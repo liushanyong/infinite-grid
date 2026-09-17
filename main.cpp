@@ -121,6 +121,42 @@ void applyGridPlane(GridPlaneType plane)
               << gridPlaneOrigin.x << ", " << gridPlaneOrigin.y << ", "
               << gridPlaneOrigin.z << "))" << std::endl;
 }
+
+void activePlaneTangents(glm::dvec3 &tangentU, glm::dvec3 &tangentV)
+{
+    const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
+    if (gridPlane == GridPlaneType::XY)
+    {
+        tangentU = glm::dvec3(1.0, 0.0, 0.0);
+        tangentV = glm::dvec3(0.0, 1.0, 0.0);
+    }
+    else if (gridPlane == GridPlaneType::XZ)
+    {
+        tangentU = glm::dvec3(1.0, 0.0, 0.0);
+        tangentV = glm::dvec3(0.0, 0.0, 1.0);
+    }
+    else if (gridPlane == GridPlaneType::YZ)
+    {
+        tangentU = glm::dvec3(0.0, 1.0, 0.0);
+        tangentV = glm::dvec3(0.0, 0.0, 1.0);
+    }
+    else
+    {
+        tangentU = gridPlaneStartAxisDirection -
+                   planeNormal * glm::dot(gridPlaneStartAxisDirection,
+                                          planeNormal);
+        if (glm::length(tangentU) < 1e-9)
+        {
+            tangentU = glm::dvec3(1.0, 0.0, 0.0) -
+                       planeNormal * planeNormal.x;
+            if (glm::length(tangentU) < 1e-9)
+                tangentU = glm::dvec3(0.0, 1.0, 0.0) -
+                           planeNormal * planeNormal.y;
+        }
+        tangentU = glm::normalize(tangentU);
+        tangentV = glm::normalize(glm::cross(planeNormal, tangentU));
+    }
+}
 // Validation scene adapted from external/large-coordinate-rendering.
 //
 // Default magnitudes stay at 1e5 to keep the rebased coordinate frame well
@@ -488,13 +524,14 @@ void handleOrbitMouseMovement(SDL_Event event, bool middleMouseDrag)
               * std::tan(glm::radians(orbitCam.Zoom * 0.5f)))
               / (float)SCREEN_HEIGHT;
 
-    // Ground-plane pan in BOTH ortho and perspective: keeps Target.y (and
-    // Position.y) fixed so panning stays anchored to y = 0. Perspective
-    // used to pan along the camera plane, which slowly drifted the eye
-    // altitude when the view was pitched and made the ground-plane depth
-    // bounds jitter on every mouse event.
+    // Plane-constrained pan in both ortho and perspective: for XZ this keeps
+    // target/eye altitude fixed; for XY/YZ/custom it moves both points within
+    // the active plane so the camera stays consistent with the displayed grid.
+    glm::dvec3 panTangentU;
+    glm::dvec3 panTangentV;
+    activePlaneTangents(panTangentU, panTangentV);
     orbitCam.processMousePan(event.motion.xrel, event.motion.yrel,
-                             worldPerPixel, true);
+                             worldPerPixel, true, panTangentU, panTangentV);
   }
 }
 
@@ -862,36 +899,7 @@ void render()
   glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
   glm::dvec3 tangentU;
   glm::dvec3 tangentV;
-  if (gridPlane == GridPlaneType::XY)
-  {
-      tangentU = glm::dvec3(1.0, 0.0, 0.0);
-      tangentV = glm::dvec3(0.0, 1.0, 0.0);
-  }
-  else if (gridPlane == GridPlaneType::XZ)
-  {
-      tangentU = glm::dvec3(1.0, 0.0, 0.0);
-      tangentV = glm::dvec3(0.0, 0.0, 1.0);
-  }
-  else if (gridPlane == GridPlaneType::YZ)
-  {
-      tangentU = glm::dvec3(0.0, 1.0, 0.0);
-      tangentV = glm::dvec3(0.0, 0.0, 1.0);
-  }
-  else
-  {
-      tangentU = gridPlaneStartAxisDirection -
-                 planeNormal * glm::dot(gridPlaneStartAxisDirection, planeNormal);
-      if (glm::length(tangentU) < 1e-9)
-      {
-          tangentU = glm::dvec3(1.0, 0.0, 0.0) -
-                     planeNormal * planeNormal.x;
-          if (glm::length(tangentU) < 1e-9)
-              tangentU = glm::dvec3(0.0, 1.0, 0.0) -
-                         planeNormal * planeNormal.y;
-      }
-      tangentU = glm::normalize(tangentU);
-      tangentV = glm::normalize(glm::cross(planeNormal, tangentU));
-  }
+  activePlaneTangents(tangentU, tangentV);
 
   const double frontOnNormal = glm::dot(frontVec, planeNormal);
   glm::dvec3 planeCenter;
@@ -972,16 +980,21 @@ void render()
         cameraPos, right, up, front, halfW, halfH,
         minDepth, maxDepth);
 
-    // The infinite grid is the y=0 plane.  For an orthographic camera its
-    // ground intersection depth varies across the image when the view is
-    // pitched.  Compute that variation analytically instead of using a
-    // grazing-angle multiplier or the distance to unrelated world geometry.
-    const double frontY = std::abs(front.y);
-    if (frontY > 1e-8)
+    // The infinite grid lies on the active plane.  For an orthographic
+    // camera its plane-intersection depth varies across the image when the
+    // view is pitched.  Compute that variation analytically instead of
+    // using a grazing-angle multiplier or the distance to unrelated world
+    // geometry.
+    if (std::abs(frontOnNormal) > 1e-8)
     {
-      const double groundCenterDepth = -cameraPos.y / front.y;
+      const double cameraPlaneDistance =
+          glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
+      const double groundCenterDepth =
+          -cameraPlaneDistance / frontOnNormal;
       const double groundDepthRadius =
-          (std::abs(right.y) * halfW + std::abs(up.y) * halfH) / frontY;
+          (std::abs(glm::dot(right, planeNormal)) * halfW +
+           std::abs(glm::dot(up, planeNormal)) * halfH) /
+          std::abs(frontOnNormal);
       minDepth = std::min(minDepth,
                           groundCenterDepth - groundDepthRadius);
       maxDepth = std::max(maxDepth,
@@ -1194,6 +1207,7 @@ void render()
   glm::vec3 startAxisOrigin(0.0f);
   glm::vec3 startAxisDirection(0.0f);
   float startAxisVisible = 0.0f;
+  glm::vec3 startAxisLine(0.0f);
   glm::dvec3 normalizedAxisLineX(0.0);
   glm::dvec3 normalizedAxisLineZ(0.0);
   bool orthoPlaneValid = false;
@@ -1323,7 +1337,40 @@ void render()
       if (glm::length(startAxisDirection) < 1e-9)
           startAxisDirection = tangentU;
       startAxisDirection = glm::normalize(startAxisDirection);
-      startAxisVisible = 1.0f;
+      // Project a short segment around the point where the start axis is
+      // closest to the camera's gaze.  This avoids endpoint/w-plane problems
+      // while still producing the true infinite line's NDC coefficients.
+      const glm::dvec3 axisCenterOnPlane =
+          startAxisWorld +
+          startAxisDirection *
+              glm::dot(planeCenter - startAxisWorld, startAxisDirection);
+      const double axisSegmentLength =
+          0.1 * std::max(1.0, glm::length(planeCenter - cameraPos));
+      const glm::dvec3 axisPoint0 =
+          axisCenterOnPlane - startAxisDirection * axisSegmentLength;
+      const glm::dvec3 axisPoint1 =
+          axisCenterOnPlane + startAxisDirection * axisSegmentLength;
+      const glm::vec4 clip0 = projection * view *
+          glm::vec4(glm::vec3(axisPoint0 - rebase), 1.0f);
+      const glm::vec4 clip1 = projection * view *
+          glm::vec4(glm::vec3(axisPoint1 - rebase), 1.0f);
+      if (clip0.w > 0.0f && clip1.w > 0.0f)
+      {
+          const glm::dvec2 ndc0(clip0.x / clip0.w, clip0.y / clip0.w);
+          const glm::dvec2 ndc1(clip1.x / clip1.w, clip1.y / clip1.w);
+          if (glm::length(ndc1 - ndc0) > 1e-12)
+          {
+              const glm::dvec3 normalizedLine = normalizedNdcLine(glm::dvec3(
+                  ndc0.y - ndc1.y,
+                  ndc1.x - ndc0.x,
+                  ndc0.x * ndc1.y - ndc1.x * ndc0.y));
+              if (lineIntersectsNdcSquare(normalizedLine))
+              {
+                  startAxisLine = anchoredNdcLine(normalizedLine);
+                  startAxisVisible = 1.0f;
+              }
+          }
+      }
   }
 
   const glm::mat4 viewProj = projection * view;
@@ -1339,7 +1386,8 @@ void render()
       .planeOriginRelative = planeOriginRelative,
       .plane = (float)(gridPlane == GridPlaneType::XZ ? 0
                       : gridPlane == GridPlaneType::XY ? 1
-                                                       : 2),
+                       : gridPlane == GridPlaneType::YZ ? 2
+                                                        : 3),
       .planeNormal = glm::vec3(planeNormal),
       .planeTangentU = planeTangentU,
       .planeTangentV = planeTangentV,
@@ -1348,6 +1396,7 @@ void render()
       .startAxisOrigin = startAxisOrigin,
       .startAxisDirection = startAxisDirection,
       .startAxisVisible = startAxisVisible,
+      .startAxisLine = startAxisLine,
       .axisOriginGridRelative = axisOriginGridRelative,
       .axisLineX = axisLineX,
       .axisLineZ = axisLineZ,
@@ -1517,8 +1566,12 @@ int main(int argc, char *argv[])
             : (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target) *
                std::tan(glm::radians(orbitCam.Zoom * 0.5f))) /
               (float)SCREEN_HEIGHT;
+        glm::dvec3 panTangentU;
+        glm::dvec3 panTangentV;
+        activePlaneTangents(panTangentU, panTangentV);
         orbitCam.processMousePan((float)std::atof(testPanValue), 0.0f,
-                                 worldPerPixel, true);
+                                 worldPerPixel, true, panTangentU,
+                                 panTangentV);
         testPanApplied = true;
       }
     }

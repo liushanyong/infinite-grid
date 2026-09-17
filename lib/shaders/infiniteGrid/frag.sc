@@ -13,6 +13,7 @@ uniform vec4 uAxisColorV;
 uniform vec4 uStartAxisOrigin;
 uniform vec4 uStartAxisDirection;
 uniform vec4 uStartAxisVisible;
+uniform vec4 uStartAxisLine;
 uniform vec4 uAxisOriginGridRelative;
 uniform vec4 uAxisLineX;
 uniform vec4 uAxisLineZ;
@@ -185,12 +186,10 @@ void main()
     float startAxis = 0.0;
     if (uStartAxisVisible.x > 0.5)
     {
-        vec3 toPoint = p - uStartAxisOrigin.xyz;
-        float signedDistance =
-            dot(toPoint, normalize(uStartAxisDirection.xyz));
-        float pixelDistance = abs(signedDistance) /
-            max(length(vec2(dFdx(signedDistance), dFdy(signedDistance))), 1e-20);
-        startAxis = 1.0 - smoothstep(1.5, 3.5, pixelDistance);
+        // Use an NDC line computed on the CPU.  A plane-space derivative can
+        // become degenerate when a custom axis is highly foreshortened, and
+        // the old smoothstep then covers the whole viewport.
+        startAxis = axisLine1D(uStartAxisLine, v_ndc);
     }
 
     vec3 color = uGridColorMinor.xyz;

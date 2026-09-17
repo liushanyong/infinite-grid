@@ -8,6 +8,8 @@
 
 namespace GridShaders
 {
+// Rebuild this translation unit whenever the embedded infinite-grid shader
+// headers are regenerated.
 #include "shaders/infiniteGrid/vertex.h"
 #include "shaders/infiniteGrid/frag.h"
 } // namespace GridShaders
@@ -277,6 +279,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_gridStartAxisOrigin);
     destroyUniform(m_gridStartAxisDirection);
     destroyUniform(m_gridStartAxisVisible);
+    destroyUniform(m_gridStartAxisLine);
     destroyUniform(m_gridAxisOriginGridRelative);
     destroyUniform(m_gridAxisLineX);
     destroyUniform(m_gridAxisLineZ);
@@ -387,6 +390,8 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
                      packVec4(data.startAxisDirection, 0.0f).data());
     bgfx::setUniform(m_gridStartAxisVisible,
                      glm::value_ptr(glm::vec4(data.startAxisVisible, 0.0f, 0.0f, 0.0f)));
+    bgfx::setUniform(m_gridStartAxisLine,
+                     packVec4(data.startAxisLine, 0.0f).data());
     bgfx::setUniform(
         m_gridAxisOriginGridRelative,
         packVec4(glm::vec3(data.axisOriginGridRelative, 0.0f), 0.0f).data());
@@ -587,6 +592,7 @@ bool BgfxRenderer::createRenderResources()
         m_gridStartAxisOrigin = createUniformHandle("uStartAxisOrigin", bgfx::UniformType::Vec4);
         m_gridStartAxisDirection = createUniformHandle("uStartAxisDirection", bgfx::UniformType::Vec4);
         m_gridStartAxisVisible = createUniformHandle("uStartAxisVisible", bgfx::UniformType::Vec4);
+        m_gridStartAxisLine = createUniformHandle("uStartAxisLine", bgfx::UniformType::Vec4);
         m_gridAxisOriginGridRelative = createUniformHandle(
             "uAxisOriginGridRelative", bgfx::UniformType::Vec4);
         m_gridAxisLineX = createUniformHandle("uAxisLineX", bgfx::UniformType::Vec4);
@@ -627,6 +633,7 @@ bool BgfxRenderer::createRenderResources()
                 bgfx::isValid(m_gridStartAxisOrigin) &&
                 bgfx::isValid(m_gridStartAxisDirection) &&
                 bgfx::isValid(m_gridStartAxisVisible) &&
+                bgfx::isValid(m_gridStartAxisLine) &&
                 bgfx::isValid(m_gridAxisOriginGridRelative) &&
                 bgfx::isValid(m_gridAxisLineX) &&
                 bgfx::isValid(m_gridAxisLineZ) &&

@@ -44,6 +44,7 @@ private:
     bgfx::UniformHandle m_gridStartAxisOrigin = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridStartAxisDirection = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridStartAxisVisible = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_gridStartAxisLine = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridAxisOriginGridRelative = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridAxisLineX = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridAxisLineZ = BGFX_INVALID_HANDLE;

@@ -141,7 +141,9 @@ public:
   }
 
   void processMousePan(float xoffset, float yoffset, float worldPerPixel,
-                       bool panOnGroundPlane = false)
+                       bool panOnGroundPlane = false,
+                       const glm::dvec3 &panPlaneTangentU = glm::dvec3(1.0, 0.0, 0.0),
+                       const glm::dvec3 &panPlaneTangentV = glm::dvec3(0.0, 0.0, 1.0))
   {
     const double screenX = -xoffset * worldPerPixel;
     const double screenY = yoffset * worldPerPixel;
@@ -157,24 +159,29 @@ public:
           glm::normalize(glm::cross(front, glm::dvec3(WorldUp)));
       const glm::dvec3 up = glm::normalize(glm::cross(right, front));
 
-      // Find the XZ translation whose camera-space projection matches the
-      // requested screen translation. Keeping delta.y at zero preserves the
-      // camera/target altitude, so ortho panning does not perturb the
-      // ground-plane depth bounds.
-      const double determinant = right.x * up.z - right.z * up.x;
+      // Find the in-plane translation whose camera-space projection matches
+      // the requested screen translation.  Solve for the tangent-plane
+      // coefficients of: right * screenX + up * screenY.
+      const double a11 = glm::dot(right, panPlaneTangentU);
+      const double a12 = glm::dot(right, panPlaneTangentV);
+      const double a21 = glm::dot(up, panPlaneTangentU);
+      const double a22 = glm::dot(up, panPlaneTangentV);
+      const double determinant = a11 * a22 - a12 * a21;
       constexpr double kMinDeterminant = 1.0e-2;
 
       if (std::abs(determinant) >= kMinDeterminant)
       {
-        delta = glm::dvec3(
-            (up.z * screenX - right.z * screenY) / determinant,
-            0.0,
-            (-up.x * screenX + right.x * screenY) / determinant);
+        const double tangentUCoefficient =
+            (screenX * a22 - a12 * screenY) / determinant;
+        const double tangentVCoefficient =
+            (a11 * screenY - a21 * screenX) / determinant;
+        delta = panPlaneTangentU * tangentUCoefficient +
+                panPlaneTangentV * tangentVCoefficient;
       }
       else
       {
-        // Near-horizontal views have no stable XZ motion corresponding to
-        // vertical screen motion; fall back to the camera plane.
+        // The active plane is edge-on in screen space; fall back to the
+        // camera plane rather than dividing by a numerically unstable matrix.
         delta = right * screenX + up * screenY;
       }
     }

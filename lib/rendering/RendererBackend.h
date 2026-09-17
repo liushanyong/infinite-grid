@@ -34,6 +34,7 @@ struct GridRenderData
     glm::vec3 startAxisOrigin;
     glm::vec3 startAxisDirection;
     float startAxisVisible;
+    glm::vec3 startAxisLine;
     glm::vec2 axisOriginGridRelative;
     glm::vec3 axisLineX;
     glm::vec3 axisLineZ;
