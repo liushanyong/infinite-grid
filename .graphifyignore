@@ -1,0 +1,11 @@
+# Vendored third-party libraries (not project code) 
+/external/ 
+/lib/bgfx/ 
+/lib/bimg/ 
+/lib/bx/ 
+/lib/glm/ 
+/lib/SDL/ 
+/lib/tools/ 
+# graphify outputs and local agent staging 
+/graphify-out/ 
+/.skill-stage/ 

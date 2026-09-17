@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Large Coordinate Rendering Demo</title>
+  </head>
+  <body>
+    <aside class="hud">
+      <p class="eyebrow">Three.js Precision Demo</p>
+      <h1>Large Coordinate Rendering</h1>
+      <p class="summary">
+        The same set of CAD-style details rendered at large coordinates (4,000,000,000 scale) using raw data, geometry rebase,
+        and rebase + relative-to-eye shader patch respectively.
+      </p>
+
+      <div class="mode-buttons">
+        <button type="button" data-mode="raw">Raw</button>
+        <button type="button" data-mode="rebased">Rebased</button>
+        <button type="button" data-mode="relative-to-eye">Relative-to-eye</button>
+      </div>
+
+      <dl class="info-grid">
+        <dt>Mode</dt>
+        <dd id="mode-name">relative-to-eye</dd>
+        <dt>Description</dt>
+        <dd id="mode-description"></dd>
+        <dt>Base Point</dt>
+        <dd id="base-point"></dd>
+        <dt>Detail Center</dt>
+        <dd id="feature-center"></dd>
+        <dt>Mouse X</dt>
+        <dd id="mouse-x">X: 0</dd>
+        <dt>Mouse Y</dt>
+        <dd id="mouse-y">Y: 0</dd>
+      </dl>
+
+      <p class="hint">
+        Middle-drag to pan, scroll to zoom. First observe the collapse of small boxes and lines in `Raw` mode,
+        then switch to `Relative-to-eye` to see the final solution.
+      </p>
+    </aside>
+
+    <canvas id="cad-viewer-canvas"></canvas>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
