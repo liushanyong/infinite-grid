@@ -976,11 +976,66 @@ void render()
     const glm::dvec3 right(glm::dvec3(orbitCam.Right));
     const glm::dvec3 up(glm::dvec3(orbitCam.Up));
 
-    // D32F makes a fixed orthographic depth range practical.  Keep the
-    // range intentionally large and stable so camera motion cannot make
-    // near/far oscillate or shrink the visible depth slab.
-    const double nearD = -1.0e9;
-    const double farD  =  1.0e9;
+    // A fixed +-1e9 slab cannot preserve ortho depth precision: scene
+    // content near the slab center lands at depth ~0.5, where float32
+    // spacing (2^-24) times the 2e9 span is ~120 world units, so a
+    // 1-unit cube and the grid z-fight.  Keep the slab bounded around
+    // what the ortho image actually covers instead.  The slab is a
+    // pure function of the camera state (no hysteresis state), so it
+    // cannot ping-pong between two values while the camera is still.
+    const CameraSpacePoint targetCamera =
+        toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
+    const double targetDepth = targetCamera.depth;
+
+    // The infinite grid's visible depth interval is covered by the
+    // image radius around the target depth; viewport-intersecting
+    // objects and the clipped world reference line extend it.
+    const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
+    double minDepth = targetDepth - imageRadius;
+    double maxDepth = targetDepth + imageRadius;
+
+    if (aabbIntersectsOrthoViewport(
+            cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front,
+            halfW, halfH))
+    {
+      includeAabbCameraDepth(
+          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front,
+          minDepth, maxDepth);
+    }
+    for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
+    {
+      const double halfSize = (double)object.size * 0.5;
+      if (aabbIntersectsOrthoViewport(
+              object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
+              up, front, halfW, halfH))
+      {
+        includeAabbCameraDepth(
+            object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
+            up, front, minDepth, maxDepth);
+      }
+    }
+
+    // Only the portion of the reference line crossing the viewport may
+    // extend the slab; its far endpoint sits 1e7 units away.
+    includeSegmentCameraDepth(
+        glm::dvec3(0.0, 0.0, 0.0), worldLineEnd,
+        cameraPos, right, up, front, halfW, halfH,
+        minDepth, maxDepth);
+
+    const double kDepthMargin = 1.0;
+    double nearD = minDepth - kDepthMargin;
+    double farD  = maxDepth + kDepthMargin;
+    if (farD <= nearD)
+      farD = nearD + kDepthMargin;
+
+    // Positive slab floor for extreme zoom-in.
+    const double kMinDepthSpan = std::max(2.0, (double)halfH * 0.5);
+    if (farD - nearD < kMinDepthSpan)
+    {
+      const double mid = 0.5 * (nearD + farD);
+      nearD = mid - kMinDepthSpan * 0.5;
+      farD  = mid + kMinDepthSpan * 0.5;
+    }
 
     projection = glm::ortho(-halfH * aspect, halfH * aspect,
                              -halfH,            halfH,
