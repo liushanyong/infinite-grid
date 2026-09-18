@@ -976,13 +976,15 @@ void render()
     const glm::dvec3 right(glm::dvec3(orbitCam.Right));
     const glm::dvec3 up(glm::dvec3(orbitCam.Up));
 
-    // A fixed +-1e9 slab cannot preserve ortho depth precision: scene
-    // content near the slab center lands at depth ~0.5, where float32
-    // spacing (2^-24) times the 2e9 span is ~120 world units, so a
-    // 1-unit cube and the grid z-fight.  Keep the slab bounded around
-    // what the ortho image actually covers instead.  The slab is a
-    // pure function of the camera state (no hysteresis state), so it
-    // cannot ping-pong between two values while the camera is still.
+    // A fixed symmetric +-1e9 slab cannot preserve ortho depth
+    // precision: scene content lands at depth ~0.5, where float32
+    // spacing (2^-23 relative) times the 2e9 span is ~120 world units,
+    // so a 1-unit cube and the grid z-fight.  Ortho float32
+    // quantization is (z - near) * 2^-23: it depends on the distance
+    // from the near plane only and is completely independent of far.
+    // So keep near tied to the viewport (the precision-critical bound,
+    // a pure function of the camera state -- no hysteresis, no
+    // ping-pong) and push far to the defensive maximum.
     const CameraSpacePoint targetCamera =
         toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
     const double targetDepth = targetCamera.depth;
@@ -1022,20 +1024,15 @@ void render()
         cameraPos, right, up, front, halfW, halfH,
         minDepth, maxDepth);
 
+    // near: smallest value that cannot clip visible content (viewport
+    // driven).  far: defensive maximum -- free of precision cost in
+    // ortho, and it guarantees long geometry (the 1e7 world line) is
+    // never far-clipped.
     const double kDepthMargin = 1.0;
     double nearD = minDepth - kDepthMargin;
-    double farD  = maxDepth + kDepthMargin;
+    double farD  = 1.0e9;
     if (farD <= nearD)
       farD = nearD + kDepthMargin;
-
-    // Positive slab floor for extreme zoom-in.
-    const double kMinDepthSpan = std::max(2.0, (double)halfH * 0.5);
-    if (farD - nearD < kMinDepthSpan)
-    {
-      const double mid = 0.5 * (nearD + farD);
-      nearD = mid - kMinDepthSpan * 0.5;
-      farD  = mid + kMinDepthSpan * 0.5;
-    }
 
     projection = glm::ortho(-halfH * aspect, halfH * aspect,
                              -halfH,            halfH,
