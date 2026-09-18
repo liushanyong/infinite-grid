@@ -265,6 +265,10 @@ bool BgfxRenderer::initialize(SDL_Window *window)
     }
 
     bgfx::setViewMode(0, bgfx::ViewMode::Sequential);
+    // dbgTextPrintf output is only drawn when this debug flag is set
+    // (see the "else if (m_debug & BGFX_DEBUG_TEXT)" branch of the
+    // backend submit); enable it so the FPS overlay is visible.
+    bgfx::setDebug(BGFX_DEBUG_TEXT);
     m_initialized = true;
     if (!createRenderResources())
     {
