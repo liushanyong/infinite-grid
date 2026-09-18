@@ -976,63 +976,26 @@ void render()
     const glm::dvec3 right(glm::dvec3(orbitCam.Right));
     const glm::dvec3 up(glm::dvec3(orbitCam.Up));
 
-    // A fixed symmetric +-1e9 slab cannot preserve ortho depth
-    // precision: scene content lands at depth ~0.5, where float32
-    // spacing (2^-23 relative) times the 2e9 span is ~120 world units,
-    // so a 1-unit cube and the grid z-fight.  Ortho float32
-    // quantization is (z - near) * 2^-23: it depends on the distance
-    // from the near plane only and is completely independent of far.
-    // So keep near tied to the viewport (the precision-critical bound,
-    // a pure function of the camera state -- no hysteresis, no
-    // ping-pong) and push far to the defensive maximum.
+    // Symmetric ortho slab around the camera target depth.  Ortho
+    // float32 quantization at the target is slabRadius * 2^-23, so the
+    // floor radius (1e5) keeps that error at ~0.012 world units -- well
+    // below the 1-unit scene detail -- while being as large as
+    // precision allows.  1e5 also matches the orbit-distance cap, so
+    // near never clips content between the camera and the target.  The
+    // radius never drops below the viewport extent either, so extreme
+    // zoom-out keeps far content inside the slab.
     const CameraSpacePoint targetCamera =
         toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
     const double targetDepth = targetCamera.depth;
 
-    // The infinite grid's visible depth interval is covered by the
-    // image radius around the target depth; viewport-intersecting
-    // objects and the clipped world reference line extend it.
     const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
-    double minDepth = targetDepth - imageRadius;
-    double maxDepth = targetDepth + imageRadius;
+    constexpr double kOrthoSlabRadius = 1.0e5;
+    constexpr double kDepthMargin = 1.0;
+    const double slabRadius =
+        std::max(imageRadius + kDepthMargin, kOrthoSlabRadius);
 
-    if (aabbIntersectsOrthoViewport(
-            cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front,
-            halfW, halfH))
-    {
-      includeAabbCameraDepth(
-          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front,
-          minDepth, maxDepth);
-    }
-    for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
-    {
-      const double halfSize = (double)object.size * 0.5;
-      if (aabbIntersectsOrthoViewport(
-              object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
-              up, front, halfW, halfH))
-      {
-        includeAabbCameraDepth(
-            object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
-            up, front, minDepth, maxDepth);
-      }
-    }
-
-    // Only the portion of the reference line crossing the viewport may
-    // extend the slab; its far endpoint sits 1e7 units away.
-    includeSegmentCameraDepth(
-        glm::dvec3(0.0, 0.0, 0.0), worldLineEnd,
-        cameraPos, right, up, front, halfW, halfH,
-        minDepth, maxDepth);
-
-    // near: smallest value that cannot clip visible content (viewport
-    // driven).  far: defensive maximum -- free of precision cost in
-    // ortho, and it guarantees long geometry (the 1e7 world line) is
-    // never far-clipped.
-    const double kDepthMargin = 1.0;
-    double nearD = minDepth - kDepthMargin;
-    double farD  = 1.0e9;
-    if (farD <= nearD)
-      farD = nearD + kDepthMargin;
+    const double nearD = targetDepth - slabRadius;
+    const double farD  = targetDepth + slabRadius;
 
     projection = glm::ortho(-halfH * aspect, halfH * aspect,
                              -halfH,            halfH,
