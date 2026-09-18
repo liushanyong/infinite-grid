@@ -26,6 +26,9 @@ public:
     void drawTargetPoint(const TargetPointRenderData &data) override;
 
 private:
+    bool createSceneFrameBuffer(uint16_t width, uint16_t height);
+    void destroySceneFrameBuffer();
+
     bool createRenderResources();
 
     SDL_Window *m_window = nullptr;
@@ -81,6 +84,11 @@ private:
     bgfx::UniformHandle m_pointColor = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_pointProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_pointBuffer = BGFX_INVALID_HANDLE;
+
+    bgfx::UniformHandle m_blitSampler = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_blitProgram = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_blitBuffer = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
 
     uint16_t m_width = 0;
     uint16_t m_height = 0;

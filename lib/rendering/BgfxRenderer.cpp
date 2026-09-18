@@ -32,6 +32,12 @@ namespace PointShaders
 #include "shaders/targetPoint/frag.h"
 } // namespace PointShaders
 
+namespace BlitShaders
+{
+#include "shaders/blit/vertex.h"
+#include "shaders/blit/frag.h"
+} // namespace BlitShaders
+
 namespace rendering
 {
 
@@ -166,6 +172,51 @@ std::array<float, 4> packVec4(const glm::vec3 &value, float extra)
 
 } // namespace
 
+bool BgfxRenderer::createSceneFrameBuffer(
+    uint16_t width, uint16_t height)
+{
+    destroySceneFrameBuffer();
+
+    const uint64_t colorFlags = BGFX_TEXTURE_RT |
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    const uint64_t depthFlags = BGFX_TEXTURE_RT | BGFX_TEXTURE_RT_WRITE_ONLY;
+
+    bgfx::TextureHandle attachments[2] = {
+        bgfx::createTexture2D(width, height, false, 1,
+                              bgfx::TextureFormat::RGBA8, colorFlags),
+        bgfx::createTexture2D(width, height, false, 1,
+                              bgfx::TextureFormat::D32F, depthFlags),
+    };
+
+    if (!bgfx::isValid(attachments[0]) || !bgfx::isValid(attachments[1]))
+    {
+        std::cerr << "Failed to create D32F scene render targets." << std::endl;
+        if (bgfx::isValid(attachments[0]))
+            bgfx::destroy(attachments[0]);
+        if (bgfx::isValid(attachments[1]))
+            bgfx::destroy(attachments[1]);
+        return false;
+    }
+
+    m_sceneFrameBuffer = bgfx::createFrameBuffer(2, attachments, true);
+    if (!bgfx::isValid(m_sceneFrameBuffer))
+    {
+        std::cerr << "Failed to create D32F scene frame buffer." << std::endl;
+        bgfx::destroy(attachments[0]);
+        bgfx::destroy(attachments[1]);
+        return false;
+    }
+
+    return true;
+}
+
+void BgfxRenderer::destroySceneFrameBuffer()
+{
+    if (bgfx::isValid(m_sceneFrameBuffer))
+        bgfx::destroy(m_sceneFrameBuffer);
+    m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
+}
+
 const char *BgfxRenderer::name() const
 {
     return "bgfx";
@@ -260,6 +311,14 @@ void BgfxRenderer::shutdown()
     if (bgfx::isValid(m_pointBuffer))
         bgfx::destroy(m_pointBuffer);
     m_pointBuffer = BGFX_INVALID_HANDLE;
+
+    if (bgfx::isValid(m_blitProgram))
+        bgfx::destroy(m_blitProgram);
+    m_blitProgram = BGFX_INVALID_HANDLE;
+
+    if (bgfx::isValid(m_blitBuffer))
+        bgfx::destroy(m_blitBuffer);
+    m_blitBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_gridBuffer))
         bgfx::destroy(m_gridBuffer);
     m_gridBuffer = BGFX_INVALID_HANDLE;
@@ -304,6 +363,8 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_pointPosition);
     destroyUniform(m_pointSize);
     destroyUniform(m_pointColor);
+    destroyUniform(m_blitSampler);
+    destroySceneFrameBuffer();
 
     bgfx::shutdown();
     m_initialized = false;
@@ -320,14 +381,19 @@ void BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
     SDL_GetWindowSizeInPixels(m_window, &width, &height);
     width = std::max(1, width);
     height = std::max(1, height);
-    if (width != m_width || height != m_height)
+    if (width != m_width || height != m_height ||
+        !bgfx::isValid(m_sceneFrameBuffer))
     {
         bgfx::reset(static_cast<uint16_t>(width),
                     static_cast<uint16_t>(height),
                     BGFX_RESET_VSYNC);
         m_width = static_cast<uint16_t>(width);
         m_height = static_cast<uint16_t>(height);
+        if (!createSceneFrameBuffer(m_width, m_height))
+            return;
     }
+
+    bgfx::setViewFrameBuffer(0, m_sceneFrameBuffer);
 
     const auto channel = [](float value) {
         return uint32_t(std::clamp(value, 0.0f, 1.0f) * 255.0f);
@@ -344,8 +410,20 @@ void BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
 
 void BgfxRenderer::endFrame()
 {
-    if (m_initialized)
-        bgfx::frame();
+    if (!m_initialized)
+        return;
+
+    bgfx::setViewFrameBuffer(1, BGFX_INVALID_HANDLE);
+    bgfx::setViewClear(1, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                       0x000000ff, 1.0f, 0);
+    bgfx::setViewRect(1, 0, 0, m_width, m_height);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::setVertexBuffer(0, m_blitBuffer);
+    bgfx::setTexture(0, m_blitSampler,
+                     bgfx::getTexture(m_sceneFrameBuffer));
+    bgfx::submit(1, m_blitProgram);
+
+    bgfx::frame();
 }
 
 void BgfxRenderer::present()
@@ -573,8 +651,15 @@ bool BgfxRenderer::createRenderResources()
         PointShaders::frag_dx11, sizeof(PointShaders::frag_dx11), "point_fs");
     m_pointProgram = bgfx::createProgram(pointVertex, pointFragment, true);
 
+    const bgfx::ShaderHandle blitVertex = createShader(
+        BlitShaders::vertex_dx11, sizeof(BlitShaders::vertex_dx11), "blit_vs");
+    const bgfx::ShaderHandle blitFragment = createShader(
+        BlitShaders::frag_dx11, sizeof(BlitShaders::frag_dx11), "blit_fs");
+    m_blitProgram = bgfx::createProgram(blitVertex, blitFragment, true);
+
     bool ready = bgfx::isValid(m_gridProgram) && bgfx::isValid(m_cubeProgram) &&
-                 bgfx::isValid(m_lineProgram) && bgfx::isValid(m_pointProgram);
+                 bgfx::isValid(m_lineProgram) && bgfx::isValid(m_pointProgram) &&
+                 bgfx::isValid(m_blitProgram);
     if (!ready)
         std::cerr << "Failed to create one or more bgfx shader programs." << std::endl;
 
@@ -621,6 +706,8 @@ bool BgfxRenderer::createRenderResources()
         m_pointPosition = createUniformHandle("uRelativePosition", bgfx::UniformType::Vec4);
         m_pointSize = createUniformHandle("uPointSize", bgfx::UniformType::Vec4);
         m_pointColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
+        m_blitSampler = createUniformHandle("uSceneColor",
+                                            bgfx::UniformType::Sampler);
 
         ready = bgfx::isValid(m_gridInvViewProj) &&
                 bgfx::isValid(m_gridViewProj) &&
@@ -657,7 +744,7 @@ bool BgfxRenderer::createRenderResources()
                 bgfx::isValid(m_lineStart) && bgfx::isValid(m_lineEnd) &&
                 bgfx::isValid(m_lineColor) &&
                 bgfx::isValid(m_pointPosition) && bgfx::isValid(m_pointSize) &&
-                bgfx::isValid(m_pointColor);
+                bgfx::isValid(m_pointColor) && bgfx::isValid(m_blitSampler);
     }
 
     if (ready)
@@ -668,6 +755,8 @@ bool BgfxRenderer::createRenderResources()
             .end();
         const std::array<float, 6> fullscreenTriangle{-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
         m_gridBuffer = bgfx::createVertexBuffer(
+            bgfx::copy(fullscreenTriangle.data(), sizeof(fullscreenTriangle)), gridLayout);
+        m_blitBuffer = bgfx::createVertexBuffer(
             bgfx::copy(fullscreenTriangle.data(), sizeof(fullscreenTriangle)), gridLayout);
 
         bgfx::VertexLayout cubeLayout;
@@ -698,7 +787,8 @@ bool BgfxRenderer::createRenderResources()
 
         ready = bgfx::isValid(m_gridBuffer) && bgfx::isValid(m_cubeBuffer) &&
                 bgfx::isValid(m_aabbBuffer) &&
-                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer);
+                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer) &&
+                bgfx::isValid(m_blitBuffer);
         if (!ready)
             std::cerr << "Failed to create bgfx vertex buffers." << std::endl;
     }

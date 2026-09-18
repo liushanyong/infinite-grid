@@ -946,35 +946,8 @@ void render()
   float pixelSize = 0.0f;
   double activeNear = 0.0;
   double activeFar  = 0.0;
-  static bool hasStableOrthoDepthSlab = false;
-  static double stableOrthoNear = 0.0;
-  static double stableOrthoFar  = 0.0;
-  static double pendingOrthoNear = 0.0;
-  static double pendingOrthoFar = 0.0;
-  static int stableOrthoDepthSlabFrames = 0;
-  // Perspective hysteresis: same shape as the ortho slab, but only the far
-  // plane is dynamic (near is fixed at 0.1 by glm::perspective's constraint).
-  // Prevents per-frame far-plane wobble from turning depth precision into a
-  // flickering step during pan/orbit.
-  static bool hasStablePerspectiveFar = false;
-  static double stablePerspectiveFar = 0.0;
-  static double pendingPerspectiveFar = 0.0;
-  static int stablePerspectiveFarFrames = 0;
-  // The reference line belongs to the world, not to either validation scene.
   const glm::dvec3 worldLineEnd = LARGE_COORDINATE_BASE_POINT;
-  const double farSceneDistance = std::max(
-      glm::length(orbitCam.Position),
-      glm::length(orbitCam.Position - worldLineEnd));
 
-  // The grid and the world reference line both want an anchor expressed on
-  // the active plane (XZ, XY or YZ).  Compute it once in double precision so
-  // both consumers (ortho and perspective) share the exact same value
-  // rather than each branch rerunning the same arithmetic with its own
-  // local copy.
-  //
-  // When the camera looks parallel to the plane, the gaze/plane intersection
-  // is degenerate; fall back to the camera's own in-plane coordinates so the
-  // grid still has a meaningful anchor that follows the camera.
   const glm::dvec3 cameraPos(orbitCam.Position);
   const glm::dvec3 frontVec(orbitCam.Front);
   glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
@@ -1003,220 +976,33 @@ void render()
     const glm::dvec3 right(glm::dvec3(orbitCam.Right));
     const glm::dvec3 up(glm::dvec3(orbitCam.Up));
 
-    // Convert the target and the active cube center to camera space before
-    // calculating the depth interval.  The camera-space convention used
-    // here is +Z forward, so `depth` is the positive distance in front of
-    // the eye.  This is the double-precision equivalent of inverse-view
-    // transformation, without passing large absolute coordinates through
-    // a float matrix.
-    const CameraSpacePoint targetCamera =
-        toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
-    const double targetDepth = targetCamera.depth;
-
-    // Start with the orthographic image extent.  The grid is infinite, so
-    // its depth interval is handled analytically below rather than through
-    // a finite scene bound.
-    const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
-    double minDepth = targetDepth - imageRadius;
-    double maxDepth = targetDepth + imageRadius;
-
-    // OSG-style scene bounds: transform every AABB corner to camera space
-    // and accumulate the actual minimum and maximum depth.  This avoids
-    // using a center-depth estimate plus an unnecessarily large sphere.
-    if (aabbIntersectsOrthoViewport(
-            cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front,
-            halfW, halfH))
-    {
-      includeAabbCameraDepth(
-          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front,
-          minDepth, maxDepth);
-    }
-    // Include the large-coordinate reference cubes.  These are drawn
-    // every frame (unconditionally, in the render pass below), so they
-    // must always participate in the depth-slab computation as well.
-    // The per-object viewport intersection test still excludes any cube
-    // that is entirely off-screen, so panning far away does not inflate
-    // far by geometry the user cannot see.
-    for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
-    {
-      const double halfSize = (double)object.size * 0.5;
-      if (aabbIntersectsOrthoViewport(
-              object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
-              up, front, halfW, halfH))
-      {
-        includeAabbCameraDepth(
-            object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
-            up, front, minDepth, maxDepth);
-      }
-    }
-
-    // The world reference line is always drawn.  Rather than only testing
-    // its two endpoints (which misses cases where both endpoints lie
-    // outside the viewport but the middle of the segment crosses it, and
-    // conversely can pull far towards the far endpoint even when it is
-    // off-screen), clip the segment against the ortho viewport in camera
-    // space and accumulate only the visible portion's depth interval.
-    includeSegmentCameraDepth(
-        glm::dvec3(0.0, 0.0, 0.0), worldLineEnd,
-        cameraPos, right, up, front, halfW, halfH,
-        minDepth, maxDepth);
-
-    // Add a small symmetric safety margin around the accumulated bounds.
-    // Orthographic projection allows negative near values (glm::ortho does
-    // not have the near > 0 constraint that perspective imposes), so do
-    // NOT clamp near to a small positive floor.  Clamping would skew the
-    // depth slab asymmetrically whenever geometry straddles the camera
-    // plane (e.g. when the orbit radius is small enough that parts of the
-    // visible cubes fall behind the eye), which is exactly the case that
-    // made pan-computed near/far diverge from the large-orbit values even
-    // when the target position was the same.
-    const double kDepthMargin = 1.0;
-    double nearD = minDepth - kDepthMargin;
-    double farD  = maxDepth + kDepthMargin;
-    // Guarantee a strictly positive slab thickness for glm::ortho.
-    if (farD <= nearD)
-      farD = nearD + kDepthMargin;
-
-    // Depth-buffer precision floor.  Only kicks in under extreme zoom-in
-    // (halfH << 1) or when the viewport contains no finite geometry at
-    // all, so the depth slab does not collapse below the resolution of a
-    // 24-bit depth buffer.  In normal operation minDepth/maxDepth already
-    // dominate and this clamp is a no-op.  The floor grows with halfH so
-    // it scales with the current view size instead of imposing a fixed
-    // world-unit lower bound at all zoom levels.
-    const double kMinDepthSpan = std::max(2.0, (double)halfH * 0.5);
-    if (farD - nearD < kMinDepthSpan)
-    {
-      const double mid = 0.5 * (nearD + farD);
-      nearD = mid - kMinDepthSpan * 0.5;
-      farD  = mid + kMinDepthSpan * 0.5;
-    }
-
-    // Keep a conservative depth slab while the camera is being panned.
-    // Expanding is immediate (never clip visible geometry); shrinking only
-    // happens after the raw candidate has stayed within candidateEpsilon
-    // of the pending value for twenty frames.
-    //
-    // Anti-jitter invariant: when the raw candidate is judged stable (i.e.
-    // its float noise is under candidateEpsilon), NEITHER `stableOrtho*`
-    // NOR `pendingOrtho*` may change. Otherwise the ~1 ULP noise on the
-    // candidate leaks into the stable slab and produces the two-value
-    // ping-pong observed in the log (far oscillating between .207/.595).
-    if (!hasStableOrthoDepthSlab)
-    {
-      stableOrthoNear = nearD;
-      stableOrthoFar = farD;
-      pendingOrthoNear = nearD;
-      pendingOrthoFar = farD;
-      stableOrthoDepthSlabFrames = 0;
-      hasStableOrthoDepthSlab = true;
-    }
-    else
-    {
-      // A somewhat generous epsilon (1e-4) keeps sub-millimeter float
-      // noise from ever counting as motion. A pure 1e-6 relative epsilon
-      // is smaller than the noise floor of the depth-slab arithmetic
-      // itself (Liang-Barsky clipping + several dot products in double).
-      const double candidateEpsilon = std::max(
-          1e-4, std::max(std::abs(pendingOrthoNear),
-                         std::abs(pendingOrthoFar)) * 1e-4);
-      const bool candidateIsStable =
-          std::abs(nearD - pendingOrthoNear) <= candidateEpsilon &&
-          std::abs(farD - pendingOrthoFar) <= candidateEpsilon;
-
-      if (!candidateIsStable)
-      {
-        // Real motion: extend the slab immediately (never clip), refresh
-        // the pending target, and restart the stability countdown.
-        stableOrthoNear = std::min(stableOrthoNear, nearD);
-        stableOrthoFar = std::max(stableOrthoFar, farD);
-        pendingOrthoNear = nearD;
-        pendingOrthoFar = farD;
-        stableOrthoDepthSlabFrames = 0;
-      }
-      else
-      {
-        // Stable: do NOT touch stable/pending -- freezing them is what
-        // stops the two-value oscillation. Just count frames until we
-        // are allowed to shrink to the pending target.
-        if (stableOrthoDepthSlabFrames < 20)
-          ++stableOrthoDepthSlabFrames;
-        if (stableOrthoDepthSlabFrames == 20)
-        {
-          stableOrthoNear = pendingOrthoNear;
-          stableOrthoFar = pendingOrthoFar;
-          stableOrthoDepthSlabFrames = 0;
-        }
-      }
-    }
-
-    nearD = stableOrthoNear;
-    farD = stableOrthoFar;
+    // D32F makes a fixed orthographic depth range practical.  Keep the
+    // range intentionally large and stable so camera motion cannot make
+    // near/far oscillate or shrink the visible depth slab.
+    const double nearD = -1.0e9;
+    const double farD  =  1.0e9;
 
     projection = glm::ortho(-halfH * aspect, halfH * aspect,
                              -halfH,            halfH,
-                              (float)nearD, (float)farD);
+                             (float)nearD, (float)farD);
     activeNear = nearD;
     activeFar  = farD;
-    // Reset perspective hysteresis so re-entering perspective picks up
-    // the current camera state from scratch instead of a stale slab.
-    hasStablePerspectiveFar = false;
-    stablePerspectiveFarFrames = 0;
+
     // Analytic ortho pixel size (doc section 4.2): the vertical frustum
     // extent 2 * halfH maps onto the drawable viewport height.
     pixelSize = (2.0f * halfH) / static_cast<float>(drawableHeight);
   }
   else
   {
-    const double candidateFar = std::max(
-        100.0,
-        farSceneDistance
-            + glm::length(orbitCam.Position - orbitCam.Target) * 8.0
-            + 1000.0);
+    // With a 32-bit depth buffer, use a fixed perspective range instead of
+    // the old scene-distance/hysteresis calculation.  The range is large,
+    // but its finite bounds still guard against pathological camera states.
+    const float near = 1.0f;
+    const float far  = 1.0e9f;
+    projection = glm::perspective(glm::radians(45.0f), aspect, near, far);
+    activeNear = near;
+    activeFar  = far;
 
-    // Same hysteresis policy as the ortho slab. Anti-jitter invariant:
-    // when the candidate is judged stable, NEITHER `stablePerspectiveFar`
-    // NOR `pendingPerspectiveFar` may change; otherwise per-frame float
-    // noise leaks into the stable slab and produces a visible depth
-    // ping-pong during pan / orbit.
-    if (!hasStablePerspectiveFar)
-    {
-      stablePerspectiveFar = candidateFar;
-      pendingPerspectiveFar = candidateFar;
-      stablePerspectiveFarFrames = 0;
-      hasStablePerspectiveFar = true;
-    }
-    else
-    {
-      const double candidateEpsilon =
-          std::max(1e-4, std::abs(pendingPerspectiveFar) * 1e-4);
-      const bool candidateIsStable =
-          std::abs(candidateFar - pendingPerspectiveFar) <= candidateEpsilon;
-
-      if (!candidateIsStable)
-      {
-        stablePerspectiveFar = std::max(stablePerspectiveFar, candidateFar);
-        pendingPerspectiveFar = candidateFar;
-        stablePerspectiveFarFrames = 0;
-      }
-      else
-      {
-        if (stablePerspectiveFarFrames < 20)
-          ++stablePerspectiveFarFrames;
-        if (stablePerspectiveFarFrames == 20)
-        {
-          stablePerspectiveFar = pendingPerspectiveFar;
-          stablePerspectiveFarFrames = 0;
-        }
-      }
-    }
-
-    const float far = (float)stablePerspectiveFar;
-    projection = glm::perspective(glm::radians(45.0f), aspect, 0.1f, far);
-    activeNear = 0.1;
-    activeFar  = (double)far;
-    hasStableOrthoDepthSlab = false;
-    stableOrthoDepthSlabFrames = 0;
     // Rough estimate around the orbit target, only used to seed the LOD
     // step; the shader computes exact per-fragment sizes for perspective.
     pixelSize = (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target)
