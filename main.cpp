@@ -407,11 +407,33 @@ void drawWorldLine(const glm::mat4 &view, const glm::mat4 &projection,
   rendererBackend->drawWorldLine(renderData);
 }
 
+void drawMesh(const glm::mat4 &view, const glm::mat4 &projection,
+              const glm::dvec3 &rebaseOrigin,
+              const glm::dvec3 &objectWorldPosition,
+              const glm::vec3 &objectColor, float opacity, float size,
+              rendering::MeshType mesh)
+{
+  if (!rendererBackend)
+    return;
+
+  const rendering::CubeRenderData renderData{
+      .model = glm::scale(glm::mat4(1.0f), glm::vec3(size)),
+      .view = view,
+      .projection = projection,
+      .modelRelativePosition = glm::vec3(objectWorldPosition - rebaseOrigin),
+      .objectColor = objectColor,
+      .opacity = opacity,
+      .mesh = mesh,
+  };
+  rendererBackend->drawCube(renderData);
+}
+
 struct LargeCoordinateObject
 {
   glm::dvec3 worldPosition;
   glm::vec3 color;
   float size;
+  rendering::MeshType mesh = rendering::MeshType::Cube;
 };
 
 const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
@@ -441,6 +463,9 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
   return objects;
 }
 
+int stressObjectCount();
+const std::vector<LargeCoordinateObject> &getStressObjects();
+
 void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::mat4 &projection,
                                 const glm::dvec3 &rebaseOrigin)
@@ -464,8 +489,81 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   {
     drawCube(view, projection, rebaseOrigin, object->worldPosition,
              object->color, 0.45f, object->size);
+
+
   }
+  // Stress-test field (spheres/cones/tori/cubes at large coordinates).
+  // Only drawn while the large-coordinate scene is enabled (L key).
+  if (largeCoordinateSceneEnabled)
+  {
+    for (const LargeCoordinateObject &object : getStressObjects())
+    {
+      drawMesh(view, projection, rebaseOrigin, object.worldPosition,
+               object.color, 0.45f, object.size, object.mesh);
+    }
+
 }
+}
+
+int stressObjectCount()
+{
+  static const int count = [] {
+    int value = 1000;
+    if (const char *env = std::getenv("GRID_STRESS_COUNT"))
+    {
+      const long parsed = std::strtol(env, nullptr, 10);
+      if (parsed >= 0)
+        value = static_cast<int>(std::min<long>(parsed, 50000));
+    }
+    return value;
+  }();
+  return count;
+}
+
+const std::vector<LargeCoordinateObject> &getStressObjects()
+{
+  static const std::vector<LargeCoordinateObject> objects = [] {
+    std::vector<LargeCoordinateObject> result;
+    const int count = stressObjectCount();
+    if (count <= 0)
+      return result;
+
+    // Grid layout on the XZ plane around the large-coordinate base point,
+    // offset so the stress field does not overlap the validation cluster.
+    const int cols =
+        static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+    constexpr double kSpacing = 256.0;
+    constexpr double kObjectSize = 128.0;
+    const double centerOffset = (cols - 1) * 0.5 * kSpacing;
+    static constexpr rendering::MeshType kMeshCycle[] = {
+        rendering::MeshType::Sphere, rendering::MeshType::Cone,
+        rendering::MeshType::Torus,  rendering::MeshType::Cube,
+    };
+    static constexpr glm::vec3 kPalette[] = {
+        {0.43f, 0.91f, 0.98f}, {1.00f, 0.58f, 0.25f},
+        {0.55f, 0.85f, 0.45f}, {0.95f, 0.95f, 0.95f},
+        {0.90f, 0.45f, 0.75f}, {0.98f, 0.90f, 0.35f},
+    };
+    result.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i)
+    {
+      const int row = i / cols;
+      const int col = i % cols;
+      LargeCoordinateObject object;
+      object.worldPosition =
+          LARGE_COORDINATE_BASE_POINT +
+          glm::dvec3(col * kSpacing - centerOffset, kObjectSize * 0.5,
+                     row * kSpacing - centerOffset - 4096.0);
+      object.color = kPalette[i % 6];
+      object.size = static_cast<float>(kObjectSize);
+      object.mesh = kMeshCycle[i % 4];
+      result.push_back(object);
+    }
+    return result;
+  }();
+  return objects;
+}
+
 
 void printLargeCoordinateValidation()
 {
@@ -483,6 +581,10 @@ void printLargeCoordinateValidation()
             << ", " << detailCenter.z << ")\n"
             << "  micro X offsets [double, float32 world, CPU double rebase]:"
             << std::endl;
+
+  std::cout
+            << "  stress objects: " << stressObjectCount()
+            << " (GRID_STRESS_COUNT, 0 disables)" << std::endl;
 
   for (const double offset : microOffsets)
   {

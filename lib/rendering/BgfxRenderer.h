@@ -71,6 +71,9 @@ private:
     bgfx::UniformHandle m_cubeColor = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_cubeProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_cubeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_sphereBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_coneBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_torusBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_aabbBuffer = BGFX_INVALID_HANDLE;
 
     bgfx::UniformHandle m_lineStart = BGFX_INVALID_HANDLE;

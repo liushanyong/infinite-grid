@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
+#include <vector>
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -170,6 +172,137 @@ std::array<float, 4> packVec4(const glm::vec3 &value, float extra)
     return {value.x, value.y, value.z, extra};
 }
 
+// ---------------------------------------------------------------------------
+// Procedural test meshes (unit-sized, flat normals, CCW front faces to
+// match the cube buffer + BGFX_STATE_CULL_CW convention).
+// ---------------------------------------------------------------------------
+void appendTriangle(std::vector<float> &out, glm::vec3 a, glm::vec3 b,
+                    glm::vec3 c, const glm::vec3 &outward)
+{
+    const glm::vec3 crossAB = glm::cross(b - a, c - a);
+    if (glm::dot(crossAB, crossAB) < 1e-12f)
+        return; // degenerate (sphere pole quads collapse to triangles)
+    if (glm::dot(crossAB, outward) < 0.0f)
+        std::swap(b, c);
+    const glm::vec3 normal = glm::normalize(glm::cross(b - a, c - a));
+    for (const glm::vec3 *vertex : {&a, &b, &c})
+    {
+        out.push_back(vertex->x);
+        out.push_back(vertex->y);
+        out.push_back(vertex->z);
+        out.push_back(normal.x);
+        out.push_back(normal.y);
+        out.push_back(normal.z);
+    }
+}
+
+std::vector<float> makeSphereMesh()
+{
+    std::vector<float> out;
+    constexpr int kStacks = 12;
+    constexpr int kSlices = 16;
+    constexpr float kRadius = 0.5f;
+    out.reserve(static_cast<size_t>(kStacks * kSlices * 2) * 18);
+    auto point = [](int stack, int slice) {
+        const float v = glm::pi<float>() * static_cast<float>(stack) /
+                        static_cast<float>(kStacks);
+        const float u = 2.0f * glm::pi<float>() * static_cast<float>(slice) /
+                        static_cast<float>(kSlices);
+        return glm::vec3(kRadius * std::sin(v) * std::cos(u),
+                         kRadius * std::cos(v),
+                         kRadius * std::sin(v) * std::sin(u));
+    };
+    for (int stack = 0; stack < kStacks; ++stack)
+        for (int slice = 0; slice < kSlices; ++slice)
+        {
+            const glm::vec3 a = point(stack, slice);
+            const glm::vec3 b = point(stack + 1, slice);
+            const glm::vec3 c = point(stack + 1, slice + 1);
+            const glm::vec3 d = point(stack, slice + 1);
+            appendTriangle(out, a, b, c, a);
+            appendTriangle(out, a, c, d, a);
+        }
+    return out;
+}
+
+std::vector<float> makeConeMesh()
+{
+    std::vector<float> out;
+    constexpr int kSegments = 16;
+    constexpr float kRadius = 0.5f;
+    constexpr float kHalfHeight = 0.5f;
+    out.reserve(static_cast<size_t>(kSegments * 2) * 18);
+    const glm::vec3 apex(0.0f, kHalfHeight, 0.0f);
+    auto rim = [](int segment) {
+        const float phi = 2.0f * glm::pi<float>() * static_cast<float>(segment) /
+                          static_cast<float>(kSegments);
+        return glm::vec3(kRadius * std::cos(phi), -kHalfHeight,
+                         kRadius * std::sin(phi));
+    };
+    for (int segment = 0; segment < kSegments; ++segment)
+    {
+        const glm::vec3 p0 = rim(segment);
+        const glm::vec3 p1 = rim(segment + 1);
+        const glm::vec3 mid = 0.5f * (p0 + p1);
+        appendTriangle(out, apex, p0, p1, glm::vec3(mid.x, 0.0f, mid.z));
+        appendTriangle(out, glm::vec3(0.0f, -kHalfHeight, 0.0f), p0, p1,
+                       glm::vec3(0.0f, -1.0f, 0.0f));
+    }
+    return out;
+}
+
+std::vector<float> makeTorusMesh()
+{
+    std::vector<float> out;
+    constexpr int kMajor = 16;
+    constexpr int kMinor = 8;
+    constexpr float kMajorRadius = 0.325f;
+    constexpr float kMinorRadius = 0.175f;
+    out.reserve(static_cast<size_t>(kMajor * kMinor * 2) * 18);
+    auto point = [](int major, int minor, glm::vec3 *normalOut) {
+        const float u = 2.0f * glm::pi<float>() * static_cast<float>(major) /
+                        static_cast<float>(kMajor);
+        const float v = 2.0f * glm::pi<float>() * static_cast<float>(minor) /
+                        static_cast<float>(kMinor);
+        const float cu = std::cos(u);
+        const float su = std::sin(u);
+        const float cv = std::cos(v);
+        const float sv = std::sin(v);
+        if (normalOut)
+            *normalOut = glm::vec3(cv * cu, sv, cv * su);
+        return glm::vec3((kMajorRadius + kMinorRadius * cv) * cu,
+                         kMinorRadius * sv,
+                         (kMajorRadius + kMinorRadius * cv) * su);
+    };
+    for (int major = 0; major < kMajor; ++major)
+        for (int minor = 0; minor < kMinor; ++minor)
+        {
+            glm::vec3 normalA;
+            const glm::vec3 a = point(major, minor, &normalA);
+            const glm::vec3 b = point(major + 1, minor, nullptr);
+            const glm::vec3 c = point(major + 1, minor + 1, nullptr);
+            const glm::vec3 d = point(major, minor + 1, nullptr);
+            appendTriangle(out, a, b, c, normalA);
+            appendTriangle(out, a, c, d, normalA);
+        }
+    return out;
+}
+
+bgfx::VertexBufferHandle createMeshBuffer(const std::vector<float> &vertices)
+{
+    if (vertices.empty())
+        return BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .end();
+    return bgfx::createVertexBuffer(
+        bgfx::copy(vertices.data(),
+                   static_cast<uint32_t>(vertices.size() * sizeof(float))),
+        layout);
+}
+
 } // namespace
 
 bool BgfxRenderer::createSceneFrameBuffer(
@@ -298,6 +431,15 @@ void BgfxRenderer::shutdown()
     if (bgfx::isValid(m_cubeBuffer))
         bgfx::destroy(m_cubeBuffer);
     m_cubeBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_sphereBuffer))
+        bgfx::destroy(m_sphereBuffer);
+    m_sphereBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_coneBuffer))
+        bgfx::destroy(m_coneBuffer);
+    m_coneBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_torusBuffer))
+        bgfx::destroy(m_torusBuffer);
+    m_torusBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_aabbBuffer))
         bgfx::destroy(m_aabbBuffer);
     m_aabbBuffer = BGFX_INVALID_HANDLE;
@@ -538,7 +680,22 @@ void BgfxRenderer::drawCube(const CubeRenderData &data)
                    BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW |
                    BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
     bgfx::setTransform(glm::value_ptr(data.model));
-    bgfx::setVertexBuffer(0, m_cubeBuffer);
+    bgfx::VertexBufferHandle meshBuffer = m_cubeBuffer;
+    switch (data.mesh)
+    {
+    case rendering::MeshType::Sphere:
+        meshBuffer = m_sphereBuffer;
+        break;
+    case rendering::MeshType::Cone:
+        meshBuffer = m_coneBuffer;
+        break;
+    case rendering::MeshType::Torus:
+        meshBuffer = m_torusBuffer;
+        break;
+    case rendering::MeshType::Cube:
+        break;
+    }
+    bgfx::setVertexBuffer(0, meshBuffer);
     bgfx::setUniform(m_view, glm::value_ptr(data.view));
     bgfx::setUniform(m_projection, glm::value_ptr(projection));
     bgfx::setUniform(m_cubeRelativePosition,
@@ -789,6 +946,9 @@ bool BgfxRenderer::createRenderResources()
         const std::array<CubeVertex, 36> cubeVertices = makeCubeVertices();
         m_cubeBuffer = bgfx::createVertexBuffer(
             bgfx::copy(cubeVertices.data(), sizeof(cubeVertices)), cubeLayout);
+        m_sphereBuffer = createMeshBuffer(makeSphereMesh());
+        m_coneBuffer = createMeshBuffer(makeConeMesh());
+        m_torusBuffer = createMeshBuffer(makeTorusMesh());
         const std::array<CubeVertex, 24> aabbVertices = makeCubeEdgeVertices();
         m_aabbBuffer = bgfx::createVertexBuffer(
             bgfx::copy(aabbVertices.data(), sizeof(aabbVertices)), cubeLayout);

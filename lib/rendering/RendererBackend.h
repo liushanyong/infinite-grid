@@ -50,6 +50,14 @@ struct GridRenderData
     float gridOpacity;
 };
 
+enum class MeshType
+{
+    Cube,
+    Sphere,
+    Cone,
+    Torus,
+};
+
 struct CubeRenderData
 {
     glm::mat4 model;
@@ -58,6 +66,7 @@ struct CubeRenderData
     glm::vec3 modelRelativePosition;
     glm::vec3 objectColor;
     float opacity;
+    MeshType mesh = MeshType::Cube;
 };
 
 struct AabbRenderData
