@@ -37,7 +37,7 @@ SDL_Window *window = nullptr;
 // The GPU never sees these; only (objWorld - worldRebase().origin()) does.
 glm::dvec3 cubeWorldPosition(0.0);
 
-bool largeCoordinateSceneEnabled = false;
+bool largeCoordinateCameraView = false;
 bool frustumCaptureRequested = false;
 bool frustumWireframeVisible = false;
 glm::dvec3 frustumCorners[8];
@@ -490,11 +490,9 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     drawCube(view, projection, rebaseOrigin, object->worldPosition,
              object->color, 0.45f, object->size);
 
-
   }
   // Stress-test field (spheres/cones/tori/cubes at large coordinates).
-  // Only drawn while the large-coordinate scene is enabled (L key).
-  if (largeCoordinateSceneEnabled)
+  // Generated once at startup; always drawn. Pan the camera to (1e7, 0, 1e7) to inspect.
   {
     for (const LargeCoordinateObject &object : getStressObjects())
     {
@@ -504,6 +502,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
 
 }
 }
+
 
 int stressObjectCount()
 {
@@ -1578,6 +1577,9 @@ int main(int argc, char *argv[])
     return -1;
   }
   SDL_PumpEvents();
+  // Stress-test field location: printed once so it can be reached by
+  // panning (or by pressing L) instead of generating on demand.
+  printLargeCoordinateValidation();
 
   if (const char *testOrtho = std::getenv("GRID_CAMERA_TEST_ORTHO");
       testOrtho && std::strcmp(testOrtho, "0") != 0)
@@ -1633,20 +1635,18 @@ int main(int argc, char *argv[])
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
         {
-          // L key -- swap the camera-position parameters only.  Projection
-          // mode (perspective vs orthographic) and ortho half-height are
-          // intentionally untouched; toggle projection with P and zoom
-          // with the mouse wheel.
-          largeCoordinateSceneEnabled = !largeCoordinateSceneEnabled;
-          if (largeCoordinateSceneEnabled)
+          // L key -- move the camera between the origin scene and the
+          // large-coordinate stress field.  The stress models are always
+          // generated at startup; this key only teleports the camera.
+          largeCoordinateCameraView = !largeCoordinateCameraView;
+          if (largeCoordinateCameraView)
           {
             cubeWorldPosition =
                 LARGE_COORDINATE_BASE_POINT +
                 LARGE_COORDINATE_DETAIL_OFFSET;
             orbitCam.setOrbit(cubeWorldPosition, 6000.0);
             SDL_SetWindowTitle(
-                window, "grid plane - large-coordinate validation");
-            printLargeCoordinateValidation();
+                window, "grid plane - large-coordinate stress field");
           }
           else
           {
@@ -1654,8 +1654,9 @@ int main(int argc, char *argv[])
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
             SDL_SetWindowTitle(window, "grid plane");
           }
-          std::cout << "Large-coordinate scene: "
-                    << (largeCoordinateSceneEnabled ? "enabled" : "disabled")
+          std::cout << "Camera: "
+                    << (largeCoordinateCameraView ? "large-coordinate field"
+                                                  : "origin")
                     << std::endl;
         }
       }
