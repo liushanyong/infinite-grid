@@ -90,6 +90,11 @@ private:
     bgfx::VertexBufferHandle m_blitBuffer = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
 
+    // FPS overlay bookkeeping (debug text drawn in endFrame).
+    float    m_fps = 0.0f;
+    uint32_t m_frameCount = 0;
+    uint32_t m_fpsLastTick = 0;
+
     uint16_t m_width = 0;
     uint16_t m_height = 0;
     bool m_initialized = false;

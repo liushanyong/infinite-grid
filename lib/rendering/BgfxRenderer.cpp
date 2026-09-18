@@ -423,6 +423,24 @@ void BgfxRenderer::endFrame()
                      bgfx::getTexture(m_sceneFrameBuffer));
     bgfx::submit(1, m_blitProgram);
 
+    // FPS overlay: bgfx debug text renders as the last step of the
+    // frame, on top of the final blit.
+    ++m_frameCount;
+    const uint32_t now = SDL_GetTicks();
+    if (m_fpsLastTick == 0)
+        m_fpsLastTick = now;
+    const uint32_t elapsed = now - m_fpsLastTick;
+    if (elapsed >= 500)
+    {
+        m_fps = static_cast<float>(m_frameCount) * 1000.0f /
+                static_cast<float>(elapsed);
+        m_frameCount = 0;
+        m_fpsLastTick = now;
+    }
+    bgfx::dbgTextClear();
+    bgfx::dbgTextPrintf(1, 1, 0x0f, "FPS: %.1f (%.1f ms)",
+                        m_fps, m_fps > 0.0f ? 1000.0f / m_fps : 0.0f);
+
     bgfx::frame();
 }
 
