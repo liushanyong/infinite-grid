@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 #include <limits>
+#include <chrono>
 
 namespace
 {
@@ -37,6 +38,12 @@ SDL_Window *window = nullptr;
 glm::dvec3 cubeWorldPosition(0.0);
 
 bool largeCoordinateSceneEnabled = false;
+bool frustumCaptureRequested = false;
+bool frustumWireframeVisible = false;
+glm::dvec3 frustumCorners[8];
+bool gridVisibleQuadValid = false;
+glm::dvec3 gridVisibleQuad[8];
+int gridVisibleQuadCount = 0;
 enum class GridPlaneType
 {
     XZ,
@@ -293,6 +300,16 @@ void logCameraStateIfChanged(const glm::dvec3 &target,
 
   if (targetChanged || planesChanged)
   {
+    // Console I/O on Windows is synchronous and expensive; throttling to
+    // ~10 Hz keeps pan from spending most of its frame budget on logging.
+    static auto lastLogTime = std::chrono::steady_clock::now() -
+                              std::chrono::milliseconds(1000);
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastLogTime).count() < 100)
+      return;
+    lastLogTime = now;
+
     std::cout << std::fixed << std::setprecision(6)
               << "Camera Target: ("
               << target.x << ", " << target.y << ", " << target.z << ")"
@@ -371,7 +388,9 @@ void drawCube(const glm::mat4 &view, const glm::mat4 &projection,
 void drawWorldLine(const glm::mat4 &view, const glm::mat4 &projection,
                    const glm::dvec3 &rebaseOrigin,
                    const glm::dvec3 &startWorldPosition,
-                   const glm::dvec3 &endWorldPosition)
+                   const glm::dvec3 &endWorldPosition,
+                   const glm::vec3 &color = glm::vec3(0.15f, 1.0f, 0.25f),
+                   float opacity = 0.9f)
 {
   if (!rendererBackend)
     return;
@@ -382,6 +401,8 @@ void drawWorldLine(const glm::mat4 &view, const glm::mat4 &projection,
       .relativeStart = glm::vec3(startWorldPosition - rebaseOrigin),
       .relativeEnd = glm::vec3(endWorldPosition - rebaseOrigin),
       .lineWidth = 2.0f,
+      .color = color,
+      .opacity = opacity,
   };
   rendererBackend->drawWorldLine(renderData);
 }
@@ -393,52 +414,50 @@ struct LargeCoordinateObject
   float size;
 };
 
-std::vector<LargeCoordinateObject> getLargeCoordinateObjects()
+const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
 {
-  const glm::dvec3 detailCenter =
-      LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
-  return {
-      {LARGE_COORDINATE_BASE_POINT + glm::dvec3(0.0, 256.0, 0.0),
-       glm::vec3(0.43f, 0.91f, 0.98f), 512.0f},
-      {detailCenter + glm::dvec3(0.0, 224.0, 0.0),
-       glm::vec3(1.0f, 0.58f, 0.25f), 448.0f},
-      {detailCenter + glm::dvec3(1920.0, 64.0, 0.0),
-       glm::vec3(0.95f, 0.95f, 0.95f), 128.0f},
-      {detailCenter + glm::dvec3(0.0, 64.0, -1920.0),
-       glm::vec3(0.95f, 0.95f, 0.95f), 128.0f},
-      {detailCenter + glm::dvec3(-288.0, 32.0, -224.0),
-       glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-      {detailCenter + glm::dvec3(-96.0, 32.0, -224.0),
-       glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-      {detailCenter + glm::dvec3(96.0, 32.0, -224.0),
-       glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-      {detailCenter + glm::dvec3(288.0, 32.0, -224.0),
-       glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-  };
+  static const std::vector<LargeCoordinateObject> objects = [] {
+    const glm::dvec3 detailCenter =
+        LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
+    return std::vector<LargeCoordinateObject>{
+        {LARGE_COORDINATE_BASE_POINT + glm::dvec3(0.0, 256.0, 0.0),
+         glm::vec3(0.43f, 0.91f, 0.98f), 512.0f},
+        {detailCenter + glm::dvec3(0.0, 224.0, 0.0),
+         glm::vec3(1.0f, 0.58f, 0.25f), 448.0f},
+        {detailCenter + glm::dvec3(1920.0, 64.0, 0.0),
+         glm::vec3(0.95f, 0.95f, 0.95f), 128.0f},
+        {detailCenter + glm::dvec3(0.0, 64.0, -1920.0),
+         glm::vec3(0.95f, 0.95f, 0.95f), 128.0f},
+        {detailCenter + glm::dvec3(-288.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
+        {detailCenter + glm::dvec3(-96.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
+        {detailCenter + glm::dvec3(96.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
+        {detailCenter + glm::dvec3(288.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
+    };
+  }();
+  return objects;
 }
 
 void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::mat4 &projection,
                                 const glm::dvec3 &rebaseOrigin)
 {
-  const std::vector<LargeCoordinateObject> objects =
+  const std::vector<LargeCoordinateObject> &objects =
       getLargeCoordinateObjects();
 
-  std::vector<const LargeCoordinateObject *> drawOrder;
-  drawOrder.reserve(objects.size());
-  for (const auto &object : objects)
-    drawOrder.push_back(&object);
-
-  std::sort(drawOrder.begin(), drawOrder.end(),
-            [&](const LargeCoordinateObject *lhs,
-                const LargeCoordinateObject *rhs) {
-              // Distance to camera is the same as distance to rebase
-              // (translation-invariant), so sorting against the rebase
-              // origin preserves the original back-to-front order.
-              const glm::dvec3 lhsDelta = lhs->worldPosition - rebaseOrigin;
-              const glm::dvec3 rhsDelta = rhs->worldPosition - rebaseOrigin;
-              return glm::dot(lhsDelta, lhsDelta) > glm::dot(rhsDelta, rhsDelta);
-            });
+  const LargeCoordinateObject *drawOrder[8];
+  for (std::size_t i = 0; i < objects.size() && i < 8; ++i)
+    drawOrder[i] = &objects[i];
+  std::sort(std::begin(drawOrder), std::end(drawOrder),
+      [&](const LargeCoordinateObject *lhs,
+          const LargeCoordinateObject *rhs) {
+        const glm::dvec3 lhsDelta = lhs->worldPosition - rebaseOrigin;
+        const glm::dvec3 rhsDelta = rhs->worldPosition - rebaseOrigin;
+        return glm::dot(lhsDelta, lhsDelta) > glm::dot(rhsDelta, rhsDelta);
+      });
 
   // All objects are translucent, so paint them far-to-near for stable alpha.
   for (const auto *object : drawOrder)
@@ -833,6 +852,68 @@ void includeSegmentCameraDepth(const glm::dvec3 &startWorldPosition,
   maxDepth = std::max(maxDepth, std::max(depthEnter, depthExit));
 }
 
+// Clip a world-space polygon against one camera-depth plane.  Camera depth
+// uses the same +Z-forward convention as the depth slab.  This keeps the
+// debug wireframe aligned with what the grid shader actually accepts:
+// fragments outside the [near, far] slab are discarded by depth test.
+void clipPolygonAgainstDepth(const glm::dvec3 *polygon, int &count,
+                             glm::dvec3 *clipped, int maxClipped,
+                             const glm::dvec3 &cameraPos,
+                             const glm::dvec3 &front,
+                             bool keepAtMost, double depthLimit)
+{
+    if (count <= 0)
+    {
+        count = 0;
+        return;
+    }
+
+    std::array<glm::dvec3, 16> output{};
+    int outputCount = 0;
+
+    auto cameraDepth = [&](const glm::dvec3 &p) {
+        return glm::dot(p - cameraPos, front);
+    };
+    auto inside = [&](double depth) {
+        return keepAtMost ? depth <= depthLimit
+                          : depth >= depthLimit;
+    };
+    auto addPoint = [&](const glm::dvec3 &p) {
+        if (outputCount >= (int)output.size())
+            return;
+        output[outputCount++] = p;
+    };
+    auto addIntersection = [&](const glm::dvec3 &a,
+                               const glm::dvec3 &b) {
+        const double da = cameraDepth(a) - depthLimit;
+        const double db = cameraDepth(b) - depthLimit;
+        const double denom = da - db;
+        const double t = std::abs(denom) > 1e-18 ? da / denom : 0.0;
+        addPoint(a + (b - a) * glm::clamp(t, 0.0, 1.0));
+    };
+
+    bool previousInside = inside(cameraDepth(polygon[count - 1]));
+    for (int i = 0; i < count; ++i)
+    {
+        const glm::dvec3 &current = polygon[i];
+        const bool currentInside = inside(cameraDepth(current));
+        if (currentInside)
+        {
+            if (!previousInside)
+                addIntersection(polygon[i - 1 < 0 ? count - 1 : i - 1], current);
+            addPoint(current);
+        }
+        else if (previousInside)
+        {
+            addIntersection(polygon[i - 1 < 0 ? count - 1 : i - 1], current);
+        }
+        previousInside = currentInside;
+    }
+
+    count = std::min(outputCount, maxClipped);
+    std::copy_n(output.begin(), count, clipped);
+}
+
 void render()
 {
   if (!rendererBackend)
@@ -979,27 +1060,6 @@ void render()
         glm::dvec3(0.0, 0.0, 0.0), worldLineEnd,
         cameraPos, right, up, front, halfW, halfH,
         minDepth, maxDepth);
-
-    // The infinite grid lies on the active plane.  For an orthographic
-    // camera its plane-intersection depth varies across the image when the
-    // view is pitched.  Compute that variation analytically instead of
-    // using a grazing-angle multiplier or the distance to unrelated world
-    // geometry.
-    if (std::abs(frontOnNormal) > 1e-8)
-    {
-      const double cameraPlaneDistance =
-          glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
-      const double groundCenterDepth =
-          -cameraPlaneDistance / frontOnNormal;
-      const double groundDepthRadius =
-          (std::abs(glm::dot(right, planeNormal)) * halfW +
-           std::abs(glm::dot(up, planeNormal)) * halfH) /
-          std::abs(frontOnNormal);
-      minDepth = std::min(minDepth,
-                          groundCenterDepth - groundDepthRadius);
-      maxDepth = std::max(maxDepth,
-                          groundCenterDepth + groundDepthRadius);
-    }
 
     // Add a small symmetric safety margin around the accumulated bounds.
     // Orthographic projection allows negative near values (glm::ortho does
@@ -1374,6 +1434,132 @@ void render()
   }
 
   const glm::mat4 viewProj = projection * view;
+
+  bool gridPlaneVisible = false;
+  if (useOrthoProjection())
+  {
+    gridPlaneVisible = orthoPlaneValid;
+    if (gridPlaneVisible && std::abs(frontOnNormal) > 1e-8)
+    {
+      const float halfH = orthoHalfHeight();
+      const double halfW = (double)halfH * (double)aspect;
+      const glm::dvec3 right(orbitCam.Right);
+      const glm::dvec3 up(orbitCam.Up);
+      const double cameraPlaneDistance =
+          glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
+      const double groundCenterDepth =
+          -cameraPlaneDistance / frontOnNormal;
+      const double groundDepthRadius =
+          (std::abs(glm::dot(right, planeNormal)) * halfW +
+           std::abs(glm::dot(up, planeNormal)) * halfH) /
+          std::abs(frontOnNormal);
+      gridPlaneVisible =
+          (groundCenterDepth + groundDepthRadius >= activeNear) &&
+          (groundCenterDepth - groundDepthRadius <= activeFar);
+    }
+  }
+  else
+  {
+    const glm::dvec3 front = glm::normalize(glm::dvec3(orbitCam.Front));
+    const double planeCos = std::abs(glm::dot(front, planeNormal));
+    gridPlaneVisible = planeCos >= 0.087155743;
+    if (gridPlaneVisible)
+    {
+      const double denom = glm::dot(front, planeNormal);
+      const double t =
+          glm::dot(gridPlaneOrigin - cameraPos, planeNormal) / denom;
+      gridPlaneVisible = t > 0.0;
+    }
+  }
+
+  if (frustumCaptureRequested)
+  {
+    frustumCaptureRequested = false;
+    frustumWireframeVisible = true;
+    const glm::mat4 invVP = glm::inverse(viewProj);
+    for (int i = 0; i < 8; ++i)
+    {
+      const float ndcX = (i & 1) ? 1.0f : -1.0f;
+      const float ndcY = (i & 2) ? 1.0f : -1.0f;
+      const float ndcZ = (i & 4) ? 1.0f : -1.0f;
+      glm::vec4 p = invVP * glm::vec4(ndcX, ndcY, ndcZ, 1.0f);
+      if (std::abs(p.w) > 1e-10f)
+        p /= p.w;
+      frustumCorners[i] = glm::dvec3(p) + rebase;
+    }
+
+    // The grid plane's visible extent inside the frustum.  This is the
+    // plane clipped by all four side planes *and* by near/far.  Without
+    // the depth clip the debug polygon would show regions whose grid
+    // fragments are discarded outside the active depth slab.
+    std::array<glm::dvec3, 16> gridPolygon{};
+    int gridPolygonCount = 0;
+    if (useOrthoProjection() && orthoPlaneValid)
+    {
+      gridPolygon[0] = originWorld +
+          glm::dvec3(orthoPlaneCenter - orthoRight - orthoUp);
+      gridPolygon[1] = originWorld +
+          glm::dvec3(orthoPlaneCenter + orthoRight - orthoUp);
+      gridPolygon[2] = originWorld +
+          glm::dvec3(orthoPlaneCenter + orthoRight + orthoUp);
+      gridPolygon[3] = originWorld +
+          glm::dvec3(orthoPlaneCenter - orthoRight + orthoUp);
+      gridPolygonCount = 4;
+      gridVisibleQuadValid = true;
+    }
+    else if (!useOrthoProjection())
+    {
+      const glm::dvec3 camPos = orbitCam.Position;
+      const glm::dvec3 n = glm::normalize(gridPlaneNormal);
+      const double planeDist = glm::dot(gridPlaneOrigin - camPos, n);
+      gridVisibleQuadValid = true;
+      for (int i = 0; i < 4; ++i)
+      {
+        const glm::dvec3 dir =
+            glm::normalize(frustumCorners[4 + i] - camPos);
+        const double denom = glm::dot(dir, n);
+        if (std::abs(denom) < 1e-10 || planeDist / denom < 0.0)
+        {
+          gridVisibleQuadValid = false;
+          break;
+        }
+        gridPolygon[i] = camPos + dir * (planeDist / denom);
+      }
+      gridPolygonCount = gridVisibleQuadValid ? 4 : 0;
+    }
+    else
+    {
+      gridVisibleQuadValid = false;
+    }
+
+    if (gridVisibleQuadValid)
+    {
+      std::array<glm::dvec3, 16> clippedGridPolygon{};
+      int clippedGridPolygonCount = gridPolygonCount;
+      clipPolygonAgainstDepth(
+          gridPolygon.data(), clippedGridPolygonCount,
+          clippedGridPolygon.data(), (int)clippedGridPolygon.size(),
+          cameraPos, frontVec, true, activeFar);
+      if (clippedGridPolygonCount >= 3)
+      {
+        clipPolygonAgainstDepth(
+            clippedGridPolygon.data(), clippedGridPolygonCount,
+            clippedGridPolygon.data(), (int)clippedGridPolygon.size(),
+            cameraPos, frontVec, false, activeNear);
+      }
+      gridVisibleQuadValid = clippedGridPolygonCount >= 3 &&
+                             clippedGridPolygonCount <= 8;
+      if (gridVisibleQuadValid)
+      {
+        std::copy_n(clippedGridPolygon.begin(), clippedGridPolygonCount,
+                    gridVisibleQuad);
+        gridVisibleQuadCount = clippedGridPolygonCount;
+      }
+    }
+    if (!gridVisibleQuadValid)
+      gridVisibleQuadCount = 0;
+  }
+
     const rendering::GridRenderData gridRenderData{
         .view = view,
         .projection = projection,
@@ -1411,7 +1597,8 @@ void render()
       .gridColorMinor = glm::vec3(0.3f, 0.3f, 0.3f),
       .gridOpacity = 0.6f,
   };
-  rendererBackend->drawGrid(gridRenderData);
+  if (gridPlaneVisible)
+    rendererBackend->drawGrid(gridRenderData);
 
   // The green reference line is anchored to the literal world origin
   // (0, 0, 0) and the rebased grid anchor (planeCenter) is a separate
@@ -1422,7 +1609,8 @@ void render()
   // stays put.
   drawWorldLine(view, projection, rebase,
                 glm::dvec3(0.0, 0.0, 0.0),
-                worldLineEnd);
+                worldLineEnd,
+                glm::vec3(0.15f, 1.0f, 0.25f), 0.9f);
 
   // Translucent geometry goes last: the grid remains visible through the
   // cube, while the cube tints everything already rendered behind its front
@@ -1436,6 +1624,38 @@ void render()
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
   drawTargetPoint(view, projection, rebase, orbitCam.Target);
+
+  if (frustumWireframeVisible)
+  {
+    constexpr int nearEdges[4][2] = {{0,1},{1,2},{2,3},{3,0}};
+    constexpr int farEdges[4][2] = {{4,5},{5,6},{6,7},{7,4}};
+    constexpr int sideEdges[4][2] = {{0,4},{1,5},{2,6},{3,7}};
+    const glm::vec3 nearColor(1.0f, 0.2f, 0.2f);
+    const glm::vec3 farColor(0.2f, 0.4f, 1.0f);
+    const glm::vec3 sideColor(1.0f, 1.0f, 1.0f);
+    for (const auto &e : nearEdges)
+      drawWorldLine(view, projection, rebase,
+                    frustumCorners[e[0]], frustumCorners[e[1]],
+                    nearColor, 0.9f);
+    for (const auto &e : farEdges)
+      drawWorldLine(view, projection, rebase,
+                    frustumCorners[e[0]], frustumCorners[e[1]],
+                    farColor, 0.9f);
+    for (const auto &e : sideEdges)
+      drawWorldLine(view, projection, rebase,
+                    frustumCorners[e[0]], frustumCorners[e[1]],
+                    sideColor, 0.9f);
+    if (gridVisibleQuadValid)
+    {
+      const glm::vec3 gridQuadColor(1.0f, 0.85f, 0.1f);
+      for (int i = 0; i < gridVisibleQuadCount; ++i)
+        drawWorldLine(view, projection, rebase,
+                      gridVisibleQuad[i],
+                      gridVisibleQuad[(i + 1) % gridVisibleQuadCount],
+                      gridQuadColor, 0.9f);
+    }
+  }
+
   logCameraStateIfChanged(orbitCam.Target, activeNear, activeFar,
                           useOrthoProjection());
 
@@ -1503,6 +1723,11 @@ int main(int argc, char *argv[])
           applyGridPlane(GridPlaneType::YZ);
         if (evt.key.key == SDLK_4)
           applyGridPlane(GridPlaneType::Custom);
+        if (evt.key.key == SDLK_F)
+        {
+          frustumCaptureRequested = true;
+          std::cout << "Frustum wireframe: captured" << std::endl;
+        }
         if (evt.key.scancode == SDL_SCANCODE_L)
         {
           // L key -- swap the camera-position parameters only.  Projection

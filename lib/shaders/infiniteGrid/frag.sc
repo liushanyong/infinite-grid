@@ -133,15 +133,12 @@ void main()
     // The CPU supplies a D3D-depth view/projection, so clipPos.z / clipPos.w
     // is already in [0, 1] (equivalent to the reference GL shader's
     // ndc_z * 0.5 + 0.5). Emulate glDepthRange(1/65536, 1.0) as a linear
-    // remap. Values > 1 (beyond far plane) must fail against the cleared
-    // depth just like the reference does; SV_Depth is clamped to [0,1]
-    // for UNORM depth buffers on D3D, so an out-of-range value would
-    // silently become 1.0 and equal-pass, painting a persistent "outline"
-    // of anti-aliased grid edges on the far plane. Discard those pixels
-    // explicitly. Values < 0 (in front of near plane) still fail LEQUAL
-    // once clamped to 0.
+    // remap. Keep the fragment only inside the active depth slab. Beyond
+    // far, SV_Depth would clamp to 1.0 and equal-pass against the cleared
+    // depth, so discard explicitly. Before near, SV_Depth would clamp to 0
+    // and LEQUAL could also pass; discard that side explicitly as well.
     float rawDepth = clipPos.z / clipPos.w;
-    if (rawDepth > 1.0)
+    if (rawDepth > 1.0 || rawDepth < 0.0)
         discard;
     gl_FragDepth = 1.0 / 65536.0 + (1.0 - 1.0 / 65536.0) * rawDepth;
 

@@ -72,6 +72,7 @@ private:
 
     bgfx::UniformHandle m_lineStart = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_lineEnd = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_lineColor = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_lineProgram = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle m_lineBuffer = BGFX_INVALID_HANDLE;
 

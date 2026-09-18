@@ -2,7 +2,9 @@ $input v_endpoint
 
 #include "bgfx_shader.sh"
 
+uniform vec4 uColor;
+
 void main()
 {
-    gl_FragColor = vec4(0.15, 1.0, 0.25, 0.9);
+    gl_FragColor = uColor;
 }

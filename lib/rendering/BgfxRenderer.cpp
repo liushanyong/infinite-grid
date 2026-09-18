@@ -300,6 +300,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_cubeColor);
     destroyUniform(m_lineStart);
     destroyUniform(m_lineEnd);
+    destroyUniform(m_lineColor);
     destroyUniform(m_pointPosition);
     destroyUniform(m_pointSize);
     destroyUniform(m_pointColor);
@@ -496,6 +497,8 @@ void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
                      glm::value_ptr(glm::vec4(data.relativeStart, 1.0f)));
     bgfx::setUniform(m_lineEnd,
                      glm::value_ptr(glm::vec4(data.relativeEnd, 1.0f)));
+    bgfx::setUniform(m_lineColor,
+                     glm::value_ptr(glm::vec4(data.color, data.opacity)));
     bgfx::submit(0, m_lineProgram);
 }
 
@@ -614,6 +617,7 @@ bool BgfxRenderer::createRenderResources()
         m_cubeColor = createUniformHandle("uObjectColor", bgfx::UniformType::Vec4);
         m_lineStart = createUniformHandle("uRelativeStart", bgfx::UniformType::Vec4);
         m_lineEnd = createUniformHandle("uRelativeEnd", bgfx::UniformType::Vec4);
+        m_lineColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
         m_pointPosition = createUniformHandle("uRelativePosition", bgfx::UniformType::Vec4);
         m_pointSize = createUniformHandle("uPointSize", bgfx::UniformType::Vec4);
         m_pointColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
@@ -651,6 +655,7 @@ bool BgfxRenderer::createRenderResources()
                 bgfx::isValid(m_cubeRelativePosition) &&
                 bgfx::isValid(m_cubeOpacity) && bgfx::isValid(m_cubeColor) &&
                 bgfx::isValid(m_lineStart) && bgfx::isValid(m_lineEnd) &&
+                bgfx::isValid(m_lineColor) &&
                 bgfx::isValid(m_pointPosition) && bgfx::isValid(m_pointSize) &&
                 bgfx::isValid(m_pointColor);
     }

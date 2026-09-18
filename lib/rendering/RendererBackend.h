@@ -77,6 +77,8 @@ struct WorldLineRenderData
     glm::vec3 relativeStart;
     glm::vec3 relativeEnd;
     float lineWidth;
+    glm::vec3 color;
+    float opacity;
 };
 
 struct TargetPointRenderData
