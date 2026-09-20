@@ -1,11 +1,12 @@
 $input a_position, a_normal
-$output v_normal
+$output v_normal, v_viewDepth
 
 #include "bgfx_shader.sh"
 
 uniform mat4 uView;
 uniform mat4 projection;
 uniform vec4 uModelRelativePosition;
+uniform vec4 uLogDepth;
 
 void main()
 {
@@ -16,5 +17,7 @@ void main()
     modelNoTranslation[3].xyz = vec3(0.0, 0.0, 0.0);
     vec3 worldPosRebased = mul(modelNoTranslation, vec4(a_position, 1.0)).xyz + uModelRelativePosition.xyz;
 
-    gl_Position = mul(projection, mul(uView, vec4(worldPosRebased, 1.0)));
+    vec4 viewPosition = mul(uView, vec4(worldPosRebased, 1.0));
+    v_viewDepth = -viewPosition.z;
+    gl_Position = mul(projection, viewPosition);
 }

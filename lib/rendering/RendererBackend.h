@@ -48,6 +48,7 @@ struct GridRenderData
     glm::vec3 gridColorMajor;
     glm::vec3 gridColorMinor;
     float gridOpacity;
+    glm::vec4 logDepth;
 };
 
 enum class MeshType
@@ -67,6 +68,7 @@ struct CubeRenderData
     glm::vec3 objectColor;
     float opacity;
     MeshType mesh = MeshType::Cube;
+    glm::vec4 logDepth;
 };
 
 struct AabbRenderData
@@ -77,17 +79,21 @@ struct AabbRenderData
     glm::vec3 relativeMax;
     glm::vec3 color;
     float opacity;
+    glm::vec4 logDepth;
 };
 
 struct WorldLineRenderData
 {
-    glm::mat4 view;
     glm::mat4 projection;
-    glm::vec3 relativeStart;
-    glm::vec3 relativeEnd;
+    // CPU-side double camera-space values converted to float.  The vertex
+    // shader projects these directly, avoiding a second large-coordinate
+    // transform and interpolation in world/rebase space.
+    glm::vec3 viewStart;
+    glm::vec3 viewEnd;
     float lineWidth;
     glm::vec3 color;
     float opacity;
+    glm::vec4 logDepth;
 };
 
 struct TargetPointRenderData
@@ -98,6 +104,7 @@ struct TargetPointRenderData
     float pointSize;
     glm::vec3 color;
     float isOrtho;
+    glm::vec4 logDepth;
 };
 
 class RendererBackend

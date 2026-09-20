@@ -167,6 +167,18 @@ glm::mat4 projectionForDirect3D(const glm::mat4 &projection)
     return depthRange * projection;
 }
 
+float normalizedLogDepth(float viewDepth, const glm::vec4 &logDepth)
+{
+    if (logDepth.x < 0.5f)
+        return viewDepth;
+
+    const float depth = std::max(viewDepth, logDepth.y);
+    const float numerator = std::log2(std::max(depth / logDepth.y, 1.0f));
+    const float denominator =
+        std::log2(std::max(logDepth.z / logDepth.y, 1.000001f));
+    return std::clamp(numerator / denominator, 0.0f, 1.0f);
+}
+
 std::array<float, 4> packVec4(const glm::vec3 &value, float extra)
 {
     return {value.x, value.y, value.z, extra};
@@ -498,6 +510,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_gridColorMinor);
     destroyUniform(m_gridOpacity);
     destroyUniform(m_gridOrthoPlaneValid);
+    destroyUniform(m_logDepth);
     destroyUniform(m_view);
     destroyUniform(m_projection);
     destroyUniform(m_cubeRelativePosition);
@@ -600,11 +613,14 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
     if (!m_initialized || !bgfx::isValid(m_gridProgram))
         return;
 
+    // The grid is transparent and may cover the whole screen. Never leave
+    // depth behind for later transparent or overlay passes.
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LEQUAL |
+                   BGFX_STATE_DEPTH_TEST_LEQUAL |
                    BGFX_STATE_BLEND_ALPHA);
     bgfx::setVertexBuffer(0, m_gridBuffer);
     bgfx::setUniform(m_gridInvViewProj, glm::value_ptr(data.invViewProj));
+    bgfx::setUniform(m_view, glm::value_ptr(data.view));
     const glm::mat4 depthViewProj =
         projectionForDirect3D(data.projection) * data.view;
     bgfx::setUniform(m_gridViewProj, glm::value_ptr(depthViewProj));
@@ -663,6 +679,7 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
                      glm::value_ptr(glm::vec4(data.gridOpacity, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_gridOrthoPlaneValid,
                      glm::value_ptr(glm::vec4(data.orthoPlaneValid, 0.0f, 0.0f, 0.0f)));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
     bgfx::submit(0, m_gridProgram);
 }
 
@@ -676,9 +693,10 @@ void BgfxRenderer::drawCube(const CubeRenderData &data)
     // so screen-space winding is preserved and CULL_CW is required.
     // Using CULL_CCW would strip the front faces of every translucent cube
     // and break the intended painter-style depth ordering.
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z |
-                   BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW |
-                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW |
+                           BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+    bgfx::setState(data.opacity >= 0.999f ? state | BGFX_STATE_WRITE_Z : state);
     bgfx::setTransform(glm::value_ptr(data.model));
     bgfx::VertexBufferHandle meshBuffer = m_cubeBuffer;
     switch (data.mesh)
@@ -704,6 +722,7 @@ void BgfxRenderer::drawCube(const CubeRenderData &data)
                      glm::value_ptr(glm::vec4(data.opacity, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_cubeColor,
                      glm::value_ptr(glm::vec4(data.objectColor, 1.0f)));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
     bgfx::submit(0, m_cubeProgram);
 }
 
@@ -720,7 +739,7 @@ void BgfxRenderer::drawAabb(const AabbRenderData &data)
     const glm::mat4 projection = projectionForDirect3D(data.projection);
 
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LEQUAL |
+                   BGFX_STATE_DEPTH_TEST_LEQUAL |
                    BGFX_STATE_BLEND_ALPHA | BGFX_STATE_PT_LINES |
                    BGFX_STATE_LINEAA | BGFX_STATE_MSAA);
     bgfx::setTransform(glm::value_ptr(model));
@@ -733,6 +752,7 @@ void BgfxRenderer::drawAabb(const AabbRenderData &data)
                      glm::value_ptr(glm::vec4(data.opacity, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_cubeColor,
                      glm::value_ptr(glm::vec4(data.color, 1.0f)));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
     bgfx::submit(0, m_cubeProgram);
 }
 
@@ -744,18 +764,18 @@ void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
     const std::array<float, 2> vertices{0.0f, 1.0f};
     bgfx::update(m_lineBuffer, 0, bgfx::copy(vertices.data(), sizeof(vertices)));
     const glm::mat4 projection = projectionForDirect3D(data.projection);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z |
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA |
                    BGFX_STATE_PT_LINES | BGFX_STATE_LINEAA);
     bgfx::setVertexBuffer(0, m_lineBuffer);
-    bgfx::setUniform(m_view, glm::value_ptr(data.view));
     bgfx::setUniform(m_projection, glm::value_ptr(projection));
     bgfx::setUniform(m_lineStart,
-                     glm::value_ptr(glm::vec4(data.relativeStart, 1.0f)));
+                     glm::value_ptr(glm::vec4(data.viewStart, 1.0f)));
     bgfx::setUniform(m_lineEnd,
-                     glm::value_ptr(glm::vec4(data.relativeEnd, 1.0f)));
+                     glm::value_ptr(glm::vec4(data.viewEnd, 1.0f)));
     bgfx::setUniform(m_lineColor,
                      glm::value_ptr(glm::vec4(data.color, data.opacity)));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
     bgfx::submit(0, m_lineProgram);
 }
 
@@ -776,17 +796,21 @@ void BgfxRenderer::drawTargetPoint(const TargetPointRenderData &data)
     // plane. Bias the perspective target forward just enough to restore GL's
     // coincident ordering without passing the cube's front surface. Ortho
     // depth is linear and must match the reference exactly.
-    const float depthBias = data.isOrtho > 0.5f ? 0.0f : -0.0001f;
+    const glm::vec4 viewPosition =
+        data.view * glm::vec4(data.relativePosition, 1.0f);
+    float depth = data.isOrtho > 0.5f
+                      ? clip.z / clip.w
+                      : normalizedLogDepth(-viewPosition.z, data.logDepth) -
+                            0.0001f;
     const glm::vec4 position(
         ndc,
-        clip.z / clip.w + depthBias,
+        depth,
         1.0f);
     const glm::vec4 pointSize(data.pointSize * 2.0f / float(m_width),
                               data.pointSize * 2.0f / float(m_height),
                               0.0f, 0.0f);
 
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_WRITE_Z |
                    BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA);
     bgfx::setVertexBuffer(0, m_pointBuffer);
     bgfx::setUniform(m_pointPosition, glm::value_ptr(position));
@@ -874,13 +898,14 @@ bool BgfxRenderer::createRenderResources()
         m_gridColorMinor = createUniformHandle("uGridColorMinor", bgfx::UniformType::Vec4);
         m_gridOpacity = createUniformHandle("uGridOpacity", bgfx::UniformType::Vec4);
         m_gridOrthoPlaneValid = createUniformHandle("uOrthoPlaneValid", bgfx::UniformType::Vec4);
+        m_logDepth = createUniformHandle("uLogDepth", bgfx::UniformType::Vec4);
         m_view = createUniformHandle("uView", bgfx::UniformType::Mat4);
         m_projection = createUniformHandle("projection", bgfx::UniformType::Mat4);
         m_cubeRelativePosition = createUniformHandle("uModelRelativePosition", bgfx::UniformType::Vec4);
         m_cubeOpacity = createUniformHandle("uCubeOpacity", bgfx::UniformType::Vec4);
         m_cubeColor = createUniformHandle("uObjectColor", bgfx::UniformType::Vec4);
-        m_lineStart = createUniformHandle("uRelativeStart", bgfx::UniformType::Vec4);
-        m_lineEnd = createUniformHandle("uRelativeEnd", bgfx::UniformType::Vec4);
+        m_lineStart = createUniformHandle("uViewStart", bgfx::UniformType::Vec4);
+        m_lineEnd = createUniformHandle("uViewEnd", bgfx::UniformType::Vec4);
         m_lineColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
         m_pointPosition = createUniformHandle("uRelativePosition", bgfx::UniformType::Vec4);
         m_pointSize = createUniformHandle("uPointSize", bgfx::UniformType::Vec4);
@@ -917,6 +942,7 @@ bool BgfxRenderer::createRenderResources()
                 bgfx::isValid(m_gridColorMinor) &&
                 bgfx::isValid(m_gridOpacity) &&
                 bgfx::isValid(m_gridOrthoPlaneValid) &&
+                bgfx::isValid(m_logDepth) &&
                 bgfx::isValid(m_view) && bgfx::isValid(m_projection) &&
                 bgfx::isValid(m_cubeRelativePosition) &&
                 bgfx::isValid(m_cubeOpacity) && bgfx::isValid(m_cubeColor) &&

@@ -1,17 +1,18 @@
 $input a_texcoord0
-$output v_endpoint
+$output v_endpoint, v_viewDepth
 
 #include "bgfx_shader.sh"
 
-uniform mat4 uView;
 uniform mat4 projection;
-uniform vec4 uRelativeStart;
-uniform vec4 uRelativeEnd;
+uniform vec4 uViewStart;
+uniform vec4 uViewEnd;
+uniform vec4 uLogDepth;
 
 void main()
 {
     float endpoint = a_texcoord0.x;
     v_endpoint = endpoint;
-    vec3 relativePosition = mix(uRelativeStart.xyz, uRelativeEnd.xyz, endpoint);
-    gl_Position = mul(projection, mul(uView, vec4(relativePosition, 1.0)));
+    vec4 viewPosition = mix(uViewStart, uViewEnd, endpoint);
+    v_viewDepth = -viewPosition.z;
+    gl_Position = mul(projection, viewPosition);
 }

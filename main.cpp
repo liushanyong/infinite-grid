@@ -40,6 +40,7 @@ glm::dvec3 cubeWorldPosition(0.0);
 bool largeCoordinateCameraView = false;
 bool frustumCaptureRequested = false;
 bool frustumWireframeVisible = false;
+bool targetPlaneConstraintEnabled = false;
 glm::dvec3 frustumCorners[8];
 bool gridVisibleQuadValid = false;
 glm::dvec3 gridVisibleQuad[8];
@@ -58,6 +59,10 @@ glm::dvec3 gridPlaneNormal(0.0, 1.0, 0.0);
 glm::dvec3 gridPlaneStartAxisOrigin(0.0);
 glm::dvec3 gridPlaneStartAxisDirection(1.0, 0.0, 0.0);
 
+// Keep the CPU visibility test, slab construction, and grid shader discard
+// aligned.  A plane within five degrees of the view direction is hidden.
+constexpr double kMinGridPlaneCos = 0.087155743; // sin(5 degrees)
+
 // Edit these to define a non-axis-aligned infinite grid.  Key 4 activates it.
 glm::dvec3 customGridPlaneOrigin(1.0, 0.5, -0.5);
 glm::dvec3 customGridPlaneNormal =
@@ -65,6 +70,29 @@ glm::dvec3 customGridPlaneNormal =
 glm::dvec3 customGridPlaneStartAxisOrigin(1.0, 0.5, -0.5);
 glm::dvec3 customGridPlaneStartAxisDirection =
     glm::normalize(glm::dvec3(1.0, 0.0, 0.25));
+
+void enforceTargetPlaneConstraint();
+
+// Projection matrices are float32, while slab bounds are accumulated in
+// double.  Convert in the outward direction so rounding can never move a
+// near/far plane inside a bounds that was calculated to contain it.
+float floatExpandOutward(double value, bool downward)
+{
+    constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
+    constexpr float kPositiveInfinity = std::numeric_limits<float>::infinity();
+    const float direction = downward ? kNegativeInfinity : kPositiveInfinity;
+    float result = static_cast<float>(value);
+
+    if ((downward && static_cast<double>(result) > value) ||
+        (!downward && static_cast<double>(result) < value))
+    {
+        result = std::nextafterf(result, direction);
+    }
+
+    for (int i = 0; i < 3 && std::isfinite(result); ++i)
+        result = std::nextafterf(result, direction);
+    return result;
+}
 
 const char *gridPlaneName(GridPlaneType plane)
 {
@@ -127,6 +155,8 @@ void applyGridPlane(GridPlaneType plane)
               << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; origin=("
               << gridPlaneOrigin.x << ", " << gridPlaneOrigin.y << ", "
               << gridPlaneOrigin.z << "))" << std::endl;
+    if (targetPlaneConstraintEnabled)
+        enforceTargetPlaneConstraint();
 }
 
 void activePlaneTangents(glm::dvec3 &tangentU, glm::dvec3 &tangentV)
@@ -181,6 +211,34 @@ OrbitCamera orbitCam(
     -45.0f,          // Yaw
     20.0f            // Pitch
 );
+
+// Project the orbit focus onto the active grid plane. Translating the eye by
+// the same plane correction preserves the view direction and orbit distance;
+// ordinary orbiting may then still place the eye off the plane.
+void enforceTargetPlaneConstraint()
+{
+    const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
+    const double targetOnNormal =
+        glm::dot(orbitCam.Target - gridPlaneOrigin, planeNormal);
+    const glm::dvec3 correction = planeNormal * -targetOnNormal;
+    orbitCam.Target += correction;
+    orbitCam.Position += correction;
+}
+
+void setTargetPlaneConstraint(bool enabled)
+{
+    if (targetPlaneConstraintEnabled == enabled)
+        return;
+
+    targetPlaneConstraintEnabled = enabled;
+    if (enabled)
+        enforceTargetPlaneConstraint();
+
+    std::cout << "Target constraint: "
+              << (enabled ? "GRID PLANE" : "FREE")
+              << (enabled ? " (C disables)" : " (C enables)")
+              << std::endl;
+}
 
 FPSCamera fpsCam(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f), -90.0f, 0.0f);
 
@@ -247,7 +305,8 @@ void close()
 
 void drawTargetPoint(const glm::mat4 &view, const glm::mat4 &projection,
                      const glm::dvec3 &rebaseOrigin,
-                     const glm::dvec3 &targetWorldPosition)
+                     const glm::dvec3 &targetWorldPosition,
+                     const glm::vec4 &logDepth)
 {
   if (!rendererBackend)
     return;
@@ -259,6 +318,7 @@ void drawTargetPoint(const glm::mat4 &view, const glm::mat4 &projection,
       .pointSize = 5.0f,
       .color = glm::vec3(1.0f, 0.15f, 0.15f),
       .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
+      .logDepth = logDepth,
   };
   rendererBackend->drawTargetPoint(renderData);
 }
@@ -359,6 +419,7 @@ void drawAabbForCube(const rendering::CubeRenderData &renderData)
       .relativeMax = relativeMax,
       .color = glm::vec3(1.0f, 0.90f, 0.15f),
       .opacity = 1.0f,
+      .logDepth = renderData.logDepth,
   };
   rendererBackend->drawAabb(aabb);
 }
@@ -368,7 +429,8 @@ void drawCube(const glm::mat4 &view, const glm::mat4 &projection,
               const glm::dvec3 &objectWorldPosition,
               const glm::vec3 &objectColor,
               float opacity,
-              float size)
+              float size,
+              const glm::vec4 &logDepth)
 {
   if (!rendererBackend)
     return;
@@ -380,29 +442,53 @@ void drawCube(const glm::mat4 &view, const glm::mat4 &projection,
       .modelRelativePosition = glm::vec3(objectWorldPosition - rebaseOrigin),
       .objectColor = objectColor,
       .opacity = opacity,
+      .logDepth = logDepth,
   };
   rendererBackend->drawCube(renderData);
   drawAabbForCube(renderData);
 }
 
-void drawWorldLine(const glm::mat4 &view, const glm::mat4 &projection,
-                   const glm::dvec3 &rebaseOrigin,
+// View-space Z is negative in front of the eye, while clipping code uses
+// positive distance along OrbitCamera::Front.  Evaluate in double here, then
+// let the shader interpolate already-projected, camera-sized endpoints.
+glm::dvec3 toViewSpace(const glm::dvec3 &worldPosition,
+                       const glm::dvec3 &cameraPosition,
+                       const glm::dvec3 &cameraRight,
+                       const glm::dvec3 &cameraUp,
+                       const glm::dvec3 &cameraFront)
+{
+  const glm::dvec3 delta = worldPosition - cameraPosition;
+  return {glm::dot(delta, cameraRight),
+          glm::dot(delta, cameraUp),
+          -glm::dot(delta, cameraFront)};
+}
+
+void drawWorldLine(const glm::mat4 &projection,
+                   const glm::dvec3 &cameraPosition,
+                   const glm::dvec3 &cameraRight,
+                   const glm::dvec3 &cameraUp,
+                   const glm::dvec3 &cameraFront,
                    const glm::dvec3 &startWorldPosition,
                    const glm::dvec3 &endWorldPosition,
                    const glm::vec3 &color = glm::vec3(0.15f, 1.0f, 0.25f),
-                   float opacity = 0.9f)
+                   float opacity = 0.9f,
+                   const glm::vec4 &logDepth = glm::vec4(0.0f))
 {
   if (!rendererBackend)
     return;
 
   const rendering::WorldLineRenderData renderData{
-      .view = view,
       .projection = projection,
-      .relativeStart = glm::vec3(startWorldPosition - rebaseOrigin),
-      .relativeEnd = glm::vec3(endWorldPosition - rebaseOrigin),
+      .viewStart = glm::vec3(toViewSpace(startWorldPosition, cameraPosition,
+                                         cameraRight, cameraUp,
+                                         cameraFront)),
+      .viewEnd = glm::vec3(toViewSpace(endWorldPosition, cameraPosition,
+                                       cameraRight, cameraUp,
+                                       cameraFront)),
       .lineWidth = 2.0f,
       .color = color,
       .opacity = opacity,
+      .logDepth = logDepth,
   };
   rendererBackend->drawWorldLine(renderData);
 }
@@ -411,7 +497,7 @@ void drawMesh(const glm::mat4 &view, const glm::mat4 &projection,
               const glm::dvec3 &rebaseOrigin,
               const glm::dvec3 &objectWorldPosition,
               const glm::vec3 &objectColor, float opacity, float size,
-              rendering::MeshType mesh)
+              rendering::MeshType mesh, const glm::vec4 &logDepth)
 {
   if (!rendererBackend)
     return;
@@ -424,6 +510,7 @@ void drawMesh(const glm::mat4 &view, const glm::mat4 &projection,
       .objectColor = objectColor,
       .opacity = opacity,
       .mesh = mesh,
+      .logDepth = logDepth,
   };
   rendererBackend->drawCube(renderData);
 }
@@ -441,7 +528,7 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
   static const std::vector<LargeCoordinateObject> objects = [] {
     const glm::dvec3 detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
-    return std::vector<LargeCoordinateObject>{
+    std::vector<LargeCoordinateObject> objects{
         {LARGE_COORDINATE_BASE_POINT + glm::dvec3(0.0, 256.0, 0.0),
          glm::vec3(0.43f, 0.91f, 0.98f), 512.0f},
         {detailCenter + glm::dvec3(0.0, 224.0, 0.0),
@@ -459,6 +546,7 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
         {detailCenter + glm::dvec3(288.0, 32.0, -224.0),
          glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
     };
+    return objects;
   }();
   return objects;
 }
@@ -468,39 +556,27 @@ const std::vector<LargeCoordinateObject> &getStressObjects();
 
 void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::mat4 &projection,
-                                const glm::dvec3 &rebaseOrigin)
+                                const glm::dvec3 &rebaseOrigin,
+                                std::vector<const LargeCoordinateObject *> &drawOrder,
+                                const glm::vec4 &logDepth)
 {
-  const std::vector<LargeCoordinateObject> &objects =
-      getLargeCoordinateObjects();
-
-  const LargeCoordinateObject *drawOrder[8];
-  for (std::size_t i = 0; i < objects.size() && i < 8; ++i)
-    drawOrder[i] = &objects[i];
-  std::sort(std::begin(drawOrder), std::end(drawOrder),
+  const glm::dvec3 cameraPos(orbitCam.Position);
+  const glm::dvec3 cameraFront(orbitCam.Front);
+  std::sort(drawOrder.begin(), drawOrder.end(),
       [&](const LargeCoordinateObject *lhs,
           const LargeCoordinateObject *rhs) {
-        const glm::dvec3 lhsDelta = lhs->worldPosition - rebaseOrigin;
-        const glm::dvec3 rhsDelta = rhs->worldPosition - rebaseOrigin;
-        return glm::dot(lhsDelta, lhsDelta) > glm::dot(rhsDelta, rhsDelta);
+        const double lhsDepth =
+            glm::dot(lhs->worldPosition - cameraPos, cameraFront);
+        const double rhsDepth =
+            glm::dot(rhs->worldPosition - cameraPos, cameraFront);
+        return lhsDepth > rhsDepth;
       });
 
-  // All objects are translucent, so paint them far-to-near for stable alpha.
-  for (const auto *object : drawOrder)
+  for (const LargeCoordinateObject *object : drawOrder)
   {
-    drawCube(view, projection, rebaseOrigin, object->worldPosition,
-             object->color, 0.45f, object->size);
-
+    drawMesh(view, projection, rebaseOrigin, object->worldPosition,
+             object->color, 0.45f, object->size, object->mesh, logDepth);
   }
-  // Stress-test field (spheres/cones/tori/cubes at large coordinates).
-  // Generated once at startup; always drawn. Pan the camera to (1e7, 0, 1e7) to inspect.
-  {
-    for (const LargeCoordinateObject &object : getStressObjects())
-    {
-      drawMesh(view, projection, rebaseOrigin, object.worldPosition,
-               object.color, 0.45f, object.size, object.mesh);
-    }
-
-}
 }
 
 
@@ -561,6 +637,155 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
     return result;
   }();
   return objects;
+}
+
+struct WorldAabb
+{
+  glm::dvec3 min;
+  glm::dvec3 max;
+  bool valid = false;
+};
+
+void expandWorldAabb(WorldAabb &bounds, const glm::dvec3 &center,
+                     const glm::dvec3 &halfExtent)
+{
+  const glm::dvec3 minimum = center - halfExtent;
+  const glm::dvec3 maximum = center + halfExtent;
+  if (!bounds.valid)
+  {
+    bounds.min = minimum;
+    bounds.max = maximum;
+    bounds.valid = true;
+    return;
+  }
+
+  bounds.min = glm::min(bounds.min, minimum);
+  bounds.max = glm::max(bounds.max, maximum);
+}
+
+// Immutable scene bounds are computed once; the per-frame pass only converts
+// this one conservative box to camera space before doing exact object culling.
+const WorldAabb &immutableObjectBounds()
+{
+  static const WorldAabb bounds = [] {
+    WorldAabb result;
+    for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
+    {
+      expandWorldAabb(result, object.worldPosition,
+                      glm::dvec3(object.size * 0.5));
+    }
+    for (const LargeCoordinateObject &object : getStressObjects())
+    {
+      expandWorldAabb(result, object.worldPosition,
+                      glm::dvec3(object.size * 0.5));
+    }
+    return result;
+  }();
+  return bounds;
+}
+
+const WorldAabb &immutableSceneBounds()
+{
+  static const WorldAabb bounds = [] {
+    WorldAabb result = immutableObjectBounds();
+
+    // The reference line is always drawn and may connect distant clusters.
+    expandWorldAabb(result, glm::dvec3(0.0), glm::dvec3(0.0));
+    expandWorldAabb(result, LARGE_COORDINATE_BASE_POINT, glm::dvec3(0.0));
+    return result;
+  }();
+  return bounds;
+}
+
+// Put the initial orbit camera around a bounding sphere of every renderable
+// object.  This is a fit-all view, not a request to bypass per-frame culling:
+// all objects are therefore submitted on the first perspective frame, while
+// later views still avoid drawing geometry outside the CAD frustum.
+void fitCameraToRenderableObjects()
+{
+  const WorldAabb &bounds = immutableObjectBounds();
+  if (!bounds.valid)
+    return;
+
+  const glm::dvec3 center = (bounds.min + bounds.max) * 0.5;
+  const glm::dvec3 halfExtent = (bounds.max - bounds.min) * 0.5;
+  const double boundingRadius = std::max(1.0, glm::length(halfExtent));
+
+  int drawableWidth = SCREEN_WIDTH;
+  int drawableHeight = SCREEN_HEIGHT;
+  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+  drawableWidth = std::max(drawableWidth, 1);
+  drawableHeight = std::max(drawableHeight, 1);
+  const double aspect = static_cast<double>(drawableWidth) /
+                        static_cast<double>(drawableHeight);
+
+  // glm::perspective() uses a 45-degree vertical FOV.  Fit the bounding
+  // sphere against the narrower of the vertical/horizontal FOVs.
+  const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
+  const double halfFov = std::min(
+      glm::radians(45.0) * 0.5,
+      std::atan(tanHalfVertical * aspect));
+  const double distance =
+      std::nextafter(boundingRadius / std::sin(halfFov),
+                     std::numeric_limits<double>::infinity()) * 1.04;
+
+  orbitCam.setOrbit(center, distance);
+  if (useOrthoProjection())
+    orthoHalfHeight() = static_cast<float>(boundingRadius * 1.04);
+
+  std::cout << std::fixed << std::setprecision(3)
+            << "Initial fit-all camera: center=(" << center.x << ", "
+            << center.y << ", " << center.z << ") distance=" << distance
+            << std::endl;
+}
+
+// Pressing L asks for the stress field itself, not the nearby validation
+// cluster.  Fit that field's local bounds so a perspective camera does not
+// inherit an orbit focus that places the requested geometry behind the eye.
+void fitCameraToStressField()
+{
+  WorldAabb bounds;
+  for (const LargeCoordinateObject &object : getStressObjects())
+  {
+    expandWorldAabb(bounds, object.worldPosition,
+                    glm::dvec3(object.size * 0.5));
+  }
+
+  if (!bounds.valid)
+  {
+    const glm::dvec3 detailCenter =
+        LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
+    orbitCam.setOrbit(detailCenter, 6000.0);
+    return;
+  }
+
+  const glm::dvec3 center = (bounds.min + bounds.max) * 0.5;
+  const glm::dvec3 halfExtent = (bounds.max - bounds.min) * 0.5;
+  const double boundingRadius = std::max(1.0, glm::length(halfExtent));
+
+  int drawableWidth = SCREEN_WIDTH;
+  int drawableHeight = SCREEN_HEIGHT;
+  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+  drawableWidth = std::max(drawableWidth, 1);
+  drawableHeight = std::max(drawableHeight, 1);
+  const double aspect = static_cast<double>(drawableWidth) /
+                        static_cast<double>(drawableHeight);
+
+  const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
+  const double halfFov = std::min(
+      glm::radians(45.0) * 0.5,
+      std::atan(tanHalfVertical * aspect));
+  const double distance =
+      std::nextafter(boundingRadius / std::sin(halfFov),
+                     std::numeric_limits<double>::infinity()) * 1.04;
+
+  orbitCam.setOrbit(center, distance);
+  if (useOrthoProjection())
+    orthoHalfHeight() = static_cast<float>(boundingRadius * 1.04);
+
+  std::cout << "Stress-field camera: center=(" << center.x << ", "
+            << center.y << ", " << center.z << ") distance=" << distance
+            << std::endl;
 }
 
 
@@ -686,6 +911,35 @@ void handleOrbitZoom(SDL_Event event)
   }
 }
 
+// Keep the world size visible at OrbitCamera::Target when switching modes.
+// Ortho scale is halfHeight; perspective scale at the target plane is
+// distance * tan(FOV / 2).  Do not derive this from dynamic near/far slabs.
+void switchProjectionMode()
+{
+  constexpr double kFovDegrees = 45.0;
+  const double tanHalfVertical = std::tan(glm::radians(kFovDegrees) * 0.5);
+  bool &isOrtho = useOrthoProjection();
+
+  if (isOrtho)
+  {
+    const double distance = orthoHalfHeight() / tanHalfVertical;
+    orbitCam.setTargetDistance(distance);
+    isOrtho = false;
+  }
+  else
+  {
+    const double distance = glm::length(orbitCam.Position - orbitCam.Target);
+    float &halfHeight = orthoHalfHeight();
+    halfHeight = glm::clamp(
+        static_cast<float>(distance * tanHalfVertical), halfHMin, halfHMax);
+    isOrtho = true;
+  }
+
+  std::cout << "Projection: "
+            << (isOrtho ? "ORTHOGRAPHIC" : "PERSPECTIVE")
+            << std::endl;
+}
+
 // -------------------------------------------------------------------------
 // FPS camera scaffolding -- built but not wired into render().
 //
@@ -800,6 +1054,16 @@ struct CameraSpacePoint
   double depth;
 };
 
+struct CameraSpaceAabb
+{
+  double minX;
+  double maxX;
+  double minY;
+  double maxY;
+  double minDepth;
+  double maxDepth;
+};
+
 // Equivalent to transforming by the inverse view matrix, but evaluated in
 // double precision from the camera basis.  This is important for the
 // rebased large-coordinate scene: converting an absolute world position
@@ -817,69 +1081,62 @@ CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
           glm::dot(delta, cameraFront)};
 }
 
-void includeAabbCameraDepth(const glm::dvec3 &worldCenter,
-                            const glm::dvec3 &halfExtent,
-                            const glm::dvec3 &cameraPosition,
-                            const glm::dvec3 &cameraRight,
-                            const glm::dvec3 &cameraUp,
-                            const glm::dvec3 &cameraFront,
-                            double &minDepth,
-                            double &maxDepth)
-{
-  // Transform all eight corners, as opposed to estimating the depth from
-  // the center and a bounding sphere.  This is the same conservative
-  // bounding-box approach used by scene-graph cullers such as OSG.
-  for (int x = -1; x <= 1; x += 2)
-  {
-    for (int y = -1; y <= 1; y += 2)
-    {
-      for (int z = -1; z <= 1; z += 2)
-      {
-        const glm::dvec3 corner = worldCenter + glm::dvec3(
-            x * halfExtent.x, y * halfExtent.y, z * halfExtent.z);
-        const CameraSpacePoint cameraPoint = toCameraSpace(
-            corner, cameraPosition, cameraRight, cameraUp, cameraFront);
-        minDepth = std::min(minDepth, cameraPoint.depth);
-        maxDepth = std::max(maxDepth, cameraPoint.depth);
-      }
-    }
-  }
-}
-
-bool aabbIntersectsOrthoViewport(const glm::dvec3 &worldCenter,
+// The exact camera-space bounds of an axis-aligned box.  The support radius
+// along each camera basis vector is dot(abs(basis), halfExtent); summing all
+// three world-axis contributions is required for a rotated camera basis.
+CameraSpaceAabb cameraAabbBounds(const glm::dvec3 &worldCenter,
                                  const glm::dvec3 &halfExtent,
                                  const glm::dvec3 &cameraPosition,
                                  const glm::dvec3 &cameraRight,
                                  const glm::dvec3 &cameraUp,
-                                 const glm::dvec3 &cameraFront,
+                                 const glm::dvec3 &cameraFront)
+{
+  const glm::dvec3 delta = worldCenter - cameraPosition;
+  const double rightRadius = glm::dot(glm::abs(cameraRight), halfExtent);
+  const double upRadius = glm::dot(glm::abs(cameraUp), halfExtent);
+  const double frontRadius = glm::dot(glm::abs(cameraFront), halfExtent);
+  const double centerX = glm::dot(delta, cameraRight);
+  const double centerY = glm::dot(delta, cameraUp);
+  const double centerDepth = glm::dot(delta, cameraFront);
+
+  return {centerX - rightRadius, centerX + rightRadius,
+          centerY - upRadius,      centerY + upRadius,
+          centerDepth - frontRadius, centerDepth + frontRadius};
+}
+
+bool aabbIntersectsOrthoViewport(const CameraSpaceAabb &bounds,
                                  double halfWidth,
                                  double halfHeight)
 {
-  double minX = std::numeric_limits<double>::max();
-  double maxX = -std::numeric_limits<double>::max();
-  double minY = std::numeric_limits<double>::max();
-  double maxY = -std::numeric_limits<double>::max();
+  return bounds.maxX >= -halfWidth && bounds.minX <= halfWidth &&
+         bounds.maxY >= -halfHeight && bounds.minY <= halfHeight;
+}
 
-  for (int x = -1; x <= 1; x += 2)
-  {
-    for (int y = -1; y <= 1; y += 2)
-    {
-      for (int z = -1; z <= 1; z += 2)
-      {
-        const glm::dvec3 corner = worldCenter + glm::dvec3(
-            x * halfExtent.x, y * halfExtent.y, z * halfExtent.z);
-        const CameraSpacePoint cameraPoint = toCameraSpace(
-            corner, cameraPosition, cameraRight, cameraUp, cameraFront);
-        minX = std::min(minX, cameraPoint.x);
-        maxX = std::max(maxX, cameraPoint.x);
-        minY = std::min(minY, cameraPoint.y);
-        maxY = std::max(maxY, cameraPoint.y);
-      }
-    }
-  }
+bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
+                                      double nearPlane, double farPlane,
+                                      double tanHalfVertical,
+                                      double tanHalfHorizontal)
+{
+  // Test the six frustum half-spaces directly.  For each plane, the largest
+  // signed distance being negative is the only possible AABB rejection.
+  const auto outside = [&](double x, double y, double z, double offset) {
+    const double minimum =
+        (x < 0.0 ? bounds.maxX : bounds.minX) * x +
+        (y < 0.0 ? bounds.maxY : bounds.minY) * y +
+        (z < 0.0 ? bounds.maxDepth : bounds.minDepth) * z + offset;
+    const double maximum =
+        (x < 0.0 ? bounds.minX : bounds.maxX) * x +
+        (y < 0.0 ? bounds.minY : bounds.maxY) * y +
+        (z < 0.0 ? bounds.minDepth : bounds.maxDepth) * z + offset;
+    return maximum < 0.0;
+  };
 
-  return maxX >= -halfWidth && minX <= halfWidth &&
-         maxY >= -halfHeight && minY <= halfHeight;
+  return !outside( 0.0,  0.0,  1.0, -nearPlane) &&       // z >= near
+         !outside( 0.0,  0.0, -1.0,  farPlane) &&        // z <= far
+         !outside( 1.0,  0.0,  tanHalfHorizontal, 0.0) && // left
+         !outside(-1.0,  0.0,  tanHalfHorizontal, 0.0) && // right
+         !outside( 0.0,  1.0,  tanHalfVertical,   0.0) && // bottom
+         !outside( 0.0, -1.0,  tanHalfVertical,   0.0);   // top
 }
 
 // Liang-Barsky style 2D clipping of a world-space line segment against the
@@ -951,6 +1208,164 @@ void includeSegmentCameraDepth(const glm::dvec3 &startWorldPosition,
   const double depthExit  = p0.depth + (p1.depth - p0.depth) * tExit;
   minDepth = std::min(minDepth, std::min(depthEnter, depthExit));
   maxDepth = std::max(maxDepth, std::max(depthEnter, depthExit));
+}
+
+// Clip a camera-space segment to the four perspective side planes and a
+// minimum forward depth.  Unlike projecting both endpoints, this reports the
+// depth interval of the portion that can actually enter the view volume.
+bool includeSegmentPerspectiveDepth(
+    const CameraSpacePoint &start, const CameraSpacePoint &end,
+    double minimumDepth, double tanHalfVertical, double tanHalfHorizontal,
+    double &minDepth, double &maxDepth)
+{
+  const double dx = end.x - start.x;
+  const double dy = end.y - start.y;
+  const double dz = end.depth - start.depth;
+
+  // Each half-space has the form value(t) = a + b * t >= 0.
+  const double constraints[5][2] = {
+      {start.depth - minimumDepth, dz},
+      {start.x + start.depth * tanHalfHorizontal,
+       dx + dz * tanHalfHorizontal},
+      {-start.x + start.depth * tanHalfHorizontal,
+       -dx + dz * tanHalfHorizontal},
+      {start.y + start.depth * tanHalfVertical,
+       dy + dz * tanHalfVertical},
+      {-start.y + start.depth * tanHalfVertical,
+       -dy + dz * tanHalfVertical},
+  };
+
+  double tEnter = 0.0;
+  double tExit = 1.0;
+  for (const auto &constraint : constraints)
+  {
+    const double a = constraint[0];
+    const double b = constraint[1];
+    if (a < 0.0)
+    {
+      if (b <= 0.0)
+        return false;
+      tEnter = std::max(tEnter, -a / b);
+    }
+    else if (b < 0.0)
+    {
+      tExit = std::min(tExit, a / -b);
+    }
+  }
+
+  if (tEnter > tExit)
+    return false;
+
+  const double depthEnter = start.depth + dz * tEnter;
+  const double depthExit = start.depth + dz * tExit;
+  minDepth = std::min({minDepth, depthEnter, depthExit});
+  maxDepth = std::max({maxDepth, depthEnter, depthExit});
+  return true;
+}
+
+// Clip a world segment to camera-space half spaces of the form
+// a + b * t >= 0.  Keeping the interpolation parameter in double lets the
+// caller draw only the visible portion of a very long line; each endpoint is
+// then close enough to the frame's rebase origin for the float32 GPU path.
+template <size_t N>
+bool clipWorldSegmentToHalfSpaces(
+    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
+    const CameraSpacePoint &startCamera,
+    const CameraSpacePoint &endCamera,
+    const double (&constraints)[N][2],
+    glm::dvec3 &clippedStart, glm::dvec3 &clippedEnd)
+{
+  const glm::dvec3 deltaWorld = endWorld - startWorld;
+  const double dx = endCamera.x - startCamera.x;
+  const double dy = endCamera.y - startCamera.y;
+  const double dz = endCamera.depth - startCamera.depth;
+
+  double tEnter = 0.0;
+  double tExit = 1.0;
+  for (const auto &constraint : constraints)
+  {
+    const double a = constraint[0];
+    const double b = constraint[1];
+    if (a < 0.0)
+    {
+      if (b <= 0.0)
+        return false;
+      tEnter = std::max(tEnter, -a / b);
+    }
+    else if (b < 0.0)
+    {
+      tExit = std::min(tExit, a / -b);
+    }
+  }
+
+  if (tEnter > tExit)
+    return false;
+
+  clippedStart = startWorld + deltaWorld * tEnter;
+  clippedEnd = startWorld + deltaWorld * tExit;
+  return true;
+}
+
+bool clipReferenceSegmentToOrtho(
+    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
+    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
+    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
+    double nearPlane, double farPlane, double halfWidth,
+    double halfHeight, glm::dvec3 &clippedStart,
+    glm::dvec3 &clippedEnd)
+{
+  const CameraSpacePoint start = toCameraSpace(
+      startWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
+  const CameraSpacePoint end = toCameraSpace(
+      endWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
+  const double dx = end.x - start.x;
+  const double dy = end.y - start.y;
+  const double dz = end.depth - start.depth;
+
+  const double constraints[6][2] = {
+      {start.depth - nearPlane, dz},
+      {farPlane - start.depth, -dz},
+      {start.x + halfWidth, dx},
+      {halfWidth - start.x, -dx},
+      {start.y + halfHeight, dy},
+      {halfHeight - start.y, -dy},
+  };
+  return clipWorldSegmentToHalfSpaces(startWorld, endWorld, start, end,
+                                      constraints, clippedStart,
+                                      clippedEnd);
+}
+
+bool clipReferenceSegmentToPerspective(
+    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
+    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
+    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
+    double nearPlane, double farPlane, double tanHalfVertical,
+    double tanHalfHorizontal, glm::dvec3 &clippedStart,
+    glm::dvec3 &clippedEnd)
+{
+  const CameraSpacePoint start = toCameraSpace(
+      startWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
+  const CameraSpacePoint end = toCameraSpace(
+      endWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
+  const double dx = end.x - start.x;
+  const double dy = end.y - start.y;
+  const double dz = end.depth - start.depth;
+
+  const double constraints[6][2] = {
+      {start.depth - nearPlane, dz},
+      {farPlane - start.depth, -dz},
+      {start.x + start.depth * tanHalfHorizontal,
+       dx + dz * tanHalfHorizontal},
+      {-start.x + start.depth * tanHalfHorizontal,
+       -dx + dz * tanHalfHorizontal},
+      {start.y + start.depth * tanHalfVertical,
+       dy + dz * tanHalfVertical},
+      {-start.y + start.depth * tanHalfVertical,
+       -dy + dz * tanHalfVertical},
+  };
+  return clipWorldSegmentToHalfSpaces(startWorld, endWorld, start, end,
+                                      constraints, clippedStart,
+                                      clippedEnd);
 }
 
 // Clip a world-space polygon against one camera-depth plane.  Camera depth
@@ -1044,10 +1459,25 @@ void render()
   // object uniform downstream.
   glm::mat4 view = orbitCam.getViewMatrix(rebase);
   glm::mat4 projection;
+  glm::mat4 overlayProjection;
   float pixelSize = 0.0f;
   double activeNear = 0.0;
   double activeFar  = 0.0;
+  float overlayNear = 0.0f;
+  float overlayFar = 0.0f;
+  glm::vec4 logDepth(0.0f);
+  static std::vector<const LargeCoordinateObject *> drawOrder;
+  drawOrder.clear();
+  drawOrder.reserve(getLargeCoordinateObjects().size() +
+                    getStressObjects().size());
+  static std::vector<const LargeCoordinateObject *> tinyDraws;
+  tinyDraws.clear();
+  tinyDraws.reserve(getLargeCoordinateObjects().size() +
+                    getStressObjects().size());
   const glm::dvec3 worldLineEnd = LARGE_COORDINATE_BASE_POINT;
+  glm::dvec3 referenceLineStart = glm::dvec3(0.0);
+  glm::dvec3 referenceLineEnd = worldLineEnd;
+  bool referenceLineVisible = false;
 
   const glm::dvec3 cameraPos(orbitCam.Position);
   const glm::dvec3 frontVec(orbitCam.Front);
@@ -1077,32 +1507,95 @@ void render()
     const glm::dvec3 right(glm::dvec3(orbitCam.Right));
     const glm::dvec3 up(glm::dvec3(orbitCam.Up));
 
-    // Symmetric ortho slab around the camera target depth.  Ortho
-    // float32 quantization at the target is slabRadius * 2^-23, so the
-    // floor radius (1e5) keeps that error at ~0.012 world units -- well
-    // below the 1-unit scene detail -- while being as large as
-    // precision allows.  1e5 also matches the orbit-distance cap, so
-    // near never clips content between the camera and the target.  The
-    // radius never drops below the viewport extent either, so extreme
-    // zoom-out keeps far content inside the slab.
+    // Start with the depth interval covered by the visible ortho image.
+    // The scene bounds below can make near negative; that is intentional
+    // because orthographic geometry can straddle the camera plane.
+    // Clamping near to zero would hide the lower half of the center cube.
     const CameraSpacePoint targetCamera =
         toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
     const double targetDepth = targetCamera.depth;
 
     const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
-    constexpr double kOrthoSlabRadius = 1.0e5;
-    constexpr double kDepthMargin = 1.0;
-    const double slabRadius =
-        std::max(imageRadius + kDepthMargin, kOrthoSlabRadius);
+    double slabRadius = imageRadius;
 
-    const double nearD = targetDepth - slabRadius;
-    const double farD  = targetDepth + slabRadius;
+    auto includeObjectDepth = [&](const LargeCoordinateObject &object) {
+      const double halfSize = (double)object.size * 0.5;
+      const CameraSpaceAabb bounds = cameraAabbBounds(
+          object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
+          up, front);
+      if (aabbIntersectsOrthoViewport(bounds, halfW, halfH))
+      {
+        slabRadius = std::max(
+            {slabRadius,
+             std::abs(bounds.minDepth - targetDepth),
+             std::abs(bounds.maxDepth - targetDepth)});
+        drawOrder.push_back(&object);
+      }
+    };
+
+    {
+      const CameraSpaceAabb bounds = cameraAabbBounds(
+          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front);
+      if (aabbIntersectsOrthoViewport(bounds, halfW, halfH))
+      {
+        slabRadius = std::max(
+            {slabRadius,
+             std::abs(bounds.minDepth - targetDepth),
+             std::abs(bounds.maxDepth - targetDepth)});
+      }
+    }
+    for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
+      includeObjectDepth(object);
+    for (const LargeCoordinateObject &object : getStressObjects())
+      includeObjectDepth(object);
+
+    // The reference line can be 1e7 units long.  Clip it to the ortho
+    // viewport first so only its visible part can extend the slab.
+    double segmentMinDepth = targetDepth;
+    double segmentMaxDepth = targetDepth;
+    includeSegmentCameraDepth(
+        glm::dvec3(0.0, 0.0, 0.0), worldLineEnd,
+        cameraPos, right, up, front, halfW, halfH,
+        segmentMinDepth, segmentMaxDepth);
+    slabRadius = std::max(
+        {slabRadius,
+         std::abs(segmentMinDepth - targetDepth),
+         std::abs(segmentMaxDepth - targetDepth)});
+
+    // The infinite ground plane can extend beyond the target-centered
+    // viewport interval, especially at grazing angles.  Use the same
+    // analytic interval that decides whether the grid plane is visible.
+    if (std::abs(frontOnNormal) > kMinGridPlaneCos)
+    {
+      const double cameraPlaneDistance =
+          glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
+      const double groundCenterDepth =
+          -cameraPlaneDistance / frontOnNormal;
+      const double groundDepthRadius =
+          (std::abs(glm::dot(right, planeNormal)) * halfW +
+           std::abs(glm::dot(up, planeNormal)) * halfH) /
+          std::abs(frontOnNormal);
+      slabRadius = std::max(
+          {slabRadius,
+           std::abs(groundCenterDepth - groundDepthRadius - targetDepth),
+           std::abs(groundCenterDepth + groundDepthRadius - targetDepth)});
+    }
+
+    // Keep a stable minimum slab as the ortho image zooms in.  A full 128
+    // world-unit span comfortably covers close-up geometry without pushing
+    // ortho depth precision far enough to matter even at 1e7 coordinates.
+    constexpr double kMinDepthSpan = 1024.0;
+    slabRadius = std::max(slabRadius, kMinDepthSpan * 0.5);
+
+    const double orthoNearDepth = targetDepth - slabRadius;
+    const double orthoFarDepth = targetDepth + slabRadius;
+    const float near = floatExpandOutward(orthoNearDepth, true);
+    const float far = floatExpandOutward(orthoFarDepth, false);
 
     projection = glm::ortho(-halfH * aspect, halfH * aspect,
-                             -halfH,            halfH,
-                             (float)nearD, (float)farD);
-    activeNear = nearD;
-    activeFar  = farD;
+                             -halfH,            halfH, near, far);
+    activeNear = near;
+    activeFar  = far;
 
     // Analytic ortho pixel size (doc section 4.2): the vertical frustum
     // extent 2 * halfH maps onto the drawable viewport height.
@@ -1110,20 +1603,231 @@ void render()
   }
   else
   {
-    // With a 32-bit depth buffer, use a fixed perspective range instead of
-    // the old scene-distance/hysteresis calculation.  The range is large,
-    // but its finite bounds still guard against pathological camera states.
-    const float near = 1.0f;
-    const float far  = 1.0e9f;
-    projection = glm::perspective(glm::radians(45.0f), aspect, near, far);
+    const glm::dvec3 right(glm::dvec3(orbitCam.Right));
+    const glm::dvec3 up(glm::dvec3(orbitCam.Up));
+    const double tanHalfVertical =
+        std::tan(glm::radians(45.0) * 0.5);
+    const double tanHalfHorizontal = tanHalfVertical * aspect;
+
+    constexpr double kNearDepthFloor = 0.05;
+    constexpr double kMaxPerspectiveFar = 1.0e9;
+    constexpr double kMinPerspectiveSpan = 1.0;
+    constexpr double kMinObjectPixelExtent = 0.1;
+    // A single conservative pass over the cached scene AABB gives an initial
+    // depth interval without using the final near/far as input.  Exact AABB
+    // culling below therefore cannot reject an object that would later have
+    // expanded the final depth range.
+    const WorldAabb &sceneBounds = immutableSceneBounds();
+    double provisionalNear = kNearDepthFloor;
+    double provisionalFar = kMaxPerspectiveFar;
+    if (sceneBounds.valid)
+    {
+      const glm::dvec3 center =
+          (sceneBounds.min + sceneBounds.max) * 0.5;
+      const glm::dvec3 halfExtent =
+          (sceneBounds.max - sceneBounds.min) * 0.5;
+      const CameraSpaceAabb sceneCamera =
+          cameraAabbBounds(center, halfExtent, cameraPos, right, up,
+                           frontVec);
+      provisionalNear = std::min(provisionalNear, sceneCamera.minDepth);
+      provisionalFar = std::max(sceneCamera.maxDepth,
+                                provisionalNear + kMinPerspectiveSpan);
+    }
+
+    const CameraSpacePoint targetCamera =
+        toCameraSpace(orbitCam.Target, cameraPos, right, up, frontVec);
+    double overlayMinDepth = targetCamera.depth;
+    double overlayMaxDepth = targetCamera.depth;
+    double objectMinDepth = targetCamera.depth;
+    double objectMaxDepth = targetCamera.depth;
+
+    {
+      const CameraSpaceAabb cubeBounds = cameraAabbBounds(
+          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up,
+          frontVec);
+      provisionalNear = std::min(provisionalNear, cubeBounds.minDepth);
+      provisionalFar = std::min(
+          kMaxPerspectiveFar,
+          std::max(provisionalFar, cubeBounds.maxDepth));
+      if (aabbIntersectsPerspectiveFrustum(
+              cubeBounds, provisionalNear, provisionalFar,
+              tanHalfVertical, tanHalfHorizontal))
+      {
+        overlayMinDepth = std::min(overlayMinDepth, cubeBounds.minDepth);
+        overlayMaxDepth = std::max(overlayMaxDepth, cubeBounds.maxDepth);
+        objectMinDepth = std::min(objectMinDepth, cubeBounds.minDepth);
+        objectMaxDepth = std::max(objectMaxDepth, cubeBounds.maxDepth);
+      }
+    }
+
+    auto addVisibleObjects =
+        [&](const std::vector<LargeCoordinateObject> &objects) {
+          for (const LargeCoordinateObject &object : objects)
+          {
+            const double halfSize = (double)object.size * 0.5;
+            const CameraSpaceAabb bounds = cameraAabbBounds(
+                object.worldPosition, glm::dvec3(halfSize), cameraPos,
+                right, up, frontVec);
+            if (aabbIntersectsPerspectiveFrustum(
+                    bounds, provisionalNear, provisionalFar,
+                    tanHalfVertical,
+                    tanHalfHorizontal))
+            {
+              const double nearestDepth =
+                  std::max(kNearDepthFloor, bounds.minDepth);
+              const double screenExtent =
+                  (double)object.size * drawableHeight /
+                  (2.0 * nearestDepth * tanHalfVertical);
+              if (screenExtent < kMinObjectPixelExtent)
+              {
+                tinyDraws.push_back(&object);
+                continue;
+              }
+
+              overlayMinDepth = std::min(overlayMinDepth, bounds.minDepth);
+              overlayMaxDepth = std::max(overlayMaxDepth, bounds.maxDepth);
+              objectMinDepth = std::min(objectMinDepth, bounds.minDepth);
+              objectMaxDepth = std::max(objectMaxDepth, bounds.maxDepth);
+              drawOrder.push_back(&object);
+            }
+          }
+        };
+    addVisibleObjects(getLargeCoordinateObjects());
+    addVisibleObjects(getStressObjects());
+
+    // The reference line is drawn without an AABB, so clip the segment to the
+    // exact perspective side frusta.  It is a non-depth-writing overlay and
+    // must not consume the depth precision reserved for solid geometry.
+    includeSegmentPerspectiveDepth(
+        toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
+        toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
+        kNearDepthFloor, tanHalfVertical, tanHalfHorizontal,
+        overlayMinDepth, overlayMaxDepth);
+
+    // Four corner rays bound the finite part of the visible plane.  At
+    // grazing angles one ray can meet the plane behind the eye; then the
+    // grid runs to the horizon and needs the conservative far cap.
+    if (std::abs(frontOnNormal) >= kMinGridPlaneCos &&
+        glm::dot(gridPlaneOrigin - cameraPos, planeNormal) /
+            frontOnNormal > 0.0)
+    {
+      bool planeExtentIsFinite = true;
+      for (int y = 0; y < 2; ++y)
+      {
+        for (int x = 0; x < 2; ++x)
+        {
+          const glm::dvec3 cornerDirection =
+              frontVec +
+              right * ((x ? tanHalfHorizontal : -tanHalfHorizontal)) +
+              up * ((y ? tanHalfVertical : -tanHalfVertical));
+          const double denominator =
+              glm::dot(cornerDirection, planeNormal);
+          if (std::abs(denominator) < 1.0e-12)
+          {
+            planeExtentIsFinite = false;
+            continue;
+          }
+
+          const double cornerDepth =
+              glm::dot(gridPlaneOrigin - cameraPos, planeNormal) /
+              denominator;
+          if (cornerDepth <= 0.0)
+          {
+            planeExtentIsFinite = false;
+            continue;
+          }
+
+          overlayMinDepth = std::min(overlayMinDepth, cornerDepth);
+          overlayMaxDepth = std::max(overlayMaxDepth, cornerDepth);
+        }
+      }
+
+      if (!planeExtentIsFinite)
+        overlayMaxDepth = std::max(overlayMaxDepth, kMaxPerspectiveFar);
+    }
+
+    // Solid geometry receives a compact depth slab.  Infinite ground and the
+    // 1e7 reference line are transparent overlays; if they share this slab,
+    // a close cube maps to float32 NDC depth 1.0 and is clipped by the GPU.
+    const double depthMagnitude = std::max(
+        {kNearDepthFloor, std::abs(objectMinDepth),
+         std::abs(objectMaxDepth)});
+    // A few float32 ULPs are the real precision floor because projection is
+    // float; the extra world-unit keeps matrix conversion from being marginal.
+    const double depthMargin =
+        std::max(1.0, 8.0 * std::numeric_limits<float>::epsilon() *
+                           depthMagnitude);
+
+    const float near = floatExpandOutward(
+        std::max(kNearDepthFloor, objectMinDepth - depthMargin), true);
+    const float far = floatExpandOutward(std::min(
+        kMaxPerspectiveFar,
+        std::max(objectMaxDepth + depthMargin,
+                 (double)near + kMinPerspectiveSpan)), false);
+
+    projection = glm::perspective(glm::radians(45.0f), aspect,
+                                  near, far);
     activeNear = near;
     activeFar  = far;
+
+    const double overlayDepthMagnitude = std::max(
+        {kNearDepthFloor, std::abs(overlayMinDepth),
+         std::abs(overlayMaxDepth)});
+    const double overlayDepthMargin =
+        std::max(1.0, 8.0 * std::numeric_limits<float>::epsilon() *
+                           overlayDepthMagnitude);
+    overlayNear = floatExpandOutward(kNearDepthFloor, true);
+    overlayFar = floatExpandOutward(std::min(
+        kMaxPerspectiveFar,
+        std::max(overlayMaxDepth + overlayDepthMargin,
+                 (double)overlayNear + kMinPerspectiveSpan)), false);
+    overlayProjection = glm::perspective(glm::radians(45.0f), aspect,
+                                         overlayNear, overlayFar);
 
     // Rough estimate around the orbit target, only used to seed the LOD
     // step; the shader computes exact per-fragment sizes for perspective.
     pixelSize = (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target)
                   * tan(glm::radians(22.5f)))
                / static_cast<float>(drawableHeight);
+  }
+
+  if (useOrthoProjection())
+  {
+    overlayProjection = projection;
+    overlayNear = static_cast<float>(activeNear);
+    overlayFar = static_cast<float>(activeFar);
+    logDepth = glm::vec4(0.0f, overlayNear, overlayFar, 0.0f);
+  }
+  else
+  {
+    // One shared mapping is required because every depth-tested fragment
+    // compares against the same depth buffer.  The object/overlay projection
+    // planes remain independent and are used only for hardware clipping.
+    const float depthNear =
+        std::min(static_cast<float>(activeNear), overlayNear);
+    const float depthFar =
+        std::max(static_cast<float>(activeFar), overlayFar);
+    logDepth = glm::vec4(1.0f, depthNear, depthFar, 0.0f);
+  }
+
+  const glm::dvec3 cameraRight(orbitCam.Right);
+  const glm::dvec3 cameraUp(orbitCam.Up);
+  if (useOrthoProjection())
+  {
+    referenceLineVisible = clipReferenceSegmentToOrtho(
+        glm::dvec3(0.0), worldLineEnd, cameraPos, cameraRight, cameraUp,
+        frontVec, activeNear, activeFar,
+        (double)orthoHalfHeight() * (double)aspect, orthoHalfHeight(),
+        referenceLineStart, referenceLineEnd);
+  }
+  else
+  {
+    const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
+    referenceLineVisible = clipReferenceSegmentToPerspective(
+        glm::dvec3(0.0), worldLineEnd, cameraPos, cameraRight, cameraUp,
+        frontVec, overlayNear, overlayFar, tanHalfVertical,
+        tanHalfVertical * (double)aspect, referenceLineStart,
+        referenceLineEnd);
   }
 
   // LOD step with hysteresis (doc section 4.5).  In orthographic mode the
@@ -1203,8 +1907,7 @@ void render()
     // For an orthographic camera every pixel shares the same view direction.
     // Hide the plane when that direction is within five degrees of being
     // parallel to it, matching the perspective shader's grazing cutoff.
-    const double kMinOrthoPlaneCos = 0.087155743; // sin(5 degrees)
-    orthoPlaneValid = std::abs(frontOnNormal) > kMinOrthoPlaneCos;
+    orthoPlaneValid = std::abs(frontOnNormal) > kMinGridPlaneCos;
     {
       const glm::dvec3 imageRight = right * halfW;
       const glm::dvec3 imageUp = up * halfH;
@@ -1258,14 +1961,9 @@ void render()
   // world coordinate; magnitude is bounded by chunkSize/2 instead of
   // step/2.
   planeOriginRelative = glm::vec3(originWorld - rebase);
-  // -originWorld on the two in-plane axes in float32, used by the
-  // perspective axis pass to draw the world axes through the origin.
-  // originWorld itself can be 1e5+, so we cannot upload it directly
-  // without losing precision when step is fractional.  Instead we
-  // exploit the fact that originWorld == uOriginRelative + rebase
-  // (uOriginRelative is bounded to chunkSize/2, rebase is a chunk
-  // multiple of 1e4; both are exact in float32) and compute the
-  // negation in float32.
+  // The shader's p is already relative to the snapped grid anchor, so this
+  // value intentionally stays grid-relative.  Resolving it against the frame
+  // rebase would shift the world axes by one rebase chunk.
   axisOriginGridRelative = glm::vec2(
       (float)glm::dot(-originWorld, tangentU),
       (float)glm::dot(-originWorld, tangentV));
@@ -1312,9 +2010,9 @@ void render()
           axisCenterOnPlane - startAxisDirection * axisSegmentLength;
       const glm::dvec3 axisPoint1 =
           axisCenterOnPlane + startAxisDirection * axisSegmentLength;
-      const glm::vec4 clip0 = projection * view *
+      const glm::vec4 clip0 = overlayProjection * view *
           glm::vec4(glm::vec3(axisPoint0 - rebase), 1.0f);
-      const glm::vec4 clip1 = projection * view *
+      const glm::vec4 clip1 = overlayProjection * view *
           glm::vec4(glm::vec3(axisPoint1 - rebase), 1.0f);
       if (clip0.w > 0.0f && clip1.w > 0.0f)
       {
@@ -1335,13 +2033,14 @@ void render()
       }
   }
 
-  const glm::mat4 viewProj = projection * view;
+  const glm::mat4 objectViewProj = projection * view;
+  const glm::mat4 overlayViewProj = overlayProjection * view;
 
   bool gridPlaneVisible = false;
   if (useOrthoProjection())
   {
     gridPlaneVisible = orthoPlaneValid;
-    if (gridPlaneVisible && std::abs(frontOnNormal) > 1e-8)
+    if (gridPlaneVisible && std::abs(frontOnNormal) > kMinGridPlaneCos)
     {
       const float halfH = orthoHalfHeight();
       const double halfW = (double)halfH * (double)aspect;
@@ -1364,7 +2063,7 @@ void render()
   {
     const glm::dvec3 front = glm::normalize(glm::dvec3(orbitCam.Front));
     const double planeCos = std::abs(glm::dot(front, planeNormal));
-    gridPlaneVisible = planeCos >= 0.087155743;
+    gridPlaneVisible = planeCos >= kMinGridPlaneCos;
     if (gridPlaneVisible)
     {
       const double denom = glm::dot(front, planeNormal);
@@ -1378,7 +2077,7 @@ void render()
   {
     frustumCaptureRequested = false;
     frustumWireframeVisible = true;
-    const glm::mat4 invVP = glm::inverse(viewProj);
+    const glm::mat4 invVP = glm::inverse(overlayViewProj);
     for (int i = 0; i < 8; ++i)
     {
       const float ndcX = (i & 1) ? 1.0f : -1.0f;
@@ -1441,13 +2140,13 @@ void render()
       clipPolygonAgainstDepth(
           gridPolygon.data(), clippedGridPolygonCount,
           clippedGridPolygon.data(), (int)clippedGridPolygon.size(),
-          cameraPos, frontVec, true, activeFar);
+          cameraPos, frontVec, true, overlayFar);
       if (clippedGridPolygonCount >= 3)
       {
         clipPolygonAgainstDepth(
             clippedGridPolygon.data(), clippedGridPolygonCount,
             clippedGridPolygon.data(), (int)clippedGridPolygon.size(),
-            cameraPos, frontVec, false, activeNear);
+            cameraPos, frontVec, false, overlayNear);
       }
       gridVisibleQuadValid = clippedGridPolygonCount >= 3 &&
                              clippedGridPolygonCount <= 8;
@@ -1463,10 +2162,10 @@ void render()
   }
 
     const rendering::GridRenderData gridRenderData{
-        .view = view,
-        .projection = projection,
-        .invViewProj = glm::inverse(viewProj),
-      .viewProj = viewProj,
+      .view = view,
+        .projection = overlayProjection,
+        .invViewProj = glm::inverse(overlayViewProj),
+      .viewProj = overlayViewProj,
       .camFront = orbitCam.Front,
       .orthoPlaneCenter = orthoPlaneCenter,
       .orthoRight = orthoRight,
@@ -1498,34 +2197,47 @@ void render()
       .gridColorMajor = glm::vec3(0.5f, 0.5f, 0.5f),
       .gridColorMinor = glm::vec3(0.3f, 0.3f, 0.3f),
       .gridOpacity = 0.6f,
+      .logDepth = logDepth,
   };
+  // Opaque geometry first so transparent passes can depth-test against it.
+  drawCube(view, projection, rebase, cubeWorldPosition,
+      glm::vec3(1.0f, 0.58f, 0.25f), 1.0f, 1.0f, logDepth);
+
   if (gridPlaneVisible)
     rendererBackend->drawGrid(gridRenderData);
 
-  // The green reference line is anchored to the literal world origin
-  // (0, 0, 0) and the rebased grid anchor (planeCenter) is a separate
-  // point that follows the camera.  On purpose these two world points
-  // are independent -- after a camera pan they will not coincide on
-  // screen, by design.  This visually demonstrates the rebased grid
-  // staying attached to the camera while the world frame of reference
-  // stays put.
-  drawWorldLine(view, projection, rebase,
-                glm::dvec3(0.0, 0.0, 0.0),
-                worldLineEnd,
-                glm::vec3(0.15f, 1.0f, 0.25f), 0.9f);
+  // The logical line still runs through the literal world origin.  Only its
+  // frustum-clipped portion is submitted, so both GPU endpoints remain small
+  // after rebase even when the full segment spans 1e7 world units.
+  if (referenceLineVisible)
+    drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
+                  referenceLineStart, referenceLineEnd,
+                  glm::vec3(0.15f, 1.0f, 0.25f), 0.9f, logDepth);
 
-  // Translucent geometry goes last: the grid remains visible through the
-  // cube, while the cube tints everything already rendered behind its front
-  // faces.  Keep depth writes off so later transparent geometry can still be
-  // depth-sorted independently.
-  drawLargeCoordinateObjects(view, projection, rebase);
-  drawCube(view, projection, rebase, cubeWorldPosition,
-      glm::vec3(1.0f, 0.58f, 0.25f), 1.0f, 1.0f);
+  // Translucent meshes remain sorted far-to-near. They depth-test against
+  // opaque geometry but must not overwrite the shared depth buffer.
+  drawLargeCoordinateObjects(view, projection, rebase, drawOrder, logDepth);
+
+  // Below the mesh LOD threshold, emit a stable center-point impostor so a
+  // distant object remains addressable without expanding the solid depth slab.
+  for (const LargeCoordinateObject *object : tinyDraws)
+  {
+    const rendering::TargetPointRenderData renderData{
+        .view = view,
+        .projection = overlayProjection,
+        .relativePosition = glm::vec3(object->worldPosition - rebase),
+        .pointSize = 2.0f,
+        .color = object->color,
+        .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
+        .logDepth = logDepth,
+    };
+    rendererBackend->drawTargetPoint(renderData);
+  }
 
   // Small 5-pixel "sphere" (disc-shaded point) at the orbit target so the
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
-  drawTargetPoint(view, projection, rebase, orbitCam.Target);
+  drawTargetPoint(view, projection, rebase, orbitCam.Target, logDepth);
 
   if (frustumWireframeVisible)
   {
@@ -1536,25 +2248,26 @@ void render()
     const glm::vec3 farColor(0.2f, 0.4f, 1.0f);
     const glm::vec3 sideColor(1.0f, 1.0f, 1.0f);
     for (const auto &e : nearEdges)
-      drawWorldLine(view, projection, rebase,
+    drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
                     frustumCorners[e[0]], frustumCorners[e[1]],
-                    nearColor, 0.9f);
+                    nearColor, 0.9f, logDepth);
     for (const auto &e : farEdges)
-      drawWorldLine(view, projection, rebase,
+      drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
                     frustumCorners[e[0]], frustumCorners[e[1]],
-                    farColor, 0.9f);
+                    farColor, 0.9f, logDepth);
     for (const auto &e : sideEdges)
-      drawWorldLine(view, projection, rebase,
+      drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
                     frustumCorners[e[0]], frustumCorners[e[1]],
-                    sideColor, 0.9f);
+                    sideColor, 0.9f, logDepth);
     if (gridVisibleQuadValid)
     {
       const glm::vec3 gridQuadColor(1.0f, 0.85f, 0.1f);
       for (int i = 0; i < gridVisibleQuadCount; ++i)
-        drawWorldLine(view, projection, rebase,
+        drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp,
+                      frontVec,
                       gridVisibleQuad[i],
                       gridVisibleQuad[(i + 1) % gridVisibleQuadCount],
-                      gridQuadColor, 0.9f);
+                      gridQuadColor, 0.9f, logDepth);
     }
   }
 
@@ -1590,6 +2303,8 @@ int main(int argc, char *argv[])
     std::cout << "Projection: ORTHOGRAPHIC (test)" << std::endl;
   }
 
+  fitCameraToRenderableObjects();
+
   SDL_Event evt;
   bool running = true;
   bool middleMouseDrag = false;
@@ -1617,8 +2332,7 @@ int main(int argc, char *argv[])
         }
         if (evt.key.key == SDLK_P)
         {
-          useOrthoProjection() = !useOrthoProjection();
-          std::cout << "Projection: " << (useOrthoProjection() ? "ORTHOGRAPHIC" : "PERSPECTIVE") << std::endl;
+          switchProjectionMode();
         }
         if (evt.key.key == SDLK_1)
           applyGridPlane(GridPlaneType::XY);
@@ -1628,6 +2342,8 @@ int main(int argc, char *argv[])
           applyGridPlane(GridPlaneType::YZ);
         if (evt.key.key == SDLK_4)
           applyGridPlane(GridPlaneType::Custom);
+        if (evt.key.key == SDLK_C)
+          setTargetPlaneConstraint(!targetPlaneConstraintEnabled);
         if (evt.key.key == SDLK_F)
         {
           frustumCaptureRequested = true;
@@ -1644,7 +2360,7 @@ int main(int argc, char *argv[])
             cubeWorldPosition =
                 LARGE_COORDINATE_BASE_POINT +
                 LARGE_COORDINATE_DETAIL_OFFSET;
-            orbitCam.setOrbit(cubeWorldPosition, 6000.0);
+            fitCameraToStressField();
             SDL_SetWindowTitle(
                 window, "grid plane - large-coordinate stress field");
           }
@@ -1704,6 +2420,11 @@ int main(int argc, char *argv[])
         testPanApplied = true;
       }
     }
+
+    // A single post-input correction covers every camera mutation, including
+    // orbiting, dolly/zoom, teleport shortcuts, and future input paths.
+    if (targetPlaneConstraintEnabled)
+      enforceTargetPlaneConstraint();
 
     render();
 

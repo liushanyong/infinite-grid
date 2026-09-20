@@ -123,13 +123,14 @@ public:
 
     Position += front * (dist * 0.1 * (double)yoffset);
 
-    // Clamp the resulting target distance to the same [1, 100000]
-    // band the orbit-radius path enforced.
+    // Keep close-up usable while allowing the camera to fit the full
+    // 1e7-coordinate validation scene.  The hard limit only guards against
+    // non-finite or runaway dolly states.
     const double newDist = glm::length(glm::dvec3(Target) - Position);
     if (newDist < 1.0)
       Position = Target - front * 1.0;
-    else if (newDist > 100000.0)
-      Position = Target - front * 100000.0;
+    else if (newDist > 1.0e9)
+      Position = Target - front * 1.0e9;
 
     // Recompute the basis vectors from the new Position.  We do NOT
     // call updateCameraVectors() here because that would snap
@@ -220,6 +221,25 @@ public:
     Front = glm::normalize(glm::vec3(Target - Position));
     Right = glm::normalize(glm::cross(Front, WorldUp));
     Up = glm::normalize(glm::cross(Right, Front));
+  }
+
+  // Dolly along the actual eye->target direction.  Projection switching must
+  // not reuse Yaw/Pitch because wheel dolly and viewport conversions can make
+  // those Euler angles stale while Front remains the intended view direction.
+  void setTargetDistance(double newDistance)
+  {
+    const glm::dvec3 front = glm::normalize(Target - Position);
+    newDistance = glm::clamp(newDistance, 1.0, 1.0e9);
+
+    Position = Target - front * newDistance;
+    Front = glm::normalize(glm::vec3(front));
+    Right = glm::normalize(glm::cross(Front, WorldUp));
+    Up = glm::normalize(glm::cross(Right, Front));
+
+    // Keep orbit angles synchronized with the moved position so the next
+    // mouse orbit continues from the converted view instead of snapping back.
+    Yaw = glm::degrees(std::atan2((double)-Front.z, (double)-Front.x));
+    Pitch = glm::degrees(std::asin(glm::clamp((double)-Front.y, -1.0, 1.0)));
   }
 
 private:

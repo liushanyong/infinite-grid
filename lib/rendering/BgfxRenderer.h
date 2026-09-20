@@ -61,6 +61,7 @@ private:
     bgfx::UniformHandle m_gridColorMinor = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridOpacity = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridOrthoPlaneValid = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_logDepth = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_gridProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gridBuffer = BGFX_INVALID_HANDLE;
 

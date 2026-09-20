@@ -3,6 +3,8 @@ $input v_rayOrigin, v_rayDir, v_ndc
 #include "bgfx_shader.sh"
 
 uniform mat4 uViewProj;
+uniform mat4 uView;
+uniform vec4 uLogDepth;
 uniform vec4 uGroundRelativeY;
 uniform vec4 uOriginRelative;
 uniform vec4 uPlaneNormal;
@@ -42,6 +44,16 @@ float gridLine1D(float coord, float step, float halfWidthPx,
     float aa = derivative;
     float width = halfWidthPx * derivative;
     return 1.0 - smoothstep(width - aa, width + aa, dist);
+}
+
+float perspectiveOutputDepth(float viewDepth)
+{
+    if (viewDepth < uLogDepth.y || viewDepth > uLogDepth.z)
+        discard;
+
+    float numerator = log2(max(viewDepth / uLogDepth.y, 1.0));
+    float denominator = log2(max(uLogDepth.z / uLogDepth.y, 1.000001));
+    return clamp(numerator / denominator, 0.0, 1.0);
 }
 
 float filteredGridLine(float coord, float step, float halfWidthPx,
@@ -140,7 +152,9 @@ void main()
     float rawDepth = clipPos.z / clipPos.w;
     if (rawDepth > 1.0 || rawDepth < 0.0)
         discard;
-    gl_FragDepth = 1.0 / 65536.0 + (1.0 - 1.0 / 65536.0) * rawDepth;
+    gl_FragDepth = uLogDepth.x > 0.5
+        ? perspectiveOutputDepth(-mul(uView, vec4(relativePos, 1.0)).z)
+        : 1.0 / 65536.0 + (1.0 - 1.0 / 65536.0) * rawDepth;
 
     float minorStep = uStep.x * 0.1;
     vec2 gridCoord = planeCoordinates(p);
