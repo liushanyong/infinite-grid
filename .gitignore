@@ -49,3 +49,37 @@ __pycache__/
 Testing/
 CTestTestfile.cmake
 CTestCostData.txt
+
+# Local-only build/run helpers and debug artifacts (machine-specific paths)
+/.build*.cmd
+/.run*.cmd
+/.run*.pid
+/.build*.log
+/capture_*.py
+/close_app.py
+/list_titles.py
+/check_main.py
+/tmp_*
+/*.dis
+/*.spv
+/*.spv.h
+/final_*.png
+/vk_validation*.png
+/drawGrid
+
+# External reference snapshots and analysis material
+/_external/
+
+# Shader-compile intermediates
+lib/shaders/**/*.temp.h.hlsl
+lib/shaders/**/*.bak
+lib/shaders/**/*.vk_orig
+
+# OpenCADStudio ImGui port sandbox: build/run outputs
+/ports/OpenCADImGuiPort/build/
+/ports/OpenCADImGuiPort/Testing/
+/ports/OpenCADImGuiPort/*.cmd
+/ports/OpenCADImGuiPort/imgui.ini
+/ports/OpenCADImGuiPort/NVIDIA Corporation/
+/ports/OpenCADImGuiPort/_reference/
+lib/shaders/**/*.temp.h
