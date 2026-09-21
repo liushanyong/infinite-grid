@@ -4,13 +4,13 @@
 namespace rendering
 {
 
-std::unique_ptr<RendererBackend> createRenderer(BackendType type)
+std::unique_ptr<RendererBackend> createRenderer(BackendType type, GraphicsApi api)
 {
     switch (type)
     {
     case BackendType::Bgfx:
     default:
-        return std::make_unique<BgfxRenderer>();
+        return std::make_unique<BgfxRenderer>(api);
     }
 }
 

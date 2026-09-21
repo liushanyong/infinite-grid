@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <iomanip>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
 #include <glm/gtc/type_ptr.hpp>
-
 namespace GridShaders
 {
 // Rebuild this translation unit whenever the embedded infinite-grid shader
@@ -15,34 +18,34 @@ namespace GridShaders
 #include "shaders/infiniteGrid/vertex.h"
 #include "shaders/infiniteGrid/frag.h"
 } // namespace GridShaders
-
 namespace CubeShaders
 {
 #include "shaders/centerAnchor/vertex.h"
 #include "shaders/centerAnchor/frag.h"
 } // namespace CubeShaders
-
 namespace LineShaders
 {
 #include "shaders/worldLine/vertex.h"
 #include "shaders/worldLine/frag.h"
 } // namespace LineShaders
-
 namespace PointShaders
 {
 #include "shaders/targetPoint/vertex.h"
 #include "shaders/targetPoint/frag.h"
 } // namespace PointShaders
-
-namespace BlitShaders
+namespace MeshInstanceShaders
 {
-#include "shaders/blit/vertex.h"
-#include "shaders/blit/frag.h"
-} // namespace BlitShaders
+#include "shaders/centerAnchorInstance/vertex.h"
+#include "shaders/centerAnchorInstance/frag.h"
+} // namespace MeshInstanceShaders
+namespace PointInstanceShaders
+{
+#include "shaders/targetPointInstance/vertex.h"
+#include "shaders/targetPointInstance/frag.h"
+} // namespace PointInstanceShaders
 
 namespace rendering
 {
-
 namespace
 {
 
@@ -153,14 +156,15 @@ void destroyUniform(bgfx::UniformHandle &handle)
 
 glm::mat4 projectionForDirect3D(const glm::mat4 &projection)
 {
-    // Convert GL clip-space depth [-1, 1] into D3D clip-space depth [0, 1]:
-    //   z' = 0.5*z + 0.5*w
-    //   w' = w
-    // In glm (column-major) mat[col][row], so the '0.5 * w' term that lands
-    // on the z-row lives at column 3, row 2 (i.e. depthRange[3][2]).
-    // Writing to depthRange[2][3] instead placed 0.5 into row-3/col-2, which
-    // corrupted w on every draw -- distorting the perspective near/far
-    // depth mapping and the target-point CPU clip-space division.
+    // bgfx reports whether the backend expects NDC depth in [-1, 1].
+    // OpenGL-style backends keep homogeneousDepth; D3D, Vulkan and Metal use
+    // [0, 1], so remap z/w with z' = 0.5 * z + 0.5 * w.
+    // In glm (column-major) mat[col][row], the '0.5 * w' term that lands on
+    // the z-row lives at column 3, row 2 (i.e. depthRange[3][2]).
+    const bgfx::Caps *caps = bgfx::getCaps();
+    if (!caps || caps->homogeneousDepth)
+        return projection;
+
     glm::mat4 depthRange(1.0f);
     depthRange[2][2] = 0.5f;
     depthRange[3][2] = 0.5f;
@@ -315,51 +319,53 @@ bgfx::VertexBufferHandle createMeshBuffer(const std::vector<float> &vertices)
         layout);
 }
 
-} // namespace
-
-bool BgfxRenderer::createSceneFrameBuffer(
-    uint16_t width, uint16_t height)
+// Shader headers contain one binary per supported API.  bgfx validates the
+// binary type at shader creation, so select the array using the renderer that
+// bgfx actually initialized (which may differ from the requested API only if
+// a future fallback path is added).
+struct ShaderBinary
 {
-    destroySceneFrameBuffer();
+    const uint8_t *data;
+    uint32_t size;
+};
 
-    const uint64_t colorFlags = BGFX_TEXTURE_RT |
-        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    const uint64_t depthFlags = BGFX_TEXTURE_RT | BGFX_TEXTURE_RT_WRITE_ONLY;
-
-    bgfx::TextureHandle attachments[2] = {
-        bgfx::createTexture2D(width, height, false, 1,
-                              bgfx::TextureFormat::RGBA8, colorFlags),
-        bgfx::createTexture2D(width, height, false, 1,
-                              bgfx::TextureFormat::D32F, depthFlags),
-    };
-
-    if (!bgfx::isValid(attachments[0]) || !bgfx::isValid(attachments[1]))
+template <typename T>
+ShaderBinary selectShaderBinary(
+    bgfx::RendererType::Enum renderer,
+    const T *d3d11, size_t d3d11Size,
+    const T *d3d12, size_t d3d12Size,
+    const T *glsl, size_t glslSize,
+    const T *spirv, size_t spirvSize)
+{
+    switch (renderer)
     {
-        std::cerr << "Failed to create D32F scene render targets." << std::endl;
-        if (bgfx::isValid(attachments[0]))
-            bgfx::destroy(attachments[0]);
-        if (bgfx::isValid(attachments[1]))
-            bgfx::destroy(attachments[1]);
-        return false;
+    case bgfx::RendererType::Direct3D12:
+        return {d3d12, static_cast<uint32_t>(d3d12Size)};
+    case bgfx::RendererType::OpenGL:
+    case bgfx::RendererType::OpenGLES:
+        return {glsl, static_cast<uint32_t>(glslSize)};
+    case bgfx::RendererType::Vulkan:
+        return {spirv, static_cast<uint32_t>(spirvSize)};
+    case bgfx::RendererType::Direct3D11:
+    default:
+        return {d3d11, static_cast<uint32_t>(d3d11Size)};
     }
-
-    m_sceneFrameBuffer = bgfx::createFrameBuffer(2, attachments, true);
-    if (!bgfx::isValid(m_sceneFrameBuffer))
-    {
-        std::cerr << "Failed to create D32F scene frame buffer." << std::endl;
-        bgfx::destroy(attachments[0]);
-        bgfx::destroy(attachments[1]);
-        return false;
-    }
-
-    return true;
 }
 
-void BgfxRenderer::destroySceneFrameBuffer()
+#define SELECT_SHADER_BINARY(NAMESPACE, NAME)                                  \
+    selectShaderBinary(                                                        \
+        bgfx::getRendererType(),                                               \
+        NAMESPACE::NAME##_dx11, sizeof(NAMESPACE::NAME##_dx11),                \
+        NAMESPACE::NAME##_dx12, sizeof(NAMESPACE::NAME##_dx12),                \
+        NAMESPACE::NAME##_glsl, sizeof(NAMESPACE::NAME##_glsl),                \
+        NAMESPACE::NAME##_spv, sizeof(NAMESPACE::NAME##_spv))
+
+} // namespace
+
+
+BgfxRenderer::BgfxRenderer(GraphicsApi api)
+    : m_api(api)
 {
-    if (bgfx::isValid(m_sceneFrameBuffer))
-        bgfx::destroy(m_sceneFrameBuffer);
-    m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
 }
 
 const char *BgfxRenderer::name() const
@@ -397,11 +403,30 @@ bool BgfxRenderer::initialize(SDL_Window *window)
     }
 
     bgfx::Init init;
-    init.type = bgfx::RendererType::Direct3D11;
+    switch (m_api)
+    {
+    case GraphicsApi::Direct3D11:
+        init.type = bgfx::RendererType::Direct3D11;
+        break;
+    case GraphicsApi::Direct3D12:
+        init.type = bgfx::RendererType::Direct3D12;
+        break;
+    case GraphicsApi::OpenGL:
+        init.type = bgfx::RendererType::OpenGL;
+        break;
+    case GraphicsApi::Vulkan:
+        init.type = bgfx::RendererType::Vulkan;
+        break;
+    case GraphicsApi::Auto:
+    default:
+        init.type = bgfx::RendererType::Direct3D11;
+        break;
+    }
     init.platformData.nwh = hwnd;
     init.resolution.width = m_width;
     init.resolution.height = m_height;
-    init.resolution.reset = BGFX_RESET_VSYNC;
+    init.resolution.reset = BGFX_RESET_VSYNC | BGFX_RESET_MSAA_X4;
+    init.debug = std::getenv("GRID_GPU_DEBUG") != nullptr;
 
     if (!bgfx::init(init))
     {
@@ -421,7 +446,8 @@ bool BgfxRenderer::initialize(SDL_Window *window)
         return false;
     }
 
-    std::cout << "bgfx D3D11 renderer initialized." << std::endl;
+    std::cout << "bgfx " << bgfx::getRendererName(bgfx::getRendererType())
+              << " renderer initialized." << std::endl;
     return true;
 }
 
@@ -439,6 +465,10 @@ void BgfxRenderer::shutdown()
 
     if (bgfx::isValid(m_cubeProgram))
         bgfx::destroy(m_cubeProgram);
+    if (bgfx::isValid(m_meshInstanceProgram))
+        bgfx::destroy(m_meshInstanceProgram);
+    if (bgfx::isValid(m_pointInstanceProgram))
+        bgfx::destroy(m_pointInstanceProgram);
     m_cubeProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_cubeBuffer))
         bgfx::destroy(m_cubeBuffer);
@@ -469,17 +499,6 @@ void BgfxRenderer::shutdown()
     if (bgfx::isValid(m_pointBuffer))
         bgfx::destroy(m_pointBuffer);
     m_pointBuffer = BGFX_INVALID_HANDLE;
-
-    if (bgfx::isValid(m_blitProgram))
-        bgfx::destroy(m_blitProgram);
-    m_blitProgram = BGFX_INVALID_HANDLE;
-
-    if (bgfx::isValid(m_blitBuffer))
-        bgfx::destroy(m_blitBuffer);
-    m_blitBuffer = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(m_gridBuffer))
-        bgfx::destroy(m_gridBuffer);
-    m_gridBuffer = BGFX_INVALID_HANDLE;
 
     destroyUniform(m_gridInvViewProj);
     destroyUniform(m_gridViewProj);
@@ -519,40 +538,37 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_lineStart);
     destroyUniform(m_lineEnd);
     destroyUniform(m_lineColor);
+    destroyUniform(m_lineWidth);
+    destroyUniform(m_lineDepthBias);
     destroyUniform(m_pointPosition);
     destroyUniform(m_pointSize);
     destroyUniform(m_pointColor);
-    destroyUniform(m_blitSampler);
-    destroySceneFrameBuffer();
 
     bgfx::shutdown();
     m_initialized = false;
     m_window = nullptr;
 }
 
-void BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
+bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
 {
     if (!m_initialized)
-        return;
+        return false;
 
     int width = 0;
     int height = 0;
     SDL_GetWindowSizeInPixels(m_window, &width, &height);
     width = std::max(1, width);
     height = std::max(1, height);
-    if (width != m_width || height != m_height ||
-        !bgfx::isValid(m_sceneFrameBuffer))
+    if (width != m_width || height != m_height)
     {
+        // Rendering now targets the MSAA backbuffer directly; there is no
+        // offscreen scene frame buffer to recreate on resize.
         bgfx::reset(static_cast<uint16_t>(width),
                     static_cast<uint16_t>(height),
-                    BGFX_RESET_VSYNC);
+                    BGFX_RESET_VSYNC | BGFX_RESET_MSAA_X4);
         m_width = static_cast<uint16_t>(width);
         m_height = static_cast<uint16_t>(height);
-        if (!createSceneFrameBuffer(m_width, m_height))
-            return;
     }
-
-    bgfx::setViewFrameBuffer(0, m_sceneFrameBuffer);
 
     const auto channel = [](float value) {
         return uint32_t(std::clamp(value, 0.0f, 1.0f) * 255.0f);
@@ -565,25 +581,18 @@ void BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
     bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, rgba, 1.0f, 0);
     bgfx::setViewRect(0, 0, 0, m_width, m_height);
     bgfx::touch(0);
+    return true;
 }
+
 
 void BgfxRenderer::endFrame()
 {
     if (!m_initialized)
         return;
 
-    bgfx::setViewFrameBuffer(1, BGFX_INVALID_HANDLE);
-    bgfx::setViewClear(1, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
-                       0x000000ff, 1.0f, 0);
-    bgfx::setViewRect(1, 0, 0, m_width, m_height);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::setVertexBuffer(0, m_blitBuffer);
-    bgfx::setTexture(0, m_blitSampler,
-                     bgfx::getTexture(m_sceneFrameBuffer));
-    bgfx::submit(1, m_blitProgram);
 
     // FPS overlay: bgfx debug text renders as the last step of the
-    // frame, on top of the final blit.
+    // frame.
     ++m_frameCount;
     const uint32_t now = SDL_GetTicks();
     if (m_fpsLastTick == 0)
@@ -612,13 +621,15 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_gridProgram))
         return;
-
-    // The grid is transparent and may cover the whole screen. Never leave
-    // depth behind for later transparent or overlay passes.
+    // The grid is translucent, but its line/axis pixels must occlude
+    // geometry behind the grid plane. Fragments with zero alpha are already
+    // discarded, so only visible line pixels write depth; the gaps between
+    // lines stay transparent for later passes.
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_DEPTH_TEST_LEQUAL |
-                   BGFX_STATE_BLEND_ALPHA);
-    bgfx::setVertexBuffer(0, m_gridBuffer);
+                   BGFX_STATE_BLEND_ALPHA |
+                   BGFX_STATE_WRITE_Z);
+    bgfx::setVertexBuffer(0, m_pointBuffer); // Grid and target-point share the same fullscreen-triangle layout/data.
     bgfx::setUniform(m_gridInvViewProj, glm::value_ptr(data.invViewProj));
     bgfx::setUniform(m_view, glm::value_ptr(data.view));
     const glm::mat4 depthViewProj =
@@ -726,6 +737,136 @@ void BgfxRenderer::drawCube(const CubeRenderData &data)
     bgfx::submit(0, m_cubeProgram);
 }
 
+
+void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
+{
+    if (!m_initialized || !bgfx::isValid(m_meshInstanceProgram) ||
+        !data.instances || data.instanceCount == 0)
+        return;
+
+    bgfx::VertexBufferHandle meshBuffer = m_cubeBuffer;
+    switch (data.mesh)
+    {
+    case rendering::MeshType::Sphere: meshBuffer = m_sphereBuffer; break;
+    case rendering::MeshType::Cone:   meshBuffer = m_coneBuffer;   break;
+    case rendering::MeshType::Torus:  meshBuffer = m_torusBuffer;  break;
+    case rendering::MeshType::Cube:   break;
+    }
+
+    constexpr uint16_t kStride = 64;
+    static_assert(sizeof(MeshInstance) == kStride,
+                  "MeshInstance must match the GPU instance stride");
+    const glm::mat4 projection = projectionForDirect3D(data.projection);
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_DEPTH_TEST_LEQUAL |
+                           BGFX_STATE_CULL_CW | BGFX_STATE_MSAA |
+                           (data.opaque ? BGFX_STATE_WRITE_Z :
+                                          BGFX_STATE_BLEND_ALPHA);
+
+    bgfx::setUniform(m_view, glm::value_ptr(data.view));
+    bgfx::setUniform(m_projection, glm::value_ptr(projection));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
+
+    uint32_t first = 0;
+    while (first < data.instanceCount)
+    {
+        const uint32_t available = bgfx::getAvailInstanceDataBuffer(
+            data.instanceCount - first, kStride);
+        if (available == 0)
+            break;
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
+        auto *gpu = reinterpret_cast<MeshInstance *>(idb.data);
+        std::memcpy(gpu, data.instances + first,
+                    sizeof(MeshInstance) * idb.num);
+
+        bgfx::setState(state);
+        bgfx::setVertexBuffer(0, meshBuffer);
+        bgfx::setInstanceDataBuffer(&idb);
+        bgfx::submit(0, m_meshInstanceProgram);
+        first += idb.num;
+    }
+}
+
+void BgfxRenderer::drawTargetPointInstances(
+    const TargetPointInstancesRenderData &data)
+{
+    if (!m_initialized || !bgfx::isValid(m_pointInstanceProgram) ||
+        !data.instances || data.instanceCount == 0)
+        return;
+    constexpr uint16_t kStride = 48;
+    struct PointInstanceGpu
+    {
+        glm::vec4 positionDepth;
+        glm::vec4 screenSize;
+        glm::vec4 colorOpacity;
+    };
+    static_assert(sizeof(PointInstanceGpu) == kStride,
+                  "Point instance must match the GPU instance stride");
+
+    const glm::mat4 projection = projectionForDirect3D(data.projection);
+    const glm::vec2 pixelSizeNdc(
+        data.pointSize * 2.0f / float(m_width),
+        data.pointSize * 2.0f / float(m_height));
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_DEPTH_TEST_LEQUAL |
+                           BGFX_STATE_BLEND_ALPHA;
+
+    uint32_t first = 0;
+    while (first < data.instanceCount)
+    {
+        const uint32_t available = bgfx::getAvailInstanceDataBuffer(
+            data.instanceCount - first, kStride);
+        if (available == 0)
+            break;
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
+        auto *gpu = reinterpret_cast<PointInstanceGpu *>(idb.data);
+
+        uint32_t written = 0;
+        for (uint32_t i = 0; i < idb.num; ++i)
+        {
+            const TargetPointInstance &input = data.instances[first + i];
+            const glm::vec4 clip = projection * data.view *
+                                   glm::vec4(input.relativePosition, 1.0f);
+            if (!(clip.w > 0.0f))
+                continue;
+            const glm::vec2 ndc(clip.x / clip.w, clip.y / clip.w);
+            const glm::vec4 viewPosition = data.view *
+                glm::vec4(input.relativePosition, 1.0f);
+            float depth = clip.z / clip.w;
+            if (data.isOrtho <= 0.5f)
+            {
+                const float viewDepth = -viewPosition.z;
+                const float biasWorld =
+                    std::max(0.5f * data.pixelSizeWorld, 0.01f);
+                depth = normalizedLogDepth(
+                    std::max(viewDepth - biasWorld, data.logDepth.y),
+                    data.logDepth);
+            }
+
+            gpu[written].positionDepth = glm::vec4(ndc, depth, 1.0f);
+            gpu[written].screenSize = glm::vec4(pixelSizeNdc, 0.0f, 0.0f);
+            gpu[written].colorOpacity = glm::vec4(input.color, 1.0f);
+            ++written;
+        }
+
+        if (written == 0)
+        {
+            first += idb.num;
+            continue;
+        }
+        idb.num = written;
+        idb.size = uint32_t(written) * kStride;
+
+        bgfx::setState(state);
+        bgfx::setVertexBuffer(0, m_pointBuffer);
+        bgfx::setInstanceDataBuffer(&idb);
+        bgfx::submit(0, m_pointInstanceProgram);
+        first += idb.num;
+    }
+}
+
 void BgfxRenderer::drawAabb(const AabbRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_cubeProgram) ||
@@ -761,21 +902,62 @@ void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
     if (!m_initialized || !bgfx::isValid(m_lineProgram))
         return;
 
-    const std::array<float, 2> vertices{0.0f, 1.0f};
+    // Ribbon quad: two triangles with (t, side) attributes.  The vertex
+    // shader expands the segment by lineWidth pixels in NDC, so D3D11 gets
+    // wide, MSAA-antialiased lines instead of unsupported 1px line prims.
+    const std::array<float, 12> vertices{
+        0.0f, -1.0f,  0.0f, 1.0f,  1.0f, -1.0f,
+        1.0f, -1.0f,  0.0f, 1.0f,  1.0f,  1.0f,
+    };
     bgfx::update(m_lineBuffer, 0, bgfx::copy(vertices.data(), sizeof(vertices)));
     const glm::mat4 projection = projectionForDirect3D(data.projection);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA |
-                   BGFX_STATE_PT_LINES | BGFX_STATE_LINEAA);
+                   BGFX_STATE_MSAA);
     bgfx::setVertexBuffer(0, m_lineBuffer);
+    // The reference line can be coplanar with the analytic grid.  Offset
+    // only fragment depth (not ribbon geometry): 1% camera distance is safe
+    // in log-depth perspective, and the same amount as a normalized ortho
+    // offset prevents one-ULP depth comparisons from hiding the ribbon.
+    const float cameraDepth = std::abs(data.viewStart.z);
+    const float depthBias = std::max(0.01f * cameraDepth, 1.0e-4f);
+    const float normalizedBias = std::clamp(
+        depthBias / std::max(data.logDepth.z - data.logDepth.y, 1.0f),
+        0.0f, 0.1f);
     bgfx::setUniform(m_projection, glm::value_ptr(projection));
     bgfx::setUniform(m_lineStart,
                      glm::value_ptr(glm::vec4(data.viewStart, 1.0f)));
     bgfx::setUniform(m_lineEnd,
                      glm::value_ptr(glm::vec4(data.viewEnd, 1.0f)));
+    bgfx::setUniform(m_lineWidth,
+                     glm::value_ptr(glm::vec4(data.lineWidth, 0.0f,
+                                              0.0f, 0.0f)));
+    bgfx::setUniform(m_lineDepthBias,
+                     glm::value_ptr(glm::vec4(depthBias, normalizedBias,
+                                              0.0f, 0.0f)));
+    bgfx::setUniform(m_gridScreenWidth,
+                     glm::value_ptr(glm::vec4(static_cast<float>(m_width), 0.0f, 0.0f, 0.0f)));
+    bgfx::setUniform(m_gridScreenHeight,
+                     glm::value_ptr(glm::vec4(static_cast<float>(m_height), 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_lineColor,
                      glm::value_ptr(glm::vec4(data.color, data.opacity)));
     bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
+    if (std::getenv("GRID_CAMERA_DEBUG"))
+    {
+        static int debugCalls = 0;
+        if (debugCalls < 8)
+        {
+            ++debugCalls;
+            const glm::vec4 clip0 = projection * glm::vec4(data.viewStart, 1.0f);
+            const glm::vec4 clip1 = projection * glm::vec4(data.viewEnd, 1.0f);
+            std::cout << std::scientific << std::setprecision(6)
+                      << "[WLINE] start=" << data.viewStart.x << "," << data.viewStart.y << "," << data.viewStart.z
+                      << " end=" << data.viewEnd.x << "," << data.viewEnd.y << "," << data.viewEnd.z
+                      << " clip0=(" << clip0.x << "," << clip0.y << "," << clip0.z << "," << clip0.w << ")"
+                      << " ndc0=(" << (clip0.w ? clip0.x / clip0.w : 99.0f) << "," << (clip0.w ? clip0.y / clip0.w : 99.0f) << ")"
+                      << " ndc1=(" << (clip1.w ? clip1.x / clip1.w : 99.0f) << "," << (clip1.w ? clip1.y / clip1.w : 99.0f) << ")\n";
+        }
+    }
     bgfx::submit(0, m_lineProgram);
 }
 
@@ -791,17 +973,22 @@ void BgfxRenderer::drawTargetPoint(const TargetPointRenderData &data)
         return;
 
     const glm::vec2 ndc(clip.x / clip.w, clip.y / clip.w);
-    // The target is a screen-space quad standing in for GL_POINTS. D3D's
-    // 24-bit depth buffer quantizes coincident reference depths at this far
-    // plane. Bias the perspective target forward just enough to restore GL's
-    // coincident ordering without passing the cube's front surface. Ortho
+    // The target is a screen-space quad standing in for GL_POINTS. The
+    // perspective bias is applied in world units (half a pixel at the
+    // point's depth), so it stays sub-pixel at every distance instead of
+    // growing with the log-depth mapping at large world coordinates. Ortho
     // depth is linear and must match the reference exactly.
     const glm::vec4 viewPosition =
         data.view * glm::vec4(data.relativePosition, 1.0f);
-    float depth = data.isOrtho > 0.5f
-                      ? clip.z / clip.w
-                      : normalizedLogDepth(-viewPosition.z, data.logDepth) -
-                            0.0001f;
+    float depth = clip.z / clip.w;
+    if (data.isOrtho <= 0.5f)
+    {
+        const float viewDepth = -viewPosition.z;
+        const float biasWorld =
+            std::max(0.5f * data.pixelSizeWorld, 0.01f);
+        depth = normalizedLogDepth(
+            std::max(viewDepth - biasWorld, data.logDepth.y), data.logDepth);
+    }
     const glm::vec4 position(
         ndc,
         depth,
@@ -830,39 +1017,71 @@ bool BgfxRenderer::createRenderResources()
         return handle;
     };
 
+    const auto gridVertexBinary = SELECT_SHADER_BINARY(GridShaders, vertex);
+    const auto gridFragmentBinary = SELECT_SHADER_BINARY(GridShaders, frag);
     const bgfx::ShaderHandle gridVertex = createShader(
-        GridShaders::vertex_dx11, sizeof(GridShaders::vertex_dx11), "grid_vs");
+        gridVertexBinary.data, gridVertexBinary.size, "grid_vs");
     const bgfx::ShaderHandle gridFragment = createShader(
-        GridShaders::frag_dx11, sizeof(GridShaders::frag_dx11), "grid_fs");
+        gridFragmentBinary.data, gridFragmentBinary.size, "grid_fs");
     m_gridProgram = bgfx::createProgram(gridVertex, gridFragment, true);
 
+    const auto cubeVertexBinary = SELECT_SHADER_BINARY(CubeShaders, vertex);
+    const auto cubeFragmentBinary = SELECT_SHADER_BINARY(CubeShaders, frag);
     const bgfx::ShaderHandle cubeVertex = createShader(
-        CubeShaders::vertex_dx11, sizeof(CubeShaders::vertex_dx11), "cube_vs");
+        cubeVertexBinary.data, cubeVertexBinary.size, "cube_vs");
     const bgfx::ShaderHandle cubeFragment = createShader(
-        CubeShaders::frag_dx11, sizeof(CubeShaders::frag_dx11), "cube_fs");
+        cubeFragmentBinary.data, cubeFragmentBinary.size, "cube_fs");
     m_cubeProgram = bgfx::createProgram(cubeVertex, cubeFragment, true);
 
+    const auto meshInstanceVertexBinary =
+        SELECT_SHADER_BINARY(MeshInstanceShaders, vertex);
+    const auto meshInstanceFragmentBinary =
+        SELECT_SHADER_BINARY(MeshInstanceShaders, frag);
+    const bgfx::ShaderHandle meshInstanceVertex = createShader(
+        meshInstanceVertexBinary.data, meshInstanceVertexBinary.size,
+        "mesh_instance_vs");
+    const bgfx::ShaderHandle meshInstanceFragment = createShader(
+        meshInstanceFragmentBinary.data, meshInstanceFragmentBinary.size,
+        "mesh_instance_fs");
+    m_meshInstanceProgram = bgfx::createProgram(
+        meshInstanceVertex, meshInstanceFragment, true);
+
+    const auto lineVertexBinary = SELECT_SHADER_BINARY(LineShaders, vertex);
+    const auto lineFragmentBinary = SELECT_SHADER_BINARY(LineShaders, frag);
     const bgfx::ShaderHandle lineVertex = createShader(
-        LineShaders::vertex_dx11, sizeof(LineShaders::vertex_dx11), "line_vs");
+        lineVertexBinary.data, lineVertexBinary.size, "line_vs");
     const bgfx::ShaderHandle lineFragment = createShader(
-        LineShaders::frag_dx11, sizeof(LineShaders::frag_dx11), "line_fs");
+        lineFragmentBinary.data, lineFragmentBinary.size, "line_fs");
     m_lineProgram = bgfx::createProgram(lineVertex, lineFragment, true);
 
+    const auto pointVertexBinary = SELECT_SHADER_BINARY(PointShaders, vertex);
+    const auto pointFragmentBinary = SELECT_SHADER_BINARY(PointShaders, frag);
     const bgfx::ShaderHandle pointVertex = createShader(
-        PointShaders::vertex_dx11, sizeof(PointShaders::vertex_dx11), "point_vs");
+        pointVertexBinary.data, pointVertexBinary.size, "point_vs");
     const bgfx::ShaderHandle pointFragment = createShader(
-        PointShaders::frag_dx11, sizeof(PointShaders::frag_dx11), "point_fs");
+        pointFragmentBinary.data, pointFragmentBinary.size, "point_fs");
     m_pointProgram = bgfx::createProgram(pointVertex, pointFragment, true);
 
-    const bgfx::ShaderHandle blitVertex = createShader(
-        BlitShaders::vertex_dx11, sizeof(BlitShaders::vertex_dx11), "blit_vs");
-    const bgfx::ShaderHandle blitFragment = createShader(
-        BlitShaders::frag_dx11, sizeof(BlitShaders::frag_dx11), "blit_fs");
-    m_blitProgram = bgfx::createProgram(blitVertex, blitFragment, true);
+    const auto pointInstanceVertexBinary =
+        SELECT_SHADER_BINARY(PointInstanceShaders, vertex);
+    const auto pointInstanceFragmentBinary =
+        SELECT_SHADER_BINARY(PointInstanceShaders, frag);
+    const bgfx::ShaderHandle pointInstanceVertex = createShader(
+        pointInstanceVertexBinary.data, pointInstanceVertexBinary.size,
+        "point_instance_vs");
+    const bgfx::ShaderHandle pointInstanceFragment = createShader(
+        pointInstanceFragmentBinary.data, pointInstanceFragmentBinary.size,
+        "point_instance_fs");
+    m_pointInstanceProgram = bgfx::createProgram(
+        pointInstanceVertex, pointInstanceFragment, true);
 
-    bool ready = bgfx::isValid(m_gridProgram) && bgfx::isValid(m_cubeProgram) &&
-                 bgfx::isValid(m_lineProgram) && bgfx::isValid(m_pointProgram) &&
-                 bgfx::isValid(m_blitProgram);
+
+    bool ready = bgfx::isValid(m_gridProgram) &&
+                 bgfx::isValid(m_meshInstanceProgram) &&
+                 bgfx::isValid(m_pointInstanceProgram) &&
+                 bgfx::isValid(m_cubeProgram) &&
+                 bgfx::isValid(m_lineProgram) &&
+                 bgfx::isValid(m_pointProgram);
     if (!ready)
         std::cerr << "Failed to create one or more bgfx shader programs." << std::endl;
 
@@ -907,11 +1126,11 @@ bool BgfxRenderer::createRenderResources()
         m_lineStart = createUniformHandle("uViewStart", bgfx::UniformType::Vec4);
         m_lineEnd = createUniformHandle("uViewEnd", bgfx::UniformType::Vec4);
         m_lineColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
+        m_lineWidth = createUniformHandle("uLineWidth", bgfx::UniformType::Vec4);
+        m_lineDepthBias = createUniformHandle("uDepthBias", bgfx::UniformType::Vec4);
         m_pointPosition = createUniformHandle("uRelativePosition", bgfx::UniformType::Vec4);
         m_pointSize = createUniformHandle("uPointSize", bgfx::UniformType::Vec4);
         m_pointColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
-        m_blitSampler = createUniformHandle("uSceneColor",
-                                            bgfx::UniformType::Sampler);
 
         ready = bgfx::isValid(m_gridInvViewProj) &&
                 bgfx::isValid(m_gridViewProj) &&
@@ -947,22 +1166,16 @@ bool BgfxRenderer::createRenderResources()
                 bgfx::isValid(m_cubeRelativePosition) &&
                 bgfx::isValid(m_cubeOpacity) && bgfx::isValid(m_cubeColor) &&
                 bgfx::isValid(m_lineStart) && bgfx::isValid(m_lineEnd) &&
+                 bgfx::isValid(m_lineDepthBias) &&
                 bgfx::isValid(m_lineColor) &&
+                bgfx::isValid(m_lineWidth) &&
                 bgfx::isValid(m_pointPosition) && bgfx::isValid(m_pointSize) &&
-                bgfx::isValid(m_pointColor) && bgfx::isValid(m_blitSampler);
+                bgfx::isValid(m_pointColor);
     }
 
     if (ready)
     {
-        bgfx::VertexLayout gridLayout;
-        gridLayout.begin()
-            .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
-            .end();
-        const std::array<float, 6> fullscreenTriangle{-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
-        m_gridBuffer = bgfx::createVertexBuffer(
-            bgfx::copy(fullscreenTriangle.data(), sizeof(fullscreenTriangle)), gridLayout);
-        m_blitBuffer = bgfx::createVertexBuffer(
-            bgfx::copy(fullscreenTriangle.data(), sizeof(fullscreenTriangle)), gridLayout);
+
 
         bgfx::VertexLayout cubeLayout;
         cubeLayout.begin()
@@ -970,20 +1183,22 @@ bool BgfxRenderer::createRenderResources()
             .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
             .end();
         const std::array<CubeVertex, 36> cubeVertices = makeCubeVertices();
-        m_cubeBuffer = bgfx::createVertexBuffer(
-            bgfx::copy(cubeVertices.data(), sizeof(cubeVertices)), cubeLayout);
         m_sphereBuffer = createMeshBuffer(makeSphereMesh());
         m_coneBuffer = createMeshBuffer(makeConeMesh());
         m_torusBuffer = createMeshBuffer(makeTorusMesh());
+        m_cubeBuffer = bgfx::createVertexBuffer(
+            bgfx::copy(cubeVertices.data(), sizeof(cubeVertices)), cubeLayout);
         const std::array<CubeVertex, 24> aabbVertices = makeCubeEdgeVertices();
         m_aabbBuffer = bgfx::createVertexBuffer(
             bgfx::copy(aabbVertices.data(), sizeof(aabbVertices)), cubeLayout);
 
         bgfx::VertexLayout lineLayout;
         lineLayout.begin()
-            .add(bgfx::Attrib::TexCoord0, 1, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
             .end();
-        m_lineBuffer = bgfx::createDynamicVertexBuffer(2, lineLayout);
+        // Two triangles per ribbon quad: (t, side) = (0,-1) (0,+1) (1,-1)
+        // and (1,-1) (0,+1) (1,+1).
+        m_lineBuffer = bgfx::createDynamicVertexBuffer(6, lineLayout);
 
         bgfx::VertexLayout pointLayout;
         pointLayout.begin()
@@ -993,10 +1208,12 @@ bool BgfxRenderer::createRenderResources()
         m_pointBuffer = bgfx::createVertexBuffer(
             bgfx::copy(pointDisc.data(), sizeof(pointDisc)), pointLayout);
 
-        ready = bgfx::isValid(m_gridBuffer) && bgfx::isValid(m_cubeBuffer) &&
+
+
+
+        ready = bgfx::isValid(m_cubeBuffer) &&
                 bgfx::isValid(m_aabbBuffer) &&
-                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer) &&
-                bgfx::isValid(m_blitBuffer);
+                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer);
         if (!ready)
             std::cerr << "Failed to create bgfx vertex buffers." << std::endl;
     }

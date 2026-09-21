@@ -4825,12 +4825,16 @@ VK_DESTROY
 		vkGetBufferMemoryRequirements(device, m_buffer, &mr);
 
 		VK_CHECK(s_renderVK->allocateMemory(&mr, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m_deviceMem) );
-
 		VK_CHECK(vkBindBufferMemory(device, m_buffer, m_deviceMem, 0) );
 
 		if (!m_dynamic)
 		{
 			update(_commandBuffer, 0, _size, _data);
+
+			// Static data is read by later command buffers without a shared
+			// resource fence.  Wait here so the device-local copy is complete
+			// before application resources are used on another frame.
+			s_renderVK->kick(true);
 		}
 	}
 
@@ -4850,7 +4854,9 @@ VK_DESTROY
 		setMemoryBarrier(
 			  _commandBuffer
 			, VK_PIPELINE_STAGE_TRANSFER_BIT
-			, VK_PIPELINE_STAGE_TRANSFER_BIT
+			, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
+			| VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+			| VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
 			);
 
 		if (!stagingBuffer.m_isFromScratch)
@@ -8509,7 +8515,7 @@ VK_DESTROY
 		setMemoryBarrier(
 			  m_commandBuffer
 			, VK_PIPELINE_STAGE_TRANSFER_BIT
-			, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
+			, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
 			);
 
 		VkRenderPassBeginInfo rpbi;

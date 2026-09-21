@@ -2,7 +2,7 @@
 REM =====================================================
 REM bgfx Shader Batch Compilation Script
 REM Generates *.h header files with embedded binary arrays
-REM for all platforms (spirv, dx9, dx11, metal, essl).
+REM for all platforms (spirv, glsl, dx11, dx12, metal, essl).
 REM
 REM Usage:
 REM   compile_shaders_all.bat                  -- compile all shaders
@@ -80,7 +80,7 @@ echo   -Help               Show this help
 echo.
 echo Output:
 echo   *.h header files generated next to each *.sc source file
-echo   Each header contains binary arrays for spv/dx11/dx12/mtl/essl
+echo   Each header contains binary arrays for spv/glsl/dx11/dx12/mtl/essl
 echo.
 goto :eof
 
@@ -274,6 +274,10 @@ if !ERRORLEVEL! equ 0 (set /a "PASS+=1") else (set /a "FAIL+=1")
 
 REM ---- Platform: DX12 (Windows, SM 5.0) ----
 call :run_shaderc windows s_5_0 "!VARNAME!_dx12"
+if !ERRORLEVEL! equ 0 (set /a "PASS+=1") else (set /a "FAIL+=1")
+
+REM ---- Platform: OpenGL 2.1-compatible desktop GLSL ----
+call :run_shaderc windows 120 "!VARNAME!_glsl"
 if !ERRORLEVEL! equ 0 (set /a "PASS+=1") else (set /a "FAIL+=1")
 
 REM ---- Platform: Metal (macOS) ----

@@ -11,27 +11,30 @@ namespace rendering
 class BgfxRenderer final : public RendererBackend
 {
 public:
+    explicit BgfxRenderer(GraphicsApi api = GraphicsApi::Auto);
+
     const char *name() const override;
     Uint32 windowFlags() const override;
     bool configureSDL() override;
     bool initialize(SDL_Window *window) override;
     void shutdown() override;
-    void beginFrame(const glm::vec4 &clearColor) override;
+    bool beginFrame(const glm::vec4 &clearColor) override;
     void endFrame() override;
     void present() override;
     void drawGrid(const GridRenderData &data) override;
     void drawCube(const CubeRenderData &data) override;
+    void drawMeshInstances(const MeshInstancesRenderData &data) override;
     void drawAabb(const AabbRenderData &data) override;
     void drawWorldLine(const WorldLineRenderData &data) override;
     void drawTargetPoint(const TargetPointRenderData &data) override;
+    void drawTargetPointInstances(const TargetPointInstancesRenderData &data) override;
 
 private:
-    bool createSceneFrameBuffer(uint16_t width, uint16_t height);
-    void destroySceneFrameBuffer();
 
     bool createRenderResources();
 
     SDL_Window *m_window = nullptr;
+    GraphicsApi m_api = GraphicsApi::Auto;
     bgfx::UniformHandle m_gridInvViewProj = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridViewProj = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridCamFront = BGFX_INVALID_HANDLE;
@@ -63,14 +66,14 @@ private:
     bgfx::UniformHandle m_gridOrthoPlaneValid = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_logDepth = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_gridProgram = BGFX_INVALID_HANDLE;
-    bgfx::VertexBufferHandle m_gridBuffer = BGFX_INVALID_HANDLE;
-
     bgfx::UniformHandle m_view = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_projection = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cubeRelativePosition = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cubeOpacity = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cubeColor = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_cubeProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_meshInstanceProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_pointInstanceProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_cubeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_sphereBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_coneBuffer = BGFX_INVALID_HANDLE;
@@ -80,6 +83,8 @@ private:
     bgfx::UniformHandle m_lineStart = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_lineEnd = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_lineColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_lineWidth = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_lineDepthBias = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_lineProgram = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle m_lineBuffer = BGFX_INVALID_HANDLE;
 
@@ -89,10 +94,6 @@ private:
     bgfx::ProgramHandle m_pointProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_pointBuffer = BGFX_INVALID_HANDLE;
 
-    bgfx::UniformHandle m_blitSampler = BGFX_INVALID_HANDLE;
-    bgfx::ProgramHandle m_blitProgram = BGFX_INVALID_HANDLE;
-    bgfx::VertexBufferHandle m_blitBuffer = BGFX_INVALID_HANDLE;
-    bgfx::FrameBufferHandle m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
 
     // FPS overlay bookkeeping (debug text drawn in endFrame).
     float    m_fps = 0.0f;

@@ -14,6 +14,15 @@ enum class BackendType
     Bgfx,
 };
 
+enum class GraphicsApi
+{
+    Auto,
+    Direct3D11,
+    Direct3D12,
+    OpenGL,
+    Vulkan,
+};
+
 struct GridRenderData
 {
     glm::mat4 view;
@@ -96,12 +105,55 @@ struct WorldLineRenderData
     glm::vec4 logDepth;
 };
 
+struct MeshInstance
+{
+    // Three column-major columns of a 3x4 affine transform.  The translation
+    // is stored in .w so a full model matrix can be rebuilt without a fourth
+    // GPU instance attribute.  Position is already rebase-relative.
+    glm::vec4 transformColumn0;
+    glm::vec4 transformColumn1;
+    glm::vec4 transformColumn2;
+    glm::vec4 colorOpacity;
+};
+
+struct MeshInstancesRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    const MeshInstance *instances = nullptr;
+    uint32_t instanceCount = 0;
+    MeshType mesh = MeshType::Cube;
+    bool opaque = false;
+    glm::vec4 logDepth;
+};
+
+struct TargetPointInstance
+{
+    glm::vec3 relativePosition;
+    glm::vec3 color;
+};
+
+struct TargetPointInstancesRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    const TargetPointInstance *instances = nullptr;
+    uint32_t instanceCount = 0;
+    float pointSize = 2.0f;
+    float pixelSizeWorld = 0.0f;
+    float isOrtho = 0.0f;
+    glm::vec4 logDepth;
+};
+
 struct TargetPointRenderData
 {
     glm::mat4 view;
     glm::mat4 projection;
     glm::vec3 relativePosition;
     float pointSize;
+    // World units per screen pixel at this point (perspective).  Used for a
+    // world-scale depth bias instead of a fixed normalized-depth epsilon.
+    float pixelSizeWorld;
     glm::vec3 color;
     float isOrtho;
     glm::vec4 logDepth;
@@ -117,16 +169,19 @@ public:
     virtual bool configureSDL() = 0;
     virtual bool initialize(SDL_Window *window) = 0;
     virtual void shutdown() = 0;
-    virtual void beginFrame(const glm::vec4 &clearColor) = 0;
+    virtual bool beginFrame(const glm::vec4 &clearColor) = 0;
     virtual void endFrame() = 0;
     virtual void present() = 0;
     virtual void drawGrid(const GridRenderData &data) = 0;
     virtual void drawCube(const CubeRenderData &data) = 0;
+    virtual void drawMeshInstances(const MeshInstancesRenderData &data) = 0;
     virtual void drawAabb(const AabbRenderData &data) = 0;
     virtual void drawWorldLine(const WorldLineRenderData &data) = 0;
     virtual void drawTargetPoint(const TargetPointRenderData &data) = 0;
+    virtual void drawTargetPointInstances(const TargetPointInstancesRenderData &data) = 0;
 };
 
-std::unique_ptr<RendererBackend> createRenderer(BackendType type);
+std::unique_ptr<RendererBackend> createRenderer(
+    BackendType type, GraphicsApi api = GraphicsApi::Auto);
 
 } // namespace rendering

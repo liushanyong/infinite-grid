@@ -15,19 +15,48 @@
 namespace
 {
 
-rendering::BackendType resolveRequestedBackend()
+struct RequestedRenderer
+{
+  rendering::BackendType type = rendering::BackendType::Bgfx;
+  rendering::GraphicsApi api = rendering::GraphicsApi::Vulkan;// Auto;
+};
+
+RequestedRenderer resolveRequestedBackend()
 {
   const char *backend = std::getenv("WINDOW_RENDERER");
   if (!backend)
-    return rendering::BackendType::Bgfx;
+    return {};
 
   const std::string_view backendName(backend);
+  RequestedRenderer requested;
   if (backendName == "bgfx")
-    return rendering::BackendType::Bgfx;
-
-  std::cerr << "Unknown WINDOW_RENDERER value '" << backendName
-            << "', falling back to bgfx." << std::endl;
-  return rendering::BackendType::Bgfx;
+  {
+    requested.api = rendering::GraphicsApi::Auto;
+  }
+  else if (backendName == "bgfx-d3d11" || backendName == "dx11")
+  {
+    requested.api = rendering::GraphicsApi::Direct3D11;
+  }
+  else if (backendName == "bgfx-d3d12" || backendName == "dx12")
+  {
+    requested.api = rendering::GraphicsApi::Direct3D12;
+  }
+  else if (backendName == "bgfx-opengl" || backendName == "opengl" ||
+           backendName == "gl")
+  {
+    requested.api = rendering::GraphicsApi::OpenGL;
+  }
+  else if (backendName == "bgfx-vulkan" || backendName == "vulkan" ||
+           backendName == "vk")
+  {
+    requested.api = rendering::GraphicsApi::Vulkan;
+  }
+  else
+  {
+    std::cerr << "Unknown WINDOW_RENDERER value '" << backendName
+              << "'. Supported: bgfx, dx11, dx12, gl, vk." << std::endl;
+  }
+  return requested;
 }
 
 std::unique_ptr<rendering::RendererBackend> rendererBackend;
@@ -89,10 +118,89 @@ float floatExpandOutward(double value, bool downward)
         result = std::nextafterf(result, direction);
     }
 
+
     for (int i = 0; i < 3 && std::isfinite(result); ++i)
         result = std::nextafterf(result, direction);
     return result;
 }
+// Depth-slab hysteresis: expansion is applied immediately so nothing is
+// clipped while moving, but shrinkage is delayed until the candidate slab
+// has been stable for twenty frames.  This prevents one-ULP per-frame noise
+// from making the near/far planes (and therefore the log-depth mapping)
+// ping-pong between two values.
+struct SlabStabilizer
+{
+    bool initialized = false;
+    double stableNear = 0.0;
+    double stableFar = 0.0;
+    double pendingNear = 0.0;
+    double pendingFar = 0.0;
+    int stableFrames = 0;
+
+    void reset()
+    {
+        initialized = false;
+        stableFrames = 0;
+    }
+
+    void apply(double candidateNear, double candidateFar,
+               double &outNear, double &outFar)
+    {
+        if (!initialized)
+        {
+            stableNear = pendingNear = candidateNear;
+            stableFar = pendingFar = candidateFar;
+            stableFrames = 0;
+            initialized = true;
+        }
+        else if (candidateNear < stableNear || candidateFar > stableFar)
+        {
+            stableNear = std::min(stableNear, candidateNear);
+            stableFar = std::max(stableFar, candidateFar);
+            pendingNear = stableNear;
+            pendingFar = stableFar;
+            stableFrames = 0;
+        }
+        else
+        {
+            const double magnitude = std::max(
+                {std::abs(stableNear), std::abs(stableFar),
+                 std::abs(candidateNear), std::abs(candidateFar)});
+            const double epsilon = std::max(1.0e-4, magnitude * 1.0e-4);
+            if (std::abs(candidateNear - pendingNear) > epsilon ||
+                std::abs(candidateFar - pendingFar) > epsilon)
+            {
+                pendingNear = candidateNear;
+                pendingFar = candidateFar;
+                stableFrames = 0;
+            }
+            else
+            {
+                ++stableFrames;
+            }
+            if (stableFrames >= 20)
+            {
+                stableNear = pendingNear;
+                stableFar = pendingFar;
+                stableFrames = 0;
+            }
+        }
+        outNear = stableNear;
+        outFar = stableFar;
+    }
+};
+
+SlabStabilizer g_orthoSlabStabilizer;
+SlabStabilizer g_perspectiveSlabStabilizer;
+SlabStabilizer g_overlaySlabStabilizer;
+
+void resetSlabStabilizers()
+{
+    g_orthoSlabStabilizer.reset();
+    g_perspectiveSlabStabilizer.reset();
+    g_overlaySlabStabilizer.reset();
+}
+
 
 const char *gridPlaneName(GridPlaneType plane)
 {
@@ -155,6 +263,7 @@ void applyGridPlane(GridPlaneType plane)
               << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; origin=("
               << gridPlaneOrigin.x << ", " << gridPlaneOrigin.y << ", "
               << gridPlaneOrigin.z << "))" << std::endl;
+    resetSlabStabilizers();
     if (targetPlaneConstraintEnabled)
         enforceTargetPlaneConstraint();
 }
@@ -196,12 +305,11 @@ void activePlaneTangents(glm::dvec3 &tangentU, glm::dvec3 &tangentV)
 }
 // Validation scene adapted from external/large-coordinate-rendering.
 //
-// Default magnitudes stay at 1e5 to keep the rebased coordinate frame well
-// inside float32 precision (ULP ≈ 8 mm at this scale).  Bump both
-// components to ~1e9 when you want a true precision-stress demonstration;
-// the four "micro X" cubes will start to collapse onto 0 / 512-unit buckets
-// if the rebase layer is ever bypassed, exactly as the reference project's
-// README describes.
+  // The base point is 1e7 so the far cluster exercises large coordinates.
+  // The rebased camera/target stay bounded by the 1e4 chunk; distant
+  // objects sit far from the rebase origin, but at those distances they
+  // render below the impostor threshold, so float32 quantization stays
+  // sub-pixel.  Bump to ~1e9 for a true precision-stress demonstration:
 const glm::dvec3 LARGE_COORDINATE_BASE_POINT(1e7, 0.0, 1e7);
 const glm::dvec3 LARGE_COORDINATE_DETAIL_OFFSET(1536.0, 0.0, -1024.0);
 
@@ -254,7 +362,9 @@ bool init()
     return false;
   }
 
-  rendererBackend = rendering::createRenderer(resolveRequestedBackend());
+  const auto requestedRenderer = resolveRequestedBackend();
+  rendererBackend = rendering::createRenderer(
+      requestedRenderer.type, requestedRenderer.api);
 
   if (!rendererBackend->configureSDL())
   {
@@ -306,7 +416,8 @@ void close()
 void drawTargetPoint(const glm::mat4 &view, const glm::mat4 &projection,
                      const glm::dvec3 &rebaseOrigin,
                      const glm::dvec3 &targetWorldPosition,
-                     const glm::vec4 &logDepth)
+                     const glm::vec4 &logDepth,
+                     float pixelSizeWorld)
 {
   if (!rendererBackend)
     return;
@@ -316,6 +427,7 @@ void drawTargetPoint(const glm::mat4 &view, const glm::mat4 &projection,
       .projection = projection,
       .relativePosition = glm::vec3(targetWorldPosition - rebaseOrigin),
       .pointSize = 5.0f,
+        .pixelSizeWorld = pixelSizeWorld,
       .color = glm::vec3(1.0f, 0.15f, 0.15f),
       .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
       .logDepth = logDepth,
@@ -383,6 +495,54 @@ void logCameraStateIfChanged(const glm::dvec3 &target,
     lastOrtho = isOrtho;
     initialized = true;
   }
+}
+
+// GRID_DEBUG_SLAB=1 prints stabilized slab changes so a static camera can be
+// verified to produce at most one immediate expansion and one delayed shrink.
+void logSlabIfChanged(bool isOrtho, double nearPlane, double farPlane,
+                      double overlayNearPlane, double overlayFarPlane)
+{
+    static const bool enabled = [] {
+        const char *flag = std::getenv("GRID_DEBUG_SLAB");
+        return flag && flag[0] != '0';
+    }();
+    if (!enabled)
+        return;
+
+    static double last[2][4];
+    static bool initialized[2] = {false, false};
+    static auto lastLogTime = std::chrono::steady_clock::now();
+    const int slot = isOrtho ? 1 : 0;
+    const double values[4] = {nearPlane, farPlane,
+                              overlayNearPlane, overlayFarPlane};
+    bool changed = !initialized[slot];
+    if (!changed)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            if (std::abs(values[i] - last[slot][i]) >
+                1e-6 * std::max(1.0, std::abs(last[slot][i])))
+            {
+                changed = true;
+                break;
+            }
+        }
+    }
+    if (!changed)
+        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastLogTime).count() < 100)
+        return;
+    lastLogTime = now;
+    std::cout << std::scientific << std::setprecision(6) << "[SLAB]"
+              << (isOrtho ? " ortho" : " persp")
+              << " near=" << nearPlane << " far=" << farPlane
+              << " overlayNear=" << overlayNearPlane
+              << " overlayFar=" << overlayFarPlane << std::endl;
+    for (int i = 0; i < 4; ++i)
+        last[slot][i] = values[i];
+    initialized[slot] = true;
 }
 
 void drawAabbForCube(const rendering::CubeRenderData &renderData)
@@ -572,10 +732,59 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         return lhsDepth > rhsDepth;
       });
 
-  for (const LargeCoordinateObject *object : drawOrder)
+  // One transparent instance list per mesh geometry.  Instances inside a
+  // list keep the global far-to-near order; cross-mesh blending order is a
+  // documented limitation until opaque/transparent material buckets are
+  // split in the CAD asset model.
+  constexpr size_t kMeshCount = 4;
+  static std::array<std::vector<rendering::MeshInstance>, kMeshCount * 2> groups;
+  for (auto &group : groups)
+    group.clear();
+
+    for (const LargeCoordinateObject *object : drawOrder)
+    {
+        const size_t meshIndex = static_cast<size_t>(object->mesh);
+        const size_t groupIndex = meshIndex * 2;
+        const glm::vec3 relativePosition(object->worldPosition - rebaseOrigin);
+        const float scale = object->size;
+        groups[groupIndex].push_back({
+            glm::vec4(scale, 0.0f, 0.0f, relativePosition.x),
+            glm::vec4(0.0f, scale, 0.0f, relativePosition.y),
+            glm::vec4(0.0f, 0.0f, scale, relativePosition.z),
+            glm::vec4(object->color, 0.45f)});
+    }
+
+  if (std::getenv("GRID_CAMERA_DEBUG"))
   {
-    drawMesh(view, projection, rebaseOrigin, object->worldPosition,
-             object->color, 0.45f, object->size, object->mesh, logDepth);
+    static bool loggedGroups = false;
+    if (!loggedGroups)
+    {
+      loggedGroups = true;
+      std::cout << "[M4] drawOrder=" << drawOrder.size();
+      for (const auto &group : groups)
+        std::cout << " group=" << group.size();
+      std::cout << std::endl;
+    }
+  }
+
+  const rendering::MeshType meshTypes[kMeshCount] = {
+      rendering::MeshType::Cube, rendering::MeshType::Sphere,
+      rendering::MeshType::Cone, rendering::MeshType::Torus};
+  for (size_t meshIndex = 0; meshIndex < kMeshCount; ++meshIndex)
+  {
+    auto &instances = groups[meshIndex * 2];
+    if (instances.empty())
+      continue;
+    const rendering::MeshInstancesRenderData renderData{
+        .view = view,
+        .projection = projection,
+        .instances = instances.data(),
+        .instanceCount = static_cast<uint32_t>(instances.size()),
+        .mesh = meshTypes[meshIndex],
+        .opaque = false,
+        .logDepth = logDepth,
+    };
+    rendererBackend->drawMeshInstances(renderData);
   }
 }
 
@@ -730,7 +939,7 @@ void fitCameraToRenderableObjects()
                      std::numeric_limits<double>::infinity()) * 1.04;
 
   orbitCam.setOrbit(center, distance);
-  if (useOrthoProjection())
+  if (useOrthoProjection() && !std::getenv("GRID_CAMERA_TEST_ORTHO_HALFH"))
     orthoHalfHeight() = static_cast<float>(boundingRadius * 1.04);
 
   std::cout << std::fixed << std::setprecision(3)
@@ -780,7 +989,7 @@ void fitCameraToStressField()
                      std::numeric_limits<double>::infinity()) * 1.04;
 
   orbitCam.setOrbit(center, distance);
-  if (useOrthoProjection())
+  if (useOrthoProjection() && !std::getenv("GRID_CAMERA_TEST_ORTHO_HALFH"))
     orthoHalfHeight() = static_cast<float>(boundingRadius * 1.04);
 
   std::cout << "Stress-field camera: center=(" << center.x << ", "
@@ -846,6 +1055,17 @@ bool shiftKeyDown()
   return keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
 }
 
+// World-per-pixel must follow the actual drawable size, not the compile-time
+// window constants, so resize / HiDPI changes keep pan speed correct.
+int currentDrawableHeight()
+{
+    int width = SCREEN_WIDTH;
+    int height = SCREEN_HEIGHT;
+    if (window)
+        SDL_GetWindowSizeInPixels(window, &width, &height);
+    return std::max(1, height);
+}
+
 void handleOrbitMouseMovement(SDL_Event event, bool middleMouseDrag)
 {
   if (event.type == SDL_EVENT_MOUSE_MOTION)
@@ -864,10 +1084,10 @@ void handleOrbitMouseMovement(SDL_Event event, bool middleMouseDrag)
     // Middle-drag alone pans the view at the cursor's world scale.
     // Ortho uses its exact frustum scale; perspective uses the target-plane FOV.
     const float worldPerPixel = useOrthoProjection()
-        ? (2.0f * orthoHalfHeight()) / (float)SCREEN_HEIGHT
+        ? (2.0f * orthoHalfHeight()) / (float)currentDrawableHeight()
         : (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target)
               * std::tan(glm::radians(orbitCam.Zoom * 0.5f)))
-              / (float)SCREEN_HEIGHT;
+              / (float)currentDrawableHeight();
 
     // Plane-constrained pan in both ortho and perspective: for XZ this keeps
     // target/eye altitude fixed; for XY/YZ/custom it moves both points within
@@ -899,11 +1119,12 @@ void handleOrbitZoom(SDL_Event event)
       halfH = halfHMin;
     if (halfH > halfHMax)
       halfH = halfHMax;
-    if (cameraDebugEnabled())
-    {
-      std::cout << "Ortho half-height: " << std::scientific
-                << std::setprecision(4) << halfH << std::endl;
-    }
+      if (cameraDebugEnabled())
+      {
+        std::cout << "Ortho half-height: " << std::scientific
+                  << std::setprecision(4) << halfH << std::endl;
+      }
+
   }
   else
   {
@@ -916,6 +1137,7 @@ void handleOrbitZoom(SDL_Event event)
 // distance * tan(FOV / 2).  Do not derive this from dynamic near/far slabs.
 void switchProjectionMode()
 {
+    resetSlabStabilizers();
   constexpr double kFovDegrees = 45.0;
   const double tanHalfVertical = std::tan(glm::radians(kFovDegrees) * 0.5);
   bool &isOrtho = useOrthoProjection();
@@ -1110,6 +1332,165 @@ bool aabbIntersectsOrthoViewport(const CameraSpaceAabb &bounds,
 {
   return bounds.maxX >= -halfWidth && bounds.minX <= halfWidth &&
          bounds.maxY >= -halfHeight && bounds.minY <= halfHeight;
+}
+
+struct WorldAabb2
+{
+    glm::dvec3 min;
+    glm::dvec3 max;
+};
+
+CameraSpaceAabb cameraAabbBounds(const WorldAabb2 &worldBounds,
+                                 const glm::dvec3 &cameraPosition,
+                                 const glm::dvec3 &cameraRight,
+                                 const glm::dvec3 &cameraUp,
+                                 const glm::dvec3 &cameraFront)
+{
+    const glm::dvec3 center = (worldBounds.min + worldBounds.max) * 0.5;
+    const glm::dvec3 halfExtent = (worldBounds.max - worldBounds.min) * 0.5;
+    return cameraAabbBounds(center, halfExtent, cameraPosition, cameraRight,
+                            cameraUp, cameraFront);
+}
+
+// Static median-split BVH over the immutable startup scene.  World positions
+// remain double precision; the camera-space conversion happens only for a
+// visited node.  This removes the per-frame O(objects) broad-phase transform
+// pass while preserving exact leaf-side slab/LOD decisions.
+class SceneObjectBvh
+{
+public:
+    struct Node
+    {
+        WorldAabb2 bounds{};
+        uint32_t leftChild = 0;
+        uint32_t rightChild = 0;
+        uint32_t begin = 0;
+        uint32_t end = 0;
+        bool leaf = false;
+    };
+
+    void build(std::vector<const LargeCoordinateObject *> sceneObjects)
+    {
+        objects = std::move(sceneObjects);
+        nodes.clear();
+        if (objects.empty())
+            return;
+
+        nodes.reserve(objects.size() * 2);
+        buildRange(0, static_cast<uint32_t>(objects.size()));
+    }
+
+    template <typename Visitor>
+    void collect(Visitor &&nodeIsVisible,
+                 std::vector<const LargeCoordinateObject *> &output) const
+    {
+        output.clear();
+        if (nodes.empty())
+            return;
+
+        std::array<uint32_t, 128> stack{};
+        int stackTop = 0;
+        stack[stackTop++] = 0;
+        while (stackTop > 0)
+        {
+            const Node &node = nodes[stack[--stackTop]];
+            if (!nodeIsVisible(node.bounds))
+                continue;
+            if (node.leaf)
+            {
+                for (uint32_t i = node.begin; i < node.end; ++i)
+                    output.push_back(objects[i]);
+            }
+            else
+            {
+                stack[stackTop++] = node.rightChild;
+                stack[stackTop++] = node.leftChild;
+            }
+        }
+    }
+
+private:
+    static WorldAabb2 objectBounds(const LargeCoordinateObject &object)
+    {
+        const glm::dvec3 halfExtent(object.size * 0.5);
+        return {object.worldPosition - halfExtent,
+                object.worldPosition + halfExtent};
+    }
+
+    static WorldAabb2 mergeBounds(const WorldAabb2 &a, const WorldAabb2 &b)
+    {
+        return {glm::min(a.min, b.min), glm::max(a.max, b.max)};
+    }
+
+    uint32_t buildRange(uint32_t begin, uint32_t end)
+    {
+        WorldAabb2 bounds = objectBounds(*objects[begin]);
+        glm::dvec3 centroidSum = objectBounds(*objects[begin]).min +
+                                 objectBounds(*objects[begin]).max;
+        for (uint32_t i = begin + 1; i < end; ++i)
+        {
+            const WorldAabb2 itemBounds = objectBounds(*objects[i]);
+            bounds = mergeBounds(bounds, itemBounds);
+            centroidSum += itemBounds.min + itemBounds.max;
+        }
+
+        const uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
+        nodes.push_back({bounds, 0, 0, begin, end, false});
+        const uint32_t count = end - begin;
+        if (count <= 4)
+        {
+            nodes[nodeIndex].leaf = true;
+            return nodeIndex;
+        }
+
+        const glm::dvec3 extent = bounds.max - bounds.min;
+        int axis = 0;
+        if (extent.y > extent.x && extent.y >= extent.z)
+            axis = 1;
+        else if (extent.z > extent.x && extent.z > extent.y)
+            axis = 2;
+
+        const uint32_t middle = begin + count / 2;
+        std::nth_element(objects.begin() + begin, objects.begin() + middle,
+                         objects.begin() + end,
+                         [axis](const LargeCoordinateObject *lhs,
+                                const LargeCoordinateObject *rhs) {
+                             const glm::dvec3 lhsCentroid =
+                                 lhs->worldPosition;
+                             const glm::dvec3 rhsCentroid =
+                                 rhs->worldPosition;
+                             return lhsCentroid[axis] < rhsCentroid[axis];
+                         });
+
+        const uint32_t leftChild = buildRange(begin, middle);
+        // buildRange can reallocate nodes, so refresh the parent reference.
+        nodes[nodeIndex].leftChild = leftChild;
+        const uint32_t rightChild = buildRange(middle, end);
+        nodes[nodeIndex].rightChild = rightChild;
+        nodes[nodeIndex].leaf = false;
+        return nodeIndex;
+    }
+
+    std::vector<const LargeCoordinateObject *> objects;
+    std::vector<Node> nodes;
+};
+
+const SceneObjectBvh &getSceneObjectBvh()
+{
+    static const SceneObjectBvh bvh = [] {
+        std::vector<const LargeCoordinateObject *> all;
+        all.reserve(getLargeCoordinateObjects().size() +
+                    getStressObjects().size());
+        for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
+            all.push_back(&object);
+        for (const LargeCoordinateObject &object : getStressObjects())
+            all.push_back(&object);
+
+        SceneObjectBvh result;
+        result.build(std::move(all));
+        return result;
+    }();
+    return bvh;
 }
 
 bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
@@ -1435,9 +1816,10 @@ void render()
   if (!rendererBackend)
     return;
 
-  rendererBackend->beginFrame(glm::vec4(0.1f, 0.1f, 0.1f, 1.0f));
+  if (!rendererBackend->beginFrame(glm::vec4(0.1f, 0.1f, 0.1f, 1.0f)))
+    return;
 
-  // ── Rebase layer ──────────────────────────────────────────────────────────
+  // �� Rebase layer ����������������������������������������������������������
   // Snap the world origin to the current camera chunk once per frame.
   // Every GPU-bound coordinate (view matrix translation, per-object
   // uModelRelativePosition, grid uOriginRelative) is computed relative
@@ -1544,10 +1926,16 @@ void render()
              std::abs(bounds.maxDepth - targetDepth)});
       }
     }
-    for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
-      includeObjectDepth(object);
-    for (const LargeCoordinateObject &object : getStressObjects())
-      includeObjectDepth(object);
+    static std::vector<const LargeCoordinateObject *> orthoCandidates;
+    getSceneObjectBvh().collect(
+        [&](const WorldAabb2 &bounds) {
+            const CameraSpaceAabb cameraBounds = cameraAabbBounds(
+                bounds, cameraPos, right, up, front);
+            return aabbIntersectsOrthoViewport(cameraBounds, halfW, halfH);
+        },
+        orthoCandidates);
+    for (const LargeCoordinateObject *object : orthoCandidates)
+      includeObjectDepth(*object);
 
     // The reference line can be 1e7 units long.  Clip it to the ortho
     // viewport first so only its visible part can extend the slab.
@@ -1581,16 +1969,19 @@ void render()
            std::abs(groundCenterDepth + groundDepthRadius - targetDepth)});
     }
 
-    // Keep a stable minimum slab as the ortho image zooms in.  A full 128
+    // Keep a stable minimum slab as the ortho image zooms in.  A full 1024
     // world-unit span comfortably covers close-up geometry without pushing
     // ortho depth precision far enough to matter even at 1e7 coordinates.
     constexpr double kMinDepthSpan = 1024.0;
     slabRadius = std::max(slabRadius, kMinDepthSpan * 0.5);
-
-    const double orthoNearDepth = targetDepth - slabRadius;
-    const double orthoFarDepth = targetDepth + slabRadius;
-    const float near = floatExpandOutward(orthoNearDepth, true);
-    const float far = floatExpandOutward(orthoFarDepth, false);
+    // Hysteresis: expand immediately, shrink only after twenty stable frames.
+    double stableOrthoNear = 0.0;
+    double stableOrthoFar = 0.0;
+    g_orthoSlabStabilizer.apply(targetDepth - slabRadius,
+                                targetDepth + slabRadius,
+                                stableOrthoNear, stableOrthoFar);
+    const float near = floatExpandOutward(stableOrthoNear, true);
+    const float far = floatExpandOutward(stableOrthoFar, false);
 
     projection = glm::ortho(-halfH * aspect, halfH * aspect,
                              -halfH,            halfH, near, far);
@@ -1660,44 +2051,50 @@ void render()
       }
     }
 
-    auto addVisibleObjects =
-        [&](const std::vector<LargeCoordinateObject> &objects) {
-          for (const LargeCoordinateObject &object : objects)
-          {
-            const double halfSize = (double)object.size * 0.5;
-            const CameraSpaceAabb bounds = cameraAabbBounds(
-                object.worldPosition, glm::dvec3(halfSize), cameraPos,
-                right, up, frontVec);
-            if (aabbIntersectsPerspectiveFrustum(
-                    bounds, provisionalNear, provisionalFar,
-                    tanHalfVertical,
-                    tanHalfHorizontal))
-            {
-              const double nearestDepth =
-                  std::max(kNearDepthFloor, bounds.minDepth);
-              const double screenExtent =
-                  (double)object.size * drawableHeight /
-                  (2.0 * nearestDepth * tanHalfVertical);
-              if (screenExtent < kMinObjectPixelExtent)
-              {
-                tinyDraws.push_back(&object);
-                continue;
-              }
+    static std::vector<const LargeCoordinateObject *> perspectiveCandidates;
+    getSceneObjectBvh().collect(
+        [&](const WorldAabb2 &bounds) {
+            const CameraSpaceAabb cameraBounds = cameraAabbBounds(
+                bounds, cameraPos, right, up, frontVec);
+            return aabbIntersectsPerspectiveFrustum(
+                cameraBounds, kNearDepthFloor, kMaxPerspectiveFar,
+                tanHalfVertical, tanHalfHorizontal);
+        },
+        perspectiveCandidates);
 
-              overlayMinDepth = std::min(overlayMinDepth, bounds.minDepth);
-              overlayMaxDepth = std::max(overlayMaxDepth, bounds.maxDepth);
-              objectMinDepth = std::min(objectMinDepth, bounds.minDepth);
-              objectMaxDepth = std::max(objectMaxDepth, bounds.maxDepth);
-              drawOrder.push_back(&object);
-            }
-          }
-        };
-    addVisibleObjects(getLargeCoordinateObjects());
-    addVisibleObjects(getStressObjects());
+    for (const LargeCoordinateObject *objectPtr : perspectiveCandidates)
+    {
+      const LargeCoordinateObject &object = *objectPtr;
+      const double halfSize = (double)object.size * 0.5;
+      const CameraSpaceAabb bounds = cameraAabbBounds(
+          object.worldPosition, glm::dvec3(halfSize), cameraPos,
+          right, up, frontVec);
+      if (aabbIntersectsPerspectiveFrustum(
+              bounds, provisionalNear, provisionalFar,
+              tanHalfVertical, tanHalfHorizontal))
+      {
+        const double nearestDepth =
+            std::max(kNearDepthFloor, bounds.minDepth);
+        const double screenExtent =
+            (double)object.size * drawableHeight /
+            (2.0 * nearestDepth * tanHalfVertical);
+        if (screenExtent < kMinObjectPixelExtent)
+        {
+          tinyDraws.push_back(&object);
+          continue;
+        }
 
-    // The reference line is drawn without an AABB, so clip the segment to the
-    // exact perspective side frusta.  It is a non-depth-writing overlay and
-    // must not consume the depth precision reserved for solid geometry.
+        overlayMinDepth = std::min(overlayMinDepth, bounds.minDepth);
+        overlayMaxDepth = std::max(overlayMaxDepth, bounds.maxDepth);
+        objectMinDepth = std::min(objectMinDepth, bounds.minDepth);
+        objectMaxDepth = std::max(objectMaxDepth, bounds.maxDepth);
+        drawOrder.push_back(&object);
+      }
+    }
+
+    // The reference line is drawn without an AABB, so clip the segment to
+    // the exact perspective side frusta.  It is a non-depth-writing overlay
+    // and must not consume the depth precision reserved for solid geometry.
     includeSegmentPerspectiveDepth(
         toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
         toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
@@ -1753,17 +2150,26 @@ void render()
         {kNearDepthFloor, std::abs(objectMinDepth),
          std::abs(objectMaxDepth)});
     // A few float32 ULPs are the real precision floor because projection is
-    // float; the extra world-unit keeps matrix conversion from being marginal.
+    // float; the extra world-unit keeps matrix conversion from being
+    // marginal.
     const double depthMargin =
         std::max(1.0, 8.0 * std::numeric_limits<float>::epsilon() *
                            depthMagnitude);
 
-    const float near = floatExpandOutward(
-        std::max(kNearDepthFloor, objectMinDepth - depthMargin), true);
-    const float far = floatExpandOutward(std::min(
+    const double candidateObjectNear = std::max(
+        kNearDepthFloor, objectMinDepth - depthMargin);
+    const double candidateObjectFar = std::min(
         kMaxPerspectiveFar,
         std::max(objectMaxDepth + depthMargin,
-                 (double)near + kMinPerspectiveSpan)), false);
+                 candidateObjectNear + kMinPerspectiveSpan));
+    double stablePerspectiveNear = 0.0;
+    double stablePerspectiveFar = 0.0;
+    g_perspectiveSlabStabilizer.apply(candidateObjectNear,
+                                      candidateObjectFar,
+                                      stablePerspectiveNear,
+                                      stablePerspectiveFar);
+    const float near = floatExpandOutward(stablePerspectiveNear, true);
+    const float far = floatExpandOutward(stablePerspectiveFar, false);
 
     projection = glm::perspective(glm::radians(45.0f), aspect,
                                   near, far);
@@ -1776,11 +2182,17 @@ void render()
     const double overlayDepthMargin =
         std::max(1.0, 8.0 * std::numeric_limits<float>::epsilon() *
                            overlayDepthMagnitude);
-    overlayNear = floatExpandOutward(kNearDepthFloor, true);
-    overlayFar = floatExpandOutward(std::min(
+    const double candidateOverlayFar = std::min(
         kMaxPerspectiveFar,
         std::max(overlayMaxDepth + overlayDepthMargin,
-                 (double)overlayNear + kMinPerspectiveSpan)), false);
+                 kNearDepthFloor + kMinPerspectiveSpan));
+    double stableOverlayNear = 0.0;
+    double stableOverlayFar = 0.0;
+    g_overlaySlabStabilizer.apply(
+        (double)kNearDepthFloor, candidateOverlayFar,
+        stableOverlayNear, stableOverlayFar);
+    overlayNear = floatExpandOutward(stableOverlayNear, true);
+    overlayFar = floatExpandOutward(stableOverlayFar, false);
     overlayProjection = glm::perspective(glm::radians(45.0f), aspect,
                                          overlayNear, overlayFar);
 
@@ -1810,6 +2222,9 @@ void render()
     logDepth = glm::vec4(1.0f, depthNear, depthFar, 0.0f);
   }
 
+  logSlabIfChanged(useOrthoProjection(), activeNear, activeFar,
+                   overlayNear, overlayFar);
+
   const glm::dvec3 cameraRight(orbitCam.Right);
   const glm::dvec3 cameraUp(orbitCam.Up);
   if (useOrthoProjection())
@@ -1828,6 +2243,25 @@ void render()
         frontVec, overlayNear, overlayFar, tanHalfVertical,
         tanHalfVertical * (double)aspect, referenceLineStart,
         referenceLineEnd);
+  }
+
+  if (cameraDebugEnabled())
+  {
+    static int lastLineState = -2;
+    const int lineState = (useOrthoProjection() ? 2 : 0) |
+                          (referenceLineVisible ? 1 : 0);
+    if (lineState != lastLineState)
+    {
+      lastLineState = lineState;
+    std::cout << std::scientific << std::setprecision(4)
+              << "[LINE] mode=" << (useOrthoProjection() ? "ortho" : "persp")
+              << " visible=" << referenceLineVisible
+              << " slab=[" << activeNear << ", " << activeFar << "]"
+              << " overlay=[" << overlayNear << ", " << overlayFar << "]"
+              << " seg=[(" << referenceLineStart.x << "," << referenceLineStart.y << "," << referenceLineStart.z
+              << ") -> (" << referenceLineEnd.x << "," << referenceLineEnd.y << "," << referenceLineEnd.z << ")]"
+              << std::endl;
+    }
   }
 
   // LOD step with hysteresis (doc section 4.5).  In orthographic mode the
@@ -2218,26 +2652,37 @@ void render()
   // opaque geometry but must not overwrite the shared depth buffer.
   drawLargeCoordinateObjects(view, projection, rebase, drawOrder, logDepth);
 
-  // Below the mesh LOD threshold, emit a stable center-point impostor so a
-  // distant object remains addressable without expanding the solid depth slab.
+  // Below the mesh LOD threshold, emit stable center-point impostors.  The
+  // renderer projects and batches all points into one GPU submission per
+  // transient-buffer chunk.
+  static std::vector<rendering::TargetPointInstance> pointInstances;
+  pointInstances.clear();
+  pointInstances.reserve(tinyDraws.size());
   for (const LargeCoordinateObject *object : tinyDraws)
   {
-    const rendering::TargetPointRenderData renderData{
+    pointInstances.push_back({
+        glm::vec3(object->worldPosition - rebase), object->color});
+  }
+  if (!pointInstances.empty())
+  {
+    const rendering::TargetPointInstancesRenderData pointRenderData{
         .view = view,
         .projection = overlayProjection,
-        .relativePosition = glm::vec3(object->worldPosition - rebase),
+        .instances = pointInstances.data(),
+        .instanceCount = static_cast<uint32_t>(pointInstances.size()),
         .pointSize = 2.0f,
-        .color = object->color,
+        .pixelSizeWorld = pixelSize,
         .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
         .logDepth = logDepth,
     };
-    rendererBackend->drawTargetPoint(renderData);
+    rendererBackend->drawTargetPointInstances(pointRenderData);
   }
 
   // Small 5-pixel "sphere" (disc-shaded point) at the orbit target so the
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
-  drawTargetPoint(view, projection, rebase, orbitCam.Target, logDepth);
+    drawTargetPoint(view, projection, rebase, orbitCam.Target, logDepth,
+                   pixelSize);
 
   if (frustumWireframeVisible)
   {
@@ -2305,6 +2750,18 @@ int main(int argc, char *argv[])
 
   fitCameraToRenderableObjects();
 
+  if (const char *largeView = std::getenv("GRID_CAMERA_LARGE");
+      largeView && std::strcmp(largeView, "0") != 0)
+  {
+    largeCoordinateCameraView = true;
+    cubeWorldPosition =
+        LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
+    fitCameraToStressField();
+    resetSlabStabilizers();
+    SDL_SetWindowTitle(
+        window, "grid plane - large-coordinate stress field");
+  }
+
   SDL_Event evt;
   bool running = true;
   bool middleMouseDrag = false;
@@ -2361,6 +2818,7 @@ int main(int argc, char *argv[])
                 LARGE_COORDINATE_BASE_POINT +
                 LARGE_COORDINATE_DETAIL_OFFSET;
             fitCameraToStressField();
+            resetSlabStabilizers();
             SDL_SetWindowTitle(
                 window, "grid plane - large-coordinate stress field");
           }
@@ -2368,6 +2826,7 @@ int main(int argc, char *argv[])
           {
             cubeWorldPosition = glm::dvec3(0.0);
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
+            resetSlabStabilizers();
             SDL_SetWindowTitle(window, "grid plane");
           }
           std::cout << "Camera: "
@@ -2407,10 +2866,10 @@ int main(int argc, char *argv[])
           currentFrame >= std::atof(testPanAtValue))
       {
         const float worldPerPixel = useOrthoProjection()
-            ? (2.0f * orthoHalfHeight()) / (float)SCREEN_HEIGHT
+            ? (2.0f * orthoHalfHeight()) / (float)currentDrawableHeight()
             : (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target) *
                std::tan(glm::radians(orbitCam.Zoom * 0.5f))) /
-              (float)SCREEN_HEIGHT;
+              (float)currentDrawableHeight();
         glm::dvec3 panTangentU;
         glm::dvec3 panTangentV;
         activePlaneTangents(panTangentU, panTangentV);
