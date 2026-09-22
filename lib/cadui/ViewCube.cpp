@@ -15,6 +15,8 @@ namespace cadui
     namespace
     {
         constexpr float kNavInset = 2.0f;
+        constexpr float kViewCubePx = 84.0f;
+        constexpr float kViewCubeScale = 0.36f;
         constexpr float kF = 0.80f;
         constexpr float kE = 1.00f;
         constexpr float kM = (kF + kE) * 0.5f;
@@ -405,7 +407,8 @@ namespace cadui
 
         const float pickerHeight = options.showUcsPicker ? ImGui::GetFrameHeight() : 0.0f;
         bool pickerHovered = false;
-        const float navSize = std::min(size.x, std::max(0.0f, size.y - pickerHeight));
+        const float navSize = kViewCubePx * kViewCubeScale * 2.0f * kNavInset; // 120.96 px
+        (void)size;
         const float cubeHalf = navSize * 0.25f;
         const float radius = cubeHalf;
         const ImVec2 navCenter{ center.x, center.y - pickerHeight * 0.5f };

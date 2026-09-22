@@ -83,3 +83,15 @@ lib/shaders/**/*.vk_orig
 /ports/OpenCADImGuiPort/NVIDIA Corporation/
 /ports/OpenCADImGuiPort/_reference/
 lib/shaders/**/*.temp.h
+# Local-only build/run helpers and debug artifacts for the UCS view-cube example 
+/examples/UcsViewCubeImGui/*.cmd 
+/examples/UcsViewCubeImGui/build/ 
+/imgui_ucs_viewcube.ini 
+ 
+# Local window-activation/screenshot debug helpers 
+/ports/OpenCADImGuiPort/activate.vbs 
+/ports/OpenCADImGuiPort/screenshot.py 
+ 
+# Downloaded OpenCADStudio reference source/archive 
+/external/ 
+/OpenCADStudio.zip 
