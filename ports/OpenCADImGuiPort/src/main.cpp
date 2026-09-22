@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
-
 namespace
 {
     void* getNativeWindowHandle(SDL_Window* window)
@@ -76,7 +75,7 @@ int main(int argc, char** argv)
     }
 
     SDL_Window* window = SDL_CreateWindow(
-        "OpenCADStudio ImGui Port",
+        "Open CAD Studio 2026.37 - Drawing1",
         1600,
         900,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN
@@ -103,6 +102,30 @@ int main(int argc, char** argv)
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = "imgui.ini";
 
+    if (!io.Fonts->AddFontFromFileTTF(
+        "C:/Windows/Fonts/msyh.ttc",
+        18.0f,
+        nullptr,
+        io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+    ))
+    {
+        std::cerr << "Chinese font load failed; using ImGui default font" << std::endl;
+    }
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 0.0f;
+    style.FrameRounding = 3.0f;
+    style.GrabRounding = 3.0f;
+    style.WindowBorderSize = 0.0f;
+    style.FrameBorderSize = 0.0f;
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.078f, 0.102f, 0.137f, 1.0f);
+    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.059f, 0.075f, 0.102f, 1.0f);
+    style.Colors[ImGuiCol_Button] = ImVec4(0.122f, 0.161f, 0.212f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.176f, 0.239f, 0.314f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.133f, 0.424f, 0.765f, 1.0f);
+    style.Colors[ImGuiCol_Header] = ImVec4(0.129f, 0.173f, 0.227f, 1.0f);
+    style.Colors[ImGuiCol_Text] = ImVec4(0.878f, 0.918f, 0.965f, 1.0f);
+
     if (!ImGui_ImplSDL3_InitForOther(window))
     {
         std::cerr << "ImGui SDL3 backend init failed" << std::endl;
@@ -119,7 +142,13 @@ int main(int argc, char** argv)
     InputRouter router;
     ui::UiHost uiHost(controller, router);
 
+    UiAction initialSelection;
+    initialSelection.type = UiActionType::SelectObject;
+    initialSelection.objectId = 1;
+    controller.execute(initialSelection);
+
     SDL_ShowWindow(window);
+    SDL_RaiseWindow(window);
 
     bool running = true;
     float lastFrameMs = 0.0f;

@@ -10383,9 +10383,6 @@ void ImGuiStackSizes::CompareWithContextState(ImGuiContext* ctx)
     ImGuiContext& g = *ctx;
     ImGuiWindow* window = g.CurrentWindow;
     IM_UNUSED(window);
-
-    // Window stacks
-    // NOT checking: DC.ItemWidth, DC.TextWrapPos (per window) to allow user to conveniently push once and not pop (they are cleared on Begin)
     IM_ASSERT(SizeOfIDStack         == window->IDStack.Size     && "PushID/PopID or TreeNode/TreePop Mismatch!");
 
     // Global stacks

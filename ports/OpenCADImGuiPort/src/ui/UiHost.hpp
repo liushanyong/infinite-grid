@@ -16,8 +16,6 @@ namespace ui
         void draw(float frameMs);
 
     private:
-        void drawDockspace();
-        void drawMainMenuBar(const AppSnapshot& snapshot);
         void drawPanels(const AppSnapshot& snapshot);
         void drawToolbar(const AppSnapshot& snapshot);
         void drawGlobalShortcuts(const AppSnapshot& snapshot);

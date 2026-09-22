@@ -127,6 +127,72 @@ struct MeshInstancesRenderData
     glm::vec4 logDepth;
 };
 
+enum class CadStyle
+{
+    Realistic,
+    Conceptual,
+    DepthOnly,
+    Grayscale,
+    Shaded,
+    Sketch,
+    Wireframe,
+    Xray,
+};
+
+struct CadAlgorithmDemoRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    const MeshInstance *instances = nullptr;
+    uint32_t instanceCount = 0;
+    MeshType mesh = MeshType::Cube;
+    CadStyle style = CadStyle::Realistic;
+    glm::vec3 cameraPos;
+    glm::vec3 lightDir;
+    glm::vec3 baseColor;
+    float metallic = 0.0f;
+    float roughness = 0.35f;
+    float transparency = 0.5f;
+    float strokeWidth = 1.0f;
+    float strokeDensity = 1.0f;
+    glm::vec4 logDepth;
+};
+
+// CAD vector primitives ported from CADplatformer's lines_pass: wide
+// polylines with round joins/caps and edge anti-aliasing, plus arbitrary
+// filled triangle soups. Vertices are already rebase-relative.
+struct PrimVertex
+{
+    glm::vec3 position;
+    glm::vec4 color;
+    glm::vec2 uv; // x: along-ribbon parameter; y: across-ribbon in [0, 1]
+};
+
+struct FillVertex
+{
+    glm::vec3 position;
+    glm::vec4 color;
+};
+
+struct PolylineRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    const PrimVertex *vertices = nullptr;
+    uint32_t vertexCount = 0;
+    glm::vec4 logDepth;
+    float edgeSoftness = 0.15f; // ribbon units faded at the edges
+};
+
+struct FilledTrianglesRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    const FillVertex *vertices = nullptr;
+    uint32_t vertexCount = 0;
+    glm::vec4 logDepth;
+};
+
 struct TargetPointInstance
 {
     glm::vec3 relativePosition;
@@ -179,6 +245,9 @@ public:
     virtual void drawWorldLine(const WorldLineRenderData &data) = 0;
     virtual void drawTargetPoint(const TargetPointRenderData &data) = 0;
     virtual void drawTargetPointInstances(const TargetPointInstancesRenderData &data) = 0;
+    virtual void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) = 0;
+    virtual void drawPolylines(const PolylineRenderData &data) = 0;
+    virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
 };
 
 std::unique_ptr<RendererBackend> createRenderer(

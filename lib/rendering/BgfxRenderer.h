@@ -28,6 +28,9 @@ public:
     void drawWorldLine(const WorldLineRenderData &data) override;
     void drawTargetPoint(const TargetPointRenderData &data) override;
     void drawTargetPointInstances(const TargetPointInstancesRenderData &data) override;
+    void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) override;
+    void drawPolylines(const PolylineRenderData &data) override;
+    void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
 
 private:
 
@@ -74,6 +77,24 @@ private:
     bgfx::ProgramHandle m_cubeProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_meshInstanceProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_pointInstanceProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_cadAlgorithmProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadView = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadProjection = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadCameraPos = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadBaseColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadLightDir = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadStyleParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadWireframeColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadStrokeParams = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_polylineProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_fillProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout m_polylineLayout;
+    bgfx::VertexLayout m_fillLayout;
+    bgfx::VertexBufferHandle m_cadCubeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_cadSphereBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_cadConeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_cadTorusBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_cubeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_sphereBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_coneBuffer = BGFX_INVALID_HANDLE;

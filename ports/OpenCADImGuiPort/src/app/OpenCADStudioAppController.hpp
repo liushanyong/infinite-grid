@@ -26,7 +26,7 @@ private:
     void runCommand(const std::string& command);
 
     std::unique_ptr<ocs::IOpenCADStudioBridge> bridge_;
-    std::unordered_map<ocs::CadHandle, int> handleToUiId_;
+    mutable std::unordered_map<ocs::CadHandle, int> handleToUiId_;
     mutable int nextUiId_{1};
     mutable std::string lastStatus_{"Ready"};
     bool closeRequested_{false};

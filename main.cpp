@@ -18,7 +18,7 @@ namespace
 struct RequestedRenderer
 {
   rendering::BackendType type = rendering::BackendType::Bgfx;
-  rendering::GraphicsApi api = rendering::GraphicsApi::Vulkan;// Auto;
+  rendering::GraphicsApi api = rendering::GraphicsApi::Vulkan;//Auto;//
 };
 
 RequestedRenderer resolveRequestedBackend()
@@ -711,8 +711,366 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
   return objects;
 }
 
+static glm::dvec3 vectorPrimitivesAnchor() { 
+  return LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET + 
+         glm::dvec3(0.0, 0.0, 0.0); 
+} 
+static int cadAlgorithmDemoStyle = 0;
+ 
+static void drawVectorPrimitivesDemo(const glm::mat4 &view, 
+                                     const glm::mat4 &projection, 
+                                     const glm::dvec3 &rebase, 
+                                     const glm::vec4 &logDepth, 
+                                     const glm::dvec3 &cameraPos, 
+                                     const glm::dvec3 &cameraFront, 
+                                     const glm::dvec3 &cameraRightD, 
+                                     const glm::dvec3 &cameraUpD, 
+                                     float pixelSizeWorld) {
+  const glm::dvec3 anchor = vectorPrimitivesAnchor(); 
+  const glm::dvec3 toAnchor = anchor - cameraPos; 
+  const double anchorDepth = glm::dot(toAnchor, cameraFront); 
+  if (anchorDepth <= 0.0) return; 
+ 
+  const glm::vec3 camRight = glm::normalize(glm::vec3(cameraRightD)); 
+  const glm::vec3 camUp = glm::normalize(glm::vec3(cameraUpD)); 
+  const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront)); 
+  std::vector<rendering::PrimVertex> polyVerts;
+  std::vector<rendering::FillVertex> fillVerts;
+
+
+  { 
+    static std::vector<rendering::TargetPointInstance> demoPoints; 
+    demoPoints.clear(); 
+    const glm::dvec3 pointBase = anchor + glm::dvec3(1024.0, -640.0, 0.0); 
+    for (int i = 0; i < 24; ++i) { 
+      const double x = (i % 8) * 96.0; 
+      const double y = (i / 8) * 96.0; 
+      demoPoints.push_back({glm::vec3(pointBase + glm::dvec3(x, y, 0.0) - rebase), 
+        glm::vec3(0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i)}); 
+    } 
+    if (rendererBackend && !demoPoints.empty()) { 
+      const rendering::TargetPointInstancesRenderData pointData{ 
+        .view = view, .projection = projection, .instances = demoPoints.data(), 
+        .instanceCount = static_cast<uint32_t>(demoPoints.size()), 
+        .pointSize = 6.0f, .pixelSizeWorld = pixelSizeWorld, 
+        .isOrtho = useOrthoProjection() ? 1.0f : 0.0f, .logDepth = logDepth}; 
+      rendererBackend->drawTargetPointInstances(pointData); 
+    } 
+  } 
+
+  { 
+    const glm::dvec3 dashStart = anchor + glm::dvec3(-1024.0, -640.0, -512.0); 
+    const glm::dvec3 dashEnd = dashStart + glm::dvec3(1024.0, 256.0, 0.0); 
+    const glm::vec4 dashColor(0.95f, 0.25f, 0.75f, 1.0f); 
+    glm::vec3 ra = glm::vec3(dashStart - rebase); 
+    glm::vec3 rb = glm::vec3(dashEnd - rebase); 
+    glm::vec3 dir = glm::normalize(rb - ra); 
+    glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * 1.25f; 
+    const glm::dvec3 dashDirD = glm::normalize(dashEnd - dashStart);
+    const double total = glm::length(dashEnd - dashStart); 
+    for (double d = 0.0; d < total; d += 144.0) { 
+      const double e = std::min(d + 96.0, total); 
+      if (e - d < 1.0) break; 
+      glm::vec3 s0 = glm::vec3(dashStart + dashDirD * d - rebase); 
+      glm::vec3 s1 = glm::vec3(dashStart + dashDirD * e - rebase); 
+      polyVerts.push_back({s0 - side, dashColor, {float(d / total), 0.0f}}); 
+      polyVerts.push_back({s0 + side, dashColor, {float(d / total), 1.0f}}); 
+      polyVerts.push_back({s1 + side, dashColor, {float(e / total), 1.0f}}); 
+      polyVerts.push_back({s0 - side, dashColor, {float(d / total), 0.0f}}); 
+      polyVerts.push_back({s1 + side, dashColor, {float(e / total), 1.0f}}); 
+      polyVerts.push_back({s1 - side, dashColor, {float(e / total), 0.0f}}); 
+    } 
+    glm::vec3 tip = rb; 
+    glm::vec3 base = rb - dir * 48.0f; 
+    glm::vec3 arrowSide = glm::normalize(glm::cross(camFront, dir)) * 24.0f; 
+    fillVerts.push_back({tip, dashColor}); 
+    fillVerts.push_back({base - arrowSide, dashColor}); 
+    fillVerts.push_back({base + arrowSide, dashColor}); 
+  } 
+
+  { 
+    constexpr int surfaceSegs = 24; 
+    const glm::dvec3 surfaceOrigin = anchor + glm::dvec3(512.0, 768.0, -512.0); 
+    auto surfacePoint = [&](double u, double v) { 
+      const double h = glm::sin(glm::pi<double>() * u) * glm::sin(glm::pi<double>() * v); 
+      return surfaceOrigin + glm::dvec3(u * 768.0, h * 224.0, v * 512.0); 
+    }; 
+    for (int iy = 0; iy < surfaceSegs; ++iy) { 
+      for (int ix = 0; ix < surfaceSegs; ++ix) { 
+        const double u0 = double(ix) / surfaceSegs; 
+        const double v0 = double(iy) / surfaceSegs; 
+        const double u1 = double(ix + 1) / surfaceSegs; 
+        const double v1 = double(iy + 1) / surfaceSegs; 
+        glm::vec3 p00 = glm::vec3(surfacePoint(u0, v0) - rebase); 
+        glm::vec3 p10 = glm::vec3(surfacePoint(u1, v0) - rebase); 
+        glm::vec3 p01 = glm::vec3(surfacePoint(u0, v1) - rebase); 
+        glm::vec3 p11 = glm::vec3(surfacePoint(u1, v1) - rebase); 
+        glm::vec4 c00(0.15f + 0.75f * float(u0), 0.20f + 0.55f * float(v0), 0.85f, 0.80f); 
+        glm::vec4 c10(0.15f + 0.75f * float(u1), 0.20f + 0.55f * float(v0), 0.85f, 0.80f); 
+        glm::vec4 c01(0.15f + 0.75f * float(u0), 0.20f + 0.55f * float(v1), 0.85f, 0.80f); 
+        glm::vec4 c11(0.15f + 0.75f * float(u1), 0.20f + 0.55f * float(v1), 0.85f, 0.80f); 
+        fillVerts.push_back({p00, c00}); fillVerts.push_back({p10, c10}); fillVerts.push_back({p11, c11}); 
+        fillVerts.push_back({p00, c00}); fillVerts.push_back({p11, c11}); fillVerts.push_back({p01, c01}); 
+      } 
+    } 
+
+    for (int k = 0; k <= surfaceSegs; k += 4) { 
+      for (int i = 0; i < surfaceSegs; ++i) { 
+        const double t0 = double(i) / surfaceSegs; 
+        const double t1 = double(i + 1) / surfaceSegs; 
+        const double g = double(k) / surfaceSegs; 
+        glm::dvec3 a = surfacePoint(t0, g); 
+        glm::dvec3 b = surfacePoint(t1, g); 
+        glm::vec3 ra2 = glm::vec3(a - rebase); 
+        glm::vec3 rb2 = glm::vec3(b - rebase); 
+        glm::vec3 dir2 = glm::normalize(rb2 - ra2); 
+        glm::vec3 side2 = glm::normalize(glm::cross(dir2, camFront)) * 1.0f; 
+        glm::vec4 lineColor(0.05f, 0.10f, 0.25f, 0.85f); 
+        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
+        polyVerts.push_back({ra2 + side2, lineColor, {float(t0), 1.0f}}); 
+        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
+        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
+        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
+        polyVerts.push_back({rb2 - side2, lineColor, {float(t1), 0.0f}}); 
+        a = surfacePoint(g, t0); 
+        b = surfacePoint(g, t1); 
+        ra2 = glm::vec3(a - rebase); 
+        rb2 = glm::vec3(b - rebase); 
+        dir2 = glm::normalize(rb2 - ra2); 
+        side2 = glm::normalize(glm::cross(dir2, camFront)) * 1.0f; 
+        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
+        polyVerts.push_back({ra2 + side2, lineColor, {float(t0), 1.0f}}); 
+        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
+        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
+        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
+        polyVerts.push_back({rb2 - side2, lineColor, {float(t1), 0.0f}}); 
+      } 
+    } 
+  } 
+ 
+  { 
+    const glm::dvec3 ptBase = anchor + glm::dvec3(0, -768, 0); 
+    for (int i = 0; i < 5; ++i) { 
+      glm::dvec3 p = ptBase + glm::dvec3(i * 256.0, 0, 0); 
+      glm::vec3 rp = glm::vec3(p - rebase); 
+      float r = 6.0f; 
+      glm::vec4 col(0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f); 
+      for (int s = 0; s < 8; ++s) { 
+        float a0 = s * 0.7853982f; 
+        float a1 = (s + 1) * 0.7853982f; 
+        fillVerts.push_back({rp, col}); 
+        fillVerts.push_back({rp + camRight * r * cosf(a0) + camUp * r * sinf(a0), col}); 
+        fillVerts.push_back({rp + camRight * r * cosf(a1) + camUp * r * sinf(a1), col}); 
+      } 
+    } 
+  }
+ 
+  { 
+    const float widths[] = {1.0f, 2.0f, 4.0f, 8.0f}; 
+    const glm::vec4 lineCols[] = {{1.0f, 0.2f, 0.2f, 1.0f}, {0.2f, 1.0f, 0.2f, 1.0f}, {0.2f, 0.4f, 1.0f, 1.0f}, {1.0f, 0.8f, 0.2f, 1.0f}}; 
+    const glm::dvec3 lineBase = anchor + glm::dvec3(-1024.0, -384.0, -512.0); 
+    for (int li = 0; li < 4; ++li) { 
+      float hw = widths[li] * 0.5f; 
+      const glm::dvec3 a = lineBase + glm::dvec3(0.0, li * 192.0, 0.0); 
+      const glm::dvec3 b = a + glm::dvec3(1024.0, 0.0, 0.0); 
+      glm::vec3 ra = glm::vec3(a - rebase); 
+      glm::vec3 rb = glm::vec3(b - rebase); 
+      glm::vec3 dir = glm::normalize(rb - ra); 
+      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
+      glm::vec4 col = lineCols[li]; 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
+      for (int s = 0; s < 8; ++s) { 
+        float a0 = s * 0.7853982f; 
+        float a1 = (s + 1) * 0.7853982f; 
+        for (int e = 0; e < 2; ++e) { 
+          glm::vec3 cen = (e == 0) ? ra : rb; 
+          fillVerts.push_back({cen, col}); 
+          fillVerts.push_back({cen + camRight * hw * cosf(a0) + camUp * hw * sinf(a0), col}); 
+          fillVerts.push_back({cen + camRight * hw * cosf(a1) + camUp * hw * sinf(a1), col}); 
+        } 
+      } 
+    } 
+  }
+ 
+  { 
+    const glm::dvec3 plBase = anchor + glm::dvec3(-512.0, 0.0, -512.0); 
+    const glm::dvec3 pts[] = {plBase, plBase + glm::dvec3(256.0, 256.0, 0.0), plBase + glm::dvec3(512.0, 128.0, 256.0), plBase + glm::dvec3(768.0, 384.0, 0.0)}; 
+    float hw = 2.0f; 
+    glm::vec4 col(0.6f, 0.2f, 1.0f, 1.0f); 
+    for (int si = 0; si < 3; ++si) { 
+      glm::vec3 ra = glm::vec3(pts[si] - rebase); 
+      glm::vec3 rb = glm::vec3(pts[si + 1] - rebase); 
+      glm::vec3 dir = glm::normalize(rb - ra); 
+      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
+    } 
+    for (int ji = 1; ji < 3; ++ji) { 
+      glm::vec3 cen = glm::vec3(pts[ji] - rebase); 
+      for (int s = 0; s < 8; ++s) { 
+        float a0 = s * 0.7853982f; 
+        float a1 = (s + 1) * 0.7853982f; 
+        fillVerts.push_back({cen, col}); 
+        fillVerts.push_back({cen + camRight * hw * cosf(a0) + camUp * hw * sinf(a0), col}); 
+        fillVerts.push_back({cen + camRight * hw * cosf(a1) + camUp * hw * sinf(a1), col}); 
+      } 
+    } 
+  }
+ 
+  { 
+    const glm::dvec3 hexC = anchor + glm::dvec3(0.0, 256.0, -512.0); 
+    const float hexR = 128.0f; 
+    glm::vec4 hexCol(0.3f, 0.8f, 0.5f, 1.0f); 
+    for (int s = 0; s < 6; ++s) { 
+      float a0 = s * 1.0471976f; 
+      float a1 = (s + 1) * 1.0471976f; 
+      glm::vec3 p0 = glm::vec3(hexC - rebase) + camRight * hexR * cosf(a0) + camUp * hexR * sinf(a0); 
+      glm::vec3 p1 = glm::vec3(hexC - rebase) + camRight * hexR * cosf(a1) + camUp * hexR * sinf(a1); 
+      fillVerts.push_back({glm::vec3(hexC - rebase), hexCol}); 
+      fillVerts.push_back({p0, hexCol}); 
+      fillVerts.push_back({p1, hexCol}); 
+    } 
+  }
+ 
+  { 
+    const glm::dvec3 arcC = anchor + glm::dvec3(512.0, 256.0, -512.0); 
+    const float arcR = 192.0f; 
+    glm::vec4 col(1.0f, 0.5f, 0.1f, 1.0f); 
+    const int segs = 48; 
+    float hw = 3.0f; 
+    for (int s = 0; s < segs; ++s) { 
+      float a0 = 0.0f + 4.71239f * s / segs; 
+      float a1 = 0.0f + 4.71239f * (s + 1) / segs; 
+      glm::vec3 ra = glm::vec3(arcC - rebase) + camRight * arcR * cosf(a0) + camUp * arcR * sinf(a0); 
+      glm::vec3 rb = glm::vec3(arcC - rebase) + camRight * arcR * cosf(a1) + camUp * arcR * sinf(a1); 
+      glm::vec3 dir = glm::normalize(rb - ra); 
+      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
+    } 
+  }
+ 
+  { 
+    const glm::dvec3 b0 = anchor + glm::dvec3(-768.0, 512.0, 0.0); 
+    const glm::dvec3 b1 = b0 + glm::dvec3(256.0, 384.0, 128.0); 
+    const glm::dvec3 b2 = b0 + glm::dvec3(512.0, -128.0, -128.0); 
+    const glm::dvec3 b3 = b0 + glm::dvec3(768.0, 256.0, 0.0); 
+    glm::vec4 col(0.9f, 0.7f, 0.2f, 1.0f); 
+    float hw = 3.0f; 
+    const int segs = 32; 
+    auto bez = [&](double t) -> glm::dvec3 { 
+      double u = 1.0 - t; 
+      return u*u*u*b0 + 3.0*u*u*t*b1 + 3.0*u*t*t*b2 + t*t*t*b3; 
+    }; 
+    for (int s = 0; s < segs; ++s) { 
+      double t0 = (double)s / segs; 
+      double t1 = (double)(s + 1) / segs; 
+      glm::vec3 ra = glm::vec3(bez(t0) - rebase); 
+      glm::vec3 rb = glm::vec3(bez(t1) - rebase); 
+      glm::vec3 dir = glm::normalize(rb - ra); 
+      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
+      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
+      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
+    } 
+  }
+ 
+  { 
+    const glm::dvec3 cC = anchor + glm::dvec3(256.0, 512.0, 256.0); 
+    const float cR = 160.0f; 
+    glm::vec4 col(0.2f, 0.6f, 0.9f, 1.0f); 
+    for (int s = 0; s < 16; ++s) { 
+      float a0 = s * 0.3926991f; 
+      float a1 = (s + 1) * 0.3926991f; 
+      fillVerts.push_back({glm::vec3(cC - rebase), col}); 
+      fillVerts.push_back({glm::vec3(cC - rebase) + camRight * cR * cosf(a0) + camUp * cR * sinf(a0), col}); 
+      fillVerts.push_back({glm::vec3(cC - rebase) + camRight * cR * cosf(a1) + camUp * cR * sinf(a1), col}); 
+    } 
+  }
+ 
+  { 
+    const glm::dvec3 q0 = anchor + glm::dvec3(-256.0, -128.0, 256.0); 
+    const glm::dvec3 q1 = q0 + glm::dvec3(512.0, 0.0, 0.0); 
+    const glm::dvec3 q2 = q1 + glm::dvec3(0.0, 384.0, 0.0); 
+    const glm::dvec3 q3 = q0 + glm::dvec3(0.0, 384.0, 0.0); 
+    glm::vec4 col(0.5f, 0.5f, 0.9f, 1.0f); 
+    glm::vec3 r0 = glm::vec3(q0 - rebase); 
+    glm::vec3 r1 = glm::vec3(q1 - rebase); 
+    glm::vec3 r2 = glm::vec3(q2 - rebase); 
+    glm::vec3 r3 = glm::vec3(q3 - rebase); 
+    fillVerts.push_back({r0, col}); fillVerts.push_back({r1, col}); fillVerts.push_back({r2, col}); 
+    fillVerts.push_back({r0, col}); fillVerts.push_back({r2, col}); fillVerts.push_back({r3, col}); 
+  }
+ 
+  {rendering::CubeRenderData cd;cd.model=glm::scale(glm::mat4(1.0f),glm::vec3(200.0f));cd.view=view;cd.projection=projection;cd.modelRelativePosition=glm::vec3(anchor-rebase);cd.objectColor=glm::vec3(1,0,0);cd.opacity=1.0f;cd.mesh=rendering::MeshType::Cube;cd.logDepth=logDepth;rendererBackend->drawCube(cd);}
+  if (!polyVerts.empty()) { 
+    rendering::PolylineRenderData polyData; 
+    polyData.view = view; 
+    polyData.projection = projection; 
+    polyData.vertices = polyVerts.data(); 
+    polyData.vertexCount = static_cast<uint32_t>(polyVerts.size()); 
+    polyData.logDepth = logDepth; 
+    polyData.edgeSoftness = 2.0f; 
+    rendererBackend->drawPolylines(polyData);
+  } 
+ 
+  if (!fillVerts.empty()) { 
+    rendering::FilledTrianglesRenderData fillData; 
+    fillData.view = view; 
+    fillData.projection = projection; 
+    fillData.vertices = fillVerts.data(); 
+    fillData.vertexCount = static_cast<uint32_t>(fillVerts.size()); 
+    fillData.logDepth = logDepth; 
+    rendererBackend->drawFilledTriangles(fillData);
+  }
+ 
+  { 
+    const glm::dvec3 solidBase = anchor + glm::dvec3(0.0, 768.0, 512.0); 
+    const float solidScale = 192.0f; 
+    const rendering::MeshType meshTypes[] = {rendering::MeshType::Cube, rendering::MeshType::Sphere, rendering::MeshType::Cone, rendering::MeshType::Torus}; 
+    for (size_t mi = 0; mi < 4; ++mi) { 
+      const glm::dvec3 pos = solidBase + glm::dvec3((mi % 2) * 512.0, (mi / 2) * 512.0, 0.0); 
+      glm::vec4 relPos = glm::vec4(glm::vec3(pos - rebase), 0.0f); 
+      rendering::MeshInstance inst = {glm::vec4(solidScale, 0.0f, 0.0f, relPos.x), glm::vec4(0.0f, solidScale, 0.0f, relPos.y), glm::vec4(0.0f, 0.0f, solidScale, relPos.z), glm::vec4(0.8f, 0.7f, 0.9f, 0.65f)}; 
+      const glm::vec3 relCamPos(orbitCam.Position - rebase); 
+      const rendering::CadAlgorithmDemoRenderData renderData{.view = view, .projection = projection, .instances = &inst, .instanceCount = 1, .mesh = meshTypes[mi], .style = static_cast<rendering::CadStyle>(cadAlgorithmDemoStyle), .cameraPos = relCamPos, .lightDir = glm::vec3(0.4f, 0.8f, 0.55f), .baseColor = glm::vec3(1.0f, 1.0f, 1.0f), .metallic = 0.0f, .roughness = 0.35f, .transparency = 0.5f, .strokeWidth = 1.0f, .strokeDensity = 1.0f, .logDepth = logDepth}; 
+      rendererBackend->drawCadAlgorithmDemo(renderData);
+    } 
+  } 
+}
+
 int stressObjectCount();
 const std::vector<LargeCoordinateObject> &getStressObjects();
+
+static bool cadAlgorithmDemoEnabled()
+{
+  // Enabled by default; set GRID_CAD_SHADER_DEMO=0 to restore the normal
+  // mesh-instancing path.
+  const char *value = std::getenv("GRID_CAD_SHADER_DEMO");
+  return value == nullptr || *value == '\0' ||
+         std::strcmp(value, "0") != 0;
+}
+
+
+static constexpr const char *kCadAlgorithmStyleNames[] = {
+    "Realistic", "Conceptual", "DepthOnly", "Grayscale",
+    "Shaded",    "Sketch",     "Wireframe", "Xray"};
 
 void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::mat4 &projection,
@@ -722,6 +1080,66 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
 {
   const glm::dvec3 cameraPos(orbitCam.Position);
   const glm::dvec3 cameraFront(orbitCam.Front);
+
+  if (cadAlgorithmDemoEnabled())
+  {
+    std::sort(drawOrder.begin(), drawOrder.end(),
+        [&](const LargeCoordinateObject *lhs,
+            const LargeCoordinateObject *rhs) {
+          const double lhsDepth =
+              glm::dot(lhs->worldPosition - cameraPos, cameraFront);
+          const double rhsDepth =
+              glm::dot(rhs->worldPosition - cameraPos, cameraFront);
+          return lhsDepth > rhsDepth;
+        });
+
+    constexpr size_t kCadMeshCount = 4;
+    static std::array<std::vector<rendering::MeshInstance>, kCadMeshCount>
+        cadGroups;
+    for (auto &group : cadGroups)
+      group.clear();
+    for (const LargeCoordinateObject *object : drawOrder)
+    {
+      const size_t meshIndex = static_cast<size_t>(object->mesh);
+      const glm::vec3 relativePosition(object->worldPosition - rebaseOrigin);
+      const float scale = object->size;
+      cadGroups[meshIndex].push_back({
+          glm::vec4(scale, 0.0f, 0.0f, relativePosition.x),
+          glm::vec4(0.0f, scale, 0.0f, relativePosition.y),
+          glm::vec4(0.0f, 0.0f, scale, relativePosition.z),
+          glm::vec4(object->color, 0.65f)});
+    }
+
+    const rendering::MeshType cadMeshTypes[kCadMeshCount] = {
+        rendering::MeshType::Cube, rendering::MeshType::Sphere,
+        rendering::MeshType::Cone, rendering::MeshType::Torus};
+    const glm::vec3 relativeCameraPos(orbitCam.Position - rebaseOrigin);
+    for (size_t meshIndex = 0; meshIndex < kCadMeshCount; ++meshIndex)
+    {
+      auto &instances = cadGroups[meshIndex];
+      if (instances.empty())
+        continue;
+      const rendering::CadAlgorithmDemoRenderData renderData{
+          .view = view,
+          .projection = projection,
+          .instances = instances.data(),
+          .instanceCount = static_cast<uint32_t>(instances.size()),
+          .mesh = cadMeshTypes[meshIndex],
+          .style = static_cast<rendering::CadStyle>(cadAlgorithmDemoStyle),
+          .cameraPos = relativeCameraPos,
+          .lightDir = glm::vec3(0.4f, 0.8f, 0.55f),
+          .baseColor = glm::vec3(1.0f, 1.0f, 1.0f),
+          .metallic = 0.0f,
+          .roughness = 0.35f,
+          .transparency = 0.5f,
+          .strokeWidth = 1.0f,
+          .strokeDensity = 1.0f,
+          .logDepth = logDepth,
+      };
+      rendererBackend->drawCadAlgorithmDemo(renderData);
+    }
+    return;
+  }
   std::sort(drawOrder.begin(), drawOrder.end(),
       [&](const LargeCoordinateObject *lhs,
           const LargeCoordinateObject *rhs) {
@@ -791,16 +1209,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
 
 int stressObjectCount()
 {
-  static const int count = [] {
-    int value = 1000;
-    if (const char *env = std::getenv("GRID_STRESS_COUNT"))
-    {
-      const long parsed = std::strtol(env, nullptr, 10);
-      if (parsed >= 0)
-        value = static_cast<int>(std::min<long>(parsed, 50000));
-    }
-    return value;
-  }();
+  static const int count = 1000;
   return count;
 }
 
@@ -1015,9 +1424,7 @@ void printLargeCoordinateValidation()
             << "  micro X offsets [double, float32 world, CPU double rebase]:"
             << std::endl;
 
-  std::cout
-            << "  stress objects: " << stressObjectCount()
-            << " (GRID_STRESS_COUNT, 0 disables)" << std::endl;
+  std::cout << "  stress objects: " << stressObjectCount() << std::endl;
 
   for (const double offset : microOffsets)
   {
@@ -2651,6 +3058,7 @@ void render()
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
   drawLargeCoordinateObjects(view, projection, rebase, drawOrder, logDepth);
+  drawVectorPrimitivesDemo(view, projection, rebase, logDepth, cameraPos, frontVec, cameraRight, cameraUp, pixelSize);
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -2750,17 +3158,15 @@ int main(int argc, char *argv[])
 
   fitCameraToRenderableObjects();
 
-  if (const char *largeView = std::getenv("GRID_CAMERA_LARGE");
-      largeView && std::strcmp(largeView, "0") != 0)
-  {
-    largeCoordinateCameraView = true;
-    cubeWorldPosition =
-        LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
-    fitCameraToStressField();
-    resetSlabStabilizers();
-    SDL_SetWindowTitle(
-        window, "grid plane - large-coordinate stress field");
-  }
+  // The demo always starts in the large-coordinate stress field so every
+  // object group renders by default without extra environment setup.
+  largeCoordinateCameraView = true;
+  cubeWorldPosition =
+      LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
+  fitCameraToStressField();
+  resetSlabStabilizers();
+  SDL_SetWindowTitle(
+      window, "grid plane - large-coordinate stress field");
 
   SDL_Event evt;
   bool running = true;
@@ -2805,6 +3211,14 @@ int main(int argc, char *argv[])
         {
           frustumCaptureRequested = true;
           std::cout << "Frustum wireframe: captured" << std::endl;
+        }
+        if (evt.key.key == SDLK_K && cadAlgorithmDemoEnabled())
+        {
+          cadAlgorithmDemoStyle = (cadAlgorithmDemoStyle + 1) % 8;
+          std::cout << "CAD algorithm demo style: " << cadAlgorithmDemoStyle
+                    << " ("
+                    << kCadAlgorithmStyleNames[cadAlgorithmDemoStyle]
+                    << ")" << std::endl;
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
         {

@@ -271,7 +271,8 @@ void OpenCADStudioAppController::execute(const UiAction& action)
         request.x2 = action.x2;
         request.y2 = action.y2;
         request.radius = action.radius;
-        apply(bridge_->createObject(request));
+        const ocs::BridgeCreateResult created = bridge_->createObject(request);
+        apply({created.ok, created.status});
         break;
     }
 

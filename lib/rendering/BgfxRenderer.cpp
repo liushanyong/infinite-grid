@@ -44,6 +44,24 @@ namespace PointInstanceShaders
 #include "shaders/targetPointInstance/frag.h"
 } // namespace PointInstanceShaders
 
+namespace CadAlgorithmShaders
+{
+#include "shaders/cadAlgorithm/vs_cad_instance.h"
+#include "shaders/cadAlgorithm/fs_cad_styles.h"
+} // namespace CadAlgorithmShaders
+
+namespace PrimPolylineShaders
+{
+#include "shaders/cadPrimitives/polyline/vs_polyline.h"
+#include "shaders/cadPrimitives/polyline/fs_polyline.h"
+} // namespace PrimPolylineShaders
+
+namespace PrimFilledShaders
+{
+#include "shaders/cadPrimitives/filled/vs_filled.h"
+#include "shaders/cadPrimitives/filled/fs_filled.h"
+} // namespace PrimFilledShaders
+
 namespace rendering
 {
 namespace
@@ -319,6 +337,65 @@ bgfx::VertexBufferHandle createMeshBuffer(const std::vector<float> &vertices)
         layout);
 }
 
+
+bgfx::VertexBufferHandle createCadMeshBuffer(const std::vector<float> &vertices)
+{
+    if (vertices.empty() || vertices.size() % 6 != 0)
+        return BGFX_INVALID_HANDLE;
+
+    // The CAD algorithm shader uses a barycentric coordinate for wireframe and
+    // unified shading.  Mesh generators emit triangle soup, so every three
+    // vertices form one triangle and receive (1,0,0), (0,1,0), and (0,0,1).
+    const size_t vertexCount = vertices.size() / 6;
+    std::vector<float> cadVertices;
+    cadVertices.reserve(vertexCount * 9);
+    for (size_t i = 0; i < vertexCount; ++i)
+    {
+        const size_t source = i * 6;
+        cadVertices.insert(cadVertices.end(), vertices.begin() + source,
+                           vertices.begin() + source + 6);
+        switch (i % 3)
+        {
+        case 0:
+            cadVertices.insert(cadVertices.end(), {1.0f, 0.0f, 0.0f});
+            break;
+        case 1:
+            cadVertices.insert(cadVertices.end(), {0.0f, 1.0f, 0.0f});
+            break;
+        default:
+            cadVertices.insert(cadVertices.end(), {0.0f, 0.0f, 1.0f});
+            break;
+        }
+    }
+
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 3, bgfx::AttribType::Float)
+        .end();
+    return bgfx::createVertexBuffer(
+        bgfx::copy(cadVertices.data(),
+                   static_cast<uint32_t>(cadVertices.size() * sizeof(float))),
+        layout);
+}
+
+bgfx::VertexBufferHandle createCadCubeBuffer(const std::array<CubeVertex, 36> &vertices)
+{
+    std::vector<float> source;
+    source.reserve(vertices.size() * 6);
+    for (const CubeVertex &vertex : vertices)
+    {
+        source.push_back(vertex.position.x);
+        source.push_back(vertex.position.y);
+        source.push_back(vertex.position.z);
+        source.push_back(vertex.normal.x);
+        source.push_back(vertex.normal.y);
+        source.push_back(vertex.normal.z);
+    }
+    return createCadMeshBuffer(source);
+}
+
 // Shader headers contain one binary per supported API.  bgfx validates the
 // binary type at shader creation, so select the array using the renderer that
 // bgfx actually initialized (which may differ from the requested API only if
@@ -469,9 +546,26 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_meshInstanceProgram);
     if (bgfx::isValid(m_pointInstanceProgram))
         bgfx::destroy(m_pointInstanceProgram);
+    if (bgfx::isValid(m_cadAlgorithmProgram))
+        bgfx::destroy(m_cadAlgorithmProgram);
+    if (bgfx::isValid(m_polylineProgram))
+        bgfx::destroy(m_polylineProgram);
+    if (bgfx::isValid(m_fillProgram))
+        bgfx::destroy(m_fillProgram);
     m_cubeProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_cubeBuffer))
         bgfx::destroy(m_cubeBuffer);
+    if (bgfx::isValid(m_cadCubeBuffer))
+        bgfx::destroy(m_cadCubeBuffer);
+    if (bgfx::isValid(m_cadSphereBuffer))
+        bgfx::destroy(m_cadSphereBuffer);
+    m_cadSphereBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_cadConeBuffer))
+        bgfx::destroy(m_cadConeBuffer);
+    m_cadConeBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_cadTorusBuffer))
+        bgfx::destroy(m_cadTorusBuffer);
+    m_cadTorusBuffer = BGFX_INVALID_HANDLE;
     m_cubeBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_sphereBuffer))
         bgfx::destroy(m_sphereBuffer);
@@ -500,6 +594,15 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_pointBuffer);
     m_pointBuffer = BGFX_INVALID_HANDLE;
 
+    destroyUniform(m_cadView);
+    destroyUniform(m_cadProjection);
+    destroyUniform(m_cadCameraPos);
+    destroyUniform(m_cadBaseColor);
+    destroyUniform(m_cadLightDir);
+    destroyUniform(m_cadStyleParams);
+    destroyUniform(m_cadWireframeColor);
+    destroyUniform(m_cadStrokeParams);
+    destroyUniform(m_primParams);
     destroyUniform(m_gridInvViewProj);
     destroyUniform(m_gridViewProj);
     destroyUniform(m_gridCamFront);
@@ -867,6 +970,124 @@ void BgfxRenderer::drawTargetPointInstances(
     }
 }
 
+void BgfxRenderer::drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data)
+{
+    bgfx::VertexBufferHandle meshBuffer = m_cadCubeBuffer;
+    switch (data.mesh)
+    {
+    case rendering::MeshType::Sphere: meshBuffer = m_cadSphereBuffer; break;
+    case rendering::MeshType::Cone:   meshBuffer = m_cadConeBuffer;   break;
+    case rendering::MeshType::Torus:  meshBuffer = m_cadTorusBuffer;  break;
+    case rendering::MeshType::Cube:   break;
+    }
+
+    if (!m_initialized || !bgfx::isValid(m_cadAlgorithmProgram) ||
+        !bgfx::isValid(meshBuffer) || !data.instances ||
+        data.instanceCount == 0)
+        return;
+
+    constexpr uint16_t kStride = 64;
+    static_assert(sizeof(MeshInstance) == kStride,
+                  "MeshInstance must match the CAD algorithm demo stride");
+
+    const glm::mat4 projection = projectionForDirect3D(data.projection);
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_DEPTH_TEST_LEQUAL |
+                           BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+
+    bgfx::setUniform(m_cadView, glm::value_ptr(data.view));
+    bgfx::setUniform(m_cadProjection, glm::value_ptr(projection));
+    bgfx::setUniform(m_cadCameraPos, glm::value_ptr(glm::vec4(data.cameraPos, 1.0f)));
+    bgfx::setUniform(m_cadBaseColor, glm::value_ptr(glm::vec4(data.baseColor, 1.0f)));
+    bgfx::setUniform(m_cadLightDir, glm::value_ptr(glm::vec4(glm::normalize(data.lightDir), 0.0f)));
+    bgfx::setUniform(m_cadStyleParams, glm::value_ptr(glm::vec4(static_cast<float>(data.style), data.metallic, data.roughness, data.transparency)));
+    bgfx::setUniform(m_cadWireframeColor, glm::value_ptr(glm::vec4(0.1f, 0.1f, 0.1f, 1.0f)));
+    bgfx::setUniform(m_cadStrokeParams, glm::value_ptr(glm::vec4(data.strokeWidth, data.strokeDensity, 0.0f, 0.0f)));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
+
+    uint32_t first = 0;
+    while (first < data.instanceCount)
+    {
+        const uint32_t available = bgfx::getAvailInstanceDataBuffer(
+            data.instanceCount - first, kStride);
+        if (available == 0)
+            break;
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
+        auto *gpu = reinterpret_cast<MeshInstance *>(idb.data);
+        std::memcpy(gpu, data.instances + first,
+                    sizeof(MeshInstance) * idb.num);
+
+        bgfx::setState(state);
+        bgfx::setVertexBuffer(0, meshBuffer);
+        bgfx::setInstanceDataBuffer(&idb);
+        bgfx::submit(0, m_cadAlgorithmProgram);
+        first += idb.num;
+    }
+}
+
+void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
+    static bool dbg = true;
+    if (dbg) { dbg = false;
+        printf("[polyline] valid=%d count=%u\n", bgfx::isValid(m_polylineProgram), data.vertexCount);
+    }
+    if (!bgfx::isValid(m_polylineProgram) || data.vertexCount < 2 || !data.vertices) return;
+    if (data.vertexCount > 65535) return; 
+ 
+    bgfx::TransientVertexBuffer tvb;
+    const uint32_t vertSize = sizeof(PrimVertex); 
+    const uint32_t totalBytes = data.vertexCount * vertSize; 
+    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_polylineLayout)) return; 
+    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_polylineLayout); 
+    memcpy(tvb.data, data.vertices, totalBytes);
+ 
+    glm::mat4 identity = glm::mat4(1.0f); 
+    bgfx::setTransform(glm::value_ptr(identity)); 
+    bgfx::setVertexBuffer(0, &tvb); 
+    bgfx::setUniform(m_view, glm::value_ptr(data.view)); 
+    const glm::mat4 proj = projectionForDirect3D(data.projection);
+    bgfx::setUniform(m_projection, glm::value_ptr(proj));
+    float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w }; 
+    bgfx::setUniform(m_logDepth, logDepth); 
+    float prim[4] = { 0.15f, data.edgeSoftness, 0.0f, 0.0f }; 
+    bgfx::setUniform(m_primParams, prim);
+ 
+    constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A 
+        | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA; 
+    bgfx::setState(state); 
+    bgfx::submit(0, m_polylineProgram); 
+}
+ 
+void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data) {
+    static bool dbg = true;
+    if (dbg) { dbg = false;
+        printf("[filled] valid=%d count=%u\n", bgfx::isValid(m_fillProgram), data.vertexCount);
+    } 
+    if (!bgfx::isValid(m_fillProgram) || data.vertexCount < 3 || !data.vertices) return; 
+    if (data.vertexCount > 65535) return;
+ 
+    bgfx::TransientVertexBuffer tvb; 
+    const uint32_t vertSize = sizeof(FillVertex); 
+    const uint32_t totalBytes = data.vertexCount * vertSize; 
+    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_fillLayout)) return; 
+    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_fillLayout); 
+    memcpy(tvb.data, data.vertices, totalBytes);
+ 
+    glm::mat4 identity = glm::mat4(1.0f); 
+    bgfx::setTransform(glm::value_ptr(identity)); 
+    bgfx::setVertexBuffer(0, &tvb); 
+    bgfx::setUniform(m_view, glm::value_ptr(data.view)); 
+    const glm::mat4 proj = projectionForDirect3D(data.projection);
+    bgfx::setUniform(m_projection, glm::value_ptr(proj)); 
+    float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w }; 
+    bgfx::setUniform(m_logDepth, logDepth);
+ 
+    constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z 
+        | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA; 
+    bgfx::setState(state); 
+    bgfx::submit(0, m_fillProgram); 
+}
+
 void BgfxRenderer::drawAabb(const AabbRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_cubeProgram) ||
@@ -1075,10 +1296,57 @@ bool BgfxRenderer::createRenderResources()
     m_pointInstanceProgram = bgfx::createProgram(
         pointInstanceVertex, pointInstanceFragment, true);
 
+    const auto cadAlgorithmVertexBinary =
+        SELECT_SHADER_BINARY(CadAlgorithmShaders, vs_cad_instance);
+    const auto cadAlgorithmFragmentBinary =
+        SELECT_SHADER_BINARY(CadAlgorithmShaders, fs_cad_styles);
+    const bgfx::ShaderHandle cadAlgorithmVertex = createShader(
+        cadAlgorithmVertexBinary.data, cadAlgorithmVertexBinary.size,
+        "cad_algorithm_vs");
+    const bgfx::ShaderHandle cadAlgorithmFragment = createShader(
+        cadAlgorithmFragmentBinary.data, cadAlgorithmFragmentBinary.size,
+        "cad_algorithm_fs");
+    m_cadAlgorithmProgram = bgfx::createProgram(
+        cadAlgorithmVertex, cadAlgorithmFragment, true);
+
+    const auto polylineVertexBinary =
+        SELECT_SHADER_BINARY(PrimPolylineShaders, vs_polyline);
+    const auto polylineFragmentBinary =
+        SELECT_SHADER_BINARY(PrimPolylineShaders, fs_polyline);
+    const bgfx::ShaderHandle polylineVertex = createShader(
+        polylineVertexBinary.data, polylineVertexBinary.size,
+        "prim_polyline_vs");
+    const bgfx::ShaderHandle polylineFragment = createShader(
+        polylineFragmentBinary.data, polylineFragmentBinary.size,
+        "prim_polyline_fs");
+    m_polylineProgram = bgfx::createProgram(polylineVertex, polylineFragment, true);
+
+    const auto fillVertexBinary =
+        SELECT_SHADER_BINARY(PrimFilledShaders, vs_filled);
+    const auto fillFragmentBinary =
+        SELECT_SHADER_BINARY(PrimFilledShaders, fs_filled);
+    const bgfx::ShaderHandle fillVertex = createShader(
+        fillVertexBinary.data, fillVertexBinary.size, "prim_fill_vs");
+    const bgfx::ShaderHandle fillFragment = createShader(
+        fillFragmentBinary.data, fillFragmentBinary.size, "prim_fill_fs");
+    m_fillProgram = bgfx::createProgram(fillVertex, fillFragment, true);
+    m_polylineLayout.begin() 
+    .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float) 
+    .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float) 
+    .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float) 
+    .end(); 
+m_fillLayout.begin() 
+    .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float) 
+    .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float) 
+    .end();
+
 
     bool ready = bgfx::isValid(m_gridProgram) &&
                  bgfx::isValid(m_meshInstanceProgram) &&
                  bgfx::isValid(m_pointInstanceProgram) &&
+                 bgfx::isValid(m_cadAlgorithmProgram) &&
+                 bgfx::isValid(m_polylineProgram) &&
+                 bgfx::isValid(m_fillProgram) &&
                  bgfx::isValid(m_cubeProgram) &&
                  bgfx::isValid(m_lineProgram) &&
                  bgfx::isValid(m_pointProgram);
@@ -1131,6 +1399,17 @@ bool BgfxRenderer::createRenderResources()
         m_pointPosition = createUniformHandle("uRelativePosition", bgfx::UniformType::Vec4);
         m_pointSize = createUniformHandle("uPointSize", bgfx::UniformType::Vec4);
         m_pointColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
+        // Uniform names must exactly match the names declared in the CAD
+        // shader sources; bgfx binds program uniforms by name.
+        m_cadView = createUniformHandle("u_cadView", bgfx::UniformType::Mat4);
+        m_cadProjection = createUniformHandle("u_cadProjection", bgfx::UniformType::Mat4);
+        m_cadCameraPos = createUniformHandle("u_cameraPos", bgfx::UniformType::Vec4);
+        m_cadBaseColor = createUniformHandle("u_baseColor", bgfx::UniformType::Vec4);
+        m_cadLightDir = createUniformHandle("u_lightDir", bgfx::UniformType::Vec4);
+        m_cadStyleParams = createUniformHandle("u_styleParams", bgfx::UniformType::Vec4);
+        m_cadWireframeColor = createUniformHandle("u_wireframeColor", bgfx::UniformType::Vec4);
+        m_cadStrokeParams = createUniformHandle("u_strokeParams", bgfx::UniformType::Vec4);
+        m_primParams = createUniformHandle("uPrimParams", bgfx::UniformType::Vec4);
 
         ready = bgfx::isValid(m_gridInvViewProj) &&
                 bgfx::isValid(m_gridViewProj) &&
@@ -1170,7 +1449,16 @@ bool BgfxRenderer::createRenderResources()
                 bgfx::isValid(m_lineColor) &&
                 bgfx::isValid(m_lineWidth) &&
                 bgfx::isValid(m_pointPosition) && bgfx::isValid(m_pointSize) &&
-                bgfx::isValid(m_pointColor);
+                bgfx::isValid(m_pointColor) &&
+                bgfx::isValid(m_cadView) &&
+                bgfx::isValid(m_cadProjection) &&
+                bgfx::isValid(m_cadCameraPos) &&
+                bgfx::isValid(m_cadBaseColor) &&
+                bgfx::isValid(m_cadLightDir) &&
+                bgfx::isValid(m_cadStyleParams) &&
+                bgfx::isValid(m_cadWireframeColor) &&
+                bgfx::isValid(m_cadStrokeParams) &&
+                bgfx::isValid(m_primParams);
     }
 
     if (ready)
@@ -1188,6 +1476,10 @@ bool BgfxRenderer::createRenderResources()
         m_torusBuffer = createMeshBuffer(makeTorusMesh());
         m_cubeBuffer = bgfx::createVertexBuffer(
             bgfx::copy(cubeVertices.data(), sizeof(cubeVertices)), cubeLayout);
+        m_cadCubeBuffer = createCadCubeBuffer(cubeVertices);
+        m_cadSphereBuffer = createCadMeshBuffer(makeSphereMesh());
+        m_cadConeBuffer = createCadMeshBuffer(makeConeMesh());
+        m_cadTorusBuffer = createCadMeshBuffer(makeTorusMesh());
         const std::array<CubeVertex, 24> aabbVertices = makeCubeEdgeVertices();
         m_aabbBuffer = bgfx::createVertexBuffer(
             bgfx::copy(aabbVertices.data(), sizeof(aabbVertices)), cubeLayout);
@@ -1212,6 +1504,10 @@ bool BgfxRenderer::createRenderResources()
 
 
         ready = bgfx::isValid(m_cubeBuffer) &&
+                bgfx::isValid(m_cadCubeBuffer) &&
+                bgfx::isValid(m_cadSphereBuffer) &&
+                bgfx::isValid(m_cadConeBuffer) &&
+                bgfx::isValid(m_cadTorusBuffer) &&
                 bgfx::isValid(m_aabbBuffer) &&
                 bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer);
         if (!ready)

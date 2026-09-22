@@ -1,7 +1,9 @@
 #include "CommandLinePanel.hpp"
+#include "UiLayout.hpp"
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <string>
 
 namespace ui
@@ -17,76 +19,66 @@ namespace ui
 
             if (viewportHost)
             {
-                if (payload == "zoom in")
-                {
-                    viewportHost->zoomIn();
-                }
-                else if (payload == "zoom out")
-                {
-                    viewportHost->zoomOut();
-                }
-                else if (payload == "zoom extents")
-                {
-                    viewportHost->zoomExtents();
-                }
-                else if (payload == "reset")
-                {
-                    viewportHost->reset();
-                }
+                if (payload == "zoom in") viewportHost->zoomIn();
+                else if (payload == "zoom out") viewportHost->zoomOut();
+                else if (payload == "zoom extents") viewportHost->zoomExtents();
+                else if (payload == "reset") viewportHost->reset();
             }
         }
     }
 
     void drawCommandLinePanel(IAppController& controller, const AppSnapshot& snapshot, ViewportHost* viewportHost)
     {
-        ImGui::SetNextWindowSize(ImVec2(520.0f, 180.0f), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin("Command Line"))
-        {
-            ImGui::End();
-            return;
-        }
+        (void)snapshot;
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const float leftOffset = kLeftPanelWidth;
+        const float availableWidth = std::max(0.0f, viewport->WorkSize.x - leftOffset);
+        const float width = std::clamp(availableWidth * 0.48f, 320.0f, 910.0f);
+        const float x = viewport->WorkPos.x + leftOffset + (availableWidth - width) * 0.5f;
+        const float y = viewport->WorkPos.y + viewport->WorkSize.y - kStatusBarHeight - 44.0f;
 
+        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(width, 32.0f), ImGuiCond_Always);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(45, 45, 45, 245));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(35, 35, 35, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(7.0f, 6.0f));
+
+        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration
+            | ImGuiWindowFlags_NoDocking
+            | ImGuiWindowFlags_NoMove
+            | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoSavedSettings
+            | ImGuiWindowFlags_NoFocusOnAppearing;
+        ImGui::Begin("##CommandOverlay", nullptr, flags);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(74, 222, 128, 255));
+        ImGui::TextUnformatted("命令:");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::SmallButton(">");
+        ImGui::SameLine();
         static char command[256] = "";
-        bool submitted = ImGui::InputTextWithHint("##command", "Type a command...", command, sizeof(command), ImGuiInputTextFlags_EnterReturnsTrue);
-
-        if (ImGui::Button("Run") && command[0] != '\0')
-        {
-            submitted = true;
-        }
-
+        ImGui::PushItemWidth(-98.0f);
+        const bool submitted = ImGui::InputTextWithHint(
+            "##Command",
+            "",
+            command,
+            sizeof(command),
+            ImGuiInputTextFlags_EnterReturnsTrue
+        );
+        ImGui::PopItemWidth();
         ImGui::SameLine();
-
-        if (ImGui::Button("Grid"))
-        {
-            UiAction action;
-            action.type = UiActionType::ToggleGrid;
-            controller.execute(action);
-        }
-
+        ImGui::SmallButton(">");
         ImGui::SameLine();
-
-        if (ImGui::Button("Snap"))
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(80, 190, 125, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(95, 205, 138, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(61, 163, 103, 255));
+        if (ImGui::SmallButton("MCP"))
         {
-            UiAction action;
-            action.type = UiActionType::ToggleSnap;
-            controller.execute(action);
         }
-
-        ImGui::SameLine();
-
-        if (ImGui::Button("Ortho"))
-        {
-            UiAction action;
-            action.type = UiActionType::ToggleOrtho;
-            controller.execute(action);
-        }
-
-        ImGui::SameLine();
-
-        if (ImGui::Button("Zoom Extents") && viewportHost)
-        {
-            viewportHost->zoomExtents();
-        }
+        ImGui::PopStyleColor(3);
 
         if (submitted && command[0] != '\0')
         {
@@ -94,44 +86,8 @@ namespace ui
             command[0] = '\0';
         }
 
-        ImGui::Separator();
-        ImGui::Text("History");
-
-        ImGui::SameLine();
-        if (ImGui::Button("Clear History"))
-        {
-            UiAction action;
-            action.type = UiActionType::ClearHistory;
-            controller.execute(action);
-        }
-
-        if (snapshot.commandHistory.empty())
-        {
-            ImGui::TextDisabled("No commands executed yet.");
-        }
-        else
-        {
-            const float footerHeight = ImGui::GetFrameHeightWithSpacing();
-            if (ImGui::BeginChild("CommandHistory", ImVec2(0.0f, -footerHeight), 0))
-            {
-                for (int index = static_cast<int>(snapshot.commandHistory.size()) - 1; index >= 0; --index)
-                {
-                    const std::string& historyCommand = snapshot.commandHistory[static_cast<size_t>(index)];
-                    ImGui::PushID(index);
-                    if (ImGui::Selectable(historyCommand.c_str()))
-                    {
-                        submitCommand(controller, viewportHost, historyCommand);
-                    }
-                    if (ImGui::IsItemHovered())
-                    {
-                        ImGui::SetTooltip("Click to run again");
-                    }
-                    ImGui::PopID();
-                }
-            }
-            ImGui::EndChild();
-        }
-
         ImGui::End();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
     }
 }

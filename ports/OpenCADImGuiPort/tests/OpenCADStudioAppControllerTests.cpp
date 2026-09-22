@@ -27,6 +27,7 @@ namespace
             result.primaryHandle = primary;
             result.layers = layers;
             result.currentLayer = currentLayer;
+            result.currentFile = currentFile;
             result.canUndo = canUndo;
             result.canRedo = canRedo;
             result.statusText = status;
@@ -332,7 +333,7 @@ namespace
         assert(snapshot.selectedObjectIds.size() == 1);
         assert(snapshot.selectedObjectId == 1);
 
-        select.selectionModifier = SelectionModifier::Toggle;
+        select.selectionModifier = ::SelectionModifier::Toggle;
         controller.execute(select);
         assert(fake.selected.empty());
     }
