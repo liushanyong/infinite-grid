@@ -1587,13 +1587,14 @@ void BgfxRenderer::drawTargetPointInstances(
     bgfx::setUniform(m_primParams, pointStyle);
 
     uint32_t first = 0;
+    static std::vector<PointInstanceGpu> visibleInputs;
     while (first < data.instanceCount)
     {
         const uint32_t available = bgfx::getAvailInstanceDataBuffer(
             data.instanceCount - first, kStride);
         if (available == 0)
             break;
-        std::vector<PointInstanceGpu> visibleInputs;
+        visibleInputs.clear();
         visibleInputs.reserve(available);
 
         for (uint32_t i = 0; i < available; ++i)
@@ -1807,11 +1808,6 @@ RenderModeFlags BgfxRenderer::renderModeFlags() const
 }
 
 void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
-    static bool dbg = true;
-    if (dbg) { dbg = false;
-        printf("[polyline] valid=%d count=%u\n", bgfx::isValid(m_polylineProgram), data.vertexCount);
-    }
-
     if (!bgfx::isValid(m_polylineProgram) || data.vertexCount < 2 || !data.vertices) return;
     if (data.vertexCount > 65535) return;
 

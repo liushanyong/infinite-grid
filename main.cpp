@@ -996,30 +996,29 @@ struct VectorPrimitivesTessellation
   std::vector<CadEntityRange> fillRanges;
   std::vector<CadEntityRange> pointRanges;
 
-  const std::string &strokeNameAt(size_t index) const
+  const char *strokeNameAt(size_t index) const
   {
     return nameAt(strokeRanges, index, "CADStroke");
   }
-  const std::string &fillNameAt(size_t index) const
+  const char *fillNameAt(size_t index) const
   {
     return nameAt(fillRanges, index, "CADFill");
   }
-  const std::string &pointNameAt(size_t index) const
+  const char *pointNameAt(size_t index) const
   {
     return nameAt(pointRanges, index, "CADPoint");
   }
 
 private:
-  static const std::string &nameAt(const std::vector<CadEntityRange> &ranges,
-                                   size_t index, const char *fallback)
+  static const char *nameAt(const std::vector<CadEntityRange> &ranges,
+                            size_t index, const char *fallback)
   {
     for (const CadEntityRange &range : ranges)
     {
       if (index >= range.begin && index < range.begin + range.count)
-        return range.name;
+        return range.name.c_str();
     }
-    static const std::string fallbackName = fallback;
-    return fallbackName;
+    return fallback;
   }
 };
 
@@ -1428,13 +1427,17 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront));
   const VectorPrimitivesTessellation &tessellation =
       getVectorPrimitivesTessellation();
-  std::vector<rendering::PrimVertex> polyVerts;
-  std::vector<rendering::FillVertex> fillVerts;
-  std::vector<rendering::FillVertex> surfaceFillVerts;
-  std::vector<rendering::TargetPointInstance> cadPoints;
-  std::vector<bool> strokeVisible;
-  std::vector<bool> fillVisible;
-  std::vector<bool> pointVisible;
+  static std::vector<rendering::PrimVertex> polyVerts;
+  static std::vector<rendering::FillVertex> fillVerts;
+  static std::vector<rendering::FillVertex> surfaceFillVerts;
+  static std::vector<rendering::TargetPointInstance> cadPoints;
+  static std::vector<bool> strokeVisible;
+  static std::vector<bool> fillVisible;
+  static std::vector<bool> pointVisible;
+  polyVerts.clear();
+  fillVerts.clear();
+  surfaceFillVerts.clear();
+  cadPoints.clear();
 
   auto appendRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
                           const glm::vec4 &color, float halfWidth,
@@ -2905,7 +2908,7 @@ struct UnifiedVisibilityQuery
   }
 };
 
-std::vector<VisibilityCandidate> buildVisibilityCandidates();
+void buildVisibilityCandidates(std::vector<VisibilityCandidate> &candidates);
 
 VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
                                       VisibilityKind kind,
@@ -2973,8 +2976,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     PickDebugTrace localTrace;
     PickDebugTrace &trace = debugTrace ? *debugTrace : localTrace;
     const UnifiedVisibilityQuery pickVisibility = makePickingVisibilityQuery();
-    const std::vector<VisibilityCandidate> visibilityCandidates =
-        buildVisibilityCandidates();
+    std::vector<VisibilityCandidate> visibilityCandidates;
+    buildVisibilityCandidates(visibilityCandidates);
     const auto visibleState = [&](VisibilityKind kind, size_t entityIndex,
                                   size_t rangeBegin) {
         const auto found = std::find_if(
@@ -3154,7 +3157,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                                          hitDepth))
                 {
                     considerCadOverlayHit(hitDepth,
-                                          cad.strokeNameAt(strokeIndex).c_str());
+                                          cad.strokeNameAt(strokeIndex));
                 }
             }
             ++strokeIndex;
@@ -3184,7 +3187,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                                       hitDepth))
             {
                 if (triangle.common.visible)
-                    considerCadHit(hitDepth, cad.fillNameAt(fillIndex).c_str());
+                    considerCadHit(hitDepth, cad.fillNameAt(fillIndex));
             }
             ++fillIndex;
         }
@@ -3228,7 +3231,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             {
                 if (point.common.visible)
                     considerCadOverlayHit(
-                        hitDepth, cad.pointNameAt(pointIndex).c_str());
+                        hitDepth, cad.pointNameAt(pointIndex));
             }
             ++pointIndex;
         }
@@ -3424,14 +3427,46 @@ VisibilityCandidate makeCadRangeCandidate(
   return candidate;
 }
 
-std::vector<VisibilityCandidate> buildVisibilityCandidates()
+static const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
 {
-  std::vector<VisibilityCandidate> candidates;
+  static const std::vector<VisibilityCandidate> candidates = [] {
+    const VectorPrimitivesTessellation &cad =
+        getVectorPrimitivesTessellation();
+    std::vector<VisibilityCandidate> result;
+    result.reserve(cad.strokeRanges.size() + cad.fillRanges.size() +
+                   cad.pointRanges.size());
+    for (const CadEntityRange &range : cad.strokeRanges)
+    {
+      if (range.count)
+        result.push_back(makeCadRangeCandidate(
+            cad, range, VisibilityKind::CadStroke));
+    }
+    for (const CadEntityRange &range : cad.fillRanges)
+    {
+      if (range.count)
+        result.push_back(makeCadRangeCandidate(
+            cad, range, VisibilityKind::CadFill));
+    }
+    for (const CadEntityRange &range : cad.pointRanges)
+    {
+      if (range.count)
+        result.push_back(makeCadRangeCandidate(
+            cad, range, VisibilityKind::CadPoint));
+    }
+    return result;
+  }();
+  return candidates;
+}
+
+void buildVisibilityCandidates(std::vector<VisibilityCandidate> &candidates)
+{
+  candidates.clear();
   size_t reserveCount = getLargeCoordinateObjects().size() +
                         getStressObjects().size() + 1;
   const VectorPrimitivesTessellation &cad = getVectorPrimitivesTessellation();
-  reserveCount += cad.meshes.size() + cad.strokeRanges.size() +
-                  cad.fillRanges.size() + cad.pointRanges.size();
+  const std::vector<VisibilityCandidate> &cadRangeCandidates =
+      cadRangeVisibilityCandidates();
+  reserveCount += cad.meshes.size() + cadRangeCandidates.size();
   candidates.reserve(reserveCount);
 
   for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
@@ -3461,25 +3496,8 @@ std::vector<VisibilityCandidate> buildVisibilityCandidates()
       candidates.push_back(makeMeshCandidate(
           cad.meshes[i], VisibilityKind::CadMesh, i));
   }
-  for (const CadEntityRange &range : cad.strokeRanges)
-  {
-    if (range.count)
-      candidates.push_back(makeCadRangeCandidate(
-          cad, range, VisibilityKind::CadStroke));
-  }
-  for (const CadEntityRange &range : cad.fillRanges)
-  {
-    if (range.count)
-      candidates.push_back(makeCadRangeCandidate(
-          cad, range, VisibilityKind::CadFill));
-  }
-  for (const CadEntityRange &range : cad.pointRanges)
-  {
-    if (range.count)
-      candidates.push_back(makeCadRangeCandidate(
-          cad, range, VisibilityKind::CadPoint));
-  }
-  return candidates;
+  for (const VisibilityCandidate &candidate : cadRangeCandidates)
+    candidates.push_back(candidate);
 }
 
 // Liang-Barsky style 2D clipping of a world-space line segment against the
@@ -3824,7 +3842,7 @@ void render()
   tinyDraws.reserve(getLargeCoordinateObjects().size() +
                     getStressObjects().size());
   static std::vector<VisibilityCandidate> visibilityCandidates;
-  visibilityCandidates = buildVisibilityCandidates();
+  buildVisibilityCandidates(visibilityCandidates);
   static std::vector<const VisibilityCandidate *> visibleCadDraws;
   visibleCadDraws.clear();
   visibleCadDraws.reserve(visibilityCandidates.size());

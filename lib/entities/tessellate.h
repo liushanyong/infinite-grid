@@ -140,14 +140,19 @@ inline void tessellate(const Arc &arc, TessellatedEntity &result,
 inline void tessellate(const Circle &circle, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
+    if (!(circle.radius > 0.0) || !std::isfinite(circle.radius))
+        return;
+
     Arc arc;
     arc.center = circle.center;
     arc.radius = circle.radius;
     arc.startAngle = 0.0;
     arc.endAngle = glm::two_pi<double>();
     arc.normal = circle.normal;
+    const size_t strokeBefore = result.strokes.size();
     tessellate(arc, result, options);
-    result.strokes.back().closed = true;
+    if (result.strokes.size() > strokeBefore)
+        result.strokes.back().closed = true;
 }
 
 inline void tessellate(const Ellipse &ellipse, TessellatedEntity &result,
