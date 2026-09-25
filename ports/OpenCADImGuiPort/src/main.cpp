@@ -117,6 +117,7 @@ int main(int argc, char** argv)
     style.FrameRounding = 3.0f;
     style.GrabRounding = 3.0f;
     style.WindowBorderSize = 0.0f;
+    style.WindowMinSize = ImVec2(120.0f, 80.0f);
     style.FrameBorderSize = 0.0f;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.078f, 0.102f, 0.137f, 1.0f);
     style.Colors[ImGuiCol_FrameBg] = ImVec4(0.059f, 0.075f, 0.102f, 1.0f);
@@ -125,6 +126,11 @@ int main(int argc, char** argv)
     style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.133f, 0.424f, 0.765f, 1.0f);
     style.Colors[ImGuiCol_Header] = ImVec4(0.129f, 0.173f, 0.227f, 1.0f);
     style.Colors[ImGuiCol_Text] = ImVec4(0.878f, 0.918f, 0.965f, 1.0f);
+    style.Colors[ImGuiCol_TitleBg] = ImVec4(0.165f, 0.165f, 0.165f, 1.0f);
+    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.205f, 0.205f, 0.205f, 1.0f);
+    style.Colors[ImGuiCol_DockingPreview] = ImVec4(0.075f, 0.565f, 0.800f, 0.55f);
+    style.Colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.086f, 0.086f, 0.086f, 1.0f);
+    style.Colors[ImGuiCol_Separator] = ImVec4(0.235f, 0.235f, 0.235f, 1.0f);
 
     if (!ImGui_ImplSDL3_InitForOther(window))
     {

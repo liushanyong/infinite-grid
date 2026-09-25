@@ -1,5 +1,5 @@
 ﻿$input a_position, i_data0, i_data1, i_data2
-$output v_pointCoord, v_color
+$output v_pointCoord, v_color, v_depth
 
 #include "bgfx_shader.sh"
 
@@ -11,4 +11,5 @@ void main()
     gl_Position = vec4(i_data0.xy + a_position.xy * i_data1.xy, i_data0.zw);
     v_pointCoord = a_position.xy;
     v_color = i_data2;
+    v_depth = i_data0.z;
 }

@@ -2,12 +2,34 @@
 
 #include <SDL.h>
 
+#include <array>
 #include <memory>
+#include <string>
 
 #include <glm/glm.hpp>
 
+#include "RenderMode.h"
+
 namespace rendering
 {
+
+// Double-single encoding: high is the nearest f32 to the f64 value and low is
+// the f64 remainder after high is subtracted.  The pair preserves enough
+// precision for world-space translations at CAD/survey coordinates.
+struct DoubleSingleVec3
+{
+    glm::vec3 high{0.0f};
+    glm::vec3 low{0.0f};
+};
+
+inline DoubleSingleVec3 encodeDoubleSingle(const glm::dvec3 &value)
+{
+    DoubleSingleVec3 encoded;
+    encoded.high = glm::vec3(value);
+    encoded.low = glm::vec3(value - glm::dvec3(encoded.high));
+    return encoded;
+}
+
 
 enum class BackendType
 {
@@ -76,8 +98,13 @@ struct CubeRenderData
     glm::vec3 modelRelativePosition;
     glm::vec3 objectColor;
     float opacity;
+    // Rendering layer.  0 keeps every object in the single default
+    // layer; values > 0 composite the object above lower layers.
+    float layer = 0.0f;
     MeshType mesh = MeshType::Cube;
     glm::vec4 logDepth;
+    DoubleSingleVec3 eye;
+    DoubleSingleVec3 object;
 };
 
 struct AabbRenderData
@@ -88,7 +115,10 @@ struct AabbRenderData
     glm::vec3 relativeMax;
     glm::vec3 color;
     float opacity;
+    float layer = 0.0f;
     glm::vec4 logDepth;
+    DoubleSingleVec3 eye;
+    DoubleSingleVec3 object;
 };
 
 struct WorldLineRenderData
@@ -107,13 +137,15 @@ struct WorldLineRenderData
 
 struct MeshInstance
 {
-    // Three column-major columns of a 3x4 affine transform.  The translation
-    // is stored in .w so a full model matrix can be rebuilt without a fourth
-    // GPU instance attribute.  Position is already rebase-relative.
+    // Column-major 3x3 transform.  The .w components carry RGB because bgfx
+    // exposes fewer instance attributes when the mesh uses packed UVs.
     glm::vec4 transformColumn0;
     glm::vec4 transformColumn1;
     glm::vec4 transformColumn2;
-    glm::vec4 colorOpacity;
+
+    // Double-single encoded translation; high.w is opacity.
+    glm::vec4 positionHigh;
+    glm::vec4 positionLow;
 };
 
 struct MeshInstancesRenderData
@@ -124,19 +156,31 @@ struct MeshInstancesRenderData
     uint32_t instanceCount = 0;
     MeshType mesh = MeshType::Cube;
     bool opaque = false;
+    float layer = 0.0f;
     glm::vec4 logDepth;
+    DoubleSingleVec3 eye;
+    uint32_t diffuseTextureIndex = 0;
+    float headlight = 1.0f;
+    float triplanarUv = 0.0f;
+    bool realistic = false;
+    glm::vec4 material = glm::vec4(0.0f, 0.35f, 0.0f, 0.5f);
 };
 
-enum class CadStyle
+struct RealisticLight
 {
-    Realistic,
-    Conceptual,
-    DepthOnly,
-    Grayscale,
-    Shaded,
-    Sketch,
-    Wireframe,
-    Xray,
+    glm::vec3 position{0.0f};
+    glm::vec3 color{1.0f};
+    float radius = 0.0f;
+};
+
+struct RealisticLightsRenderData
+{
+    glm::vec3 ambient{0.08f, 0.09f, 0.11f};
+    glm::vec3 direction{0.4f, 0.8f, 0.55f};
+    glm::vec3 directionColor{1.0f, 0.97f, 0.90f};
+    float directionIntensity = 1.0f;
+    std::array<RealisticLight, 4> pointLights;
+    uint32_t pointLightCount = 0;
 };
 
 struct CadAlgorithmDemoRenderData
@@ -146,7 +190,7 @@ struct CadAlgorithmDemoRenderData
     const MeshInstance *instances = nullptr;
     uint32_t instanceCount = 0;
     MeshType mesh = MeshType::Cube;
-    CadStyle style = CadStyle::Realistic;
+    RenderMode renderMode = RenderMode::Wireframe2D;
     glm::vec3 cameraPos;
     glm::vec3 lightDir;
     glm::vec3 baseColor;
@@ -155,7 +199,9 @@ struct CadAlgorithmDemoRenderData
     float transparency = 0.5f;
     float strokeWidth = 1.0f;
     float strokeDensity = 1.0f;
+    float layer = 0.0f;
     glm::vec4 logDepth;
+    DoubleSingleVec3 eye;
 };
 
 // CAD vector primitives ported from CADplatformer's lines_pass: wide
@@ -182,6 +228,7 @@ struct PolylineRenderData
     uint32_t vertexCount = 0;
     glm::vec4 logDepth;
     float edgeSoftness = 0.15f; // ribbon units faded at the edges
+    float layer = 0.0f;
 };
 
 struct FilledTrianglesRenderData
@@ -190,6 +237,8 @@ struct FilledTrianglesRenderData
     glm::mat4 projection;
     const FillVertex *vertices = nullptr;
     uint32_t vertexCount = 0;
+    bool is3DFace = false;
+    float layer = 0.0f;
     glm::vec4 logDepth;
 };
 
@@ -197,6 +246,7 @@ struct TargetPointInstance
 {
     glm::vec3 relativePosition;
     glm::vec3 color;
+    float pointSize = 0.0f;
 };
 
 struct TargetPointInstancesRenderData
@@ -246,8 +296,16 @@ public:
     virtual void drawTargetPoint(const TargetPointRenderData &data) = 0;
     virtual void drawTargetPointInstances(const TargetPointInstancesRenderData &data) = 0;
     virtual void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) = 0;
+    virtual void setRenderMode(RenderMode mode) = 0;
+    virtual RenderMode renderMode() const = 0;
+    virtual RenderModeFlags renderModeFlags() const = 0;
     virtual void drawPolylines(const PolylineRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
+
+    // Zero is a renderer-provided white texture; other ids are allocated by
+    // the active backend and remain valid until shutdown().
+    virtual uint32_t loadMeshTexture(const std::string &path) { return 0; }
+    virtual void setRealisticLights(const RealisticLightsRenderData &lights) {}
 };
 
 std::unique_ptr<RendererBackend> createRenderer(

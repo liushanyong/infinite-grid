@@ -11,6 +11,10 @@
 #include <vector>
 
 #include <glm/gtc/type_ptr.hpp>
+
+#include <bx/allocator.h>
+#include <bx/error.h>
+#include <bimg/decode.h>
 namespace GridShaders
 {
 // Rebuild this translation unit whenever the embedded infinite-grid shader
@@ -38,6 +42,12 @@ namespace MeshInstanceShaders
 #include "shaders/centerAnchorInstance/vertex.h"
 #include "shaders/centerAnchorInstance/frag.h"
 } // namespace MeshInstanceShaders
+
+namespace RealisticMeshShaders
+{
+#include "shaders/realisticMesh/vs_realistic_mesh.h"
+#include "shaders/realisticMesh/fs_pbr_mesh.h"
+} // namespace RealisticMeshShaders
 namespace PointInstanceShaders
 {
 #include "shaders/targetPointInstance/vertex.h"
@@ -62,10 +72,69 @@ namespace PrimFilledShaders
 #include "shaders/cadPrimitives/filled/fs_filled.h"
 } // namespace PrimFilledShaders
 
+namespace PresentShaders
+{
+#include "shaders/present/vs_present.h"
+#include "shaders/present/fs_present.h"
+} // namespace PresentShaders
+
 namespace rendering
 {
 namespace
 {
+
+// CAD visual styles use ordered passes into one explicit MSAA scene target.
+// Only the background view clears; later passes inherit its depth buffer.
+constexpr bgfx::ViewId kViewBackground = 0;
+constexpr bgfx::ViewId kViewDepthPrepass = 1;
+constexpr bgfx::ViewId kViewSolidFill = 2;
+constexpr bgfx::ViewId kViewEdges = 3;
+constexpr bgfx::ViewId kViewWire = 4;
+constexpr bgfx::ViewId kViewOverlay = 5;
+constexpr bgfx::ViewId kViewPresent = 8;
+
+// Layer compositing: layer N shifts its geometry closer in view space so it
+// always composites above layer N-1 regardless of draw order.  The shared
+// log-depth mapping spans object and overlay slabs, so the bias is derived
+// from each draw's own view depth as a fixed fraction of log-mapped depth.
+constexpr float kLayerNormalizedBias = 1.0f / 65536.0f;
+constexpr float kEdgeNormalizedDepthBias = 1.0f / 65536.0f;
+constexpr float kLn2 = 0.6931471805599453f;
+
+float logDepthDenominator(const glm::vec4 &logDepth)
+{
+    const float near = std::max(logDepth.y, 1e-6f);
+    const float far = std::max(logDepth.z, near * 1.000001f);
+    return std::log2(far / near);
+}
+
+float normalizedLogDepth(float viewDepth, const glm::vec4 &logDepth, float denom)
+{
+    const float near = std::max(logDepth.y, 1e-6f);
+    float t = std::log2(std::max(viewDepth / near, 1.0f)) / denom;
+    return std::clamp(t, 0.0f, 1.0f);
+}
+
+float layerOffsetUnits(float layer, float viewDepth, const glm::vec4 &logDepth)
+{
+    if (layer <= 0.0f)
+        return 0.0f;
+    const float d = std::max(viewDepth, 1.0f);
+    // dt/dd of the log mapping times the per-layer normalized bias.
+    return layer * kLayerNormalizedBias * d * kLn2 * logDepthDenominator(logDepth);
+}
+
+float edgeDepthBiasUnits(float viewDepth)
+{
+    return std::max(viewDepth, 1.0f) * kEdgeNormalizedDepthBias;
+}
+
+// Normalized sort depth for bgfx depth-sorted views (0 = near, 1 = far).
+uint32_t normalizedSortDepth(float viewDepth, const glm::vec4 &logDepth, float denom)
+{
+    return static_cast<uint32_t>(normalizedLogDepth(viewDepth, logDepth, denom)
+                                 * 16777215.0f);
+}
 
 struct CubeVertex
 {
@@ -157,9 +226,10 @@ std::array<CubeVertex, 24> makeCubeEdgeVertices()
     };
 }
 
-bgfx::UniformHandle createUniformHandle(const char *name, bgfx::UniformType::Enum type)
+bgfx::UniformHandle createUniformHandle(
+    const char *name, bgfx::UniformType::Enum type, uint16_t count = 1)
 {
-    const bgfx::UniformHandle handle = bgfx::createUniform(name, type);
+    const bgfx::UniformHandle handle = bgfx::createUniform(name, type, count);
     if (!bgfx::isValid(handle))
         std::cerr << "Failed to create bgfx uniform: " << name << std::endl;
     return handle;
@@ -206,12 +276,18 @@ std::array<float, 4> packVec4(const glm::vec3 &value, float extra)
     return {value.x, value.y, value.z, extra};
 }
 
+float depthStyleForRenderMode(RenderMode mode)
+{
+    return mode == RenderMode::DepthBuffer ? 7.0f : 0.0f;
+}
+
 // ---------------------------------------------------------------------------
 // Procedural test meshes (unit-sized, flat normals, CCW front faces to
 // match the cube buffer + BGFX_STATE_CULL_CW convention).
 // ---------------------------------------------------------------------------
 void appendTriangle(std::vector<float> &out, glm::vec3 a, glm::vec3 b,
-                    glm::vec3 c, const glm::vec3 &outward)
+                    glm::vec3 c, const glm::vec3 &outward, glm::vec2 ua,
+                    glm::vec2 ub, glm::vec2 uc)
 {
     const glm::vec3 crossAB = glm::cross(b - a, c - a);
     if (glm::dot(crossAB, crossAB) < 1e-12f)
@@ -219,15 +295,183 @@ void appendTriangle(std::vector<float> &out, glm::vec3 a, glm::vec3 b,
     if (glm::dot(crossAB, outward) < 0.0f)
         std::swap(b, c);
     const glm::vec3 normal = glm::normalize(glm::cross(b - a, c - a));
-    for (const glm::vec3 *vertex : {&a, &b, &c})
+    const glm::vec3 *vertices[] = {&a, &b, &c};
+    const glm::vec2 *uvs[] = {&ua, &ub, &uc};
+    for (size_t i = 0; i < 3; ++i)
     {
-        out.push_back(vertex->x);
-        out.push_back(vertex->y);
-        out.push_back(vertex->z);
+        out.push_back(vertices[i]->x);
+        out.push_back(vertices[i]->y);
+        out.push_back(vertices[i]->z);
         out.push_back(normal.x);
         out.push_back(normal.y);
         out.push_back(normal.z);
+        out.push_back(uvs[i]->x);
+        out.push_back(uvs[i]->y);
     }
+}
+
+glm::vec2 sphericalUv(float v, float u)
+{
+    return glm::vec2(u, 1.0f - v);
+}
+
+static void appendEdgeVertex(std::vector<float> &out, const glm::vec3 &position,
+                             const glm::vec3 &normal, const glm::vec2 &uv)
+{
+    out.push_back(position.x);
+    out.push_back(position.y);
+    out.push_back(position.z);
+    out.push_back(normal.x);
+    out.push_back(normal.y);
+    out.push_back(normal.z);
+    out.push_back(uv.x);
+    out.push_back(uv.y);
+}
+
+std::vector<float> makeCubeFeatureEdges()
+{
+    std::vector<float> out;
+    out.reserve(24 * 8);
+    for (const CubeVertex &vertex : makeCubeEdgeVertices())
+    {
+        const glm::vec3 &position = vertex.position;
+        const glm::vec3 &normal = vertex.normal;
+        glm::vec2 uv;
+        if (std::abs(normal.x) > 0.5f)
+            uv = glm::vec2(position.z + 0.5f, position.y + 0.5f);
+        else if (std::abs(normal.y) > 0.5f)
+            uv = glm::vec2(position.x + 0.5f, position.z + 0.5f);
+        else
+            uv = glm::vec2(position.x + 0.5f, position.y + 0.5f);
+        appendEdgeVertex(out, position, normal, uv);
+    }
+    return out;
+}
+
+std::vector<float> makeSphereFeatureEdges()
+{
+    constexpr int kStacks = 12;
+    constexpr int kSlices = 16;
+    constexpr float kRadius = 0.5f;
+    auto point = [](int stack, int slice) {
+        const float v = glm::pi<float>() * static_cast<float>(stack) / kStacks;
+        const float u = 2.0f * glm::pi<float>() * static_cast<float>(slice) / kSlices;
+        return glm::vec3(kRadius * std::sin(v) * std::cos(u),
+                         kRadius * std::cos(v),
+                         kRadius * std::sin(v) * std::sin(u));
+    };
+    std::vector<float> out;
+    for (int slice = 0; slice < kSlices; slice += 2)
+        for (int stack = 0; stack < kStacks; ++stack)
+        {
+            const glm::vec3 a = point(stack, slice);
+            const glm::vec3 b = point(stack + 1, slice);
+            appendEdgeVertex(out, a, glm::normalize(a),
+                             sphericalUv(float(stack) / kStacks,
+                                         float(slice) / kSlices));
+            appendEdgeVertex(out, b, glm::normalize(b),
+                             sphericalUv(float(stack + 1) / kStacks,
+                                         float(slice) / kSlices));
+        }
+    for (int stack = 3; stack < kStacks; stack += 3)
+        for (int slice = 0; slice < kSlices; ++slice)
+        {
+            const glm::vec3 a = point(stack, slice);
+            const glm::vec3 b = point(stack, slice + 1);
+            appendEdgeVertex(out, a, glm::normalize(a),
+                             sphericalUv(float(stack) / kStacks,
+                                         float(slice) / kSlices));
+            appendEdgeVertex(out, b, glm::normalize(b),
+                             sphericalUv(float(stack) / kStacks,
+                                         float(slice + 1) / kSlices));
+        }
+    return out;
+}
+
+std::vector<float> makeConeFeatureEdges()
+{
+    constexpr int kSegments = 16;
+    constexpr float kRadius = 0.5f;
+    constexpr float kHalfHeight = 0.5f;
+    const glm::vec3 apex(0.0f, kHalfHeight, 0.0f);
+    auto rim = [kRadius, kHalfHeight](int segment) {
+        const float phi = 2.0f * glm::pi<float>() * segment / kSegments;
+        return glm::vec3(kRadius * std::cos(phi), -kHalfHeight,
+                         kRadius * std::sin(phi));
+    };
+    std::vector<float> out;
+    for (int segment = 0; segment < kSegments; ++segment)
+    {
+        const glm::vec3 a = rim(segment);
+        const glm::vec3 b = rim(segment + 1);
+        appendEdgeVertex(out, a, glm::vec3(a.x, 0.0f, a.z),
+                         glm::vec2(float(segment) / kSegments, 0.0f));
+        appendEdgeVertex(out, b, glm::vec3(b.x, 0.0f, b.z),
+                         glm::vec2(float(segment + 1) / kSegments, 0.0f));
+    }
+    for (int segment = 0; segment < kSegments; segment += 4)
+    {
+        const glm::vec3 p = rim(segment);
+        appendEdgeVertex(out, apex, glm::normalize(apex - p),
+                         glm::vec2(0.5f, 1.0f));
+        appendEdgeVertex(out, p, glm::vec3(p.x, 0.0f, p.z),
+                         glm::vec2(float(segment) / kSegments, 0.0f));
+    }
+    return out;
+}
+
+std::vector<float> makeTorusFeatureEdges()
+{
+    constexpr int kMajor = 16;
+    constexpr int kMinor = 8;
+    constexpr float kMajorRadius = 0.325f;
+    constexpr float kMinorRadius = 0.175f;
+    auto point = [](int major, int minor) {
+        const float u = 2.0f * glm::pi<float>() * major / kMajor;
+        const float v = 2.0f * glm::pi<float>() * minor / kMinor;
+        const float cu = std::cos(u);
+        const float su = std::sin(u);
+        const float cv = std::cos(v);
+        const float sv = std::sin(v);
+        return glm::vec3((kMajorRadius + kMinorRadius * cv) * cu,
+                         kMinorRadius * sv,
+                         (kMajorRadius + kMinorRadius * cv) * su);
+    };
+    auto normal = [](int major, int minor) {
+        const float u = 2.0f * glm::pi<float>() * major / kMajor;
+        const float v = 2.0f * glm::pi<float>() * minor / kMinor;
+        const float cu = std::cos(u);
+        const float su = std::sin(u);
+        const float cv = std::cos(v);
+        const float sv = std::sin(v);
+        return glm::vec3(cv * cu, sv, cv * su);
+    };
+    std::vector<float> out;
+    for (const int minor : {0, kMinor / 2})
+        for (int major = 0; major < kMajor; ++major)
+        {
+            const glm::vec3 a = point(major, minor);
+            const glm::vec3 b = point(major + 1, minor);
+            appendEdgeVertex(out, a, normal(major, minor),
+                             glm::vec2(float(major) / kMajor,
+                                       float(minor) / kMinor));
+            appendEdgeVertex(out, b, normal(major + 1, minor),
+                             glm::vec2(float(major + 1) / kMajor,
+                                       float(minor) / kMinor));
+        }
+    for (const int major : {0, kMajor / 4, kMajor / 2, kMajor * 3 / 4})
+        for (int minor = 0; minor < kMinor; ++minor)
+        {
+            const glm::vec3 a = point(major, minor);
+            const glm::vec3 b = point(major, minor + 1);
+            appendEdgeVertex(out, a, normal(major, minor),
+                             glm::vec2(float(major) / kMajor,
+                                       float(minor) / kMinor));
+            appendEdgeVertex(out, b, normal(major, minor + 1),
+                             glm::vec2(float(major) / kMajor,
+                                       float(minor + 1) / kMinor));
+        }
+    return out;
 }
 
 std::vector<float> makeSphereMesh()
@@ -236,7 +480,7 @@ std::vector<float> makeSphereMesh()
     constexpr int kStacks = 12;
     constexpr int kSlices = 16;
     constexpr float kRadius = 0.5f;
-    out.reserve(static_cast<size_t>(kStacks * kSlices * 2) * 18);
+    out.reserve(static_cast<size_t>(kStacks * kSlices * 2) * 24);
     auto point = [](int stack, int slice) {
         const float v = glm::pi<float>() * static_cast<float>(stack) /
                         static_cast<float>(kStacks);
@@ -253,8 +497,14 @@ std::vector<float> makeSphereMesh()
             const glm::vec3 b = point(stack + 1, slice);
             const glm::vec3 c = point(stack + 1, slice + 1);
             const glm::vec3 d = point(stack, slice + 1);
-            appendTriangle(out, a, b, c, a);
-            appendTriangle(out, a, c, d, a);
+            const float v0 = static_cast<float>(stack) / kStacks;
+            const float v1 = static_cast<float>(stack + 1) / kStacks;
+            const float u0 = static_cast<float>(slice) / kSlices;
+            const float u1 = static_cast<float>(slice + 1) / kSlices;
+            appendTriangle(out, a, b, c, a, sphericalUv(v0, u0),
+                           sphericalUv(v1, u0), sphericalUv(v1, u1));
+            appendTriangle(out, a, c, d, a, sphericalUv(v0, u0),
+                           sphericalUv(v1, u1), sphericalUv(v0, u1));
         }
     return out;
 }
@@ -265,7 +515,7 @@ std::vector<float> makeConeMesh()
     constexpr int kSegments = 16;
     constexpr float kRadius = 0.5f;
     constexpr float kHalfHeight = 0.5f;
-    out.reserve(static_cast<size_t>(kSegments * 2) * 18);
+    out.reserve(static_cast<size_t>(kSegments * 2) * 24);
     const glm::vec3 apex(0.0f, kHalfHeight, 0.0f);
     auto rim = [](int segment) {
         const float phi = 2.0f * glm::pi<float>() * static_cast<float>(segment) /
@@ -278,9 +528,14 @@ std::vector<float> makeConeMesh()
         const glm::vec3 p0 = rim(segment);
         const glm::vec3 p1 = rim(segment + 1);
         const glm::vec3 mid = 0.5f * (p0 + p1);
-        appendTriangle(out, apex, p0, p1, glm::vec3(mid.x, 0.0f, mid.z));
+        const float u0 = static_cast<float>(segment) / kSegments;
+        const float u1 = static_cast<float>(segment + 1) / kSegments;
+        appendTriangle(out, apex, p0, p1, glm::vec3(mid.x, 0.0f, mid.z),
+                       glm::vec2(0.5f * (u0 + u1), 1.0f),
+                       glm::vec2(u0, 0.0f), glm::vec2(u1, 0.0f));
         appendTriangle(out, glm::vec3(0.0f, -kHalfHeight, 0.0f), p0, p1,
-                       glm::vec3(0.0f, -1.0f, 0.0f));
+                       glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.5f, 0.5f),
+                       glm::vec2(u0, 0.0f), glm::vec2(u1, 1.0f));
     }
     return out;
 }
@@ -292,7 +547,7 @@ std::vector<float> makeTorusMesh()
     constexpr int kMinor = 8;
     constexpr float kMajorRadius = 0.325f;
     constexpr float kMinorRadius = 0.175f;
-    out.reserve(static_cast<size_t>(kMajor * kMinor * 2) * 18);
+    out.reserve(static_cast<size_t>(kMajor * kMinor * 2) * 24);
     auto point = [](int major, int minor, glm::vec3 *normalOut) {
         const float u = 2.0f * glm::pi<float>() * static_cast<float>(major) /
                         static_cast<float>(kMajor);
@@ -316,9 +571,41 @@ std::vector<float> makeTorusMesh()
             const glm::vec3 b = point(major + 1, minor, nullptr);
             const glm::vec3 c = point(major + 1, minor + 1, nullptr);
             const glm::vec3 d = point(major, minor + 1, nullptr);
-            appendTriangle(out, a, b, c, normalA);
-            appendTriangle(out, a, c, d, normalA);
+            const float u0 = static_cast<float>(major) / kMajor;
+            const float u1 = static_cast<float>(major + 1) / kMajor;
+            const float v0 = static_cast<float>(minor) / kMinor;
+            const float v1 = static_cast<float>(minor + 1) / kMinor;
+            const glm::vec2 uvA(u0, v0);
+            const glm::vec2 uvB(u1, v0);
+            const glm::vec2 uvC(u1, v1);
+            const glm::vec2 uvD(u0, v1);
+            appendTriangle(out, a, b, c, normalA, uvA, uvB, uvC);
+            appendTriangle(out, a, c, d, normalA, uvA, uvC, uvD);
         }
+    return out;
+}
+
+std::vector<float> makeCubeMesh()
+{
+    constexpr float kSize = 0.5f;
+    std::vector<float> out;
+    out.reserve(36 * 8);
+    auto appendQuad = [&](const glm::vec3 &a, const glm::vec3 &b,
+                          const glm::vec3 &c, const glm::vec3 &d,
+                          const glm::vec3 &normal) {
+        appendTriangle(out, a, b, c, normal,
+                       glm::vec2(0.0f, 1.0f), glm::vec2(1.0f, 1.0f),
+                       glm::vec2(1.0f, 0.0f));
+        appendTriangle(out, a, c, d, normal,
+                       glm::vec2(0.0f, 1.0f), glm::vec2(1.0f, 0.0f),
+                       glm::vec2(0.0f, 0.0f));
+    };
+    appendQuad({-kSize,-kSize, kSize},{ kSize,-kSize, kSize},{ kSize, kSize, kSize},{-kSize, kSize, kSize},{0,0,1});
+    appendQuad({ kSize,-kSize,-kSize},{-kSize,-kSize,-kSize},{-kSize, kSize,-kSize},{ kSize, kSize,-kSize},{0,0,-1});
+    appendQuad({ kSize,-kSize, kSize},{ kSize,-kSize,-kSize},{ kSize, kSize,-kSize},{ kSize, kSize, kSize},{1,0,0});
+    appendQuad({-kSize,-kSize,-kSize},{-kSize,-kSize, kSize},{-kSize, kSize, kSize},{-kSize, kSize,-kSize},{-1,0,0});
+    appendQuad({-kSize, kSize, kSize},{ kSize, kSize, kSize},{ kSize, kSize,-kSize},{-kSize, kSize,-kSize},{0,1,0});
+    appendQuad({-kSize,-kSize,-kSize},{ kSize,-kSize,-kSize},{ kSize,-kSize, kSize},{-kSize,-kSize, kSize},{0,-1,0});
     return out;
 }
 
@@ -328,8 +615,8 @@ bgfx::VertexBufferHandle createMeshBuffer(const std::vector<float> &vertices)
         return BGFX_INVALID_HANDLE;
     bgfx::VertexLayout layout;
     layout.begin()
-        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Position, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 4, bgfx::AttribType::Float)
         .end();
     return bgfx::createVertexBuffer(
         bgfx::copy(vertices.data(),
@@ -340,20 +627,20 @@ bgfx::VertexBufferHandle createMeshBuffer(const std::vector<float> &vertices)
 
 bgfx::VertexBufferHandle createCadMeshBuffer(const std::vector<float> &vertices)
 {
-    if (vertices.empty() || vertices.size() % 6 != 0)
+    if (vertices.empty() || vertices.size() % 8 != 0)
         return BGFX_INVALID_HANDLE;
 
     // The CAD algorithm shader uses a barycentric coordinate for wireframe and
     // unified shading.  Mesh generators emit triangle soup, so every three
     // vertices form one triangle and receive (1,0,0), (0,1,0), and (0,0,1).
-    const size_t vertexCount = vertices.size() / 6;
+    const size_t vertexCount = vertices.size() / 8;
     std::vector<float> cadVertices;
-    cadVertices.reserve(vertexCount * 9);
+    cadVertices.reserve(vertexCount * 11);
     for (size_t i = 0; i < vertexCount; ++i)
     {
-        const size_t source = i * 6;
+        const size_t source = i * 8;
         cadVertices.insert(cadVertices.end(), vertices.begin() + source,
-                           vertices.begin() + source + 6);
+                           vertices.begin() + source + 8);
         switch (i % 3)
         {
         case 0:
@@ -370,8 +657,8 @@ bgfx::VertexBufferHandle createCadMeshBuffer(const std::vector<float> &vertices)
 
     bgfx::VertexLayout layout;
     layout.begin()
-        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Position, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 3, bgfx::AttribType::Float)
         .end();
     return bgfx::createVertexBuffer(
@@ -380,20 +667,26 @@ bgfx::VertexBufferHandle createCadMeshBuffer(const std::vector<float> &vertices)
         layout);
 }
 
+bgfx::VertexBufferHandle createFeatureEdgeLineBuffer(
+    const std::vector<float> &edgeLineList)
+{
+    if (edgeLineList.empty() || edgeLineList.size() % 16 != 0)
+        return BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 4, bgfx::AttribType::Float)
+        .end();
+    return bgfx::createVertexBuffer(
+        bgfx::copy(edgeLineList.data(),
+                   static_cast<uint32_t>(edgeLineList.size() * sizeof(float))),
+        layout);
+}
+
 bgfx::VertexBufferHandle createCadCubeBuffer(const std::array<CubeVertex, 36> &vertices)
 {
-    std::vector<float> source;
-    source.reserve(vertices.size() * 6);
-    for (const CubeVertex &vertex : vertices)
-    {
-        source.push_back(vertex.position.x);
-        source.push_back(vertex.position.y);
-        source.push_back(vertex.position.z);
-        source.push_back(vertex.normal.x);
-        source.push_back(vertex.normal.y);
-        source.push_back(vertex.normal.z);
-    }
-    return createCadMeshBuffer(source);
+    (void)vertices;
+    return createCadMeshBuffer(makeCubeMesh());
 }
 
 // Shader headers contain one binary per supported API.  bgfx validates the
@@ -450,6 +743,61 @@ const char *BgfxRenderer::name() const
     return "bgfx";
 }
 
+void BgfxRenderer::setRealisticLights(const RealisticLightsRenderData &lights)
+{
+    m_realisticLights = lights;
+    m_realisticLights.direction = glm::normalize(m_realisticLights.direction);
+    m_realisticLights.pointLightCount =
+        std::min<uint32_t>(m_realisticLights.pointLightCount,
+                           static_cast<uint32_t>(m_realisticLights.pointLights.size()));
+}
+
+uint32_t BgfxRenderer::loadMeshTexture(const std::string &path)
+{
+    if (!m_initialized || path.empty())
+        return 0;
+
+    size_t fileSize = 0;
+    void *fileData = SDL_LoadFile(path.c_str(), &fileSize);
+    if (!fileData || fileSize == 0 || fileSize > UINT32_MAX)
+    {
+        if (fileData)
+            SDL_free(fileData);
+        std::cerr << "Failed to load mesh texture: " << path << std::endl;
+        return 0;
+    }
+
+    bx::DefaultAllocator allocator;
+    bx::Error error;
+    bimg::ImageContainer *image = bimg::imageParse(
+        &allocator, fileData, static_cast<uint32_t>(fileSize),
+        bimg::TextureFormat::BGRA8, &error);
+    SDL_free(fileData);
+    if (!image || !image->m_data || image->m_size == 0)
+    {
+        if (image)
+            bimg::imageFree(image);
+        std::cerr << "Failed to decode mesh texture: " << path << std::endl;
+        return 0;
+    }
+
+    const bgfx::TextureHandle texture = bgfx::createTexture2D(
+        static_cast<uint16_t>(image->m_width),
+        static_cast<uint16_t>(image->m_height),
+        image->m_numMips > 1, 1,
+        static_cast<bgfx::TextureFormat::Enum>(image->m_format),
+        BGFX_TEXTURE_NONE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(image->m_data, image->m_size));
+    bimg::imageFree(image);
+    if (!bgfx::isValid(texture))
+    {
+        std::cerr << "Failed to create mesh texture: " << path << std::endl;
+        return 0;
+    }
+
+    m_meshTextures.push_back(texture);
+    return static_cast<uint32_t>(m_meshTextures.size());
+}
 Uint32 BgfxRenderer::windowFlags() const
 {
     return 0;
@@ -511,7 +859,6 @@ bool BgfxRenderer::initialize(SDL_Window *window)
         return false;
     }
 
-    bgfx::setViewMode(0, bgfx::ViewMode::Sequential);
     // dbgTextPrintf output is only drawn when this debug flag is set
     // (see the "else if (m_debug & BGFX_DEBUG_TEXT)" branch of the
     // backend submit); enable it so the FPS overlay is visible.
@@ -536,6 +883,7 @@ void BgfxRenderer::shutdown()
         return;
     }
 
+    destroySceneFrameBuffer();
     if (bgfx::isValid(m_gridProgram))
         bgfx::destroy(m_gridProgram);
     m_gridProgram = BGFX_INVALID_HANDLE;
@@ -544,6 +892,9 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_cubeProgram);
     if (bgfx::isValid(m_meshInstanceProgram))
         bgfx::destroy(m_meshInstanceProgram);
+    if (bgfx::isValid(m_pbrMeshProgram))
+        bgfx::destroy(m_pbrMeshProgram);
+    m_pbrMeshProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_pointInstanceProgram))
         bgfx::destroy(m_pointInstanceProgram);
     if (bgfx::isValid(m_cadAlgorithmProgram))
@@ -555,6 +906,9 @@ void BgfxRenderer::shutdown()
     m_cubeProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_cubeBuffer))
         bgfx::destroy(m_cubeBuffer);
+    if (bgfx::isValid(m_instanceCubeBuffer))
+        bgfx::destroy(m_instanceCubeBuffer);
+    m_instanceCubeBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_cadCubeBuffer))
         bgfx::destroy(m_cadCubeBuffer);
     if (bgfx::isValid(m_cadSphereBuffer))
@@ -576,6 +930,27 @@ void BgfxRenderer::shutdown()
     if (bgfx::isValid(m_torusBuffer))
         bgfx::destroy(m_torusBuffer);
     m_torusBuffer = BGFX_INVALID_HANDLE;
+    for (bgfx::TextureHandle &texture : m_meshTextures)
+    {
+        if (bgfx::isValid(texture))
+            bgfx::destroy(texture);
+    }
+    m_meshTextures.clear();
+    if (bgfx::isValid(m_whiteTexture))
+        bgfx::destroy(m_whiteTexture);
+    m_whiteTexture = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_cubeEdgeBuffer))
+        bgfx::destroy(m_cubeEdgeBuffer);
+    m_cubeEdgeBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_sphereEdgeBuffer))
+        bgfx::destroy(m_sphereEdgeBuffer);
+    m_sphereEdgeBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_coneEdgeBuffer))
+        bgfx::destroy(m_coneEdgeBuffer);
+    m_coneEdgeBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_torusEdgeBuffer))
+        bgfx::destroy(m_torusEdgeBuffer);
+    m_torusEdgeBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_aabbBuffer))
         bgfx::destroy(m_aabbBuffer);
     m_aabbBuffer = BGFX_INVALID_HANDLE;
@@ -594,6 +969,17 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_pointBuffer);
     m_pointBuffer = BGFX_INVALID_HANDLE;
 
+    if (bgfx::isValid(m_presentProgram))
+        bgfx::destroy(m_presentProgram);
+    m_presentProgram = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_presentQuadBuffer))
+        bgfx::destroy(m_presentQuadBuffer);
+    m_presentQuadBuffer = BGFX_INVALID_HANDLE;
+    destroySceneFrameBuffer();
+
+    destroyUniform(m_cubeRelativePositionLow);
+    destroyUniform(m_eyeHigh);
+    destroyUniform(m_eyeLow);
     destroyUniform(m_cadView);
     destroyUniform(m_cadProjection);
     destroyUniform(m_cadCameraPos);
@@ -602,7 +988,17 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_cadStyleParams);
     destroyUniform(m_cadWireframeColor);
     destroyUniform(m_cadStrokeParams);
+    destroyUniform(m_cadFlatShade);
     destroyUniform(m_primParams);
+    destroyUniform(m_meshSurface);
+    destroyUniform(m_albedoSampler);
+    destroyUniform(m_realisticMaterial);
+    destroyUniform(m_rAmbient);
+    destroyUniform(m_rDirection);
+    destroyUniform(m_rDirectionColor);
+    destroyUniform(m_rPointPositions);
+    destroyUniform(m_rPointColors);
+    destroyUniform(m_rParams);
     destroyUniform(m_gridInvViewProj);
     destroyUniform(m_gridViewProj);
     destroyUniform(m_gridCamFront);
@@ -633,11 +1029,14 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_gridOpacity);
     destroyUniform(m_gridOrthoPlaneValid);
     destroyUniform(m_logDepth);
+    destroyUniform(m_layerOffset);
     destroyUniform(m_view);
     destroyUniform(m_projection);
     destroyUniform(m_cubeRelativePosition);
     destroyUniform(m_cubeOpacity);
     destroyUniform(m_cubeColor);
+    destroyUniform(m_meshEdgeOverride);
+    destroyUniform(m_presentSampler);
     destroyUniform(m_lineStart);
     destroyUniform(m_lineEnd);
     destroyUniform(m_lineColor);
@@ -647,9 +1046,55 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_pointSize);
     destroyUniform(m_pointColor);
 
+    destroySceneFrameBuffer();
+
     bgfx::shutdown();
     m_initialized = false;
     m_window = nullptr;
+}
+
+bool BgfxRenderer::createSceneFrameBuffer()
+{
+    if (!m_width || !m_height)
+        return false;
+
+    const uint64_t colorFlags = BGFX_TEXTURE_RT |
+                                BGFX_TEXTURE_RT_MSAA_X4 |
+                                BGFX_SAMPLER_U_CLAMP |
+                                BGFX_SAMPLER_V_CLAMP;
+    const uint64_t depthFlags = BGFX_TEXTURE_RT_WRITE_ONLY |
+                                BGFX_TEXTURE_RT_MSAA_X4;
+
+    bgfx::TextureHandle textures[2];
+    textures[0] = bgfx::createTexture2D(m_width, m_height, false, 1,
+                                        bgfx::TextureFormat::BGRA8, colorFlags);
+    textures[1] = bgfx::createTexture2D(m_width, m_height, false, 1,
+                                        bgfx::TextureFormat::D24S8, depthFlags);
+    if (!bgfx::isValid(textures[0]) || !bgfx::isValid(textures[1]))
+    {
+        if (bgfx::isValid(textures[0]))
+            bgfx::destroy(textures[0]);
+        if (bgfx::isValid(textures[1]))
+            bgfx::destroy(textures[1]);
+        std::cerr << "Failed to create CAD MSAA scene target." << std::endl;
+        return false;
+    }
+
+    m_sceneFrameBuffer = bgfx::createFrameBuffer(2, textures, true);
+    if (!bgfx::isValid(m_sceneFrameBuffer))
+    {
+        std::cerr << "Failed to create CAD scene framebuffer." << std::endl;
+        return false;
+    }
+    bgfx::setName(m_sceneFrameBuffer, "CADSceneMSAA");
+    return true;
+}
+
+void BgfxRenderer::destroySceneFrameBuffer()
+{
+    if (bgfx::isValid(m_sceneFrameBuffer))
+        bgfx::destroy(m_sceneFrameBuffer);
+    m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
 }
 
 bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
@@ -664,13 +1109,14 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
     height = std::max(1, height);
     if (width != m_width || height != m_height)
     {
-        // Rendering now targets the MSAA backbuffer directly; there is no
-        // offscreen scene frame buffer to recreate on resize.
         bgfx::reset(static_cast<uint16_t>(width),
                     static_cast<uint16_t>(height),
                     BGFX_RESET_VSYNC | BGFX_RESET_MSAA_X4);
         m_width = static_cast<uint16_t>(width);
         m_height = static_cast<uint16_t>(height);
+        destroySceneFrameBuffer();
+        if (!createSceneFrameBuffer())
+            return false;
     }
 
     const auto channel = [](float value) {
@@ -681,12 +1127,50 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
                           channel(clearColor.b) << 8 |
                           channel(clearColor.a);
 
-    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, rgba, 1.0f, 0);
-    bgfx::setViewRect(0, 0, 0, m_width, m_height);
-    bgfx::touch(0);
+    bgfx::setViewName(kViewBackground, "CAD Background");
+    bgfx::setViewName(kViewDepthPrepass, "CAD Hidden-Line Depth");
+    bgfx::setViewName(kViewSolidFill, "CAD Solid Fill");
+    bgfx::setViewName(kViewEdges, "CAD Edges");
+    bgfx::setViewName(kViewWire, "CAD Wires");
+    bgfx::setViewName(kViewOverlay, "CAD Overlay");
+    bgfx::setViewName(kViewPresent, "CAD Present");
+
+    for (const bgfx::ViewId view : { kViewBackground, kViewDepthPrepass,
+                                     kViewSolidFill, kViewEdges,
+                                     kViewWire, kViewOverlay })
+    {
+        bgfx::setViewFrameBuffer(view, m_sceneFrameBuffer);
+        bgfx::setViewRect(view, 0, 0, m_width, m_height);
+    }
+
+    bgfx::setViewClear(kViewBackground,
+                       BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+                       rgba, 1.0f, 0);
+    bgfx::setViewClear(kViewDepthPrepass, BGFX_CLEAR_NONE);
+    bgfx::setViewClear(kViewSolidFill, BGFX_CLEAR_NONE);
+    bgfx::setViewClear(kViewEdges, BGFX_CLEAR_NONE);
+    bgfx::setViewClear(kViewWire, BGFX_CLEAR_NONE);
+    bgfx::setViewClear(kViewOverlay, BGFX_CLEAR_NONE);
+    bgfx::setViewFrameBuffer(kViewPresent, BGFX_INVALID_HANDLE);
+    bgfx::setViewClear(kViewPresent, BGFX_CLEAR_NONE);
+
+    for (const bgfx::ViewId view : { kViewBackground, kViewDepthPrepass,
+                                     kViewSolidFill, kViewEdges,
+                                     kViewWire, kViewOverlay, kViewPresent })
+    {
+        bgfx::setViewRect(view, 0, 0, m_width, m_height);
+        bgfx::touch(view);
+    }
+    // The solid channel composites mesh fills and solid fills together by
+    // depth instead of grouping them per program.
+    bgfx::setViewMode(kViewSolidFill,
+                      bgfx::ViewMode::DepthDescending);
+    bgfx::setViewMode(kViewWire,
+                      m_renderMode.flags().wireframe3d
+                          ? bgfx::ViewMode::Default
+                          : bgfx::ViewMode::Sequential);
     return true;
 }
-
 
 void BgfxRenderer::endFrame()
 {
@@ -711,6 +1195,22 @@ void BgfxRenderer::endFrame()
     bgfx::dbgTextClear();
     bgfx::dbgTextPrintf(1, 1, 0x0f, "FPS: %.1f (%.1f ms)",
                         m_fps, m_fps > 0.0f ? 1000.0f / m_fps : 0.0f);
+
+    // Resolve the explicit MSAA scene target to the backbuffer.  This happens
+    // after debug text, so the text belongs to the resolved image too.
+    if (bgfx::isValid(m_sceneFrameBuffer) && bgfx::isValid(m_presentProgram))
+    {
+        const bgfx::TextureHandle sceneColor = bgfx::getTexture(m_sceneFrameBuffer);
+        if (bgfx::isValid(sceneColor))
+        {
+            bgfx::setViewFrameBuffer(kViewPresent, BGFX_INVALID_HANDLE);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_MSAA);
+            bgfx::setTexture(0, m_presentSampler, sceneColor);
+            bgfx::setVertexBuffer(0, m_presentQuadBuffer);
+            bgfx::submit(kViewPresent, m_presentProgram);
+        }
+    }
 
     bgfx::frame();
 }
@@ -794,7 +1294,7 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
     bgfx::setUniform(m_gridOrthoPlaneValid,
                      glm::value_ptr(glm::vec4(data.orthoPlaneValid, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
-    bgfx::submit(0, m_gridProgram);
+    bgfx::submit(kViewBackground, m_gridProgram);
 }
 
 void BgfxRenderer::drawCube(const CubeRenderData &data)
@@ -802,44 +1302,115 @@ void BgfxRenderer::drawCube(const CubeRenderData &data)
     if (!m_initialized || !bgfx::isValid(m_cubeProgram))
         return;
 
-    const glm::mat4 projection = projectionForDirect3D(data.projection);
-    // Keep clockwise back-face culling: projectionForDirect3D only remaps Z,
-    // so screen-space winding is preserved and CULL_CW is required.
-    // Using CULL_CCW would strip the front faces of every translucent cube
-    // and break the intended painter-style depth ordering.
-    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                           BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW |
-                           BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-    bgfx::setState(data.opacity >= 0.999f ? state | BGFX_STATE_WRITE_Z : state);
-    bgfx::setTransform(glm::value_ptr(data.model));
-    bgfx::VertexBufferHandle meshBuffer = m_cubeBuffer;
+    bgfx::VertexBufferHandle meshBuffer = m_instanceCubeBuffer;
+    bgfx::VertexBufferHandle edgeBuffer = m_cubeEdgeBuffer;
     switch (data.mesh)
     {
     case rendering::MeshType::Sphere:
         meshBuffer = m_sphereBuffer;
+        edgeBuffer = m_sphereEdgeBuffer;
         break;
     case rendering::MeshType::Cone:
         meshBuffer = m_coneBuffer;
+        edgeBuffer = m_coneEdgeBuffer;
         break;
     case rendering::MeshType::Torus:
         meshBuffer = m_torusBuffer;
+        edgeBuffer = m_torusEdgeBuffer;
         break;
     case rendering::MeshType::Cube:
         break;
     }
-    bgfx::setVertexBuffer(0, meshBuffer);
-    bgfx::setUniform(m_view, glm::value_ptr(data.view));
-    bgfx::setUniform(m_projection, glm::value_ptr(projection));
-    bgfx::setUniform(m_cubeRelativePosition,
-                     glm::value_ptr(glm::vec4(data.modelRelativePosition, 1.0f)));
-    bgfx::setUniform(m_cubeOpacity,
-                     glm::value_ptr(glm::vec4(data.opacity, 0.0f, 0.0f, 0.0f)));
-    bgfx::setUniform(m_cubeColor,
-                     glm::value_ptr(glm::vec4(data.objectColor, 1.0f)));
-    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
-    bgfx::submit(0, m_cubeProgram);
-}
 
+    const glm::mat4 projection = projectionForDirect3D(data.projection);
+    const RenderModeFlags modeFlags = m_renderMode.flags();
+    const bool depthStyleMode = m_renderMode.mode() == RenderMode::DepthBuffer;
+    const uint64_t transparentFillState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW |
+        BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+    const uint64_t opaqueFillState = transparentFillState | BGFX_STATE_WRITE_Z;
+    const uint64_t prepassState = BGFX_STATE_DEPTH_TEST_LEQUAL |
+        BGFX_STATE_WRITE_Z | BGFX_STATE_MSAA;
+    const uint64_t edgeState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINES |
+        BGFX_STATE_LINEAA | BGFX_STATE_MSAA;
+    const float cubeStyle[4] = { depthStyleForRenderMode(m_renderMode.mode()), 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_primParams, cubeStyle);
+    // Layer compositing and depth-sorted submission inside the solid
+    // channel so mesh fills and solid fills interleave by true depth.
+    const glm::vec3 objectTranslation =
+        (data.object.high - data.eye.high) + (data.object.low - data.eye.low);
+    const glm::vec4 objectView = data.view * glm::vec4(objectTranslation, 1.0f);
+    const float denom = logDepthDenominator(data.logDepth);
+    const float objectDepth = -objectView.z;
+    const float layerOffsetValue =
+        layerOffsetUnits(data.layer, objectDepth, data.logDepth);
+    const uint32_t sortDepth =
+        normalizedSortDepth(objectDepth - layerOffsetValue, data.logDepth, denom);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_layerOffset, layerOffset);
+    const auto submitFill = [this, &data, &projection, meshBuffer, sortDepth](bgfx::ViewId view,
+                               uint64_t state) {
+        bgfx::setState(state);
+        bgfx::setTransform(glm::value_ptr(data.model));
+        bgfx::setVertexBuffer(0, meshBuffer);
+        bgfx::setUniform(m_view, glm::value_ptr(data.view));
+        bgfx::setUniform(m_projection, glm::value_ptr(projection));
+        bgfx::setUniform(m_cubeRelativePosition,
+                         glm::value_ptr(glm::vec4(data.object.high, 1.0f)));
+        bgfx::setUniform(m_cubeRelativePositionLow,
+                         glm::value_ptr(glm::vec4(data.object.low, 0.0f)));
+        bgfx::setUniform(m_eyeHigh,
+                         glm::value_ptr(glm::vec4(data.eye.high, 0.0f)));
+        bgfx::setUniform(m_eyeLow,
+                         glm::value_ptr(glm::vec4(data.eye.low, 0.0f)));
+        bgfx::setUniform(m_cubeOpacity,
+                         glm::value_ptr(glm::vec4(data.opacity, 0.0f, 0.0f, 0.0f)));
+        bgfx::setUniform(m_cubeColor,
+                         glm::value_ptr(glm::vec4(data.objectColor, 1.0f)));
+        bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
+        bgfx::submit(view, m_cubeProgram, sortDepth);
+    };
+
+    const auto submitEdges = [this, &data, &projection, edgeBuffer, edgeState, sortDepth,
+                             objectDepth](bgfx::ViewId view,
+                                                    uint64_t state) {
+        if (!bgfx::isValid(edgeBuffer))
+            return;
+        const float edgeLayerOffset[4] = {
+            layerOffsetUnits(data.layer, objectDepth, data.logDepth) +
+            edgeDepthBiasUnits(objectDepth), 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(m_layerOffset, edgeLayerOffset);
+        bgfx::setState(state);
+        bgfx::setTransform(glm::value_ptr(data.model));
+        bgfx::setVertexBuffer(0, edgeBuffer);
+        bgfx::setUniform(m_view, glm::value_ptr(data.view));
+        bgfx::setUniform(m_projection, glm::value_ptr(projection));
+        bgfx::setUniform(m_cubeRelativePosition,
+                         glm::value_ptr(glm::vec4(data.object.high, 1.0f)));
+        bgfx::setUniform(m_cubeRelativePositionLow,
+                         glm::value_ptr(glm::vec4(data.object.low, 0.0f)));
+        bgfx::setUniform(m_eyeHigh,
+                         glm::value_ptr(glm::vec4(data.eye.high, 0.0f)));
+        bgfx::setUniform(m_eyeLow,
+                         glm::value_ptr(glm::vec4(data.eye.low, 0.0f)));
+        bgfx::setUniform(m_cubeOpacity,
+                         glm::value_ptr(glm::vec4(data.opacity, 0.0f, 0.0f, 0.0f)));
+        bgfx::setUniform(m_cubeColor,
+                         glm::value_ptr(glm::vec4(data.objectColor, 1.0f)));
+        bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
+        bgfx::submit(view, m_cubeProgram, sortDepth);
+    };
+
+    if (modeFlags.hiddenLine && modeFlags.meshFill)
+        submitFill(kViewDepthPrepass, prepassState);
+    if (modeFlags.meshFill && !modeFlags.hiddenLine)
+        submitFill(kViewSolidFill, depthStyleMode || data.opacity >= 0.999f
+                                      ? opaqueFillState
+                                      : transparentFillState);
+    if (modeFlags.show3dEdges)
+        submitEdges(modeFlags.wireframe3d ? kViewEdges : kViewWire, edgeState);
+}
 
 void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
 {
@@ -848,46 +1419,144 @@ void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
         return;
 
     bgfx::VertexBufferHandle meshBuffer = m_cubeBuffer;
+    bgfx::VertexBufferHandle edgeBuffer = m_cubeEdgeBuffer;
     switch (data.mesh)
     {
-    case rendering::MeshType::Sphere: meshBuffer = m_sphereBuffer; break;
-    case rendering::MeshType::Cone:   meshBuffer = m_coneBuffer;   break;
-    case rendering::MeshType::Torus:  meshBuffer = m_torusBuffer;  break;
-    case rendering::MeshType::Cube:   break;
+    case rendering::MeshType::Sphere:
+        meshBuffer = m_sphereBuffer;
+        edgeBuffer = m_sphereEdgeBuffer;
+        break;
+    case rendering::MeshType::Cone:
+        meshBuffer = m_coneBuffer;
+        edgeBuffer = m_coneEdgeBuffer;
+        break;
+    case rendering::MeshType::Torus:
+        meshBuffer = m_torusBuffer;
+        edgeBuffer = m_torusEdgeBuffer;
+        break;
+    case rendering::MeshType::Cube:
+        break;
     }
 
-    constexpr uint16_t kStride = 64;
-    static_assert(sizeof(MeshInstance) == kStride,
-                  "MeshInstance must match the GPU instance stride");
+    constexpr uint16_t kStride = sizeof(MeshInstance);
+    static_assert(kStride == 80,
+                  "MeshInstance must carry 5 vec4s to leave room for UV vertex attributes");
     const glm::mat4 projection = projectionForDirect3D(data.projection);
-    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                           BGFX_STATE_DEPTH_TEST_LEQUAL |
-                           BGFX_STATE_CULL_CW | BGFX_STATE_MSAA |
-                           (data.opaque ? BGFX_STATE_WRITE_Z :
-                                          BGFX_STATE_BLEND_ALPHA);
-
+    const RenderModeFlags modeFlags = m_renderMode.flags();
+    const bool depthStyleMode = m_renderMode.mode() == RenderMode::DepthBuffer;
+    const uint64_t fillState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW | BGFX_STATE_MSAA |
+        (depthStyleMode || data.opaque ? BGFX_STATE_WRITE_Z
+                                       : BGFX_STATE_BLEND_ALPHA);
+    const uint64_t prepassState = BGFX_STATE_DEPTH_TEST_LEQUAL |
+        BGFX_STATE_WRITE_Z | BGFX_STATE_MSAA;
+    const uint64_t edgeState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINES |
+        BGFX_STATE_LINEAA | BGFX_STATE_MSAA;
     bgfx::setUniform(m_view, glm::value_ptr(data.view));
     bgfx::setUniform(m_projection, glm::value_ptr(projection));
+    bgfx::setUniform(m_eyeHigh, glm::value_ptr(glm::vec4(data.eye.high, 0.0f)));
+    bgfx::setUniform(m_eyeLow, glm::value_ptr(glm::vec4(data.eye.low, 0.0f)));
     bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
-
-    uint32_t first = 0;
-    while (first < data.instanceCount)
+    const float meshStyle[4] = { depthStyleForRenderMode(m_renderMode.mode()), 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_primParams, meshStyle);
+    const float meshSurface[4] = {
+        std::clamp(data.headlight, 0.0f, 1.0f), data.triplanarUv, 0.0f, 0.0f};
+    bgfx::setUniform(m_meshSurface, meshSurface);
+    bgfx::TextureHandle albedoTexture = m_whiteTexture;
+    if (data.diffuseTextureIndex > 0 &&
+        data.diffuseTextureIndex <= m_meshTextures.size() &&
+        bgfx::isValid(m_meshTextures[data.diffuseTextureIndex - 1]))
     {
-        const uint32_t available = bgfx::getAvailInstanceDataBuffer(
-            data.instanceCount - first, kStride);
-        if (available == 0)
-            break;
-        bgfx::InstanceDataBuffer idb;
-        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
-        auto *gpu = reinterpret_cast<MeshInstance *>(idb.data);
-        std::memcpy(gpu, data.instances + first,
-                    sizeof(MeshInstance) * idb.num);
+        albedoTexture = m_meshTextures[data.diffuseTextureIndex - 1];
+    }
+    bgfx::setTexture(0, m_albedoSampler, albedoTexture);
+    bgfx::ProgramHandle fillProgram = m_meshInstanceProgram;
+    if (data.realistic && bgfx::isValid(m_pbrMeshProgram))
+    {
+        fillProgram = m_pbrMeshProgram;
+        std::array<glm::vec4, 4> pointPositions{};
+        std::array<glm::vec4, 4> pointColors{};
+        const uint32_t pointCount = std::min<uint32_t>(
+            m_realisticLights.pointLightCount, pointPositions.size());
+        for (uint32_t i = 0; i < pointCount; ++i)
+        {
+            pointPositions[i] = glm::vec4(m_realisticLights.pointLights[i].position,
+                                          m_realisticLights.pointLights[i].radius);
+            pointColors[i] = glm::vec4(m_realisticLights.pointLights[i].color, 1.0f);
+        }
+        bgfx::setUniform(m_realisticMaterial, glm::value_ptr(data.material));
+        bgfx::setUniform(m_rAmbient,
+                         glm::value_ptr(glm::vec4(m_realisticLights.ambient, 1.0f)));
+        bgfx::setUniform(m_rDirection, glm::value_ptr(glm::vec4(
+            m_realisticLights.direction, m_realisticLights.directionIntensity)));
+        bgfx::setUniform(m_rDirectionColor, glm::value_ptr(glm::vec4(
+            m_realisticLights.directionColor, 1.0f)));
+        bgfx::setUniform(m_rPointPositions,
+                         glm::value_ptr(pointPositions.front()), 4);
+        bgfx::setUniform(m_rPointColors,
+                         glm::value_ptr(pointColors.front()), 4);
+        bgfx::setUniform(m_rParams,
+                         glm::value_ptr(glm::vec4(float(pointCount), 0.0f, 0.0f, 0.0f)));
+    }
+    // Depth-sort instance batches inside the solid channel and apply the
+    // requested compositing layer.
+    const glm::vec3 instanceTranslation = glm::vec3(data.instances[0].positionHigh)
+                                        + glm::vec3(data.instances[0].positionLow);
+    const glm::vec3 eyeTranslation = data.eye.high + data.eye.low;
+    const glm::vec4 instanceView =
+        data.view * glm::vec4(instanceTranslation - eyeTranslation, 1.0f);
+    const float denom = logDepthDenominator(data.logDepth);
+    const float instanceDepth = -instanceView.z;
+    const float layerOffsetValue =
+        layerOffsetUnits(data.layer, instanceDepth, data.logDepth);
+    const uint32_t sortDepth =
+        normalizedSortDepth(instanceDepth - layerOffsetValue, data.logDepth, denom);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_layerOffset, layerOffset);
 
-        bgfx::setState(state);
-        bgfx::setVertexBuffer(0, meshBuffer);
-        bgfx::setInstanceDataBuffer(&idb);
-        bgfx::submit(0, m_meshInstanceProgram);
-        first += idb.num;
+    const auto submitChunks = [&](bgfx::ViewId view, bgfx::ProgramHandle program,
+                                  bgfx::VertexBufferHandle buffer, uint64_t state) {
+        uint32_t first = 0;
+        while (first < data.instanceCount)
+        {
+            const uint32_t available = bgfx::getAvailInstanceDataBuffer(
+                data.instanceCount - first, kStride);
+            if (available == 0)
+                break;
+            bgfx::InstanceDataBuffer idb;
+            bgfx::allocInstanceDataBuffer(&idb, available, kStride);
+            auto *gpu = reinterpret_cast<MeshInstance *>(idb.data);
+            std::memcpy(gpu, data.instances + first,
+                        sizeof(MeshInstance) * idb.num);
+
+            bgfx::setState(state);
+            bgfx::setVertexBuffer(0, buffer);
+            bgfx::setInstanceDataBuffer(&idb);
+            bgfx::submit(view, program, sortDepth);
+            first += idb.num;
+        }
+    };
+
+    const float edgeOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    const float edgeOn[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+    if (modeFlags.hiddenLine && modeFlags.meshFill)
+    {
+        bgfx::setUniform(m_meshEdgeOverride, edgeOff);
+        submitChunks(kViewDepthPrepass, m_meshInstanceProgram, meshBuffer, prepassState);
+    }
+    if (modeFlags.meshFill && !modeFlags.hiddenLine)
+    {
+        bgfx::setUniform(m_meshEdgeOverride, edgeOff);
+        submitChunks(kViewSolidFill, fillProgram, meshBuffer, fillState);
+    }
+    if (modeFlags.show3dEdges && bgfx::isValid(edgeBuffer))
+    {
+        const float edgeLayerOffset[4] = {
+            layerOffsetValue + edgeDepthBiasUnits(instanceDepth), 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(m_layerOffset, edgeLayerOffset);
+        bgfx::setUniform(m_meshEdgeOverride, edgeOn);
+        submitChunks(kViewEdges, m_meshInstanceProgram, edgeBuffer, edgeState);
     }
 }
 
@@ -908,12 +1577,14 @@ void BgfxRenderer::drawTargetPointInstances(
                   "Point instance must match the GPU instance stride");
 
     const glm::mat4 projection = projectionForDirect3D(data.projection);
-    const glm::vec2 pixelSizeNdc(
-        data.pointSize * 2.0f / float(m_width),
-        data.pointSize * 2.0f / float(m_height));
     const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                            BGFX_STATE_DEPTH_TEST_LEQUAL |
                            BGFX_STATE_BLEND_ALPHA;
+    const float pointStyle[4] = {
+        m_renderMode.mode() == RenderMode::DepthBuffer ? 1.0f : 0.0f,
+        0.0f, 0.0f, 0.0f
+    };
+    bgfx::setUniform(m_primParams, pointStyle);
 
     uint32_t first = 0;
     while (first < data.instanceCount)
@@ -922,14 +1593,18 @@ void BgfxRenderer::drawTargetPointInstances(
             data.instanceCount - first, kStride);
         if (available == 0)
             break;
-        bgfx::InstanceDataBuffer idb;
-        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
-        auto *gpu = reinterpret_cast<PointInstanceGpu *>(idb.data);
+        std::vector<PointInstanceGpu> visibleInputs;
+        visibleInputs.reserve(available);
 
-        uint32_t written = 0;
-        for (uint32_t i = 0; i < idb.num; ++i)
+        for (uint32_t i = 0; i < available; ++i)
         {
             const TargetPointInstance &input = data.instances[first + i];
+            const float pointSize = input.pointSize > 0.0f
+                                        ? input.pointSize
+                                        : data.pointSize;
+            const glm::vec2 pixelSizeNdc(
+                pointSize * 2.0f / float(m_width),
+                pointSize * 2.0f / float(m_height));
             const glm::vec4 clip = projection * data.view *
                                    glm::vec4(input.relativePosition, 1.0f);
             if (!(clip.w > 0.0f))
@@ -948,82 +1623,187 @@ void BgfxRenderer::drawTargetPointInstances(
                     data.logDepth);
             }
 
-            gpu[written].positionDepth = glm::vec4(ndc, depth, 1.0f);
-            gpu[written].screenSize = glm::vec4(pixelSizeNdc, 0.0f, 0.0f);
-            gpu[written].colorOpacity = glm::vec4(input.color, 1.0f);
-            ++written;
+            visibleInputs.push_back({
+                glm::vec4(ndc, depth, 1.0f),
+                glm::vec4(pixelSizeNdc, 0.0f, 0.0f),
+                glm::vec4(input.color, 1.0f)
+            });
         }
 
-        if (written == 0)
+        if (visibleInputs.empty())
         {
-            first += idb.num;
+            first += available;
             continue;
         }
-        idb.num = written;
-        idb.size = uint32_t(written) * kStride;
+
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb,
+                                      static_cast<uint32_t>(visibleInputs.size()),
+                                      kStride);
+        std::memcpy(idb.data, visibleInputs.data(),
+                    visibleInputs.size() * kStride);
 
         bgfx::setState(state);
         bgfx::setVertexBuffer(0, m_pointBuffer);
         bgfx::setInstanceDataBuffer(&idb);
-        bgfx::submit(0, m_pointInstanceProgram);
-        first += idb.num;
+        bgfx::submit(kViewOverlay, m_pointInstanceProgram);
+        first += available;
     }
+}
+
+static float shaderStyleForRenderMode(RenderMode mode)
+{
+    switch (mode)
+    {
+    case RenderMode::Wireframe2D:
+    case RenderMode::Wireframe3D:
+    case RenderMode::HiddenLine:
+        return 6.0f; // wireframe branch
+    case RenderMode::Shaded:
+    case RenderMode::ShadedWithEdges:
+        return 0.0f; // realistic PBR branch
+    case RenderMode::DepthBuffer:
+        return depthStyleForRenderMode(RenderMode::DepthBuffer);
+    }
+    return 6.0f;
 }
 
 void BgfxRenderer::drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data)
 {
-    bgfx::VertexBufferHandle meshBuffer = m_cadCubeBuffer;
-    switch (data.mesh)
-    {
-    case rendering::MeshType::Sphere: meshBuffer = m_cadSphereBuffer; break;
-    case rendering::MeshType::Cone:   meshBuffer = m_cadConeBuffer;   break;
-    case rendering::MeshType::Torus:  meshBuffer = m_cadTorusBuffer;  break;
-    case rendering::MeshType::Cube:   break;
-    }
-
     if (!m_initialized || !bgfx::isValid(m_cadAlgorithmProgram) ||
-        !bgfx::isValid(meshBuffer) || !data.instances ||
+        !bgfx::isValid(m_meshInstanceProgram) || !data.instances ||
         data.instanceCount == 0)
         return;
 
-    constexpr uint16_t kStride = 64;
-    static_assert(sizeof(MeshInstance) == kStride,
-                  "MeshInstance must match the CAD algorithm demo stride");
+    bgfx::VertexBufferHandle meshBuffer = m_cadCubeBuffer;
+    bgfx::VertexBufferHandle edgeBuffer = m_cubeEdgeBuffer;
+    switch (data.mesh)
+    {
+    case rendering::MeshType::Sphere:
+        meshBuffer = m_cadSphereBuffer;
+        edgeBuffer = m_sphereEdgeBuffer;
+        break;
+    case rendering::MeshType::Cone:
+        meshBuffer = m_cadConeBuffer;
+        edgeBuffer = m_coneEdgeBuffer;
+        break;
+    case rendering::MeshType::Torus:
+        meshBuffer = m_cadTorusBuffer;
+        edgeBuffer = m_torusEdgeBuffer;
+        break;
+    case rendering::MeshType::Cube:
+        break;
+    }
 
+    constexpr uint16_t kStride = sizeof(MeshInstance);
+    static_assert(kStride == 80,
+                  "CAD MeshInstance must carry 5 vec4s to leave room for UV vertex attributes");
     const glm::mat4 projection = projectionForDirect3D(data.projection);
-    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                           BGFX_STATE_DEPTH_TEST_LEQUAL |
-                           BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-
+    const RenderModeFlags modeFlags = m_renderMode.flags();
+    const bool depthStyleMode = data.renderMode == RenderMode::DepthBuffer;
+    const uint64_t fillState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA |
+        (depthStyleMode ? BGFX_STATE_WRITE_Z : 0);
+    const uint64_t prepassState = BGFX_STATE_DEPTH_TEST_LEQUAL |
+        BGFX_STATE_WRITE_Z | BGFX_STATE_MSAA;
+    const uint64_t wireState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINES |
+        BGFX_STATE_LINEAA | BGFX_STATE_MSAA;
+    bgfx::setUniform(m_view, glm::value_ptr(data.view));
+    bgfx::setUniform(m_projection, glm::value_ptr(projection));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
     bgfx::setUniform(m_cadView, glm::value_ptr(data.view));
     bgfx::setUniform(m_cadProjection, glm::value_ptr(projection));
+    bgfx::setUniform(m_eyeHigh, glm::value_ptr(glm::vec4(data.eye.high, 0.0f)));
+    bgfx::setUniform(m_eyeLow, glm::value_ptr(glm::vec4(data.eye.low, 0.0f)));
     bgfx::setUniform(m_cadCameraPos, glm::value_ptr(glm::vec4(data.cameraPos, 1.0f)));
     bgfx::setUniform(m_cadBaseColor, glm::value_ptr(glm::vec4(data.baseColor, 1.0f)));
     bgfx::setUniform(m_cadLightDir, glm::value_ptr(glm::vec4(glm::normalize(data.lightDir), 0.0f)));
-    bgfx::setUniform(m_cadStyleParams, glm::value_ptr(glm::vec4(static_cast<float>(data.style), data.metallic, data.roughness, data.transparency)));
-    bgfx::setUniform(m_cadWireframeColor, glm::value_ptr(glm::vec4(0.1f, 0.1f, 0.1f, 1.0f)));
+    bgfx::setUniform(m_cadWireframeColor, glm::value_ptr(glm::vec4(0.08f, 0.08f, 0.10f, 1.0f)));
     bgfx::setUniform(m_cadStrokeParams, glm::value_ptr(glm::vec4(data.strokeWidth, data.strokeDensity, 0.0f, 0.0f)));
-    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
+    // Layer compositing and depth-sorted submission inside the solid channel.
+    const glm::vec3 instanceTranslation = glm::vec3(data.instances[0].positionHigh)
+                                        + glm::vec3(data.instances[0].positionLow);
+    const glm::vec3 eyeTranslation = data.eye.high + data.eye.low;
+    const glm::vec4 instanceView =
+        data.view * glm::vec4(instanceTranslation - eyeTranslation, 1.0f);
+    const float denom = logDepthDenominator(data.logDepth);
+    const float instanceDepth = -instanceView.z;
+    const float layerOffsetValue =
+        layerOffsetUnits(data.layer, instanceDepth, data.logDepth);
+    const uint32_t sortDepth =
+        normalizedSortDepth(instanceDepth - layerOffsetValue, data.logDepth, denom);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_layerOffset, layerOffset);
 
-    uint32_t first = 0;
-    while (first < data.instanceCount)
+
+    const float fillStyle = shaderStyleForRenderMode(data.renderMode);
+    const float fillStyleParams[4] = { fillStyle, data.metallic,
+                                       data.roughness, data.transparency };
+    const float flatShadeParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    const float edgeOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    const auto submitChunks = [&](bgfx::ViewId view, bgfx::ProgramHandle program,
+                                  bgfx::VertexBufferHandle buffer, uint64_t state) {
+        uint32_t first = 0;
+        while (first < data.instanceCount)
+        {
+            const uint32_t available = bgfx::getAvailInstanceDataBuffer(
+                data.instanceCount - first, kStride);
+            if (available == 0)
+                break;
+            bgfx::InstanceDataBuffer idb;
+            bgfx::allocInstanceDataBuffer(&idb, available, kStride);
+            auto *gpu = reinterpret_cast<MeshInstance *>(idb.data);
+            std::memcpy(gpu, data.instances + first,
+                        sizeof(MeshInstance) * idb.num);
+
+            bgfx::setState(state);
+            bgfx::setVertexBuffer(0, buffer);
+            bgfx::setInstanceDataBuffer(&idb);
+            bgfx::submit(view, program, sortDepth);
+            first += idb.num;
+        }
+    };
+
+    if (modeFlags.hiddenLine && modeFlags.meshFill)
     {
-        const uint32_t available = bgfx::getAvailInstanceDataBuffer(
-            data.instanceCount - first, kStride);
-        if (available == 0)
-            break;
-        bgfx::InstanceDataBuffer idb;
-        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
-        auto *gpu = reinterpret_cast<MeshInstance *>(idb.data);
-        std::memcpy(gpu, data.instances + first,
-                    sizeof(MeshInstance) * idb.num);
-
-        bgfx::setState(state);
-        bgfx::setVertexBuffer(0, meshBuffer);
-        bgfx::setInstanceDataBuffer(&idb);
-        bgfx::submit(0, m_cadAlgorithmProgram);
-        first += idb.num;
+        bgfx::setUniform(m_meshEdgeOverride, edgeOff);
+        submitChunks(kViewDepthPrepass, m_meshInstanceProgram, meshBuffer, prepassState);
     }
+    if (modeFlags.meshFill && !modeFlags.hiddenLine)
+    {
+        bgfx::setUniform(m_cadStyleParams, fillStyleParams);
+        bgfx::setUniform(m_cadFlatShade, flatShadeParams);
+        submitChunks(kViewSolidFill, m_cadAlgorithmProgram, meshBuffer, fillState);
+    }
+    if (modeFlags.show3dEdges && bgfx::isValid(edgeBuffer))
+    {
+        const float edgeLayerOffset[4] = {
+            layerOffsetValue + edgeDepthBiasUnits(instanceDepth), 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(m_layerOffset, edgeLayerOffset);
+        const float edgeOn[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(m_meshEdgeOverride, edgeOn);
+        const bgfx::ViewId edgeView = modeFlags.wireframe3d || modeFlags.hiddenLine
+                                          ? kViewEdges
+                                          : kViewWire;
+        submitChunks(edgeView, m_meshInstanceProgram, edgeBuffer, wireState);
+    }
+}
+
+void BgfxRenderer::setRenderMode(RenderMode mode)
+{
+    m_renderMode.set(mode);
+}
+
+RenderMode BgfxRenderer::renderMode() const
+{
+    return m_renderMode.mode();
+}
+
+RenderModeFlags BgfxRenderer::renderModeFlags() const
+{
+    return m_renderMode.flags();
 }
 
 void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
@@ -1031,61 +1811,109 @@ void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
     if (dbg) { dbg = false;
         printf("[polyline] valid=%d count=%u\n", bgfx::isValid(m_polylineProgram), data.vertexCount);
     }
+
     if (!bgfx::isValid(m_polylineProgram) || data.vertexCount < 2 || !data.vertices) return;
-    if (data.vertexCount > 65535) return; 
- 
+    if (data.vertexCount > 65535) return;
+
     bgfx::TransientVertexBuffer tvb;
-    const uint32_t vertSize = sizeof(PrimVertex); 
-    const uint32_t totalBytes = data.vertexCount * vertSize; 
-    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_polylineLayout)) return; 
-    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_polylineLayout); 
+    const uint32_t vertSize = sizeof(PrimVertex);
+    const uint32_t totalBytes = data.vertexCount * vertSize;
+    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_polylineLayout)) return;
+    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_polylineLayout);
     memcpy(tvb.data, data.vertices, totalBytes);
- 
-    glm::mat4 identity = glm::mat4(1.0f); 
-    bgfx::setTransform(glm::value_ptr(identity)); 
-    bgfx::setVertexBuffer(0, &tvb); 
-    bgfx::setUniform(m_view, glm::value_ptr(data.view)); 
+
+    glm::mat4 identity = glm::mat4(1.0f);
+    bgfx::setTransform(glm::value_ptr(identity));
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setUniform(m_view, glm::value_ptr(data.view));
     const glm::mat4 proj = projectionForDirect3D(data.projection);
     bgfx::setUniform(m_projection, glm::value_ptr(proj));
-    float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w }; 
-    bgfx::setUniform(m_logDepth, logDepth); 
-    float prim[4] = { 0.15f, data.edgeSoftness, 0.0f, 0.0f }; 
-    bgfx::setUniform(m_primParams, prim);
- 
-    constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A 
-        | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA; 
-    bgfx::setState(state); 
-    bgfx::submit(0, m_polylineProgram); 
-}
- 
-void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data) {
-    static bool dbg = true;
-    if (dbg) { dbg = false;
-        printf("[filled] valid=%d count=%u\n", bgfx::isValid(m_fillProgram), data.vertexCount);
-    } 
-    if (!bgfx::isValid(m_fillProgram) || data.vertexCount < 3 || !data.vertices) return; 
-    if (data.vertexCount > 65535) return;
- 
-    bgfx::TransientVertexBuffer tvb; 
-    const uint32_t vertSize = sizeof(FillVertex); 
-    const uint32_t totalBytes = data.vertexCount * vertSize; 
-    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_fillLayout)) return; 
-    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_fillLayout); 
-    memcpy(tvb.data, data.vertices, totalBytes);
- 
-    glm::mat4 identity = glm::mat4(1.0f); 
-    bgfx::setTransform(glm::value_ptr(identity)); 
-    bgfx::setVertexBuffer(0, &tvb); 
-    bgfx::setUniform(m_view, glm::value_ptr(data.view)); 
-    const glm::mat4 proj = projectionForDirect3D(data.projection);
-    bgfx::setUniform(m_projection, glm::value_ptr(proj)); 
-    float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w }; 
+    float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w };
     bgfx::setUniform(m_logDepth, logDepth);
- 
-    constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z 
-        | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA; 
-    bgfx::setState(state); 
-    bgfx::submit(0, m_fillProgram); 
+    const float depthStyle = depthStyleForRenderMode(m_renderMode.mode());
+    float prim[4] = { 0.15f, data.edgeSoftness, depthStyle, 0.0f };
+    bgfx::setUniform(m_primParams, prim);
+    // Layer compositing for the wire channel (offset in view space).
+    glm::vec3 centroid(0.0f);
+    for (uint32_t i = 0; i < data.vertexCount; ++i)
+        centroid += data.vertices[i].position;
+    centroid /= float(data.vertexCount);
+    const glm::vec4 centroidView = data.view * glm::vec4(centroid, 1.0f);
+    const float denom = logDepthDenominator(data.logDepth);
+    const float centroidDepth = -centroidView.z;
+    const float layerOffsetValue =
+        layerOffsetUnits(data.layer, centroidDepth, data.logDepth);
+    const uint32_t sortDepth =
+        normalizedSortDepth(centroidDepth - layerOffsetValue, data.logDepth, denom);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_layerOffset, layerOffset);
+
+    constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A
+        | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+    bgfx::setState(state);
+    bgfx::submit(kViewWire, m_polylineProgram, sortDepth);
+}
+
+void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
+{
+    const RenderModeFlags modeFlags = m_renderMode.flags();
+    if (!data.is3DFace && !modeFlags.show2dSolidFills)
+        return;
+    if (!bgfx::isValid(m_fillProgram) || data.vertexCount < 3 || !data.vertices)
+        return;
+    if (data.vertexCount > 65535)
+        return;
+
+    bgfx::TransientVertexBuffer tvb;
+    const uint32_t vertSize = sizeof(FillVertex);
+    const uint32_t totalBytes = data.vertexCount * vertSize;
+    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_fillLayout))
+        return;
+    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_fillLayout);
+    memcpy(tvb.data, data.vertices, totalBytes);
+
+    glm::mat4 identity = glm::mat4(1.0f);
+    bgfx::setTransform(glm::value_ptr(identity));
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setUniform(m_view, glm::value_ptr(data.view));
+    const glm::mat4 proj = projectionForDirect3D(data.projection);
+    bgfx::setUniform(m_projection, glm::value_ptr(proj));
+    float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w };
+    bgfx::setUniform(m_logDepth, logDepth);
+    const float fillStyle[4] = { depthStyleForRenderMode(m_renderMode.mode()), 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_primParams, fillStyle);
+    // Depth-sort fills against meshes inside the solid channel and apply
+    // the requested compositing layer.
+    glm::vec3 centroid(0.0f);
+    for (uint32_t i = 0; i < data.vertexCount; ++i)
+        centroid += data.vertices[i].position;
+    centroid /= float(data.vertexCount);
+    const glm::vec4 centroidView = data.view * glm::vec4(centroid, 1.0f);
+    const float denom = logDepthDenominator(data.logDepth);
+    const float centroidDepth = -centroidView.z;
+    const float layerOffsetValue =
+        layerOffsetUnits(data.layer, centroidDepth, data.logDepth);
+    const uint32_t sortDepth =
+        normalizedSortDepth(centroidDepth - layerOffsetValue, data.logDepth, denom);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_layerOffset, layerOffset);
+
+    const uint64_t prepassState = BGFX_STATE_DEPTH_TEST_LEQUAL |
+        BGFX_STATE_WRITE_Z | BGFX_STATE_MSAA;
+    const uint64_t fillState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+
+    if (data.is3DFace && modeFlags.hiddenLine)
+    {
+        bgfx::setState(prepassState);
+        bgfx::submit(kViewDepthPrepass, m_fillProgram, sortDepth);
+        return;
+    }
+
+    if (data.is3DFace && !modeFlags.face3dFill)
+        return;
+    bgfx::setState(fillState | BGFX_STATE_WRITE_Z);
+    bgfx::submit(kViewSolidFill, m_fillProgram, sortDepth);
 }
 
 void BgfxRenderer::drawAabb(const AabbRenderData &data)
@@ -1109,13 +1937,27 @@ void BgfxRenderer::drawAabb(const AabbRenderData &data)
     bgfx::setUniform(m_view, glm::value_ptr(data.view));
     bgfx::setUniform(m_projection, glm::value_ptr(projection));
     bgfx::setUniform(m_cubeRelativePosition,
-                     glm::value_ptr(glm::vec4(center, 1.0f)));
+                     glm::value_ptr(glm::vec4(data.object.high, 1.0f)));
+    bgfx::setUniform(m_cubeRelativePositionLow,
+                     glm::value_ptr(glm::vec4(data.object.low, 0.0f)));
+    bgfx::setUniform(m_eyeHigh,
+                     glm::value_ptr(glm::vec4(data.eye.high, 0.0f)));
+    bgfx::setUniform(m_eyeLow,
+                     glm::value_ptr(glm::vec4(data.eye.low, 0.0f)));
     bgfx::setUniform(m_cubeOpacity,
                      glm::value_ptr(glm::vec4(data.opacity, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_cubeColor,
                      glm::value_ptr(glm::vec4(data.color, 1.0f)));
     bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
-    bgfx::submit(0, m_cubeProgram);
+    const float aabbStyle[4] = { depthStyleForRenderMode(m_renderMode.mode()), 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_primParams, aabbStyle);
+    const glm::vec4 aabbCenterView =
+        data.view * glm::vec4((data.relativeMin + data.relativeMax) * 0.5f, 1.0f);
+    const float layerOffsetValue = layerOffsetUnits(
+        data.layer, -aabbCenterView.z, data.logDepth);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+    bgfx::setUniform(m_layerOffset, layerOffset);
+    bgfx::submit(kViewWire, m_cubeProgram);
 }
 
 void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
@@ -1163,23 +2005,7 @@ void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
     bgfx::setUniform(m_lineColor,
                      glm::value_ptr(glm::vec4(data.color, data.opacity)));
     bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
-    if (std::getenv("GRID_CAMERA_DEBUG"))
-    {
-        static int debugCalls = 0;
-        if (debugCalls < 8)
-        {
-            ++debugCalls;
-            const glm::vec4 clip0 = projection * glm::vec4(data.viewStart, 1.0f);
-            const glm::vec4 clip1 = projection * glm::vec4(data.viewEnd, 1.0f);
-            std::cout << std::scientific << std::setprecision(6)
-                      << "[WLINE] start=" << data.viewStart.x << "," << data.viewStart.y << "," << data.viewStart.z
-                      << " end=" << data.viewEnd.x << "," << data.viewEnd.y << "," << data.viewEnd.z
-                      << " clip0=(" << clip0.x << "," << clip0.y << "," << clip0.z << "," << clip0.w << ")"
-                      << " ndc0=(" << (clip0.w ? clip0.x / clip0.w : 99.0f) << "," << (clip0.w ? clip0.y / clip0.w : 99.0f) << ")"
-                      << " ndc1=(" << (clip1.w ? clip1.x / clip1.w : 99.0f) << "," << (clip1.w ? clip1.y / clip1.w : 99.0f) << ")\n";
-        }
-    }
-    bgfx::submit(0, m_lineProgram);
+    bgfx::submit(kViewOverlay, m_lineProgram);
 }
 
 void BgfxRenderer::drawTargetPoint(const TargetPointRenderData &data)
@@ -1219,13 +2045,17 @@ void BgfxRenderer::drawTargetPoint(const TargetPointRenderData &data)
                               0.0f, 0.0f);
 
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA);
+                   BGFX_STATE_BLEND_ALPHA);
+    bgfx::setUniform(m_primParams,
+                     glm::value_ptr(glm::vec4(
+                         m_renderMode.mode() == RenderMode::DepthBuffer ? 1.0f : 0.0f,
+                         0.0f, 0.0f, 0.0f)));
     bgfx::setVertexBuffer(0, m_pointBuffer);
     bgfx::setUniform(m_pointPosition, glm::value_ptr(position));
     bgfx::setUniform(m_pointSize, glm::value_ptr(pointSize));
     bgfx::setUniform(m_pointColor,
                      glm::value_ptr(glm::vec4(data.color, 1.0f)));
-    bgfx::submit(0, m_pointProgram);
+    bgfx::submit(kViewOverlay, m_pointProgram);
 }
 
 bool BgfxRenderer::createRenderResources()
@@ -1266,6 +2096,18 @@ bool BgfxRenderer::createRenderResources()
         "mesh_instance_fs");
     m_meshInstanceProgram = bgfx::createProgram(
         meshInstanceVertex, meshInstanceFragment, true);
+
+    const auto pbrMeshVertexBinary =
+        SELECT_SHADER_BINARY(RealisticMeshShaders, vs_realistic_mesh);
+    const auto pbrMeshFragmentBinary =
+        SELECT_SHADER_BINARY(RealisticMeshShaders, fs_pbr_mesh);
+    const bgfx::ShaderHandle pbrMeshVertex = createShader(
+        pbrMeshVertexBinary.data, pbrMeshVertexBinary.size,
+        "realistic_mesh_vs");
+    const bgfx::ShaderHandle pbrMeshFragment = createShader(
+        pbrMeshFragmentBinary.data, pbrMeshFragmentBinary.size,
+        "realistic_mesh_fs");
+    m_pbrMeshProgram = bgfx::createProgram(pbrMeshVertex, pbrMeshFragment, true);
 
     const auto lineVertexBinary = SELECT_SHADER_BINARY(LineShaders, vertex);
     const auto lineFragmentBinary = SELECT_SHADER_BINARY(LineShaders, frag);
@@ -1321,6 +2163,16 @@ bool BgfxRenderer::createRenderResources()
         "prim_polyline_fs");
     m_polylineProgram = bgfx::createProgram(polylineVertex, polylineFragment, true);
 
+    const auto presentVertexBinary =
+        SELECT_SHADER_BINARY(PresentShaders, vs_present);
+    const auto presentFragmentBinary =
+        SELECT_SHADER_BINARY(PresentShaders, fs_present);
+    const bgfx::ShaderHandle presentVertex = createShader(
+        presentVertexBinary.data, presentVertexBinary.size, "cad_present_vs");
+    const bgfx::ShaderHandle presentFragment = createShader(
+        presentFragmentBinary.data, presentFragmentBinary.size, "cad_present_fs");
+    m_presentProgram = bgfx::createProgram(presentVertex, presentFragment, true);
+
     const auto fillVertexBinary =
         SELECT_SHADER_BINARY(PrimFilledShaders, vs_filled);
     const auto fillFragmentBinary =
@@ -1330,19 +2182,20 @@ bool BgfxRenderer::createRenderResources()
     const bgfx::ShaderHandle fillFragment = createShader(
         fillFragmentBinary.data, fillFragmentBinary.size, "prim_fill_fs");
     m_fillProgram = bgfx::createProgram(fillVertex, fillFragment, true);
-    m_polylineLayout.begin() 
-    .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float) 
-    .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float) 
-    .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float) 
-    .end(); 
-m_fillLayout.begin() 
-    .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float) 
-    .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float) 
+    m_polylineLayout.begin()
+    .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+    .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+    .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+    .end();
+m_fillLayout.begin()
+    .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+    .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
     .end();
 
 
     bool ready = bgfx::isValid(m_gridProgram) &&
                  bgfx::isValid(m_meshInstanceProgram) &&
+                 bgfx::isValid(m_pbrMeshProgram) &&
                  bgfx::isValid(m_pointInstanceProgram) &&
                  bgfx::isValid(m_cadAlgorithmProgram) &&
                  bgfx::isValid(m_polylineProgram) &&
@@ -1352,6 +2205,16 @@ m_fillLayout.begin()
                  bgfx::isValid(m_pointProgram);
     if (!ready)
         std::cerr << "Failed to create one or more bgfx shader programs." << std::endl;
+    if (!bgfx::isValid(m_gridProgram)) std::cerr << "Invalid program: grid" << std::endl;
+    if (!bgfx::isValid(m_meshInstanceProgram)) std::cerr << "Invalid program: mesh instance" << std::endl;
+    if (!bgfx::isValid(m_pbrMeshProgram)) std::cerr << "Invalid program: PBR mesh" << std::endl;
+    if (!bgfx::isValid(m_pointInstanceProgram)) std::cerr << "Invalid program: point instance" << std::endl;
+    if (!bgfx::isValid(m_cadAlgorithmProgram)) std::cerr << "Invalid program: CAD algorithm" << std::endl;
+    if (!bgfx::isValid(m_polylineProgram)) std::cerr << "Invalid program: polyline" << std::endl;
+    if (!bgfx::isValid(m_fillProgram)) std::cerr << "Invalid program: fill" << std::endl;
+    if (!bgfx::isValid(m_cubeProgram)) std::cerr << "Invalid program: cube" << std::endl;
+    if (!bgfx::isValid(m_lineProgram)) std::cerr << "Invalid program: line" << std::endl;
+    if (!bgfx::isValid(m_pointProgram)) std::cerr << "Invalid program: point" << std::endl;
 
     if (ready)
     {
@@ -1386,9 +2249,14 @@ m_fillLayout.begin()
         m_gridOpacity = createUniformHandle("uGridOpacity", bgfx::UniformType::Vec4);
         m_gridOrthoPlaneValid = createUniformHandle("uOrthoPlaneValid", bgfx::UniformType::Vec4);
         m_logDepth = createUniformHandle("uLogDepth", bgfx::UniformType::Vec4);
+        m_layerOffset = createUniformHandle("uLayerOffset", bgfx::UniformType::Vec4);
         m_view = createUniformHandle("uView", bgfx::UniformType::Mat4);
         m_projection = createUniformHandle("projection", bgfx::UniformType::Mat4);
+        m_meshEdgeOverride = createUniformHandle("uEdgeOverride", bgfx::UniformType::Vec4);
         m_cubeRelativePosition = createUniformHandle("uModelRelativePosition", bgfx::UniformType::Vec4);
+        m_cubeRelativePositionLow = createUniformHandle("uModelRelativePositionLow", bgfx::UniformType::Vec4);
+        m_eyeHigh = createUniformHandle("uEyeHigh", bgfx::UniformType::Vec4);
+        m_eyeLow = createUniformHandle("uEyeLow", bgfx::UniformType::Vec4);
         m_cubeOpacity = createUniformHandle("uCubeOpacity", bgfx::UniformType::Vec4);
         m_cubeColor = createUniformHandle("uObjectColor", bgfx::UniformType::Vec4);
         m_lineStart = createUniformHandle("uViewStart", bgfx::UniformType::Vec4);
@@ -1409,7 +2277,20 @@ m_fillLayout.begin()
         m_cadStyleParams = createUniformHandle("u_styleParams", bgfx::UniformType::Vec4);
         m_cadWireframeColor = createUniformHandle("u_wireframeColor", bgfx::UniformType::Vec4);
         m_cadStrokeParams = createUniformHandle("u_strokeParams", bgfx::UniformType::Vec4);
+        m_cadFlatShade = createUniformHandle("u_flatShade", bgfx::UniformType::Vec4);
+        m_presentSampler = createUniformHandle("s_texColor", bgfx::UniformType::Sampler);
         m_primParams = createUniformHandle("uPrimParams", bgfx::UniformType::Vec4);
+        m_meshSurface = createUniformHandle("uMeshSurface", bgfx::UniformType::Vec4);
+        m_albedoSampler = createUniformHandle("s_albedo", bgfx::UniformType::Sampler);
+        m_realisticMaterial = createUniformHandle("u_material", bgfx::UniformType::Vec4);
+        m_rAmbient = createUniformHandle("u_rAmbient", bgfx::UniformType::Vec4);
+        m_rDirection = createUniformHandle("u_rDirection", bgfx::UniformType::Vec4);
+        m_rDirectionColor = createUniformHandle("u_rDirectionColor", bgfx::UniformType::Vec4);
+        m_rPointPositions = createUniformHandle(
+            "u_rPointPositions", bgfx::UniformType::Vec4, 4);
+        m_rPointColors = createUniformHandle(
+            "u_rPointColors", bgfx::UniformType::Vec4, 4);
+        m_rParams = createUniformHandle("u_rParams", bgfx::UniformType::Vec4);
 
         ready = bgfx::isValid(m_gridInvViewProj) &&
                 bgfx::isValid(m_gridViewProj) &&
@@ -1441,8 +2322,12 @@ m_fillLayout.begin()
                 bgfx::isValid(m_gridOpacity) &&
                 bgfx::isValid(m_gridOrthoPlaneValid) &&
                 bgfx::isValid(m_logDepth) &&
+                bgfx::isValid(m_layerOffset) &&
                 bgfx::isValid(m_view) && bgfx::isValid(m_projection) &&
+        bgfx::isValid(m_meshEdgeOverride) &&
                 bgfx::isValid(m_cubeRelativePosition) &&
+                bgfx::isValid(m_cubeRelativePositionLow) &&
+                bgfx::isValid(m_eyeHigh) && bgfx::isValid(m_eyeLow) &&
                 bgfx::isValid(m_cubeOpacity) && bgfx::isValid(m_cubeColor) &&
                 bgfx::isValid(m_lineStart) && bgfx::isValid(m_lineEnd) &&
                  bgfx::isValid(m_lineDepthBias) &&
@@ -1458,7 +2343,18 @@ m_fillLayout.begin()
                 bgfx::isValid(m_cadStyleParams) &&
                 bgfx::isValid(m_cadWireframeColor) &&
                 bgfx::isValid(m_cadStrokeParams) &&
-                bgfx::isValid(m_primParams);
+                bgfx::isValid(m_cadFlatShade) &&
+                bgfx::isValid(m_presentSampler) &&
+                bgfx::isValid(m_primParams) &&
+                bgfx::isValid(m_meshSurface) &&
+                bgfx::isValid(m_albedoSampler);
+        ready = ready && bgfx::isValid(m_realisticMaterial) &&
+                bgfx::isValid(m_rAmbient) &&
+                bgfx::isValid(m_rDirection) &&
+                bgfx::isValid(m_rDirectionColor) &&
+                bgfx::isValid(m_rPointPositions) &&
+                bgfx::isValid(m_rPointColors) &&
+                bgfx::isValid(m_rParams);
     }
 
     if (ready)
@@ -1474,12 +2370,22 @@ m_fillLayout.begin()
         m_sphereBuffer = createMeshBuffer(makeSphereMesh());
         m_coneBuffer = createMeshBuffer(makeConeMesh());
         m_torusBuffer = createMeshBuffer(makeTorusMesh());
+        m_instanceCubeBuffer = createMeshBuffer(makeCubeMesh());
         m_cubeBuffer = bgfx::createVertexBuffer(
             bgfx::copy(cubeVertices.data(), sizeof(cubeVertices)), cubeLayout);
+        constexpr std::array<uint8_t, 4> whitePixel{255, 255, 255, 255};
+        m_whiteTexture = bgfx::createTexture2D(
+            1, 1, false, 1, bgfx::TextureFormat::BGRA8,
+            BGFX_TEXTURE_NONE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+            bgfx::copy(whitePixel.data(), sizeof(whitePixel)));
         m_cadCubeBuffer = createCadCubeBuffer(cubeVertices);
         m_cadSphereBuffer = createCadMeshBuffer(makeSphereMesh());
         m_cadConeBuffer = createCadMeshBuffer(makeConeMesh());
         m_cadTorusBuffer = createCadMeshBuffer(makeTorusMesh());
+        m_cubeEdgeBuffer = createFeatureEdgeLineBuffer(makeCubeFeatureEdges());
+        m_sphereEdgeBuffer = createFeatureEdgeLineBuffer(makeSphereFeatureEdges());
+        m_coneEdgeBuffer = createFeatureEdgeLineBuffer(makeConeFeatureEdges());
+        m_torusEdgeBuffer = createFeatureEdgeLineBuffer(makeTorusFeatureEdges());
         const std::array<CubeVertex, 24> aabbVertices = makeCubeEdgeVertices();
         m_aabbBuffer = bgfx::createVertexBuffer(
             bgfx::copy(aabbVertices.data(), sizeof(aabbVertices)), cubeLayout);
@@ -1500,6 +2406,22 @@ m_fillLayout.begin()
         m_pointBuffer = bgfx::createVertexBuffer(
             bgfx::copy(pointDisc.data(), sizeof(pointDisc)), pointLayout);
 
+        bgfx::VertexLayout presentLayout;
+        presentLayout.begin()
+            .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .end();
+        constexpr std::array<float, 24> presentQuad{
+            -1.0f, -1.0f, 0.0f, 1.0f,
+             1.0f, -1.0f, 1.0f, 1.0f,
+            -1.0f,  1.0f, 0.0f, 0.0f,
+             1.0f, -1.0f, 1.0f, 1.0f,
+             1.0f,  1.0f, 1.0f, 0.0f,
+            -1.0f,  1.0f, 0.0f, 0.0f,
+        };
+        m_presentQuadBuffer = bgfx::createVertexBuffer(
+            bgfx::copy(presentQuad.data(), sizeof(presentQuad)), presentLayout);
+
 
 
 
@@ -1508,8 +2430,17 @@ m_fillLayout.begin()
                 bgfx::isValid(m_cadSphereBuffer) &&
                 bgfx::isValid(m_cadConeBuffer) &&
                 bgfx::isValid(m_cadTorusBuffer) &&
+                bgfx::isValid(m_cubeEdgeBuffer) &&
+                bgfx::isValid(m_sphereEdgeBuffer) &&
+                bgfx::isValid(m_coneEdgeBuffer) &&
+                bgfx::isValid(m_torusEdgeBuffer) &&
+                bgfx::isValid(m_instanceCubeBuffer) &&
+                bgfx::isValid(m_whiteTexture) &&
                 bgfx::isValid(m_aabbBuffer) &&
-                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer);
+                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer) &&
+                bgfx::isValid(m_presentQuadBuffer) &&
+                bgfx::isValid(m_presentProgram) &&
+                createSceneFrameBuffer();
         if (!ready)
             std::cerr << "Failed to create bgfx vertex buffers." << std::endl;
     }

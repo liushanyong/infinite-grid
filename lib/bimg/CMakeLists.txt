@@ -67,7 +67,7 @@ if(CAD_USE_BIMG_DECODE)
     add_library(bimg_decode STATIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/image_decode.cpp
         ${LODEPNG_SOURCES}
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tinygltf/deps/miniz/miniz.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tinyexr/deps/miniz/miniz.c
     )
     cad_3rdparty_setup(bimg_decode)
     target_include_directories(bimg_decode PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -75,6 +75,7 @@ if(CAD_USE_BIMG_DECODE)
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/lodepng
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/stb
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tinyexr/deps/miniz
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tinygltf/deps/miniz
     )
     target_link_libraries(bimg_decode PUBLIC bx)

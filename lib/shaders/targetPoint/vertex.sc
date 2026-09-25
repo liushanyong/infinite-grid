@@ -1,5 +1,5 @@
 $input a_position
-$output v_pointCoord
+$output v_pointCoord, v_depth
 
 #include "bgfx_shader.sh"
 
@@ -13,4 +13,5 @@ void main()
     gl_Position = vec4(uRelativePosition.xy + a_position.xy * uPointSize.xy,
                        uRelativePosition.zw);
     v_pointCoord = a_position.xy;
+    v_depth = uRelativePosition.z;
 }

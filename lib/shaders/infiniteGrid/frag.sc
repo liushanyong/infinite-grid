@@ -48,9 +48,6 @@ float gridLine1D(float coord, float step, float halfWidthPx,
 
 float perspectiveOutputDepth(float viewDepth)
 {
-    if (viewDepth < uLogDepth.y || viewDepth > uLogDepth.z)
-        discard;
-
     float numerator = log2(max(viewDepth / uLogDepth.y, 1.0));
     float denominator = log2(max(uLogDepth.z / uLogDepth.y, 1.000001));
     return clamp(numerator / denominator, 0.0, 1.0);
@@ -143,18 +140,18 @@ void main()
     vec3 relativePos = uOriginRelative.xyz + p;
     vec4 clipPos = mul(uViewProj, vec4(relativePos, 1.0));
     // The CPU supplies a D3D-depth view/projection, so clipPos.z / clipPos.w
-    // is already in [0, 1] (equivalent to the reference GL shader's
-    // ndc_z * 0.5 + 0.5). Emulate glDepthRange(1/65536, 1.0) as a linear
-    // remap. Keep the fragment only inside the active depth slab. Beyond
-    // far, SV_Depth would clamp to 1.0 and equal-pass against the cleared
-    // depth, so discard explicitly. Before near, SV_Depth would clamp to 0
-    // and LEQUAL could also pass; discard that side explicitly as well.
+    // is already in the same [0, 1] range as gl_FragCoord.z. Do not apply an
+    // extra depth-range remap here: in a wide orthographic slab even 1/65536
+    // is a large world-space bias and breaks cube/grid ordering. The grid uses
+    // its own fixed perspective frustum, independent of the camera depth slab;
+    // log depth clamps past the scene far plane so distant grid pixels remain
+    // background candidates for LEQUAL sorting.
     float rawDepth = clipPos.z / clipPos.w;
     if (rawDepth > 1.0 || rawDepth < 0.0)
         discard;
     gl_FragDepth = uLogDepth.x > 0.5
         ? perspectiveOutputDepth(-mul(uView, vec4(relativePos, 1.0)).z)
-        : 1.0 / 65536.0 + (1.0 - 1.0 / 65536.0) * rawDepth;
+        : rawDepth;
 
     float minorStep = uStep.x * 0.1;
     vec2 gridCoord = planeCoordinates(p);

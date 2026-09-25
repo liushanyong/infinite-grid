@@ -1,11 +1,14 @@
 #include "main.h"
+#include "entities/tessellate.h"
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -60,6 +63,66 @@ RequestedRenderer resolveRequestedBackend()
 }
 
 std::unique_ptr<rendering::RendererBackend> rendererBackend;
+
+static rendering::RenderModeManager visualStyleManager;
+
+// Demo hook: set GRID_MESH_LAYER / GRID_FILL_LAYER to move demo objects onto
+// explicit compositing layers (default 0 = everything in one layer).
+static float envLayer(const char *name)
+{
+  const char *value = std::getenv(name);
+  return value ? float(std::atof(value)) : 0.0f;
+}
+
+static bool debugValidationMeshesEnabled()
+{
+  const char *value = std::getenv("GRID_VALIDATION_MESHES");
+  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
+static bool demoMeshesEnabled()
+{
+  const char *value = std::getenv("GRID_DEMO_MESHES");
+  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
+static bool centerCubeForced()
+{
+  const char *value = std::getenv("GRID_CENTER_CUBE");
+  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
+static uint32_t gMeshTextureIndex = 0;
+static float meshHeadlight()
+{
+  const char *value = std::getenv("GRID_MESH_HEADLIGHT");
+  return value ? float(std::clamp(std::atof(value), 0.0, 1.0)) : 1.0f;
+}
+static float meshTriplanar()
+{
+  const char *value = std::getenv("GRID_MESH_TRIPLANAR");
+  return value ? float(std::clamp(std::atof(value), 0.0, 1.0)) : 0.0f;
+}
+
+static bool realisticMeshEnabled()
+{
+  const char *value = std::getenv("GRID_REALISTIC");
+  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
+static rendering::MeshInstance makeMeshInstance(
+    float scale, const glm::vec3 &color, float opacity,
+    const rendering::DoubleSingleVec3 &position,
+    const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f))
+{
+  rendering::MeshInstance instance;
+  instance.transformColumn0 = glm::vec4(scale, 0.0f, 0.0f, color.r);
+  instance.transformColumn1 = glm::vec4(0.0f, scale, 0.0f, color.g);
+  instance.transformColumn2 = glm::vec4(0.0f, 0.0f, scale, color.b);
+  instance.positionHigh = glm::vec4(position.high, opacity);
+  instance.positionLow = glm::vec4(position.low, material.r);
+  return instance;
+}
 SDL_Window *window = nullptr;
 
 // All world-space object positions stay double precision on the CPU.
@@ -82,9 +145,9 @@ enum class GridPlaneType
     Custom,
 };
 
-GridPlaneType gridPlane = GridPlaneType::XZ;
+GridPlaneType gridPlane = GridPlaneType::XY;
 glm::dvec3 gridPlaneOrigin(0.0);
-glm::dvec3 gridPlaneNormal(0.0, 1.0, 0.0);
+glm::dvec3 gridPlaneNormal(0.0, 0.0, 1.0);
 glm::dvec3 gridPlaneStartAxisOrigin(0.0);
 glm::dvec3 gridPlaneStartAxisDirection(1.0, 0.0, 0.0);
 
@@ -92,7 +155,8 @@ glm::dvec3 gridPlaneStartAxisDirection(1.0, 0.0, 0.0);
 // aligned.  A plane within five degrees of the view direction is hidden.
 constexpr double kMinGridPlaneCos = 0.087155743; // sin(5 degrees)
 
-// Edit these to define a non-axis-aligned infinite grid.  Key 4 activates it.
+// Edit these to define a non-axis-aligned infinite grid.  Key 4 activates it;
+// R rebuilds them from the current camera frame.
 glm::dvec3 customGridPlaneOrigin(1.0, 0.5, -0.5);
 glm::dvec3 customGridPlaneNormal =
     glm::normalize(glm::dvec3(0.25, 1.0, 0.15));
@@ -320,6 +384,10 @@ OrbitCamera orbitCam(
     20.0f            // Pitch
 );
 
+// An orbit drag locks its pivot when it starts.  Until this demo has a
+// selection system, use the same fallback as OpenCADStudio: the camera target.
+std::optional<glm::dvec3> orbitPivot;
+
 // Project the orbit focus onto the active grid plane. Translating the eye by
 // the same plane correction preserves the view direction and orbit distance;
 // ordinary orbiting may then still place the eye off the plane.
@@ -329,8 +397,7 @@ void enforceTargetPlaneConstraint()
     const double targetOnNormal =
         glm::dot(orbitCam.Target - gridPlaneOrigin, planeNormal);
     const glm::dvec3 correction = planeNormal * -targetOnNormal;
-    orbitCam.Target += correction;
-    orbitCam.Position += correction;
+    orbitCam.setTarget(orbitCam.Target + correction);
 }
 
 void setTargetPlaneConstraint(bool enabled)
@@ -346,6 +413,27 @@ void setTargetPlaneConstraint(bool enabled)
               << (enabled ? "GRID PLANE" : "FREE")
               << (enabled ? " (C disables)" : " (C enables)")
               << std::endl;
+}
+
+// Re-anchor the turntable and working plane to the current view: camera Up
+// becomes the new gravity axis, while the plane passes through the orbit
+// target and is aligned with camera Right.  Preset planes 1/2/3 remain
+// untouched and can restore a world-axis working plane.
+void resetWorldUpAndPlaneFromCamera()
+{
+    orbitCam.setWorldUp(orbitCam.Up);
+
+    const glm::dvec3 horizontalAxis =
+        glm::normalize(orbitCam.Right);
+    customGridPlaneOrigin = orbitCam.Target;
+    customGridPlaneNormal = glm::normalize(orbitCam.WorldUp);
+    customGridPlaneStartAxisOrigin = orbitCam.Target;
+    customGridPlaneStartAxisDirection = horizontalAxis;
+
+    applyGridPlane(GridPlaneType::Custom);
+    std::cout << "World up reset from camera: ("
+              << orbitCam.WorldUp.x << ", " << orbitCam.WorldUp.y << ", "
+              << orbitCam.WorldUp.z << ")" << std::endl;
 }
 
 FPSCamera fpsCam(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f), -90.0f, 0.0f);
@@ -383,7 +471,7 @@ bool init()
     return false;
   }
   SDL_SetWindowTitle(
-      window, "grid plane - XZ  [1]XY [2]XZ [3]YZ [4]CUSTOM");
+      window, "grid plane - XY  [1]XY [2]XZ [3]YZ [4]CUSTOM");
 
   if (!rendererBackend->initialize(window))
   {
@@ -394,6 +482,29 @@ bool init()
   }
 
   std::cout << "Renderer backend: " << rendererBackend->name() << std::endl;
+
+  // Optional startup visual style (0=Wireframe2D .. 5=DepthBuffer), used by
+  // tooling/screenshots to render specific styles without key input.
+  if (const char *styleEnv = std::getenv("GRID_START_STYLE"))
+  {
+    const int styleIndex = std::atoi(styleEnv);
+    if (styleIndex > 0 && styleIndex < 6)
+    {
+      visualStyleManager.set(static_cast<rendering::RenderMode>(styleIndex));
+      rendererBackend->setRenderMode(visualStyleManager.mode());
+      std::cout << "Visual style: "
+              << rendering::renderModeLabel(visualStyleManager.mode())
+              << std::endl;
+    }
+  }
+  if (const char *textureEnv = std::getenv("GRID_MESH_TEXTURE"))
+  {
+    if (textureEnv[0] != '\0')
+    {
+      gMeshTextureIndex = rendererBackend->loadMeshTexture(textureEnv);
+      std::cout << "Mesh texture index: " << gMeshTextureIndex << std::endl;
+    }
+  }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
                "custom start axis=yellow)"
@@ -555,31 +666,38 @@ void drawAabbForCube(const rendering::CubeRenderData &renderData)
   glm::mat4 modelNoTranslation = renderData.model;
   modelNoTranslation[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
-  glm::vec3 relativeMin(std::numeric_limits<float>::max());
-  glm::vec3 relativeMax(std::numeric_limits<float>::lowest());
+  glm::dvec3 relativeMin(std::numeric_limits<double>::max());
+  glm::dvec3 relativeMax(std::numeric_limits<double>::lowest());
+  const glm::dvec3 objectEncoded =
+      glm::dvec3(renderData.object.high) + glm::dvec3(renderData.object.low);
+  const glm::dvec3 eyeEncoded =
+      glm::dvec3(renderData.eye.high) + glm::dvec3(renderData.eye.low);
   for (const float x : {-0.5f, 0.5f})
   {
     for (const float y : {-0.5f, 0.5f})
     {
       for (const float z : {-0.5f, 0.5f})
       {
-        const glm::vec3 relative = glm::vec3(
+        const glm::dvec3 relative = glm::dvec3(
             modelNoTranslation * glm::vec4(x, y, z, 1.0f)) +
-            renderData.modelRelativePosition;
+            (objectEncoded - eyeEncoded);
         relativeMin = glm::min(relativeMin, relative);
         relativeMax = glm::max(relativeMax, relative);
       }
     }
   }
+  const glm::dvec3 relativeCenter = (relativeMin + relativeMax) * 0.5;
 
   const rendering::AabbRenderData aabb{
       .view = renderData.view,
       .projection = renderData.projection,
-      .relativeMin = relativeMin,
-      .relativeMax = relativeMax,
+      .relativeMin = glm::vec3(relativeMin),
+      .relativeMax = glm::vec3(relativeMax),
       .color = glm::vec3(1.0f, 0.90f, 0.15f),
       .opacity = 1.0f,
       .logDepth = renderData.logDepth,
+      .eye = renderData.eye,
+      .object = rendering::encodeDoubleSingle(relativeCenter),
   };
   rendererBackend->drawAabb(aabb);
 }
@@ -603,6 +721,8 @@ void drawCube(const glm::mat4 &view, const glm::mat4 &projection,
       .objectColor = objectColor,
       .opacity = opacity,
       .logDepth = logDepth,
+      .eye = rendering::encodeDoubleSingle(orbitCam.Position),
+      .object = rendering::encodeDoubleSingle(objectWorldPosition),
   };
   rendererBackend->drawCube(renderData);
   drawAabbForCube(renderData);
@@ -675,384 +795,843 @@ void drawMesh(const glm::mat4 &view, const glm::mat4 &projection,
   rendererBackend->drawCube(renderData);
 }
 
-struct LargeCoordinateObject
+struct MeshEntityRecord
 {
+  entities::Mesh entity;
   glm::dvec3 worldPosition;
-  glm::vec3 color;
   float size;
   rendering::MeshType mesh = rendering::MeshType::Cube;
+
+  bool realistic() const
+  {
+    return entity.style == entities::MeshStyle::Realistic;
+  }
+
+  const std::string &displayName() const
+  {
+    return entity.common.name;
+  }
 };
+
+using LargeCoordinateObject = MeshEntityRecord;
+
+glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
+{
+  return entity.entity.common.color;
+}
+
+bool meshEntityVisible(const MeshEntityRecord &entity)
+{
+  return entity.entity.common.visible && entity.entity.common.color.a > 0.0f;
+}
+
+glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
+{
+  return entity.realistic()
+      ? glm::vec4(entity.entity.material.metallicFactor,
+                  entity.entity.material.roughnessFactor, 0.0f, 0.0f)
+      : glm::vec4(0.0f, 0.35f, 0.0f, 0.0f);
+}
+
+const char *meshDisplayName(rendering::MeshType mesh)
+{
+  switch (mesh)
+  {
+  case rendering::MeshType::Sphere: return "Sphere";
+  case rendering::MeshType::Cone: return "Cone";
+  case rendering::MeshType::Torus: return "Torus";
+  case rendering::MeshType::Cube: break;
+  }
+  return "Cube";
+}
+
+std::string indexedDisplayName(const char *prefix, size_t index)
+{
+  std::string name(prefix);
+  const size_t firstDigit = name.size();
+  do
+  {
+    name.push_back(char('0' + index % 10));
+    index /= 10;
+  } while (index != 0);
+  std::reverse(name.begin() + firstDigit, name.end());
+  return name;
+}
 
 const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
 {
   static const std::vector<LargeCoordinateObject> objects = [] {
     const glm::dvec3 detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
-    std::vector<LargeCoordinateObject> objects{
-        {LARGE_COORDINATE_BASE_POINT + glm::dvec3(0.0, 256.0, 0.0),
-         glm::vec3(0.43f, 0.91f, 0.98f), 512.0f},
-        {detailCenter + glm::dvec3(0.0, 224.0, 0.0),
-         glm::vec3(1.0f, 0.58f, 0.25f), 448.0f},
-        {detailCenter + glm::dvec3(1920.0, 64.0, 0.0),
-         glm::vec3(0.95f, 0.95f, 0.95f), 128.0f},
-        {detailCenter + glm::dvec3(0.0, 64.0, -1920.0),
-         glm::vec3(0.95f, 0.95f, 0.95f), 128.0f},
-        {detailCenter + glm::dvec3(-288.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-        {detailCenter + glm::dvec3(-96.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-        {detailCenter + glm::dvec3(96.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
-        {detailCenter + glm::dvec3(288.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f},
+    struct ValidationPoint
+    {
+      glm::dvec3 offset;
+      glm::vec3 color;
+      float size;
+      rendering::MeshType mesh;
     };
+    const ValidationPoint validationPoints[] = {
+        {glm::dvec3(0.0, 256.0, 0.0), glm::vec3(0.43f, 0.91f, 0.98f),
+         512.0f, rendering::MeshType::Cube},
+        {glm::dvec3(0.0, 224.0, 0.0), glm::vec3(1.0f, 0.58f, 0.25f),
+         448.0f, rendering::MeshType::Cube},
+        {glm::dvec3(1920.0, 64.0, 0.0), glm::vec3(0.95f, 0.95f, 0.95f),
+         128.0f, rendering::MeshType::Cube},
+        {glm::dvec3(0.0, 64.0, -1920.0), glm::vec3(0.95f, 0.95f, 0.95f),
+         128.0f, rendering::MeshType::Cube},
+        {glm::dvec3(-288.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+        {glm::dvec3(-96.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+        {glm::dvec3(96.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+        {glm::dvec3(288.0, 32.0, -224.0),
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+    };
+    std::vector<LargeCoordinateObject> objects;
+    if (debugValidationMeshesEnabled())
+    {
+      objects.reserve(std::size(validationPoints));
+      for (const ValidationPoint &point : validationPoints)
+      {
+        MeshEntityRecord object;
+        object.worldPosition = detailCenter + point.offset;
+        object.entity.common.color = glm::vec4(point.color, 0.45f);
+        object.size = point.size;
+        object.mesh = point.mesh;
+        object.entity.common.name =
+            indexedDisplayName(meshDisplayName(object.mesh), objects.size());
+        objects.push_back(std::move(object));
+      }
+    }
+    if (realisticMeshEnabled())
+    {
+      for (size_t i = 0; i < objects.size(); ++i)
+      {
+        objects[i].entity.style = (i % 2) != 0
+                                      ? entities::MeshStyle::Realistic
+                                      : entities::MeshStyle::Cad;
+        objects[i].entity.material.metallicFactor = 0.82f;
+        objects[i].entity.material.roughnessFactor = 0.22f;
+      }
+    }
     return objects;
   }();
   return objects;
 }
 
-static glm::dvec3 vectorPrimitivesAnchor() { 
-  return LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET + 
-         glm::dvec3(0.0, 0.0, 0.0); 
-} 
-static int cadAlgorithmDemoStyle = 0;
- 
-static void drawVectorPrimitivesDemo(const glm::mat4 &view, 
-                                     const glm::mat4 &projection, 
-                                     const glm::dvec3 &rebase, 
-                                     const glm::vec4 &logDepth, 
-                                     const glm::dvec3 &cameraPos, 
-                                     const glm::dvec3 &cameraFront, 
-                                     const glm::dvec3 &cameraRightD, 
-                                     const glm::dvec3 &cameraUpD, 
-                                     float pixelSizeWorld) {
-  const glm::dvec3 anchor = vectorPrimitivesAnchor(); 
-  const glm::dvec3 toAnchor = anchor - cameraPos; 
-  const double anchorDepth = glm::dot(toAnchor, cameraFront); 
-  if (anchorDepth <= 0.0) return; 
- 
-  const glm::vec3 camRight = glm::normalize(glm::vec3(cameraRightD)); 
-  const glm::vec3 camUp = glm::normalize(glm::vec3(cameraUpD)); 
-  const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront)); 
+MeshEntityRecord getCenterCubeEntity()
+{
+  MeshEntityRecord entity;
+  entity.entity.common.name = "CenterCube";
+  entity.entity.common.visible =
+      !largeCoordinateCameraView || centerCubeForced();
+  entity.entity.common.color = glm::vec4(1.0f, 0.58f, 0.25f, 1.0f);
+  entity.worldPosition = cubeWorldPosition;
+  entity.size = 1.0f;
+  entity.mesh = rendering::MeshType::Cube;
+  return entity;
+}
+
+static glm::dvec3 vectorPrimitivesAnchor() {
+  return LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET +
+         glm::dvec3(0.0, 0.0, 0.0);
+}
+
+static bool cadEntityDemoEnabled()
+{
+  const char *value = std::getenv("GRID_CAD_DEMO");
+  // CAD vector entities are part of the design-rendering default. Keep the
+  // explicit zero value as an escape hatch for debugging the legacy demo.
+  return value == nullptr || (std::strcmp(value, "0") != 0);
+}
+
+struct CadEntityRange
+{
+  std::string name;
+  size_t begin = 0;
+  size_t count = 0;
+};
+
+enum class VisibilityKind
+{
+  MeshObject,
+  CenterCube,
+  CadMesh,
+  CadStroke,
+  CadFill,
+  CadPoint
+};
+
+enum class VisibilityState
+{
+  Offscreen,
+  Tiny,
+  Visible
+};
+
+// One CPU-side visibility candidate can describe either a mesh instance or a
+// tessellated CAD entity range.  Both projection modes classify these records;
+// only the query parameters differ.
+struct VisibilityCandidate
+{
+  VisibilityKind kind = VisibilityKind::MeshObject;
+  size_t entityIndex = 0;
+  size_t rangeBegin = 0;
+  size_t rangeCount = 0;
+  const MeshEntityRecord *mesh = nullptr;
+  glm::dvec3 min{0.0};
+  glm::dvec3 max{0.0};
+  glm::dvec3 center{0.0};
+  double lodSize = 0.0;
+  glm::vec4 overlayColor{1.0f};
+  float overlayPointSize = 2.0f;
+};
+
+struct VectorPrimitivesTessellation
+{
+  entities::TessellatedEntity geometry;
+  std::vector<MeshEntityRecord> meshes;
+  std::vector<CadEntityRange> strokeRanges;
+  std::vector<CadEntityRange> fillRanges;
+  std::vector<CadEntityRange> pointRanges;
+
+  const std::string &strokeNameAt(size_t index) const
+  {
+    return nameAt(strokeRanges, index, "CADStroke");
+  }
+  const std::string &fillNameAt(size_t index) const
+  {
+    return nameAt(fillRanges, index, "CADFill");
+  }
+  const std::string &pointNameAt(size_t index) const
+  {
+    return nameAt(pointRanges, index, "CADPoint");
+  }
+
+private:
+  static const std::string &nameAt(const std::vector<CadEntityRange> &ranges,
+                                   size_t index, const char *fallback)
+  {
+    for (const CadEntityRange &range : ranges)
+    {
+      if (index >= range.begin && index < range.begin + range.count)
+        return range.name;
+    }
+    static const std::string fallbackName = fallback;
+    return fallbackName;
+  }
+};
+
+template <typename EntityType>
+void appendVectorPrimitive(const EntityType &entity, const char *name,
+                           const entities::TesselationOptions &options,
+                           VectorPrimitivesTessellation &target,
+                           bool fillIs3DFace = false)
+{
+  auto addRange = [name](std::vector<CadEntityRange> &ranges,
+                         size_t begin, size_t end) {
+    if (end != begin)
+      ranges.push_back({name, begin, end - begin});
+  };
+  const size_t strokeBegin = target.geometry.strokes.size();
+  const size_t fillBegin = target.geometry.fills.size();
+  const size_t pointBegin = target.geometry.points.size();
+  entities::tessellate(entity, target.geometry, options);
+  for (size_t i = strokeBegin; i < target.geometry.strokes.size(); ++i)
+  {
+    entities::Stroke &stroke = target.geometry.strokes[i];
+    stroke.common = entity.common;
+    stroke.lineWeight = entity.common.lineWeight;
+  }
+  for (size_t i = fillBegin; i < target.geometry.fills.size(); ++i)
+  {
+    entities::Triangle &fill = target.geometry.fills[i];
+    fill.common = entity.common;
+    fill.is3DFace = fillIs3DFace;
+  }
+  for (size_t i = pointBegin; i < target.geometry.points.size(); ++i)
+  {
+    entities::TessellatedPoint &point = target.geometry.points[i];
+    point.common = entity.common;
+    point.pointSize = entity.common.lineWeight > 0.0
+                          ? entity.common.lineWeight
+                          : 7.0;
+  }
+  addRange(target.strokeRanges, strokeBegin,
+           target.geometry.strokes.size());
+  addRange(target.fillRanges, fillBegin, target.geometry.fills.size());
+  addRange(target.pointRanges, pointBegin, target.geometry.points.size());
+}
+
+// The CAD vector demo is authored as formal entities.  One immutable
+// tessellation is shared by drawing and CPU picking.
+const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
+{
+  static const VectorPrimitivesTessellation tessellation = [] {
+    VectorPrimitivesTessellation target;
+    entities::TessellatedEntity &result = target.geometry;
+    if (!cadEntityDemoEnabled())
+      return target;
+
+    const glm::dvec3 cadAnchor =
+        vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
+    const entities::TesselationOptions options;
+
+    entities::Line line;
+    line.common.color = glm::vec4(1.0f, 0.24f, 0.20f, 1.0f);
+    line.start = cadAnchor;
+    line.end = cadAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    appendVectorPrimitive(line, "Line", options, target);
+
+    entities::Arc arc;
+    arc.common.color = glm::vec4(1.0f, 0.52f, 0.10f, 1.0f);
+    arc.center = cadAnchor + glm::dvec3(1024.0, 256.0, 0.0);
+    arc.radius = 192.0;
+    arc.startAngle = 0.0;
+    arc.endAngle = glm::radians(270.0);
+    appendVectorPrimitive(arc, "Arc", options, target);
+
+    entities::Circle circle;
+    circle.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
+    circle.center = cadAnchor + glm::dvec3(256.0, 512.0, 0.0);
+    circle.radius = 160.0;
+    appendVectorPrimitive(circle, "Circle", options, target);
+
+    entities::Ellipse ellipse;
+    ellipse.common.color = glm::vec4(0.65f, 0.30f, 0.85f, 1.0f);
+    ellipse.center = cadAnchor + glm::dvec3(768.0, 640.0, 0.0);
+    ellipse.majorAxis = glm::dvec3(224.0, 0.0, 0.0);
+    ellipse.radiusRatio = 0.55;
+    appendVectorPrimitive(ellipse, "Ellipse", options, target);
+
+    entities::Polyline polyline;
+    polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
+    polyline.vertices = {
+        cadAnchor + glm::dvec3(-384.0, 128.0, 0.0),
+        cadAnchor + glm::dvec3(-128.0, 384.0, 0.0),
+        cadAnchor + glm::dvec3(128.0, 256.0, 0.0),
+        cadAnchor + glm::dvec3(384.0, 512.0, 0.0)};
+    polyline.bulges = {0.25, 0.0, -0.35};
+    appendVectorPrimitive(polyline, "Polyline", options, target);
+
+    entities::LwPolyline lwpolyline;
+    lwpolyline.common.color = glm::vec4(0.25f, 0.80f, 0.45f, 1.0f);
+    lwpolyline.vertices = {glm::dvec2(-256.0, -384.0),
+                           glm::dvec2(0.0, -192.0),
+                           glm::dvec2(256.0, -448.0)};
+    lwpolyline.elevation = 0.0;
+    lwpolyline.closed = true;
+    for (glm::dvec2 &vertex : lwpolyline.vertices)
+      vertex += glm::dvec2(cadAnchor);
+    appendVectorPrimitive(lwpolyline, "LwPolyline", options, target);
+
+    entities::Spline spline;
+    spline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    spline.degree = 3;
+    spline.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
+    spline.controlPoints = {
+        cadAnchor + glm::dvec3(-768.0, 512.0, 0.0),
+        cadAnchor + glm::dvec3(-512.0, 896.0, 128.0),
+        cadAnchor + glm::dvec3(-256.0, 384.0, -128.0),
+        cadAnchor + glm::dvec3(0.0, 768.0, 0.0)};
+    appendVectorPrimitive(spline, "Spline", options, target);
+
+    entities::Hatch hatch;
+    hatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.75f);
+    hatch.outerLoop = {
+        cadAnchor + glm::dvec3(1024.0, -384.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -384.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -128.0, 0.0),
+        cadAnchor + glm::dvec3(1024.0, -128.0, 0.0)};
+    appendVectorPrimitive(hatch, "Hatch", options, target);
+
+    entities::Solid solid;
+    solid.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 0.85f);
+    solid.firstCorner = cadAnchor + glm::dvec3(0.0, -128.0, 256.0);
+    solid.secondCorner = solid.firstCorner + glm::dvec3(512.0, 0.0, 0.0);
+    solid.thirdCorner = solid.firstCorner + glm::dvec3(0.0, 384.0, 0.0);
+    solid.fourthCorner = solid.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
+    appendVectorPrimitive(solid, "Solid", options, target);
+
+    entities::Ray ray;
+    ray.common.color = glm::vec4(0.10f, 0.85f, 0.75f, 1.0f);
+    ray.start = cadAnchor + glm::dvec3(-640.0, -768.0, 0.0);
+    ray.direction = glm::dvec3(1.0, 0.25, 0.0);
+    appendVectorPrimitive(ray, "Ray", options, target);
+
+    entities::MLine mline;
+    mline.common.color = glm::vec4(0.85f, 0.35f, 0.35f, 0.95f);
+    mline.vertices = {
+        cadAnchor + glm::dvec3(-256.0, -768.0, 0.0),
+        cadAnchor + glm::dvec3(256.0, -704.0, 0.0),
+        cadAnchor + glm::dvec3(768.0, -832.0, 0.0)};
+    mline.scale = glm::dvec3(24.0, 1.0, 1.0);
+    appendVectorPrimitive(mline, "MLine", options, target);
+
+    entities::Point cadPoint;
+    cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    cadPoint.location = cadAnchor + glm::dvec3(512.0, 0.0, 0.0);
+    appendVectorPrimitive(cadPoint, "Point", options, target);
+
+    // Former in-function demo geometry.  These are now ordinary CAD entities,
+    // so the same tessellation drives rendering, names, and autofocus picking.
+    const glm::dvec3 demoAnchor = vectorPrimitivesAnchor();
+
+    for (int i = 0; i < 24; ++i)
+    {
+      entities::Point gridPoint;
+      gridPoint.common.color = glm::vec4(
+          0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i, 1.0f);
+      gridPoint.common.lineWeight = 6.0;
+      gridPoint.location = demoAnchor +
+          glm::dvec3((i % 8) * 96.0, (i / 8) * 96.0 - 640.0, 0.0) +
+          glm::dvec3(1024.0, 0.0, 0.0);
+      appendVectorPrimitive(
+          gridPoint, ("PointGrid" + std::to_string(i)).c_str(), options, target);
+    }
+
+    entities::Line dashedArrow;
+    dashedArrow.common.color = glm::vec4(0.95f, 0.25f, 0.75f, 1.0f);
+    dashedArrow.common.lineType = "DASHED";
+    dashedArrow.common.lineWeight = 2.5;
+    dashedArrow.start = demoAnchor + glm::dvec3(-1024.0, -640.0, -512.0);
+    dashedArrow.end = dashedArrow.start + glm::dvec3(1024.0, 256.0, 0.0);
+    appendVectorPrimitive(dashedArrow, "DashedArrow", options, target);
+
+    {
+      const glm::dvec3 dir =
+          glm::normalize(dashedArrow.end - dashedArrow.start);
+      const glm::dvec3 side =
+          glm::normalize(glm::cross(dir, glm::dvec3(0.0, 0.0, 1.0))) * 24.0;
+      const glm::dvec3 base = dashedArrow.end - dir * 48.0;
+      entities::Solid arrowHead;
+      arrowHead.common = dashedArrow.common;
+      arrowHead.firstCorner = dashedArrow.end;
+      arrowHead.secondCorner = base - side;
+      arrowHead.thirdCorner = base + side;
+      arrowHead.fourthCorner = base + side;
+      appendVectorPrimitive(arrowHead, "ArrowHead", options, target);
+    }
+
+    {
+      constexpr int surfaceSegs = 24;
+      const glm::dvec3 surfaceOrigin =
+          demoAnchor + glm::dvec3(512.0, 768.0, -512.0);
+      auto surfacePoint = [&](double u, double v) {
+        const double height = glm::sin(glm::pi<double>() * u) *
+                              glm::sin(glm::pi<double>() * v);
+        return surfaceOrigin +
+               glm::dvec3(u * 768.0, height * 224.0, v * 512.0);
+      };
+
+      entities::Mesh surface;
+      surface.common.color = glm::vec4(0.20f, 0.45f, 0.85f, 0.80f);
+      surface.common.layer = "GRID_FILL_LAYER";
+      surface.style = entities::MeshStyle::Cad;
+      surface.geometry.positions.reserve(
+          static_cast<size_t>(surfaceSegs + 1) * (surfaceSegs + 1));
+      for (int iy = 0; iy <= surfaceSegs; ++iy)
+      {
+        for (int ix = 0; ix <= surfaceSegs; ++ix)
+        {
+          surface.geometry.positions.push_back(surfacePoint(
+              double(ix) / surfaceSegs, double(iy) / surfaceSegs));
+        }
+      }
+      for (int iy = 0; iy < surfaceSegs; ++iy)
+      {
+        for (int ix = 0; ix < surfaceSegs; ++ix)
+        {
+          const uint32_t v00 = uint32_t(iy * (surfaceSegs + 1) + ix);
+          const uint32_t v10 = v00 + 1;
+          const uint32_t v01 = v00 + surfaceSegs + 1;
+          const uint32_t v11 = v01 + 1;
+          surface.geometry.indices.insert(
+              surface.geometry.indices.end(),
+              {v00, v10, v11, v00, v11, v01});
+        }
+      }
+      appendVectorPrimitive(surface, "ParamSurface", options, target, true);
+
+      for (int k = 0; k <= surfaceSegs; k += 4)
+      {
+        entities::Polyline isoU;
+        entities::Polyline isoV;
+        isoU.common.color = glm::vec4(0.05f, 0.10f, 0.25f, 0.85f);
+        isoU.common.lineWeight = 2.0;
+        isoV = isoU;
+        const double g = double(k) / surfaceSegs;
+        for (int i = 0; i <= surfaceSegs; ++i)
+        {
+          const double t = double(i) / surfaceSegs;
+          isoU.vertices.push_back(surfacePoint(t, g));
+          isoV.vertices.push_back(surfacePoint(g, t));
+        }
+        appendVectorPrimitive(
+            isoU, ("ParamSurfaceIsoU" + std::to_string(k)).c_str(),
+            options, target);
+        appendVectorPrimitive(
+            isoV, ("ParamSurfaceIsoV" + std::to_string(k)).c_str(),
+            options, target);
+      }
+    }
+
+    for (int i = 0; i < 5; ++i)
+    {
+      entities::Point widthDot;
+      widthDot.common.color = glm::vec4(
+          0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f);
+      widthDot.common.lineWeight = 12.0;
+      widthDot.location =
+          demoAnchor + glm::dvec3(i * 256.0, -768.0, 0.0);
+      appendVectorPrimitive(
+          widthDot, ("WidthDot" + std::to_string(i)).c_str(), options, target);
+    }
+
+    {
+      const float widths[] = {1.0f, 2.0f, 4.0f, 8.0f};
+      const glm::vec4 colors[] = {
+          {1.0f, 0.2f, 0.2f, 1.0f}, {0.2f, 1.0f, 0.2f, 1.0f},
+          {0.2f, 0.4f, 1.0f, 1.0f}, {1.0f, 0.8f, 0.2f, 1.0f}};
+      for (int i = 0; i < 4; ++i)
+      {
+        entities::Line widthLine;
+        widthLine.common.color = colors[i];
+        widthLine.common.lineWeight = widths[i];
+        widthLine.start =
+            demoAnchor + glm::dvec3(-1024.0, -384.0 + i * 192.0, -512.0);
+        widthLine.end = widthLine.start + glm::dvec3(1024.0, 0.0, 0.0);
+        appendVectorPrimitive(
+            widthLine, ("WidthLine" + std::to_string(i)).c_str(),
+            options, target);
+      }
+    }
+
+    entities::Polyline demoPolyline;
+    demoPolyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
+    demoPolyline.common.lineWeight = 4.0;
+    const glm::dvec3 polylineBase =
+        demoAnchor + glm::dvec3(-512.0, 0.0, -512.0);
+    demoPolyline.vertices = {
+        polylineBase,
+        polylineBase + glm::dvec3(256.0, 256.0, 0.0),
+        polylineBase + glm::dvec3(512.0, 128.0, 256.0),
+        polylineBase + glm::dvec3(768.0, 384.0, 0.0)};
+    appendVectorPrimitive(demoPolyline, "DemoPolyline", options, target);
+
+    entities::Hatch hexagon;
+    hexagon.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 1.0f);
+    hexagon.outerLoop.reserve(6);
+    for (int i = 0; i < 6; ++i)
+    {
+      const double angle = glm::two_pi<double>() * i / 6.0;
+      hexagon.outerLoop.push_back(
+          demoAnchor + glm::dvec3(0.0, 256.0, -512.0) +
+          glm::dvec3(128.0 * std::cos(angle), 128.0 * std::sin(angle), 0.0));
+    }
+    appendVectorPrimitive(hexagon, "Hexagon", options, target);
+
+    {
+      entities::Hatch circleFill;
+      circleFill.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
+      constexpr int circleSegments = 48;
+      circleFill.outerLoop.reserve(circleSegments);
+      for (int i = 0; i < circleSegments; ++i)
+      {
+        const double angle = glm::two_pi<double>() * i / circleSegments;
+        circleFill.outerLoop.push_back(
+            demoAnchor + glm::dvec3(256.0, 512.0, 256.0) +
+            glm::dvec3(160.0 * std::cos(angle),
+                       160.0 * std::sin(angle), 0.0));
+      }
+      appendVectorPrimitive(circleFill, "CircleFill", options, target);
+    }
+
+    entities::Solid rectangle;
+    rectangle.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 1.0f);
+    rectangle.firstCorner =
+        demoAnchor + glm::dvec3(-256.0, -128.0, 256.0);
+    rectangle.secondCorner = rectangle.firstCorner + glm::dvec3(512.0, 0.0, 0.0);
+    rectangle.thirdCorner = rectangle.firstCorner + glm::dvec3(0.0, 384.0, 0.0);
+    rectangle.fourthCorner =
+        rectangle.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
+    appendVectorPrimitive(rectangle, "Rectangle", options, target);
+
+    entities::Spline bezier;
+    bezier.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    bezier.common.lineWeight = 6.0;
+    bezier.degree = 3;
+    bezier.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
+    const glm::dvec3 bezierBase =
+        demoAnchor + glm::dvec3(-768.0, 512.0, 0.0);
+    bezier.controlPoints = {
+        bezierBase,
+        bezierBase + glm::dvec3(256.0, 384.0, 128.0),
+        bezierBase + glm::dvec3(512.0, -128.0, -128.0),
+        bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
+    appendVectorPrimitive(bezier, "Bezier", options, target);
+
+    {
+      // Demo meshes remain formal entities, but stay out of the default CAD
+      // scene.  They are available only for explicit rendering/pick debugging.
+      if (!demoMeshesEnabled())
+        return target;
+
+      MeshEntityRecord debugCube;
+      debugCube.entity.common.name = "RedDebugCube";
+      debugCube.entity.common.color = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+      debugCube.worldPosition = demoAnchor;
+      debugCube.size = 200.0f;
+      target.meshes.push_back(std::move(debugCube));
+
+      const glm::dvec3 solidBase =
+          demoAnchor + glm::dvec3(0.0, 768.0, 512.0);
+      const rendering::MeshType meshTypes[] = {
+          rendering::MeshType::Cube, rendering::MeshType::Sphere,
+          rendering::MeshType::Cone, rendering::MeshType::Torus};
+      const char *meshNames[] = {
+          "DemoCube", "DemoSphere", "DemoCone", "DemoTorus"};
+      for (size_t index = 0; index < std::size(meshTypes); ++index)
+      {
+        MeshEntityRecord mesh;
+        mesh.entity.common.name = meshNames[index];
+        mesh.entity.common.color = glm::vec4(0.8f, 0.7f, 0.9f, 0.65f);
+        mesh.worldPosition = solidBase +
+            glm::dvec3((index % 2) * 512.0, (index / 2) * 512.0, 0.0);
+        mesh.size = 192.0f;
+        mesh.mesh = meshTypes[index];
+        target.meshes.push_back(std::move(mesh));
+      }
+    }
+    return target;
+  }();
+  return tessellation;
+}
+
+static void drawVectorPrimitivesDemo(const glm::mat4 &view,
+                                     const glm::mat4 &projection,
+                                     const glm::mat4 &overlayProjection,
+                                     const glm::dvec3 &rebase,
+                                     const glm::vec4 &logDepth,
+                                     const glm::dvec3 &cameraPos,
+                                     const glm::dvec3 &cameraFront,
+                                     const glm::dvec3 &cameraRightD,
+                                     const glm::dvec3 &cameraUpD,
+                                     float pixelSizeWorld,
+                                     const std::vector<const VisibilityCandidate *> &visibleCad,
+                                     const std::vector<const VisibilityCandidate *> &tinyCad) {
+  if (visibleCad.empty() && tinyCad.empty()) return;
+
+  const glm::vec3 camRight = glm::normalize(glm::vec3(cameraRightD));
+  const glm::vec3 camUp = glm::normalize(glm::vec3(cameraUpD));
+  const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront));
+  const VectorPrimitivesTessellation &tessellation =
+      getVectorPrimitivesTessellation();
   std::vector<rendering::PrimVertex> polyVerts;
   std::vector<rendering::FillVertex> fillVerts;
+  std::vector<rendering::FillVertex> surfaceFillVerts;
+  std::vector<rendering::TargetPointInstance> cadPoints;
+  std::vector<bool> strokeVisible;
+  std::vector<bool> fillVisible;
+  std::vector<bool> pointVisible;
 
+  auto appendRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
+                          const glm::vec4 &color, float halfWidth,
+                          float u0, float u1) {
+    const glm::vec3 direction = rb - ra;
+    if (glm::length(direction) < 1.0e-5f)
+      return;
+    const glm::vec3 side =
+        glm::normalize(glm::cross(direction, camFront)) * halfWidth;
+    polyVerts.push_back({ra - side, color, {u0, 0.0f}});
+    polyVerts.push_back({ra + side, color, {u0, 1.0f}});
+    polyVerts.push_back({rb + side, color, {u1, 1.0f}});
+    polyVerts.push_back({ra - side, color, {u0, 0.0f}});
+    polyVerts.push_back({rb + side, color, {u1, 1.0f}});
+    polyVerts.push_back({rb - side, color, {u1, 0.0f}});
+  };
 
-  { 
-    static std::vector<rendering::TargetPointInstance> demoPoints; 
-    demoPoints.clear(); 
-    const glm::dvec3 pointBase = anchor + glm::dvec3(1024.0, -640.0, 0.0); 
-    for (int i = 0; i < 24; ++i) { 
-      const double x = (i % 8) * 96.0; 
-      const double y = (i / 8) * 96.0; 
-      demoPoints.push_back({glm::vec3(pointBase + glm::dvec3(x, y, 0.0) - rebase), 
-        glm::vec3(0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i)}); 
-    } 
-    if (rendererBackend && !demoPoints.empty()) { 
-      const rendering::TargetPointInstancesRenderData pointData{ 
-        .view = view, .projection = projection, .instances = demoPoints.data(), 
-        .instanceCount = static_cast<uint32_t>(demoPoints.size()), 
-        .pointSize = 6.0f, .pixelSizeWorld = pixelSizeWorld, 
-        .isOrtho = useOrthoProjection() ? 1.0f : 0.0f, .logDepth = logDepth}; 
-      rendererBackend->drawTargetPointInstances(pointData); 
-    } 
-  } 
+  auto appendCadStroke = [&](const entities::Stroke &stroke) {
+    if (!stroke.common.visible)
+      return;
+    const glm::vec4 color = stroke.common.color;
+    const float halfWidth = stroke.lineWeight > 0.0
+                                ? float(stroke.lineWeight) * 0.5f
+                                : 2.0f;
+    const size_t count = stroke.points.size();
+    if (count < 2)
+      return;
 
-  { 
-    const glm::dvec3 dashStart = anchor + glm::dvec3(-1024.0, -640.0, -512.0); 
-    const glm::dvec3 dashEnd = dashStart + glm::dvec3(1024.0, 256.0, 0.0); 
-    const glm::vec4 dashColor(0.95f, 0.25f, 0.75f, 1.0f); 
-    glm::vec3 ra = glm::vec3(dashStart - rebase); 
-    glm::vec3 rb = glm::vec3(dashEnd - rebase); 
-    glm::vec3 dir = glm::normalize(rb - ra); 
-    glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * 1.25f; 
-    const glm::dvec3 dashDirD = glm::normalize(dashEnd - dashStart);
-    const double total = glm::length(dashEnd - dashStart); 
-    for (double d = 0.0; d < total; d += 144.0) { 
-      const double e = std::min(d + 96.0, total); 
-      if (e - d < 1.0) break; 
-      glm::vec3 s0 = glm::vec3(dashStart + dashDirD * d - rebase); 
-      glm::vec3 s1 = glm::vec3(dashStart + dashDirD * e - rebase); 
-      polyVerts.push_back({s0 - side, dashColor, {float(d / total), 0.0f}}); 
-      polyVerts.push_back({s0 + side, dashColor, {float(d / total), 1.0f}}); 
-      polyVerts.push_back({s1 + side, dashColor, {float(e / total), 1.0f}}); 
-      polyVerts.push_back({s0 - side, dashColor, {float(d / total), 0.0f}}); 
-      polyVerts.push_back({s1 + side, dashColor, {float(e / total), 1.0f}}); 
-      polyVerts.push_back({s1 - side, dashColor, {float(e / total), 0.0f}}); 
-    } 
-    glm::vec3 tip = rb; 
-    glm::vec3 base = rb - dir * 48.0f; 
-    glm::vec3 arrowSide = glm::normalize(glm::cross(camFront, dir)) * 24.0f; 
-    fillVerts.push_back({tip, dashColor}); 
-    fillVerts.push_back({base - arrowSide, dashColor}); 
-    fillVerts.push_back({base + arrowSide, dashColor}); 
-  } 
+    if (stroke.common.lineType == "DASHED")
+    {
+      const glm::dvec3 start = stroke.points.front();
+      const glm::dvec3 end = stroke.points.back();
+      const glm::dvec3 direction = glm::normalize(end - start);
+      const double total = glm::length(end - start);
+      for (double d = 0.0; d < total; d += 144.0)
+      {
+        const double e = std::min(d + 96.0, total);
+        if (e - d < 1.0)
+          break;
+        appendRibbon(glm::vec3(start + direction * d - rebase),
+                     glm::vec3(start + direction * e - rebase), color,
+                     halfWidth, float(d / total), float(e / total));
+      }
+      return;
+    }
 
-  { 
-    constexpr int surfaceSegs = 24; 
-    const glm::dvec3 surfaceOrigin = anchor + glm::dvec3(512.0, 768.0, -512.0); 
-    auto surfacePoint = [&](double u, double v) { 
-      const double h = glm::sin(glm::pi<double>() * u) * glm::sin(glm::pi<double>() * v); 
-      return surfaceOrigin + glm::dvec3(u * 768.0, h * 224.0, v * 512.0); 
-    }; 
-    for (int iy = 0; iy < surfaceSegs; ++iy) { 
-      for (int ix = 0; ix < surfaceSegs; ++ix) { 
-        const double u0 = double(ix) / surfaceSegs; 
-        const double v0 = double(iy) / surfaceSegs; 
-        const double u1 = double(ix + 1) / surfaceSegs; 
-        const double v1 = double(iy + 1) / surfaceSegs; 
-        glm::vec3 p00 = glm::vec3(surfacePoint(u0, v0) - rebase); 
-        glm::vec3 p10 = glm::vec3(surfacePoint(u1, v0) - rebase); 
-        glm::vec3 p01 = glm::vec3(surfacePoint(u0, v1) - rebase); 
-        glm::vec3 p11 = glm::vec3(surfacePoint(u1, v1) - rebase); 
-        glm::vec4 c00(0.15f + 0.75f * float(u0), 0.20f + 0.55f * float(v0), 0.85f, 0.80f); 
-        glm::vec4 c10(0.15f + 0.75f * float(u1), 0.20f + 0.55f * float(v0), 0.85f, 0.80f); 
-        glm::vec4 c01(0.15f + 0.75f * float(u0), 0.20f + 0.55f * float(v1), 0.85f, 0.80f); 
-        glm::vec4 c11(0.15f + 0.75f * float(u1), 0.20f + 0.55f * float(v1), 0.85f, 0.80f); 
-        fillVerts.push_back({p00, c00}); fillVerts.push_back({p10, c10}); fillVerts.push_back({p11, c11}); 
-        fillVerts.push_back({p00, c00}); fillVerts.push_back({p11, c11}); fillVerts.push_back({p01, c01}); 
-      } 
-    } 
+    for (const glm::dvec3 &world : stroke.points)
+    {
+      const glm::vec3 center = glm::vec3(world - rebase);
+      for (int side = 0; side < 8; ++side)
+      {
+        const float a0 = side * 0.7853982f;
+        const float a1 = (side + 1) * 0.7853982f;
+        fillVerts.push_back({center, color});
+        fillVerts.push_back({center + camRight * halfWidth * std::cos(a0) +
+                                 camUp * halfWidth * std::sin(a0), color});
+        fillVerts.push_back({center + camRight * halfWidth * std::cos(a1) +
+                                 camUp * halfWidth * std::sin(a1), color});
+      }
+    }
 
-    for (int k = 0; k <= surfaceSegs; k += 4) { 
-      for (int i = 0; i < surfaceSegs; ++i) { 
-        const double t0 = double(i) / surfaceSegs; 
-        const double t1 = double(i + 1) / surfaceSegs; 
-        const double g = double(k) / surfaceSegs; 
-        glm::dvec3 a = surfacePoint(t0, g); 
-        glm::dvec3 b = surfacePoint(t1, g); 
-        glm::vec3 ra2 = glm::vec3(a - rebase); 
-        glm::vec3 rb2 = glm::vec3(b - rebase); 
-        glm::vec3 dir2 = glm::normalize(rb2 - ra2); 
-        glm::vec3 side2 = glm::normalize(glm::cross(dir2, camFront)) * 1.0f; 
-        glm::vec4 lineColor(0.05f, 0.10f, 0.25f, 0.85f); 
-        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
-        polyVerts.push_back({ra2 + side2, lineColor, {float(t0), 1.0f}}); 
-        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
-        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
-        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
-        polyVerts.push_back({rb2 - side2, lineColor, {float(t1), 0.0f}}); 
-        a = surfacePoint(g, t0); 
-        b = surfacePoint(g, t1); 
-        ra2 = glm::vec3(a - rebase); 
-        rb2 = glm::vec3(b - rebase); 
-        dir2 = glm::normalize(rb2 - ra2); 
-        side2 = glm::normalize(glm::cross(dir2, camFront)) * 1.0f; 
-        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
-        polyVerts.push_back({ra2 + side2, lineColor, {float(t0), 1.0f}}); 
-        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
-        polyVerts.push_back({ra2 - side2, lineColor, {float(t0), 0.0f}}); 
-        polyVerts.push_back({rb2 + side2, lineColor, {float(t1), 1.0f}}); 
-        polyVerts.push_back({rb2 - side2, lineColor, {float(t1), 0.0f}}); 
-      } 
-    } 
-  } 
- 
-  { 
-    const glm::dvec3 ptBase = anchor + glm::dvec3(0, -768, 0); 
-    for (int i = 0; i < 5; ++i) { 
-      glm::dvec3 p = ptBase + glm::dvec3(i * 256.0, 0, 0); 
-      glm::vec3 rp = glm::vec3(p - rebase); 
-      float r = 6.0f; 
-      glm::vec4 col(0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f); 
-      for (int s = 0; s < 8; ++s) { 
-        float a0 = s * 0.7853982f; 
-        float a1 = (s + 1) * 0.7853982f; 
-        fillVerts.push_back({rp, col}); 
-        fillVerts.push_back({rp + camRight * r * cosf(a0) + camUp * r * sinf(a0), col}); 
-        fillVerts.push_back({rp + camRight * r * cosf(a1) + camUp * r * sinf(a1), col}); 
-      } 
-    } 
+    const size_t segmentCount = stroke.closed ? count : count - 1;
+    for (size_t i = 0; i < segmentCount; ++i)
+    {
+      appendRibbon(glm::vec3(stroke.points[i] - rebase),
+                   glm::vec3(stroke.points[(i + 1) % count] - rebase),
+                   color, halfWidth, 0.0f, 1.0f);
+    }
+  };
+
+  const entities::TessellatedEntity &tess = tessellation.geometry;
+  strokeVisible.assign(tess.strokes.size(), false);
+  fillVisible.assign(tess.fills.size(), false);
+  pointVisible.assign(tess.points.size(), false);
+
+  auto markRange = [&](VisibilityKind kind, size_t begin, size_t count) {
+    std::vector<bool> &flags = kind == VisibilityKind::CadStroke ? strokeVisible
+                               : kind == VisibilityKind::CadFill ? fillVisible
+                                                                 : pointVisible;
+    const size_t limit = kind == VisibilityKind::CadStroke ? tess.strokes.size()
+                             : kind == VisibilityKind::CadFill ? tess.fills.size()
+                                                               : tess.points.size();
+    const size_t first = std::min(begin, limit);
+    const size_t last = std::min(begin + count, limit);
+    for (size_t i = first; i < last; ++i)
+      flags[i] = true;
+  };
+
+  for (const VisibilityCandidate *candidate : visibleCad)
+  {
+    if (!candidate)
+      continue;
+    if (candidate->kind == VisibilityKind::CadStroke ||
+        candidate->kind == VisibilityKind::CadFill ||
+        candidate->kind == VisibilityKind::CadPoint)
+    {
+      markRange(candidate->kind, candidate->rangeBegin, candidate->rangeCount);
+    }
   }
- 
-  { 
-    const float widths[] = {1.0f, 2.0f, 4.0f, 8.0f}; 
-    const glm::vec4 lineCols[] = {{1.0f, 0.2f, 0.2f, 1.0f}, {0.2f, 1.0f, 0.2f, 1.0f}, {0.2f, 0.4f, 1.0f, 1.0f}, {1.0f, 0.8f, 0.2f, 1.0f}}; 
-    const glm::dvec3 lineBase = anchor + glm::dvec3(-1024.0, -384.0, -512.0); 
-    for (int li = 0; li < 4; ++li) { 
-      float hw = widths[li] * 0.5f; 
-      const glm::dvec3 a = lineBase + glm::dvec3(0.0, li * 192.0, 0.0); 
-      const glm::dvec3 b = a + glm::dvec3(1024.0, 0.0, 0.0); 
-      glm::vec3 ra = glm::vec3(a - rebase); 
-      glm::vec3 rb = glm::vec3(b - rebase); 
-      glm::vec3 dir = glm::normalize(rb - ra); 
-      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
-      glm::vec4 col = lineCols[li]; 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
-      for (int s = 0; s < 8; ++s) { 
-        float a0 = s * 0.7853982f; 
-        float a1 = (s + 1) * 0.7853982f; 
-        for (int e = 0; e < 2; ++e) { 
-          glm::vec3 cen = (e == 0) ? ra : rb; 
-          fillVerts.push_back({cen, col}); 
-          fillVerts.push_back({cen + camRight * hw * cosf(a0) + camUp * hw * sinf(a0), col}); 
-          fillVerts.push_back({cen + camRight * hw * cosf(a1) + camUp * hw * sinf(a1), col}); 
-        } 
-      } 
-    } 
+
+  for (const entities::Stroke &stroke : tess.strokes)
+  {
+    if (strokeVisible.empty() || strokeVisible[&stroke - tess.strokes.data()])
+      appendCadStroke(stroke);
   }
- 
-  { 
-    const glm::dvec3 plBase = anchor + glm::dvec3(-512.0, 0.0, -512.0); 
-    const glm::dvec3 pts[] = {plBase, plBase + glm::dvec3(256.0, 256.0, 0.0), plBase + glm::dvec3(512.0, 128.0, 256.0), plBase + glm::dvec3(768.0, 384.0, 0.0)}; 
-    float hw = 2.0f; 
-    glm::vec4 col(0.6f, 0.2f, 1.0f, 1.0f); 
-    for (int si = 0; si < 3; ++si) { 
-      glm::vec3 ra = glm::vec3(pts[si] - rebase); 
-      glm::vec3 rb = glm::vec3(pts[si + 1] - rebase); 
-      glm::vec3 dir = glm::normalize(rb - ra); 
-      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
-    } 
-    for (int ji = 1; ji < 3; ++ji) { 
-      glm::vec3 cen = glm::vec3(pts[ji] - rebase); 
-      for (int s = 0; s < 8; ++s) { 
-        float a0 = s * 0.7853982f; 
-        float a1 = (s + 1) * 0.7853982f; 
-        fillVerts.push_back({cen, col}); 
-        fillVerts.push_back({cen + camRight * hw * cosf(a0) + camUp * hw * sinf(a0), col}); 
-        fillVerts.push_back({cen + camRight * hw * cosf(a1) + camUp * hw * sinf(a1), col}); 
-      } 
-    } 
+  for (const entities::Triangle &triangle : tess.fills)
+  {
+    if (!fillVisible.empty() && !fillVisible[&triangle - tess.fills.data()])
+      continue;
+    if (!triangle.common.visible)
+      continue;
+    std::vector<rendering::FillVertex> &target =
+        triangle.is3DFace ? surfaceFillVerts : fillVerts;
+    target.push_back({glm::vec3(triangle.a - rebase), triangle.common.color});
+    target.push_back({glm::vec3(triangle.b - rebase), triangle.common.color});
+    target.push_back({glm::vec3(triangle.c - rebase), triangle.common.color});
   }
- 
-  { 
-    const glm::dvec3 hexC = anchor + glm::dvec3(0.0, 256.0, -512.0); 
-    const float hexR = 128.0f; 
-    glm::vec4 hexCol(0.3f, 0.8f, 0.5f, 1.0f); 
-    for (int s = 0; s < 6; ++s) { 
-      float a0 = s * 1.0471976f; 
-      float a1 = (s + 1) * 1.0471976f; 
-      glm::vec3 p0 = glm::vec3(hexC - rebase) + camRight * hexR * cosf(a0) + camUp * hexR * sinf(a0); 
-      glm::vec3 p1 = glm::vec3(hexC - rebase) + camRight * hexR * cosf(a1) + camUp * hexR * sinf(a1); 
-      fillVerts.push_back({glm::vec3(hexC - rebase), hexCol}); 
-      fillVerts.push_back({p0, hexCol}); 
-      fillVerts.push_back({p1, hexCol}); 
-    } 
+  for (const entities::TessellatedPoint &point : tess.points)
+  {
+    if (!pointVisible.empty() && !pointVisible[&point - tess.points.data()])
+      continue;
+    if (!point.common.visible)
+      continue;
+    cadPoints.push_back({glm::vec3(point.location - rebase),
+                         glm::vec3(point.common.color),
+                         float(point.pointSize)});
   }
- 
-  { 
-    const glm::dvec3 arcC = anchor + glm::dvec3(512.0, 256.0, -512.0); 
-    const float arcR = 192.0f; 
-    glm::vec4 col(1.0f, 0.5f, 0.1f, 1.0f); 
-    const int segs = 48; 
-    float hw = 3.0f; 
-    for (int s = 0; s < segs; ++s) { 
-      float a0 = 0.0f + 4.71239f * s / segs; 
-      float a1 = 0.0f + 4.71239f * (s + 1) / segs; 
-      glm::vec3 ra = glm::vec3(arcC - rebase) + camRight * arcR * cosf(a0) + camUp * arcR * sinf(a0); 
-      glm::vec3 rb = glm::vec3(arcC - rebase) + camRight * arcR * cosf(a1) + camUp * arcR * sinf(a1); 
-      glm::vec3 dir = glm::normalize(rb - ra); 
-      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
-    } 
+
+  // A whole stroke, face, point group, or mesh below the pixel threshold is
+  // represented by one stable impostor instead of submitting invisible pixels.
+  for (const VisibilityCandidate *candidate : tinyCad)
+  {
+    if (!candidate)
+      continue;
+    cadPoints.push_back({
+        glm::vec3(candidate->center - rebase),
+        glm::vec3(candidate->overlayColor),
+        candidate->overlayPointSize});
   }
- 
-  { 
-    const glm::dvec3 b0 = anchor + glm::dvec3(-768.0, 512.0, 0.0); 
-    const glm::dvec3 b1 = b0 + glm::dvec3(256.0, 384.0, 128.0); 
-    const glm::dvec3 b2 = b0 + glm::dvec3(512.0, -128.0, -128.0); 
-    const glm::dvec3 b3 = b0 + glm::dvec3(768.0, 256.0, 0.0); 
-    glm::vec4 col(0.9f, 0.7f, 0.2f, 1.0f); 
-    float hw = 3.0f; 
-    const int segs = 32; 
-    auto bez = [&](double t) -> glm::dvec3 { 
-      double u = 1.0 - t; 
-      return u*u*u*b0 + 3.0*u*u*t*b1 + 3.0*u*t*t*b2 + t*t*t*b3; 
-    }; 
-    for (int s = 0; s < segs; ++s) { 
-      double t0 = (double)s / segs; 
-      double t1 = (double)(s + 1) / segs; 
-      glm::vec3 ra = glm::vec3(bez(t0) - rebase); 
-      glm::vec3 rb = glm::vec3(bez(t1) - rebase); 
-      glm::vec3 dir = glm::normalize(rb - ra); 
-      glm::vec3 side = glm::normalize(glm::cross(dir, camFront)) * hw; 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({ra + side, col, {0.0f, 1.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({ra - side, col, {0.0f, 0.0f}}); 
-      polyVerts.push_back({rb + side, col, {1.0f, 1.0f}}); 
-      polyVerts.push_back({rb - side, col, {1.0f, 0.0f}}); 
-    } 
+
+  if (rendererBackend && !cadPoints.empty())
+  {
+    const rendering::TargetPointInstancesRenderData cadPointData{
+      .view = view, .projection = overlayProjection, .instances = cadPoints.data(),
+      .instanceCount = static_cast<uint32_t>(cadPoints.size()),
+      .pointSize = 7.0f, .pixelSizeWorld = pixelSizeWorld,
+      .isOrtho = useOrthoProjection() ? 1.0f : 0.0f, .logDepth = logDepth};
+    rendererBackend->drawTargetPointInstances(cadPointData);
   }
- 
-  { 
-    const glm::dvec3 cC = anchor + glm::dvec3(256.0, 512.0, 256.0); 
-    const float cR = 160.0f; 
-    glm::vec4 col(0.2f, 0.6f, 0.9f, 1.0f); 
-    for (int s = 0; s < 16; ++s) { 
-      float a0 = s * 0.3926991f; 
-      float a1 = (s + 1) * 0.3926991f; 
-      fillVerts.push_back({glm::vec3(cC - rebase), col}); 
-      fillVerts.push_back({glm::vec3(cC - rebase) + camRight * cR * cosf(a0) + camUp * cR * sinf(a0), col}); 
-      fillVerts.push_back({glm::vec3(cC - rebase) + camRight * cR * cosf(a1) + camUp * cR * sinf(a1), col}); 
-    } 
+
+  if (!surfaceFillVerts.empty()) {
+    rendering::FilledTrianglesRenderData surfaceFillData;
+    surfaceFillData.view = view;
+    surfaceFillData.projection = projection;
+    surfaceFillData.vertices = surfaceFillVerts.data();
+    surfaceFillData.vertexCount = static_cast<uint32_t>(surfaceFillVerts.size());
+    surfaceFillData.is3DFace = true;
+    surfaceFillData.layer = envLayer("GRID_FILL_LAYER");
+    surfaceFillData.logDepth = logDepth;
+    rendererBackend->drawFilledTriangles(surfaceFillData);
   }
- 
-  { 
-    const glm::dvec3 q0 = anchor + glm::dvec3(-256.0, -128.0, 256.0); 
-    const glm::dvec3 q1 = q0 + glm::dvec3(512.0, 0.0, 0.0); 
-    const glm::dvec3 q2 = q1 + glm::dvec3(0.0, 384.0, 0.0); 
-    const glm::dvec3 q3 = q0 + glm::dvec3(0.0, 384.0, 0.0); 
-    glm::vec4 col(0.5f, 0.5f, 0.9f, 1.0f); 
-    glm::vec3 r0 = glm::vec3(q0 - rebase); 
-    glm::vec3 r1 = glm::vec3(q1 - rebase); 
-    glm::vec3 r2 = glm::vec3(q2 - rebase); 
-    glm::vec3 r3 = glm::vec3(q3 - rebase); 
-    fillVerts.push_back({r0, col}); fillVerts.push_back({r1, col}); fillVerts.push_back({r2, col}); 
-    fillVerts.push_back({r0, col}); fillVerts.push_back({r2, col}); fillVerts.push_back({r3, col}); 
-  }
- 
-  {rendering::CubeRenderData cd;cd.model=glm::scale(glm::mat4(1.0f),glm::vec3(200.0f));cd.view=view;cd.projection=projection;cd.modelRelativePosition=glm::vec3(anchor-rebase);cd.objectColor=glm::vec3(1,0,0);cd.opacity=1.0f;cd.mesh=rendering::MeshType::Cube;cd.logDepth=logDepth;rendererBackend->drawCube(cd);}
-  if (!polyVerts.empty()) { 
-    rendering::PolylineRenderData polyData; 
-    polyData.view = view; 
-    polyData.projection = projection; 
-    polyData.vertices = polyVerts.data(); 
-    polyData.vertexCount = static_cast<uint32_t>(polyVerts.size()); 
-    polyData.logDepth = logDepth; 
-    polyData.edgeSoftness = 2.0f; 
-    rendererBackend->drawPolylines(polyData);
-  } 
- 
-  if (!fillVerts.empty()) { 
-    rendering::FilledTrianglesRenderData fillData; 
-    fillData.view = view; 
-    fillData.projection = projection; 
-    fillData.vertices = fillVerts.data(); 
-    fillData.vertexCount = static_cast<uint32_t>(fillVerts.size()); 
-    fillData.logDepth = logDepth; 
+
+  if (!fillVerts.empty()) {
+    rendering::FilledTrianglesRenderData fillData;
+    fillData.view = view;
+    fillData.projection = projection;
+    fillData.vertices = fillVerts.data();
+    fillData.vertexCount = static_cast<uint32_t>(fillVerts.size());
+    fillData.layer = envLayer("GRID_FILL_LAYER");
+    fillData.logDepth = logDepth;
     rendererBackend->drawFilledTriangles(fillData);
   }
- 
-  { 
-    const glm::dvec3 solidBase = anchor + glm::dvec3(0.0, 768.0, 512.0); 
-    const float solidScale = 192.0f; 
-    const rendering::MeshType meshTypes[] = {rendering::MeshType::Cube, rendering::MeshType::Sphere, rendering::MeshType::Cone, rendering::MeshType::Torus}; 
-    for (size_t mi = 0; mi < 4; ++mi) { 
-      const glm::dvec3 pos = solidBase + glm::dvec3((mi % 2) * 512.0, (mi / 2) * 512.0, 0.0); 
-      glm::vec4 relPos = glm::vec4(glm::vec3(pos - rebase), 0.0f); 
-      rendering::MeshInstance inst = {glm::vec4(solidScale, 0.0f, 0.0f, relPos.x), glm::vec4(0.0f, solidScale, 0.0f, relPos.y), glm::vec4(0.0f, 0.0f, solidScale, relPos.z), glm::vec4(0.8f, 0.7f, 0.9f, 0.65f)}; 
-      const glm::vec3 relCamPos(orbitCam.Position - rebase); 
-      const rendering::CadAlgorithmDemoRenderData renderData{.view = view, .projection = projection, .instances = &inst, .instanceCount = 1, .mesh = meshTypes[mi], .style = static_cast<rendering::CadStyle>(cadAlgorithmDemoStyle), .cameraPos = relCamPos, .lightDir = glm::vec3(0.4f, 0.8f, 0.55f), .baseColor = glm::vec3(1.0f, 1.0f, 1.0f), .metallic = 0.0f, .roughness = 0.35f, .transparency = 0.5f, .strokeWidth = 1.0f, .strokeDensity = 1.0f, .logDepth = logDepth}; 
-      rendererBackend->drawCadAlgorithmDemo(renderData);
-    } 
-  } 
+  if (!polyVerts.empty()) {
+    rendering::PolylineRenderData polyData;
+    polyData.view = view;
+    polyData.projection = overlayProjection;
+    polyData.vertices = polyVerts.data();
+    polyData.vertexCount = static_cast<uint32_t>(polyVerts.size());
+    polyData.logDepth = logDepth;
+    polyData.edgeSoftness = 2.0f;
+    rendererBackend->drawPolylines(polyData);
+  }
+
+  for (const VisibilityCandidate *candidate : visibleCad)
+  {
+    if (!candidate || candidate->kind != VisibilityKind::CadMesh)
+      continue;
+    if (candidate->entityIndex >= tessellation.meshes.size())
+      continue;
+    const MeshEntityRecord &mesh =
+        tessellation.meshes[candidate->entityIndex];
+    if (!meshEntityVisible(mesh))
+      continue;
+    drawMesh(view, projection, rebase, mesh.worldPosition,
+             glm::vec3(meshEntityColor(mesh)), mesh.entity.common.color.a,
+             mesh.size, mesh.mesh, logDepth);
+  }
 }
 
 int stressObjectCount();
@@ -1060,17 +1639,14 @@ const std::vector<LargeCoordinateObject> &getStressObjects();
 
 static bool cadAlgorithmDemoEnabled()
 {
-  // Enabled by default; set GRID_CAD_SHADER_DEMO=0 to restore the normal
-  // mesh-instancing path.
+  // The CAD instancing path is the design default. Keep the older stylized
+  // shader experiment opt-in.
   const char *value = std::getenv("GRID_CAD_SHADER_DEMO");
-  return value == nullptr || *value == '\0' ||
+  return value != nullptr && *value != '\0' &&
          std::strcmp(value, "0") != 0;
 }
 
 
-static constexpr const char *kCadAlgorithmStyleNames[] = {
-    "Realistic", "Conceptual", "DepthOnly", "Grayscale",
-    "Shaded",    "Sketch",     "Wireframe", "Xray"};
 
 void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::mat4 &projection,
@@ -1079,7 +1655,23 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::vec4 &logDepth)
 {
   const glm::dvec3 cameraPos(orbitCam.Position);
-  const glm::dvec3 cameraFront(orbitCam.Front);
+  const glm::dvec3 &cameraFront = orbitCam.Front;
+
+  rendering::RealisticLightsRenderData realisticLights;
+  realisticLights.pointLights[0].position =
+      glm::vec3(LARGE_COORDINATE_BASE_POINT +
+                LARGE_COORDINATE_DETAIL_OFFSET + glm::dvec3(-1024.0, 640.0, 512.0) -
+                cameraPos);
+  realisticLights.pointLights[0].radius = 1024.0f;
+  realisticLights.pointLights[0].color = glm::vec3(1.0f, 0.88f, 0.72f);
+  realisticLights.pointLights[1].position =
+      glm::vec3(LARGE_COORDINATE_BASE_POINT +
+                LARGE_COORDINATE_DETAIL_OFFSET + glm::dvec3(1024.0, 384.0, -512.0) -
+                cameraPos);
+  realisticLights.pointLights[1].radius = 1024.0f;
+  realisticLights.pointLights[1].color = glm::vec3(0.52f, 0.74f, 1.0f);
+  realisticLights.pointLightCount = 2;
+  rendererBackend->setRealisticLights(realisticLights);
 
   if (cadAlgorithmDemoEnabled())
   {
@@ -1100,20 +1692,21 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       group.clear();
     for (const LargeCoordinateObject *object : drawOrder)
     {
+      if (!meshEntityVisible(*object))
+        continue;
       const size_t meshIndex = static_cast<size_t>(object->mesh);
-      const glm::vec3 relativePosition(object->worldPosition - rebaseOrigin);
+      const rendering::DoubleSingleVec3 objectPosition =
+          rendering::encodeDoubleSingle(object->worldPosition);
       const float scale = object->size;
-      cadGroups[meshIndex].push_back({
-          glm::vec4(scale, 0.0f, 0.0f, relativePosition.x),
-          glm::vec4(0.0f, scale, 0.0f, relativePosition.y),
-          glm::vec4(0.0f, 0.0f, scale, relativePosition.z),
-          glm::vec4(object->color, 0.65f)});
+      const glm::vec4 color = meshEntityColor(*object);
+      cadGroups[meshIndex].push_back(makeMeshInstance(
+          scale, glm::vec3(color), color.a, objectPosition));
     }
 
     const rendering::MeshType cadMeshTypes[kCadMeshCount] = {
         rendering::MeshType::Cube, rendering::MeshType::Sphere,
         rendering::MeshType::Cone, rendering::MeshType::Torus};
-    const glm::vec3 relativeCameraPos(orbitCam.Position - rebaseOrigin);
+    const glm::vec3 relativeCameraPos(0.0f);
     for (size_t meshIndex = 0; meshIndex < kCadMeshCount; ++meshIndex)
     {
       auto &instances = cadGroups[meshIndex];
@@ -1125,7 +1718,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
           .instances = instances.data(),
           .instanceCount = static_cast<uint32_t>(instances.size()),
           .mesh = cadMeshTypes[meshIndex],
-          .style = static_cast<rendering::CadStyle>(cadAlgorithmDemoStyle),
+            .renderMode = visualStyleManager.mode(),
           .cameraPos = relativeCameraPos,
           .lightDir = glm::vec3(0.4f, 0.8f, 0.55f),
           .baseColor = glm::vec3(1.0f, 1.0f, 1.0f),
@@ -1134,7 +1727,9 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
           .transparency = 0.5f,
           .strokeWidth = 1.0f,
           .strokeDensity = 1.0f,
+          .layer = envLayer("GRID_MESH_LAYER"),
           .logDepth = logDepth,
+          .eye = rendering::encodeDoubleSingle(orbitCam.Position),
       };
       rendererBackend->drawCadAlgorithmDemo(renderData);
     }
@@ -1150,66 +1745,88 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         return lhsDepth > rhsDepth;
       });
 
-  // One transparent instance list per mesh geometry.  Instances inside a
-  // list keep the global far-to-near order; cross-mesh blending order is a
-  // documented limitation until opaque/transparent material buckets are
-  // split in the CAD asset model.
-  constexpr size_t kMeshCount = 4;
-  static std::array<std::vector<rendering::MeshInstance>, kMeshCount * 2> groups;
-  for (auto &group : groups)
-    group.clear();
+  // CAD and PBR meshes share the global far-to-near painter order. Depth
+  // buckets preserve that order across compatible instancing groups while
+  // keeping the number of draw calls bounded.
+  constexpr size_t kDepthBucketCount = 16;
+  struct InstanceGroup
+  {
+    rendering::MeshType mesh;
+    bool realistic;
+    glm::vec4 material;
+    float opacity;
+    std::vector<rendering::MeshInstance> instances;
+  };
+  static std::array<std::vector<InstanceGroup>, kDepthBucketCount> buckets;
+  for (auto &bucket : buckets)
+    bucket.clear();
 
-    for (const LargeCoordinateObject *object : drawOrder)
+    const size_t orderCount = drawOrder.size();
+    for (size_t orderIndex = 0; orderIndex < orderCount; ++orderIndex)
     {
-        const size_t meshIndex = static_cast<size_t>(object->mesh);
-        const size_t groupIndex = meshIndex * 2;
-        const glm::vec3 relativePosition(object->worldPosition - rebaseOrigin);
+        const LargeCoordinateObject *object = drawOrder[orderIndex];
+        const bool realistic = object->realistic();
+        const glm::vec4 material = meshEntityRenderMaterial(*object);
+        const glm::vec4 color = meshEntityColor(*object);
+        const size_t bucketIndex = orderIndex * kDepthBucketCount /
+                                   std::max(orderCount, size_t(1));
+        const rendering::DoubleSingleVec3 objectPosition =
+            rendering::encodeDoubleSingle(object->worldPosition);
         const float scale = object->size;
-        groups[groupIndex].push_back({
-            glm::vec4(scale, 0.0f, 0.0f, relativePosition.x),
-            glm::vec4(0.0f, scale, 0.0f, relativePosition.y),
-            glm::vec4(0.0f, 0.0f, scale, relativePosition.z),
-            glm::vec4(object->color, 0.45f)});
+        if (!meshEntityVisible(*object))
+          continue;
+
+        std::vector<InstanceGroup> &groups = buckets[bucketIndex];
+        auto groupIt = std::find_if(
+            groups.begin(), groups.end(),
+            [&](const InstanceGroup &group) {
+              return group.mesh == object->mesh &&
+                     group.realistic == realistic &&
+                     group.material == material &&
+                     group.opacity == color.a;
+            });
+        if (groupIt == groups.end())
+        {
+          groups.push_back({object->mesh, realistic, material, color.a, {}});
+          groupIt = groups.end() - 1;
+        }
+        groupIt->instances.push_back(
+            makeMeshInstance(
+                scale, glm::vec3(color), color.a, objectPosition));
     }
 
-  if (std::getenv("GRID_CAMERA_DEBUG"))
-  {
-    static bool loggedGroups = false;
-    if (!loggedGroups)
+  for (auto &bucket : buckets)
+    for (const InstanceGroup &group : bucket)
     {
-      loggedGroups = true;
-      std::cout << "[M4] drawOrder=" << drawOrder.size();
-      for (const auto &group : groups)
-        std::cout << " group=" << group.size();
-      std::cout << std::endl;
+      if (group.instances.empty())
+        continue;
+        const rendering::MeshInstancesRenderData renderData{
+            .view = view,
+            .projection = projection,
+            .instances = group.instances.data(),
+            .instanceCount = static_cast<uint32_t>(group.instances.size()),
+            .mesh = group.mesh,
+            .opaque = group.opacity >= 1.0f,
+            .layer = envLayer("GRID_MESH_LAYER"),
+            .logDepth = logDepth,
+            .eye = rendering::encodeDoubleSingle(orbitCam.Position),
+            .diffuseTextureIndex = gMeshTextureIndex,
+            .headlight = meshHeadlight(),
+            .triplanarUv = meshTriplanar(),
+            .realistic = group.realistic,
+            .material = group.material,
+        };
+        rendererBackend->drawMeshInstances(renderData);
     }
-  }
-
-  const rendering::MeshType meshTypes[kMeshCount] = {
-      rendering::MeshType::Cube, rendering::MeshType::Sphere,
-      rendering::MeshType::Cone, rendering::MeshType::Torus};
-  for (size_t meshIndex = 0; meshIndex < kMeshCount; ++meshIndex)
-  {
-    auto &instances = groups[meshIndex * 2];
-    if (instances.empty())
-      continue;
-    const rendering::MeshInstancesRenderData renderData{
-        .view = view,
-        .projection = projection,
-        .instances = instances.data(),
-        .instanceCount = static_cast<uint32_t>(instances.size()),
-        .mesh = meshTypes[meshIndex],
-        .opaque = false,
-        .logDepth = logDepth,
-    };
-    rendererBackend->drawMeshInstances(renderData);
-  }
 }
-
 
 int stressObjectCount()
 {
-  static const int count = 1000;
+  static const int count = [] {
+    const char *value = std::getenv("GRID_STRESS_COUNT");
+    const int requested = value ? std::atoi(value) : 1000;
+    return std::clamp(requested, 0, 1000000);
+  }();
   return count;
 }
 
@@ -1247,9 +1864,16 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
           LARGE_COORDINATE_BASE_POINT +
           glm::dvec3(col * kSpacing - centerOffset, kObjectSize * 0.5,
                      row * kSpacing - centerOffset - 4096.0);
-      object.color = kPalette[i % 6];
+      object.entity.common.color = glm::vec4(kPalette[i % 6], 0.45f);
       object.size = static_cast<float>(kObjectSize);
       object.mesh = kMeshCycle[i % 4];
+      object.entity.style = realisticMeshEnabled() && (i % 2) != 0
+                                ? entities::MeshStyle::Realistic
+                                : entities::MeshStyle::Cad;
+      object.entity.material.metallicFactor = 0.78f;
+      object.entity.material.roughnessFactor = 0.28f;
+      object.entity.common.name =
+          indexedDisplayName("StressMesh", size_t(i));
       result.push_back(object);
     }
     return result;
@@ -1325,10 +1949,6 @@ void fitCameraToRenderableObjects()
   if (!bounds.valid)
     return;
 
-  const glm::dvec3 center = (bounds.min + bounds.max) * 0.5;
-  const glm::dvec3 halfExtent = (bounds.max - bounds.min) * 0.5;
-  const double boundingRadius = std::max(1.0, glm::length(halfExtent));
-
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
   SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
@@ -1337,23 +1957,12 @@ void fitCameraToRenderableObjects()
   const double aspect = static_cast<double>(drawableWidth) /
                         static_cast<double>(drawableHeight);
 
-  // glm::perspective() uses a 45-degree vertical FOV.  Fit the bounding
-  // sphere against the narrower of the vertical/horizontal FOVs.
-  const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
-  const double halfFov = std::min(
-      glm::radians(45.0) * 0.5,
-      std::atan(tanHalfVertical * aspect));
-  const double distance =
-      std::nextafter(boundingRadius / std::sin(halfFov),
-                     std::numeric_limits<double>::infinity()) * 1.04;
-
-  orbitCam.setOrbit(center, distance);
-  if (useOrthoProjection() && !std::getenv("GRID_CAMERA_TEST_ORTHO_HALFH"))
-    orthoHalfHeight() = static_cast<float>(boundingRadius * 1.04);
+  orbitCam.fitToBounds(bounds.min, bounds.max, aspect);
 
   std::cout << std::fixed << std::setprecision(3)
-            << "Initial fit-all camera: center=(" << center.x << ", "
-            << center.y << ", " << center.z << ") distance=" << distance
+            << "Initial fit-all camera: center=(" << orbitCam.Target.x << ", "
+            << orbitCam.Target.y << ", " << orbitCam.Target.z
+            << ") distance=" << orbitCam.Distance
             << std::endl;
 }
 
@@ -1374,12 +1983,9 @@ void fitCameraToStressField()
     const glm::dvec3 detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
     orbitCam.setOrbit(detailCenter, 6000.0);
+    orbitCam.fitDepthToBounds(detailCenter, detailCenter);
     return;
   }
-
-  const glm::dvec3 center = (bounds.min + bounds.max) * 0.5;
-  const glm::dvec3 halfExtent = (bounds.max - bounds.min) * 0.5;
-  const double boundingRadius = std::max(1.0, glm::length(halfExtent));
 
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
@@ -1389,20 +1995,11 @@ void fitCameraToStressField()
   const double aspect = static_cast<double>(drawableWidth) /
                         static_cast<double>(drawableHeight);
 
-  const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
-  const double halfFov = std::min(
-      glm::radians(45.0) * 0.5,
-      std::atan(tanHalfVertical * aspect));
-  const double distance =
-      std::nextafter(boundingRadius / std::sin(halfFov),
-                     std::numeric_limits<double>::infinity()) * 1.04;
+  orbitCam.fitToBounds(bounds.min, bounds.max, aspect);
 
-  orbitCam.setOrbit(center, distance);
-  if (useOrthoProjection() && !std::getenv("GRID_CAMERA_TEST_ORTHO_HALFH"))
-    orthoHalfHeight() = static_cast<float>(boundingRadius * 1.04);
-
-  std::cout << "Stress-field camera: center=(" << center.x << ", "
-            << center.y << ", " << center.z << ") distance=" << distance
+  std::cout << "Stress-field camera: center=(" << orbitCam.Target.x << ", "
+            << orbitCam.Target.y << ", " << orbitCam.Target.z
+            << ") distance=" << orbitCam.Distance
             << std::endl;
 }
 
@@ -1483,27 +2080,16 @@ void handleOrbitMouseMovement(SDL_Event event, bool middleMouseDrag)
     if (shiftKeyDown())
     {
       // Shift + middle-drag orbits the camera.
-      orbitCam.processMouseMovement(event.motion.xrel,
-                                    -event.motion.yrel);
+      orbitCam.orbitAroundPivot(
+          event.motion.xrel, -event.motion.yrel,
+          orbitPivot.value_or(orbitCam.Target));
       return;
     }
 
-    // Middle-drag alone pans the view at the cursor's world scale.
-    // Ortho uses its exact frustum scale; perspective uses the target-plane FOV.
-    const float worldPerPixel = useOrthoProjection()
-        ? (2.0f * orthoHalfHeight()) / (float)currentDrawableHeight()
-        : (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target)
-              * std::tan(glm::radians(orbitCam.Zoom * 0.5f)))
-              / (float)currentDrawableHeight();
-
-    // Plane-constrained pan in both ortho and perspective: for XZ this keeps
-    // target/eye altitude fixed; for XY/YZ/custom it moves both points within
-    // the active plane so the camera stays consistent with the displayed grid.
-    glm::dvec3 panTangentU;
-    glm::dvec3 panTangentV;
-    activePlaneTangents(panTangentU, panTangentV);
-    orbitCam.processMousePan(event.motion.xrel, event.motion.yrel,
-                             worldPerPixel, true, panTangentU, panTangentV);
+    // OpenCADStudio pans on the camera image plane in both projections.
+    // The eye moves with the target, preserving orientation and distance.
+    orbitCam.panScreen(event.motion.xrel, event.motion.yrel,
+                       (float)currentDrawableHeight());
   }
 }
 
@@ -1514,55 +2100,32 @@ void handleOrbitZoom(SDL_Event event)
 
   const float delta = static_cast<float>(event.wheel.y);
 
-  if (useOrthoProjection())
+  // Keep the orbit target (tag point) pinned to the viewport center. Wheel
+  // zoom changes Distance/ortho size without cursor-plane target compensation.
+  orbitCam.zoom(delta);
+  if (cameraDebugEnabled())
   {
-    // In ortho mode the wheel zooms the orthographic frustum, not the
-    // camera distance.  Dividing by 10.0f gives a comfortable rate so a
-    // typical notch (1.0) shrinks the view by ~10%% per click.
-    float &halfH = orthoHalfHeight();
-    // halfH is the ortho half-height; the wheel scales it directly.
-    halfH *= (1.0f - 0.1f * delta);
-    if (halfH < halfHMin)
-      halfH = halfHMin;
-    if (halfH > halfHMax)
-      halfH = halfHMax;
-      if (cameraDebugEnabled())
-      {
-        std::cout << "Ortho half-height: " << std::scientific
-                  << std::setprecision(4) << halfH << std::endl;
-      }
-
-  }
-  else
-  {
-    orbitCam.processMouseScroll(delta);
+    std::cout << "Ortho half-height: " << std::scientific
+              << std::setprecision(4) << orbitCam.orthoSize() << std::endl;
   }
 }
 
-// Keep the world size visible at OrbitCamera::Target when switching modes.
-// Ortho scale is halfHeight; perspective scale at the target plane is
-// distance * tan(FOV / 2).  Do not derive this from dynamic near/far slabs.
+// OpenCADStudio's projection toggle does not mutate the camera state.  Both
+// modes share Target, Rotation, and Distance; only the projection differs.
 void switchProjectionMode()
 {
-    resetSlabStabilizers();
-  constexpr double kFovDegrees = 45.0;
-  const double tanHalfVertical = std::tan(glm::radians(kFovDegrees) * 0.5);
   bool &isOrtho = useOrthoProjection();
+  int drawableWidth = SCREEN_WIDTH;
+  int drawableHeight = SCREEN_HEIGHT;
+  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+  drawableWidth = std::max(drawableWidth, 1);
+  drawableHeight = std::max(drawableHeight, 1);
+  const double aspect = static_cast<double>(drawableWidth) /
+                        static_cast<double>(drawableHeight);
 
-  if (isOrtho)
-  {
-    const double distance = orthoHalfHeight() / tanHalfVertical;
-    orbitCam.setTargetDistance(distance);
-    isOrtho = false;
-  }
-  else
-  {
-    const double distance = glm::length(orbitCam.Position - orbitCam.Target);
-    float &halfHeight = orthoHalfHeight();
-    halfHeight = glm::clamp(
-        static_cast<float>(distance * tanHalfVertical), halfHMin, halfHMax);
-    isOrtho = true;
-  }
+  orbitCam.setProjectionPreservingFrame(isOrtho, !isOrtho, aspect);
+  isOrtho = !isOrtho;
+  resetSlabStabilizers();
 
   std::cout << "Projection: "
             << (isOrtho ? "ORTHOGRAPHIC" : "PERSPECTIVE")
@@ -1900,6 +2463,841 @@ const SceneObjectBvh &getSceneObjectBvh()
     return bvh;
 }
 
+// World-per-pixel must follow the actual drawable size.
+int currentDrawableWidth()
+{
+    int width = SCREEN_WIDTH;
+    int height = SCREEN_HEIGHT;
+    if (window)
+        SDL_GetWindowSizeInPixels(window, &width, &height);
+    return std::max(1, width);
+}
+
+// VSG "double all the way": all ray construction and intersection math
+// uses double precision.  The direction is normalized in double.
+struct PickRay
+{
+    glm::dvec3 origin;
+    glm::dvec3 direction;
+};
+
+// Construct a picking ray from cursor NDC coordinates.
+// Perspective: origin = eye, direction = normalize(front + right*ndcX*tanH + up*ndcY*tanV).
+// Ortho:       origin shifts on the image plane, direction = front.
+PickRay pickRayFromNdc(double ndcX, double ndcY)
+{
+    PickRay ray;
+    ray.origin = orbitCam.Position;
+
+    if (useOrthoProjection())
+    {
+        const double halfH = orbitCam.orthoSize();
+        const double aspect = (double)currentDrawableWidth() /
+                               (double)currentDrawableHeight();
+        const double halfW = halfH * aspect;
+        ray.origin += orbitCam.Right * (ndcX * halfW) +
+                       orbitCam.Up * (ndcY * halfH);
+        ray.direction = glm::normalize(orbitCam.Front);
+    }
+    else
+    {
+        // Object rendering intentionally keeps a fixed 45 degree perspective
+        // FOV; OrbitCamera::Zoom controls only orthographic framing.
+        const double tanHalfV =
+            std::tan(glm::radians(45.0) * 0.5);
+        const double aspect = (double)currentDrawableWidth() /
+                               (double)currentDrawableHeight();
+        const double tanHalfH = tanHalfV * aspect;
+        ray.direction = glm::normalize(
+            orbitCam.Front +
+            orbitCam.Right * (ndcX * tanHalfH) +
+            orbitCam.Up * (ndcY * tanHalfV));
+    }
+    return ray;
+}
+
+// Ray-AABB slab test in double precision.
+bool rayIntersectsAabb(const PickRay &ray,
+                       const WorldAabb2 &bounds,
+                       double &hitDepth)
+{
+    glm::dvec3 inverseDirection(1.0);
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const double component = ray.direction[axis];
+        inverseDirection[axis] =
+            std::abs(component) < 1.0e-20
+                ? std::numeric_limits<double>::infinity()
+                : 1.0 / component;
+    }
+
+    const glm::dvec3 minimum = (bounds.min - ray.origin) * inverseDirection;
+    const glm::dvec3 maximum = (bounds.max - ray.origin) * inverseDirection;
+    const glm::dvec3 nearDeltas = glm::min(minimum, maximum);
+    const glm::dvec3 farDeltas  = glm::max(minimum, maximum);
+    const double enter = std::max({nearDeltas.x, nearDeltas.y, nearDeltas.z});
+    const double exit  = std::min({farDeltas.x,  farDeltas.y,  farDeltas.z});
+    if (exit < std::max(enter, 0.0))
+        return false;
+
+    hitDepth = std::max(enter, 0.0);
+    return true;
+}
+
+// Closest approach between a normalized picking ray and a finite segment.
+// Keeping every intermediate value in double avoids false hits/misses in the
+// large-coordinate CAD demo.
+bool rayIntersectsSegment(const PickRay &ray,
+                          const glm::dvec3 &start,
+                          const glm::dvec3 &end,
+                          double tolerance,
+                          double &hitDepth)
+{
+    const glm::dvec3 segment = end - start;
+    const double segmentLength2 = glm::dot(segment, segment);
+    if (segmentLength2 < 1.0e-24)
+        return false;
+
+    const glm::dvec3 originToStart = ray.origin - start;
+    const double uu = glm::dot(ray.direction, ray.direction);
+    const double uv = glm::dot(ray.direction, segment);
+    const double vv = segmentLength2;
+    const double wd = glm::dot(originToStart, ray.direction);
+    const double we = glm::dot(originToStart, segment);
+    const double denominator = uu * vv - uv * uv;
+
+    double segmentParameter;
+    if (denominator > std::max(1.0e-24, vv * 1.0e-14))
+        segmentParameter = (uu * we - uv * wd) / denominator;
+    else
+        segmentParameter = we / vv;
+    segmentParameter = glm::clamp(segmentParameter, 0.0, 1.0);
+
+    double rayParameter = (uv * segmentParameter - wd) / uu;
+    rayParameter = std::max(rayParameter, 0.0);
+    const glm::dvec3 rayPoint = ray.origin + ray.direction * rayParameter;
+    const glm::dvec3 segmentPoint = start + segment * segmentParameter;
+    const double distance = glm::distance(rayPoint, segmentPoint);
+    if (distance > tolerance)
+        return false;
+
+    hitDepth = rayParameter;
+    return true;
+}
+
+bool rayIntersectsTriangle(const PickRay &ray,
+                           const glm::dvec3 &a,
+                           const glm::dvec3 &b,
+                           const glm::dvec3 &c,
+                           double &hitDepth)
+{
+    const glm::dvec3 edge1 = b - a;
+    const glm::dvec3 edge2 = c - a;
+    const glm::dvec3 pvec = glm::cross(ray.direction, edge2);
+    const double determinant = glm::dot(edge1, pvec);
+    if (std::abs(determinant) < 1.0e-24)
+        return false;
+
+    const double inverseDeterminant = 1.0 / determinant;
+    const glm::dvec3 tvec = ray.origin - a;
+    const double u = glm::dot(tvec, pvec) * inverseDeterminant;
+    if (u < 0.0 || u > 1.0)
+        return false;
+
+    const glm::dvec3 qvec = glm::cross(tvec, edge1);
+    const double v = glm::dot(ray.direction, qvec) * inverseDeterminant;
+    if (v < 0.0 || u + v > 1.0)
+        return false;
+
+    const double depth = glm::dot(edge2, qvec) * inverseDeterminant;
+    if (depth <= 0.0)
+        return false;
+
+    hitDepth = depth;
+    return true;
+}
+
+bool rayIntersectsPoint(const PickRay &ray,
+                        const glm::dvec3 &location,
+                        double tolerance,
+                        double &hitDepth)
+{
+    const double depth = glm::dot(location - ray.origin, ray.direction);
+    if (depth <= 0.0)
+        return false;
+    const glm::dvec3 rayPoint = ray.origin + ray.direction * depth;
+    if (glm::distance(rayPoint, location) > tolerance)
+        return false;
+
+    hitDepth = depth;
+    return true;
+}
+
+// Mesh instances are unrotated and uniformly scaled. Refine the candidate
+// AABB to the rendered sphere/cone/torus surface; an empty corner of a
+// transparent mesh box must not steal focus from a nearby CAD vector.
+bool rayIntersectsRenderedMesh(const PickRay &ray,
+                               const LargeCoordinateObject &object,
+                               double &hitDepth)
+{
+    const double scale = std::max(1.0e-12, static_cast<double>(object.size));
+    const double directionLength = glm::length(ray.direction);
+    if (directionLength < 1.0e-20)
+        return false;
+
+    const glm::dvec3 origin = (ray.origin - object.worldPosition) / scale;
+    const glm::dvec3 direction = ray.direction / directionLength;
+    double best = std::numeric_limits<double>::infinity();
+
+    auto accept = [&](double depth) {
+        if (depth > 0.0 && depth < best)
+            best = depth;
+    };
+
+    switch (object.mesh)
+    {
+    case rendering::MeshType::Sphere:
+    {
+        const double a = glm::dot(direction, direction);
+        const double b = 2.0 * glm::dot(origin, direction);
+        const double c = glm::dot(origin, origin) - 0.25;
+        const double discriminant = b * b - 4.0 * a * c;
+        if (discriminant >= 0.0)
+        {
+            const double root = std::sqrt(discriminant);
+            accept((-b - root) / (2.0 * a));
+            accept((-b + root) / (2.0 * a));
+        }
+        break;
+    }
+    case rendering::MeshType::Cone:
+    {
+        const double a = direction.x * direction.x +
+                         direction.z * direction.z -
+                         0.25 * direction.y * direction.y;
+        const double b = 2.0 * (origin.x * direction.x +
+                                origin.z * direction.z) -
+                         0.5 * origin.y * direction.y +
+                         0.25 * direction.y;
+        const double c = origin.x * origin.x + origin.z * origin.z -
+                         0.25 * (0.5 - origin.y) * (0.5 - origin.y);
+        auto acceptConeRoot = [&](double depth) {
+            if (depth <= 0.0)
+                return;
+            const double y = origin.y + direction.y * depth;
+            if (y >= -0.5 && y <= 0.5)
+                accept(depth);
+        };
+        if (std::abs(a) < 1.0e-24)
+        {
+            if (std::abs(b) > 1.0e-24)
+                acceptConeRoot(-c / b);
+        }
+        else
+        {
+            const double discriminant = b * b - 4.0 * a * c;
+            if (discriminant >= 0.0)
+            {
+                const double root = std::sqrt(discriminant);
+                acceptConeRoot((-b - root) / (2.0 * a));
+                acceptConeRoot((-b + root) / (2.0 * a));
+            }
+        }
+
+        if (std::abs(direction.y) > 1.0e-20)
+        {
+            const double depth = (-0.5 - origin.y) / direction.y;
+            const glm::dvec3 local = origin + direction * depth;
+            if (depth > 0.0 &&
+                local.x * local.x + local.z * local.z <= 0.25)
+                accept(depth);
+        }
+        break;
+    }
+    case rendering::MeshType::Torus:
+    {
+        constexpr double majorRadius = 0.325;
+        constexpr double minorRadius = 0.175;
+        const double ox = origin.x;
+        const double oy = origin.y;
+        const double oz = origin.z;
+        const double dx = direction.x;
+        const double dy = direction.y;
+        const double dz = direction.z;
+        const double radial2 = dx * dx + dz * dz;
+        const double originDot = ox * dx + oz * dz;
+        const double quadraticConstant = ox * ox + oy * oy + oz * oz +
+                                         majorRadius * majorRadius -
+                                         minorRadius * minorRadius;
+        const double linearQ = originDot + oy * dy;
+        const double quadraticQ = radial2 + dy * dy;
+        const double a = quadraticQ * quadraticQ;
+        const double b = 4.0 * linearQ * quadraticQ;
+        const double c = 4.0 * linearQ * linearQ +
+                         2.0 * quadraticQ * quadraticConstant -
+                         4.0 * majorRadius * majorRadius * radial2;
+        const double d = 4.0 * linearQ * quadraticConstant -
+                         8.0 * majorRadius * majorRadius * originDot;
+        const double e = quadraticConstant * quadraticConstant -
+                         4.0 * majorRadius * majorRadius *
+                             (ox * ox + oz * oz);
+        // The local ray origin is (camera - object) / size, so its distance
+        // can be very large for remote large-coordinate objects.  A fixed
+        // near-object interval would miss the first positive torus root.
+        const double maximumDepth = std::max(0.5, glm::length(origin) + 0.5);
+
+        auto polynomial = [&](double t) {
+            return (((a * t + b) * t + c) * t + d) * t + e;
+        };
+        double low = 0.0;
+        double high = maximumDepth;
+        double fLow = polynomial(low);
+        double fHigh = polynomial(high);
+        if (std::abs(fLow) < 1.0e-14)
+            best = low;
+        else if (fLow * fHigh < 0.0)
+        {
+            for (int iteration = 0; iteration < 48; ++iteration)
+            {
+                const double middle = 0.5 * (low + high);
+                const double fMiddle = polynomial(middle);
+                if (fLow * fMiddle <= 0.0)
+                    high = middle;
+                else
+                {
+                    low = middle;
+                    fLow = fMiddle;
+                }
+            }
+            best = 0.5 * (low + high);
+        }
+        break;
+    }
+    case rendering::MeshType::Cube:
+    {
+        const glm::dvec3 halfExtent(object.size * 0.5);
+        const WorldAabb2 bounds{object.worldPosition - halfExtent,
+                                object.worldPosition + halfExtent};
+        rayIntersectsAabb(ray, bounds, best);
+        break;
+    }
+    }
+
+    if (!std::isfinite(best) || best <= 0.0)
+        return false;
+    hitDepth = best * scale / directionLength;
+    return true;
+}
+
+// CAD strokes and points are visible as screen-space primitives, so use a
+// cursor-sized tolerance instead of a fixed radius that disappears when the
+// large-coordinate demo is zoomed out.
+double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint)
+{
+    const double worldPerPixel = useOrthoProjection()
+        ? 2.0 * orbitCam.orthoSize() / currentDrawableHeight()
+        : 2.0 * std::max(0.0,
+              glm::dot(worldPoint - ray.origin, orbitCam.Front)) *
+          std::tan(glm::radians(45.0) * 0.5) /
+          currentDrawableHeight();
+    return std::max(6.0, worldPerPixel * 3.0);
+}
+
+bool pickDebugEnabled()
+{
+    static const bool enabled = [] {
+        const char *value = std::getenv("GRID_PICK_DEBUG");
+        return value != nullptr && *value != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
+                                      double nearPlane, double farPlane,
+                                      double tanHalfVertical,
+                                      double tanHalfHorizontal);
+
+struct UnifiedVisibilityQuery
+{
+  bool isOrtho = false;
+  glm::dvec3 cameraPos{0.0};
+  glm::dvec3 right{1.0, 0.0, 0.0};
+  glm::dvec3 up{0.0, 1.0, 0.0};
+  glm::dvec3 front{0.0, 0.0, -1.0};
+  double halfWidth = 1.0;
+  double halfHeight = 1.0;
+  double nearDepth = 0.05;
+  double farDepth = 1.0e9;
+  double tanHalfVertical = 0.4142;
+  double tanHalfHorizontal = 0.4142;
+  double drawableHeight = 1.0;
+  double minPixelExtent = 0.1;
+
+  static UnifiedVisibilityQuery makeOrtho(
+      const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
+      const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
+      double halfWidthValue, double halfHeightValue, double pixelsHigh)
+  {
+    return UnifiedVisibilityQuery{
+        true, cameraPosition, cameraRight, cameraUp, cameraFront,
+        halfWidthValue, halfHeightValue, 0.0, 0.0, 0.0, 0.0,
+        pixelsHigh, 0.1};
+  }
+
+  static UnifiedVisibilityQuery makePerspective(
+      const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
+      const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
+      double tanHalfV, double tanHalfH, double pixelsHigh,
+      double nearPlane, double farPlane)
+  {
+    return UnifiedVisibilityQuery{
+        false, cameraPosition, cameraRight, cameraUp, cameraFront,
+        0.0, 0.0, nearPlane, farPlane, tanHalfV, tanHalfH,
+        pixelsHigh, 0.1};
+  }
+
+  CameraSpaceAabb cameraAabb(const VisibilityCandidate &candidate) const
+  {
+    const glm::dvec3 center = (candidate.min + candidate.max) * 0.5;
+    const glm::dvec3 halfExtent =
+        glm::max((candidate.max - candidate.min) * 0.5,
+                 glm::dvec3(0.5e-3));
+    return cameraAabbBounds(center, halfExtent, cameraPos, right, up, front);
+  }
+
+  bool intersects(const VisibilityCandidate &candidate) const
+  {
+    const CameraSpaceAabb bounds = cameraAabb(candidate);
+    if (isOrtho)
+      return aabbIntersectsOrthoViewport(bounds, halfWidth, halfHeight);
+
+    return aabbIntersectsPerspectiveFrustum(
+        bounds, nearDepth, farDepth, tanHalfVertical, tanHalfHorizontal);
+  }
+
+  double screenExtent(const VisibilityCandidate &candidate) const
+  {
+    const CameraSpaceAabb bounds = cameraAabb(candidate);
+    const double worldSize = candidate.lodSize > 0.0
+                                 ? candidate.lodSize
+                                 : glm::length(candidate.max - candidate.min);
+    if (isOrtho)
+      return worldSize * drawableHeight / (2.0 * halfHeight);
+
+    const double nearestDepth =
+        std::max(nearDepth, std::max(0.0, bounds.minDepth));
+    return worldSize * drawableHeight /
+           (2.0 * nearestDepth * tanHalfVertical);
+  }
+
+  VisibilityState classify(const VisibilityCandidate &candidate) const
+  {
+    if (!intersects(candidate))
+      return VisibilityState::Offscreen;
+
+    // Orthographic CAD work traditionally presents every in-frame object at a
+    // predictable world scale.  Keep that behavior while perspective uses the
+    // existing point-impostor threshold.
+    if (!isOrtho && screenExtent(candidate) < minPixelExtent)
+      return VisibilityState::Tiny;
+    return VisibilityState::Visible;
+  }
+};
+
+std::vector<VisibilityCandidate> buildVisibilityCandidates();
+
+VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
+                                      VisibilityKind kind,
+                                      size_t entityIndex = 0);
+
+UnifiedVisibilityQuery makePickingVisibilityQuery()
+{
+  const double aspect = (double)currentDrawableWidth() /
+                        (double)currentDrawableHeight();
+  const glm::dvec3 cameraPosition(orbitCam.Position);
+  if (useOrthoProjection())
+  {
+    return UnifiedVisibilityQuery::makeOrtho(
+        cameraPosition, orbitCam.Right, orbitCam.Up, orbitCam.Front,
+        orbitCam.orthoSize() * aspect, orbitCam.orthoSize(),
+        (double)currentDrawableHeight());
+  }
+
+  const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
+  return UnifiedVisibilityQuery::makePerspective(
+      cameraPosition, orbitCam.Right, orbitCam.Up, orbitCam.Front,
+      tanHalfVertical, tanHalfVertical * aspect,
+      (double)currentDrawableHeight(), 0.05, 1.0e9);
+}
+
+VisibilityState classifyMeshVisibility(
+    const UnifiedVisibilityQuery &query, const MeshEntityRecord &mesh,
+    VisibilityKind kind)
+{
+  return query.classify(makeMeshCandidate(mesh, kind));
+}
+
+struct PickDebugTrace
+{
+    std::string meshName;
+    double meshDepth = 0.0;
+    bool meshHit = false;
+    std::string cadName;
+    double cadDepth = 0.0;
+    bool cadHit = false;
+    std::string cadOverlayName;
+    double cadOverlayDepth = 0.0;
+    bool cadOverlayHit = false;
+    size_t cadStrokeCount = 0;
+    size_t cadFillCount = 0;
+    size_t cadPointCount = 0;
+};
+
+// BVH-accelerated ray pick with distance-based pruning.
+// The collect() predicate returns false for subtrees the ray misses or
+// that cannot improve the current best, reducing traversal from O(n)
+// to O(log n) for typical spatially coherent scenes.
+struct PickResult
+{
+    glm::dvec3 pivot;
+    double hitDepth = 0.0;
+    bool hit = false;
+    std::string objectName = "Scene";
+};
+
+PickResult pickObjectAlongRay(const PickRay &ray,
+                              PickDebugTrace *debugTrace = nullptr)
+{
+    PickResult result;
+    PickDebugTrace localTrace;
+    PickDebugTrace &trace = debugTrace ? *debugTrace : localTrace;
+    const UnifiedVisibilityQuery pickVisibility = makePickingVisibilityQuery();
+    const std::vector<VisibilityCandidate> visibilityCandidates =
+        buildVisibilityCandidates();
+    const auto visibleState = [&](VisibilityKind kind, size_t entityIndex,
+                                  size_t rangeBegin) {
+        const auto found = std::find_if(
+            visibilityCandidates.begin(), visibilityCandidates.end(),
+            [&](const VisibilityCandidate &candidate) {
+                return candidate.kind == kind &&
+                       candidate.entityIndex == entityIndex &&
+                       candidate.rangeBegin == rangeBegin;
+            });
+        return found == visibilityCandidates.end()
+                   ? VisibilityState::Offscreen
+                   : pickVisibility.classify(*found);
+    };
+    const auto meshObjectState = [&](const MeshEntityRecord *object) {
+        const auto found = std::find_if(
+            visibilityCandidates.begin(), visibilityCandidates.end(),
+            [&](const VisibilityCandidate &candidate) {
+                return candidate.kind == VisibilityKind::MeshObject &&
+                       candidate.mesh == object;
+            });
+        return found == visibilityCandidates.end()
+                   ? VisibilityState::Offscreen
+                   : pickVisibility.classify(*found);
+    };
+    double nearestDepth = std::numeric_limits<double>::infinity();
+    double nearestMeshDepth = std::numeric_limits<double>::infinity();
+    double nearestCadDepth = std::numeric_limits<double>::infinity();
+    const auto considerHit = [&](double hitDepth, const std::string &name) {
+        if (hitDepth >= nearestDepth)
+            return;
+        nearestDepth = hitDepth;
+        result.hitDepth = hitDepth;
+        result.pivot = ray.origin + ray.direction * hitDepth;
+        result.hit = true;
+        result.objectName = name;
+    };
+    const auto considerMeshHit = [&](double hitDepth, const std::string &name) {
+        if (hitDepth < nearestMeshDepth)
+        {
+            nearestMeshDepth = hitDepth;
+            trace.meshHit = true;
+            trace.meshDepth = hitDepth;
+            trace.meshName = name;
+        }
+        considerHit(hitDepth, name);
+    };
+    const auto considerCadHit = [&](double hitDepth, const char *name) {
+        if (hitDepth < nearestCadDepth)
+        {
+            nearestCadDepth = hitDepth;
+            trace.cadHit = true;
+            trace.cadDepth = hitDepth;
+            trace.cadName = name;
+        }
+        considerHit(hitDepth, name);
+    };
+    // Strokes and points are rendered as cursor-sized screen-space overlays.
+    // Since the demo meshes are intentionally translucent, honor their visible
+    // hit even when a mesh surface is slightly closer along the same ray.
+    const auto considerCadOverlayHit = [&](double hitDepth, const char *name) {
+        if (!trace.cadOverlayHit || hitDepth < trace.cadOverlayDepth)
+        {
+            trace.cadOverlayHit = true;
+            trace.cadOverlayDepth = hitDepth;
+            trace.cadOverlayName = name;
+        }
+        considerCadHit(hitDepth, name);
+    };
+
+    std::vector<const LargeCoordinateObject *> candidates;
+    getSceneObjectBvh().collect(
+        [&](const WorldAabb2 &bounds) {
+            double hitDepth = 0.0;
+            if (!rayIntersectsAabb(ray, bounds, hitDepth))
+                return false; // ray misses this subtree entirely
+            if (hitDepth >= nearestDepth)
+                return false; // subtree entry is already behind the best hit
+            return true;      // traverse deeper / collect leaf objects
+        },
+        candidates);
+
+    // Refine with exact per-object AABBs (leaf bounds may be merged).
+    for (const LargeCoordinateObject *object : candidates)
+    {
+        if (meshObjectState(object) == VisibilityState::Offscreen)
+        {
+            continue;
+        }
+        const glm::dvec3 halfExtent(object->size * 0.5);
+        const WorldAabb2 objBounds{object->worldPosition - halfExtent,
+                                   object->worldPosition + halfExtent};
+        double hitDepth = 0.0;
+        if (rayIntersectsAabb(ray, objBounds, hitDepth) &&
+            hitDepth < nearestDepth &&
+            rayIntersectsRenderedMesh(ray, *object, hitDepth))
+        {
+            if (meshEntityVisible(*object))
+                considerMeshHit(hitDepth, object->displayName());
+        }
+    }
+
+    // Also test the center cube, which is rendered outside the BVH.
+    {
+        double hitDepth = 0.0;
+        const MeshEntityRecord centerCube = getCenterCubeEntity();
+        if (classifyMeshVisibility(pickVisibility, centerCube,
+                                   VisibilityKind::CenterCube) !=
+                VisibilityState::Offscreen &&
+            rayIntersectsRenderedMesh(ray, centerCube, hitDepth) &&
+            hitDepth < nearestDepth)
+        {
+            considerMeshHit(hitDepth, centerCube.displayName());
+        }
+    }
+
+    // CAD vector primitives are CPU-tessellated for drawing; test that same
+    // geometry so lines, curves, fills, and points participate in autofocus.
+    if (cadEntityDemoEnabled())
+    {
+        const VectorPrimitivesTessellation &cad =
+            getVectorPrimitivesTessellation();
+        const auto cadState = [&](VisibilityKind kind, size_t rangeBegin) {
+            return visibleState(kind, 0, rangeBegin);
+        };
+        const auto cadMeshState = [&](size_t meshIndex) {
+            const auto found = std::find_if(
+                visibilityCandidates.begin(), visibilityCandidates.end(),
+                [&](const VisibilityCandidate &candidate) {
+                    return candidate.kind == VisibilityKind::CadMesh &&
+                           candidate.entityIndex == meshIndex;
+                });
+            return found == visibilityCandidates.end()
+                       ? VisibilityState::Offscreen
+                       : pickVisibility.classify(*found);
+        };
+        if (debugTrace)
+        {
+            trace.cadStrokeCount = cad.geometry.strokes.size();
+            trace.cadFillCount = cad.geometry.fills.size();
+            trace.cadPointCount = cad.geometry.points.size();
+        }
+        size_t strokeIndex = 0;
+        for (const entities::Stroke &stroke : cad.geometry.strokes)
+        {
+            const CadEntityRange *range = nullptr;
+            for (const CadEntityRange &candidateRange : cad.strokeRanges)
+            {
+                if (candidateRange.begin == strokeIndex)
+                {
+                    range = &candidateRange;
+                    break;
+                }
+            }
+            if (!range ||
+                cadState(VisibilityKind::CadStroke, range->begin) ==
+                    VisibilityState::Offscreen)
+            {
+                ++strokeIndex;
+                continue;
+            }
+            if (stroke.points.size() < 2)
+                continue;
+            if (!stroke.common.visible)
+                continue;
+
+            const size_t segmentCount =
+                stroke.closed ? stroke.points.size() : stroke.points.size() - 1;
+            for (size_t i = 0; i < segmentCount; ++i)
+            {
+                double hitDepth = 0.0;
+                const size_t next = (i + 1) % stroke.points.size();
+                const glm::dvec3 midpoint =
+                    (stroke.points[i] + stroke.points[next]) * 0.5;
+                if (rayIntersectsSegment(ray, stroke.points[i],
+                                         stroke.points[next],
+                                         cadPickTolerance(ray, midpoint),
+                                         hitDepth))
+                {
+                    considerCadOverlayHit(hitDepth,
+                                          cad.strokeNameAt(strokeIndex).c_str());
+                }
+            }
+            ++strokeIndex;
+        }
+
+        size_t fillIndex = 0;
+        for (const entities::Triangle &triangle : cad.geometry.fills)
+        {
+            const CadEntityRange *range = nullptr;
+            for (const CadEntityRange &candidateRange : cad.fillRanges)
+            {
+                if (candidateRange.begin == fillIndex)
+                {
+                    range = &candidateRange;
+                    break;
+                }
+            }
+            if (!range ||
+                cadState(VisibilityKind::CadFill, range->begin) ==
+                    VisibilityState::Offscreen)
+            {
+                ++fillIndex;
+                continue;
+            }
+            double hitDepth = 0.0;
+            if (rayIntersectsTriangle(ray, triangle.a, triangle.b, triangle.c,
+                                      hitDepth))
+            {
+                if (triangle.common.visible)
+                    considerCadHit(hitDepth, cad.fillNameAt(fillIndex).c_str());
+            }
+            ++fillIndex;
+        }
+
+        for (size_t meshIndex = 0; meshIndex < cad.meshes.size(); ++meshIndex)
+        {
+            const MeshEntityRecord &mesh = cad.meshes[meshIndex];
+            double hitDepth = 0.0;
+            if (cadMeshState(meshIndex) !=
+                    VisibilityState::Offscreen &&
+                rayIntersectsRenderedMesh(ray, mesh, hitDepth))
+            {
+                if (meshEntityVisible(mesh))
+                    considerCadHit(hitDepth, mesh.displayName().c_str());
+            }
+        }
+
+        size_t pointIndex = 0;
+        for (const entities::TessellatedPoint &point : cad.geometry.points)
+        {
+            const CadEntityRange *range = nullptr;
+            for (const CadEntityRange &candidateRange : cad.pointRanges)
+            {
+                if (candidateRange.begin == pointIndex)
+                {
+                    range = &candidateRange;
+                    break;
+                }
+            }
+            if (!range ||
+                cadState(VisibilityKind::CadPoint, range->begin) ==
+                    VisibilityState::Offscreen)
+            {
+                ++pointIndex;
+                continue;
+            }
+            double hitDepth = 0.0;
+            if (rayIntersectsPoint(ray, point.location,
+                                   cadPickTolerance(ray, point.location),
+                                   hitDepth))
+            {
+                if (point.common.visible)
+                    considerCadOverlayHit(
+                        hitDepth, cad.pointNameAt(pointIndex).c_str());
+            }
+            ++pointIndex;
+        }
+    }
+
+    if (trace.cadOverlayHit)
+    {
+        result.hit = true;
+        result.hitDepth = trace.cadOverlayDepth;
+        result.pivot = ray.origin + ray.direction * trace.cadOverlayDepth;
+        result.objectName = trace.cadOverlayName;
+    }
+
+    return result;
+}
+
+// OpenCADStudio-style view-center pivot: casts from the viewport center.
+std::optional<glm::dvec3> viewCenterObjectPivot()
+{
+    const PickRay ray = pickRayFromNdc(0.0, 0.0);
+    const PickResult result = pickObjectAlongRay(ray);
+    if (result.hit)
+        return result.pivot;
+    return std::nullopt;
+}
+
+// Double-click autofocus: move the orbit target along the view ray to the
+// nearest object AABB under the cursor, keeping the eye fixed.  In
+// orthographic mode, Zoom is compensated to preserve the frame size.
+std::optional<std::string> autofocusAtNdc(double ndcX, double ndcY)
+{
+    const PickRay ray = pickRayFromNdc(ndcX, ndcY);
+    PickDebugTrace trace;
+    const PickResult result = pickObjectAlongRay(ray, &trace);
+    if (pickDebugEnabled())
+    {
+        std::cout << std::fixed << std::setprecision(3)
+                  << "Pick: cad={" << trace.cadHit << "," << trace.cadName
+                  << "," << trace.cadDepth << "} mesh={" << trace.meshHit
+                  << "," << trace.meshName << "," << trace.meshDepth
+                  << "} cache=(" << trace.cadStrokeCount << "/"
+                  << trace.cadFillCount << "/" << trace.cadPointCount << ")"
+                  << std::defaultfloat << std::endl;
+    }
+    if (!result.hit)
+        return std::nullopt;
+
+    // Project the ray hit onto the camera Front axis to get the view depth
+    // (distance along the gaze direction, not the slant-ray distance).
+    const double viewDepth =
+        glm::dot(result.pivot - orbitCam.Position, orbitCam.Front);
+    orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+    return result.objectName;
+}
+
+// Convert SDL window coordinates to NDC [-1, 1].
+double cursorToNdcX(double windowX, int windowWidth)
+{
+    return windowWidth > 0 ? 2.0 * windowX / windowWidth - 1.0 : 0.0;
+}
+double cursorToNdcY(double windowY, int windowHeight)
+{
+    return windowHeight > 0 ? 1.0 - 2.0 * windowY / windowHeight : 0.0;
+}
+
+// Move the target to the nearest object AABB along the view ray.  The ray
+// origin/eye and image do not move; only the focus depth changes.  Do not
+// reset slab hysteresis here: preserving the eye preserves camera-space
+// content depths, so the stabilizer should still be allowed to shrink.
 bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
                                       double nearPlane, double farPlane,
                                       double tanHalfVertical,
@@ -1925,6 +3323,163 @@ bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
          !outside(-1.0,  0.0,  tanHalfHorizontal, 0.0) && // right
          !outside( 0.0,  1.0,  tanHalfVertical,   0.0) && // bottom
          !outside( 0.0, -1.0,  tanHalfVertical,   0.0);   // top
+}
+
+void expandWorldAabb(glm::dvec3 &minimum, glm::dvec3 &maximum,
+                     const glm::dvec3 &point)
+{
+  minimum = glm::min(minimum, point);
+  maximum = glm::max(maximum, point);
+}
+
+VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
+                                      VisibilityKind kind,
+                                      size_t entityIndex)
+{
+  const glm::dvec3 halfExtent(mesh.size * 0.5);
+  VisibilityCandidate candidate;
+  candidate.kind = kind;
+  candidate.entityIndex = entityIndex;
+  candidate.mesh = &mesh;
+  candidate.min = mesh.worldPosition - halfExtent;
+  candidate.max = mesh.worldPosition + halfExtent;
+  candidate.center = mesh.worldPosition;
+  candidate.lodSize = mesh.size;
+  candidate.overlayColor = meshEntityColor(mesh);
+  candidate.overlayPointSize = 2.0f;
+  return candidate;
+}
+
+VisibilityCandidate makeCadRangeCandidate(
+    const VectorPrimitivesTessellation &tessellation,
+    const CadEntityRange &range, VisibilityKind kind)
+{
+  VisibilityCandidate candidate;
+  candidate.kind = kind;
+  candidate.entityIndex = 0;
+  candidate.rangeBegin = range.begin;
+  candidate.rangeCount = range.count;
+  candidate.overlayPointSize = 2.0f;
+
+  bool hasPoint = false;
+  glm::dvec3 minimum(0.0);
+  glm::dvec3 maximum(0.0);
+  auto include = [&](const glm::dvec3 &point) {
+    if (!hasPoint)
+    {
+      minimum = maximum = point;
+      hasPoint = true;
+    }
+    else
+    {
+      expandWorldAabb(minimum, maximum, point);
+    }
+  };
+
+  if (kind == VisibilityKind::CadStroke)
+  {
+    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    {
+      const entities::Stroke &stroke = tessellation.geometry.strokes[i];
+      for (const glm::dvec3 &point : stroke.points)
+        include(point);
+      candidate.overlayColor = stroke.common.color;
+      candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
+    }
+  }
+  else if (kind == VisibilityKind::CadFill)
+  {
+    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    {
+      const entities::Triangle &fill = tessellation.geometry.fills[i];
+      include(fill.a);
+      include(fill.b);
+      include(fill.c);
+      candidate.overlayColor = fill.common.color;
+    }
+  }
+  else
+  {
+    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    {
+      const entities::TessellatedPoint &point =
+          tessellation.geometry.points[i];
+      include(point.location);
+      candidate.overlayColor = point.common.color;
+      candidate.overlayPointSize = float(point.pointSize);
+    }
+  }
+
+  if (!hasPoint)
+    return candidate;
+
+  const double padding = 1.0e-3;
+  minimum -= glm::dvec3(padding);
+  maximum += glm::dvec3(padding);
+  candidate.min = minimum;
+  candidate.max = maximum;
+  candidate.center = (minimum + maximum) * 0.5;
+  const glm::dvec3 extent = maximum - minimum;
+  candidate.lodSize = glm::max(extent.x, glm::max(extent.y, extent.z));
+  return candidate;
+}
+
+std::vector<VisibilityCandidate> buildVisibilityCandidates()
+{
+  std::vector<VisibilityCandidate> candidates;
+  size_t reserveCount = getLargeCoordinateObjects().size() +
+                        getStressObjects().size() + 1;
+  const VectorPrimitivesTessellation &cad = getVectorPrimitivesTessellation();
+  reserveCount += cad.meshes.size() + cad.strokeRanges.size() +
+                  cad.fillRanges.size() + cad.pointRanges.size();
+  candidates.reserve(reserveCount);
+
+  for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
+  {
+    if (meshEntityVisible(object))
+      candidates.push_back(makeMeshCandidate(
+          object, VisibilityKind::MeshObject));
+  }
+  for (const LargeCoordinateObject &object : getStressObjects())
+  {
+    if (meshEntityVisible(object))
+      candidates.push_back(makeMeshCandidate(
+          object, VisibilityKind::MeshObject));
+  }
+  if (const MeshEntityRecord centerCube = getCenterCubeEntity();
+      meshEntityVisible(centerCube))
+  {
+    VisibilityCandidate centerCandidate = makeMeshCandidate(
+        centerCube, VisibilityKind::CenterCube);
+    centerCandidate.mesh = nullptr;
+    candidates.push_back(std::move(centerCandidate));
+  }
+
+  for (size_t i = 0; i < cad.meshes.size(); ++i)
+  {
+    if (meshEntityVisible(cad.meshes[i]))
+      candidates.push_back(makeMeshCandidate(
+          cad.meshes[i], VisibilityKind::CadMesh, i));
+  }
+  for (const CadEntityRange &range : cad.strokeRanges)
+  {
+    if (range.count)
+      candidates.push_back(makeCadRangeCandidate(
+          cad, range, VisibilityKind::CadStroke));
+  }
+  for (const CadEntityRange &range : cad.fillRanges)
+  {
+    if (range.count)
+      candidates.push_back(makeCadRangeCandidate(
+          cad, range, VisibilityKind::CadFill));
+  }
+  for (const CadEntityRange &range : cad.pointRanges)
+  {
+    if (range.count)
+      candidates.push_back(makeCadRangeCandidate(
+          cad, range, VisibilityKind::CadPoint));
+  }
+  return candidates;
 }
 
 // Liang-Barsky style 2D clipping of a world-space line segment against the
@@ -2247,8 +3802,13 @@ void render()
   // translation column shifts, and the same shift is applied to every
   // object uniform downstream.
   glm::mat4 view = orbitCam.getViewMatrix(rebase);
+  // Object pipelines use the strict RTE view: rotation only, zero translation.
+  // Grid/overlay keeps the old rebase view because its ray shaders reconstruct
+  // world-space rays from the inverse view-projection.
+  const glm::mat4 viewRte = orbitCam.getViewRotationMatrix();
   glm::mat4 projection;
   glm::mat4 overlayProjection;
+  glm::mat4 gridProjection;
   float pixelSize = 0.0f;
   double activeNear = 0.0;
   double activeFar  = 0.0;
@@ -2263,13 +3823,22 @@ void render()
   tinyDraws.clear();
   tinyDraws.reserve(getLargeCoordinateObjects().size() +
                     getStressObjects().size());
+  static std::vector<VisibilityCandidate> visibilityCandidates;
+  visibilityCandidates = buildVisibilityCandidates();
+  static std::vector<const VisibilityCandidate *> visibleCadDraws;
+  visibleCadDraws.clear();
+  visibleCadDraws.reserve(visibilityCandidates.size());
+  static std::vector<const VisibilityCandidate *> tinyCadDraws;
+  tinyCadDraws.clear();
+  tinyCadDraws.reserve(visibilityCandidates.size());
+  bool centerCubeInFrame = false;
   const glm::dvec3 worldLineEnd = LARGE_COORDINATE_BASE_POINT;
   glm::dvec3 referenceLineStart = glm::dvec3(0.0);
   glm::dvec3 referenceLineEnd = worldLineEnd;
   bool referenceLineVisible = false;
 
   const glm::dvec3 cameraPos(orbitCam.Position);
-  const glm::dvec3 frontVec(orbitCam.Front);
+  const glm::dvec3 &frontVec = orbitCam.Front;
   glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
   glm::dvec3 tangentU;
   glm::dvec3 tangentV;
@@ -2290,11 +3859,11 @@ void render()
 
   if (useOrthoProjection())
   {
-    const float halfH = orthoHalfHeight();
+    const double halfH = orbitCam.orthoSize();
     const double halfW = (double)halfH * (double)aspect;
-    const glm::dvec3 front(glm::dvec3(orbitCam.Front));
-    const glm::dvec3 right(glm::dvec3(orbitCam.Right));
-    const glm::dvec3 up(glm::dvec3(orbitCam.Up));
+    const glm::dvec3 &front = orbitCam.Front;
+    const glm::dvec3 &right = orbitCam.Right;
+    const glm::dvec3 &up = orbitCam.Up;
 
     // Start with the depth interval covered by the visible ortho image.
     // The scene bounds below can make near negative; that is intentional
@@ -2305,104 +3874,110 @@ void render()
     const double targetDepth = targetCamera.depth;
 
     const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
-    double slabRadius = imageRadius;
+    double slabMinDepth = targetDepth - imageRadius;
+    double slabMaxDepth = targetDepth + imageRadius;
 
     auto includeObjectDepth = [&](const LargeCoordinateObject &object) {
+      if (!meshEntityVisible(object))
+        return;
       const double halfSize = (double)object.size * 0.5;
       const CameraSpaceAabb bounds = cameraAabbBounds(
           object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
           up, front);
       if (aabbIntersectsOrthoViewport(bounds, halfW, halfH))
       {
-        slabRadius = std::max(
-            {slabRadius,
-             std::abs(bounds.minDepth - targetDepth),
-             std::abs(bounds.maxDepth - targetDepth)});
+        slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
+        slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
         drawOrder.push_back(&object);
       }
     };
 
+    const UnifiedVisibilityQuery orthoVisibility =
+        UnifiedVisibilityQuery::makeOrtho(
+            cameraPos, right, up, front, halfW, halfH,
+            (double)drawableHeight);
+    for (const VisibilityCandidate &candidate : visibilityCandidates)
     {
-      const CameraSpaceAabb bounds = cameraAabbBounds(
-          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up, front);
-      if (aabbIntersectsOrthoViewport(bounds, halfW, halfH))
+      const VisibilityState state = orthoVisibility.classify(candidate);
+      if (state == VisibilityState::Offscreen)
+        continue;
+
+      if (candidate.kind == VisibilityKind::MeshObject)
       {
-        slabRadius = std::max(
-            {slabRadius,
-             std::abs(bounds.minDepth - targetDepth),
-             std::abs(bounds.maxDepth - targetDepth)});
+        includeObjectDepth(*candidate.mesh);
+      }
+      else if (candidate.kind == VisibilityKind::CenterCube)
+      {
+        const CameraSpaceAabb bounds = orthoVisibility.cameraAabb(candidate);
+        slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
+        slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
+        centerCubeInFrame = true;
+      }
+      else if (candidate.kind == VisibilityKind::CadMesh ||
+               candidate.kind == VisibilityKind::CadFill)
+      {
+        const CameraSpaceAabb bounds = orthoVisibility.cameraAabb(candidate);
+        slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
+        slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
+        visibleCadDraws.push_back(&candidate);
+      }
+      else
+      {
+        visibleCadDraws.push_back(&candidate);
       }
     }
-    static std::vector<const LargeCoordinateObject *> orthoCandidates;
-    getSceneObjectBvh().collect(
-        [&](const WorldAabb2 &bounds) {
-            const CameraSpaceAabb cameraBounds = cameraAabbBounds(
-                bounds, cameraPos, right, up, front);
-            return aabbIntersectsOrthoViewport(cameraBounds, halfW, halfH);
-        },
-        orthoCandidates);
-    for (const LargeCoordinateObject *object : orthoCandidates)
-      includeObjectDepth(*object);
 
-    // The reference line can be 1e7 units long.  Clip it to the ortho
-    // viewport first so only its visible part can extend the slab.
-    double segmentMinDepth = targetDepth;
-    double segmentMaxDepth = targetDepth;
-    includeSegmentCameraDepth(
-        glm::dvec3(0.0, 0.0, 0.0), worldLineEnd,
-        cameraPos, right, up, front, halfW, halfH,
-        segmentMinDepth, segmentMaxDepth);
-    slabRadius = std::max(
-        {slabRadius,
-         std::abs(segmentMinDepth - targetDepth),
-         std::abs(segmentMaxDepth - targetDepth)});
-
-    // The infinite ground plane can extend beyond the target-centered
-    // viewport interval, especially at grazing angles.  Use the same
-    // analytic interval that decides whether the grid plane is visible.
-    if (std::abs(frontOnNormal) > kMinGridPlaneCos)
-    {
-      const double cameraPlaneDistance =
-          glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
-      const double groundCenterDepth =
-          -cameraPlaneDistance / frontOnNormal;
-      const double groundDepthRadius =
-          (std::abs(glm::dot(right, planeNormal)) * halfW +
-           std::abs(glm::dot(up, planeNormal)) * halfH) /
-          std::abs(frontOnNormal);
-      slabRadius = std::max(
-          {slabRadius,
-           std::abs(groundCenterDepth - groundDepthRadius - targetDepth),
-           std::abs(groundCenterDepth + groundDepthRadius - targetDepth)});
-    }
-
-    // Keep a stable minimum slab as the ortho image zooms in.  A full 1024
-    // world-unit span comfortably covers close-up geometry without pushing
-    // ortho depth precision far enough to matter even at 1e7 coordinates.
+    // OpenCADStudio centers the ortho slab on distance, not on a dynamic
+    // content midpoint.  Like its ortho_depth_range(), CAD near/far follow the
+    // model AABB plus a screen-rotation allowance.  The infinite grid and the
+    // demo origin line are intentionally excluded: at grazing angles their
+    // horizon depths are effectively unbounded and destroy depth precision.
+    const double cameraDistance =
+        glm::length(orbitCam.Position - orbitCam.Target);
+    const double slabCenterDepth = std::max(0.001, cameraDistance);
+    double visibleDepthRadius =
+        (slabMaxDepth - slabMinDepth) * 0.5;
     constexpr double kMinDepthSpan = 1024.0;
-    slabRadius = std::max(slabRadius, kMinDepthSpan * 0.5);
+    const double frameRadius = std::max(
+        {visibleDepthRadius, imageRadius, kMinDepthSpan * 0.5,
+         orbitCam.orthoSize() * 3.0});
+
+    // The stored model bounds are a conservative fit-all fallback, not a
+    // per-frame visibility request.  A previous scene can leave them millions
+    // of units away from the active target; cap that historical contribution
+    // by the currently visible slab so the stabilizer can actually converge.
+    // Rotation changes still get headroom, and genuinely large visible content
+    // raises frameRadius before this ceiling is applied.
+    constexpr double kModelDepthRadiusHeadroom = 4.0;
+    const double modelDepthRadiusCeiling =
+        std::max(kMinDepthSpan, frameRadius * kModelDepthRadiusHeadroom);
+    const double modelDepthRadius =
+        std::min(orbitCam.orthoDepthRadius(), modelDepthRadiusCeiling);
+    const double slabRadius = std::max(frameRadius, modelDepthRadius);
     // Hysteresis: expand immediately, shrink only after twenty stable frames.
     double stableOrthoNear = 0.0;
     double stableOrthoFar = 0.0;
-    g_orthoSlabStabilizer.apply(targetDepth - slabRadius,
-                                targetDepth + slabRadius,
+    g_orthoSlabStabilizer.apply(slabCenterDepth - slabRadius,
+                                slabCenterDepth + slabRadius,
                                 stableOrthoNear, stableOrthoFar);
-    const float near = floatExpandOutward(stableOrthoNear, true);
-    const float far = floatExpandOutward(stableOrthoFar, false);
+    const double near = floatExpandOutward(stableOrthoNear, true);
+    const double far = floatExpandOutward(stableOrthoFar, false);
 
-    projection = glm::ortho(-halfH * aspect, halfH * aspect,
-                             -halfH,            halfH, near, far);
+    const glm::dmat4 orthoDouble = glm::ortho(
+        -halfH * (double)aspect, halfH * (double)aspect,
+        -halfH,                  halfH, near, far);
+    projection = glm::mat4(orthoDouble);
     activeNear = near;
     activeFar  = far;
 
     // Analytic ortho pixel size (doc section 4.2): the vertical frustum
     // extent 2 * halfH maps onto the drawable viewport height.
-    pixelSize = (2.0f * halfH) / static_cast<float>(drawableHeight);
+    pixelSize = static_cast<float>((2.0 * halfH) / (double)drawableHeight);
   }
   else
   {
-    const glm::dvec3 right(glm::dvec3(orbitCam.Right));
-    const glm::dvec3 up(glm::dvec3(orbitCam.Up));
+    const glm::dvec3 &right = orbitCam.Right;
+    const glm::dvec3 &up = orbitCam.Up;
     const double tanHalfVertical =
         std::tan(glm::radians(45.0) * 0.5);
     const double tanHalfHorizontal = tanHalfVertical * aspect;
@@ -2439,55 +4014,24 @@ void render()
     double objectMinDepth = targetCamera.depth;
     double objectMaxDepth = targetCamera.depth;
 
+    const UnifiedVisibilityQuery perspectiveVisibility =
+        UnifiedVisibilityQuery::makePerspective(
+            cameraPos, right, up, frontVec, tanHalfVertical,
+            tanHalfHorizontal, (double)drawableHeight,
+            provisionalNear, provisionalFar);
+    for (const VisibilityCandidate &candidate : visibilityCandidates)
     {
-      const CameraSpaceAabb cubeBounds = cameraAabbBounds(
-          cubeWorldPosition, glm::dvec3(0.5), cameraPos, right, up,
-          frontVec);
-      provisionalNear = std::min(provisionalNear, cubeBounds.minDepth);
-      provisionalFar = std::min(
-          kMaxPerspectiveFar,
-          std::max(provisionalFar, cubeBounds.maxDepth));
-      if (aabbIntersectsPerspectiveFrustum(
-              cubeBounds, provisionalNear, provisionalFar,
-              tanHalfVertical, tanHalfHorizontal))
-      {
-        overlayMinDepth = std::min(overlayMinDepth, cubeBounds.minDepth);
-        overlayMaxDepth = std::max(overlayMaxDepth, cubeBounds.maxDepth);
-        objectMinDepth = std::min(objectMinDepth, cubeBounds.minDepth);
-        objectMaxDepth = std::max(objectMaxDepth, cubeBounds.maxDepth);
-      }
-    }
+      const VisibilityState state = perspectiveVisibility.classify(candidate);
+      if (state == VisibilityState::Offscreen)
+        continue;
 
-    static std::vector<const LargeCoordinateObject *> perspectiveCandidates;
-    getSceneObjectBvh().collect(
-        [&](const WorldAabb2 &bounds) {
-            const CameraSpaceAabb cameraBounds = cameraAabbBounds(
-                bounds, cameraPos, right, up, frontVec);
-            return aabbIntersectsPerspectiveFrustum(
-                cameraBounds, kNearDepthFloor, kMaxPerspectiveFar,
-                tanHalfVertical, tanHalfHorizontal);
-        },
-        perspectiveCandidates);
-
-    for (const LargeCoordinateObject *objectPtr : perspectiveCandidates)
-    {
-      const LargeCoordinateObject &object = *objectPtr;
-      const double halfSize = (double)object.size * 0.5;
-      const CameraSpaceAabb bounds = cameraAabbBounds(
-          object.worldPosition, glm::dvec3(halfSize), cameraPos,
-          right, up, frontVec);
-      if (aabbIntersectsPerspectiveFrustum(
-              bounds, provisionalNear, provisionalFar,
-              tanHalfVertical, tanHalfHorizontal))
+      if (candidate.kind == VisibilityKind::MeshObject)
       {
-        const double nearestDepth =
-            std::max(kNearDepthFloor, bounds.minDepth);
-        const double screenExtent =
-            (double)object.size * drawableHeight /
-            (2.0 * nearestDepth * tanHalfVertical);
-        if (screenExtent < kMinObjectPixelExtent)
+        const CameraSpaceAabb bounds =
+            perspectiveVisibility.cameraAabb(candidate);
+        if (state == VisibilityState::Tiny)
         {
-          tinyDraws.push_back(&object);
+          tinyDraws.push_back(candidate.mesh);
           continue;
         }
 
@@ -2495,7 +4039,64 @@ void render()
         overlayMaxDepth = std::max(overlayMaxDepth, bounds.maxDepth);
         objectMinDepth = std::min(objectMinDepth, bounds.minDepth);
         objectMaxDepth = std::max(objectMaxDepth, bounds.maxDepth);
-        drawOrder.push_back(&object);
+        drawOrder.push_back(candidate.mesh);
+      }
+      else if (candidate.kind == VisibilityKind::CenterCube)
+      {
+        const CameraSpaceAabb bounds = perspectiveVisibility.cameraAabb(candidate);
+        if (state == VisibilityState::Visible)
+        {
+          overlayMinDepth = std::min(overlayMinDepth, bounds.minDepth);
+          overlayMaxDepth = std::max(overlayMaxDepth, bounds.maxDepth);
+          objectMinDepth = std::min(objectMinDepth, bounds.minDepth);
+          objectMaxDepth = std::max(objectMaxDepth, bounds.maxDepth);
+          centerCubeInFrame = true;
+        }
+        else
+        {
+          const double centerDepth = glm::dot(
+              candidate.center - cameraPos, frontVec);
+          overlayMinDepth = std::min(overlayMinDepth, centerDepth);
+          overlayMaxDepth = std::max(overlayMaxDepth, centerDepth);
+          tinyCadDraws.push_back(&candidate);
+        }
+      }
+      else if (candidate.kind == VisibilityKind::CadMesh ||
+               candidate.kind == VisibilityKind::CadFill)
+      {
+        const CameraSpaceAabb bounds = perspectiveVisibility.cameraAabb(candidate);
+        if (state == VisibilityState::Visible)
+        {
+          objectMinDepth = std::min(objectMinDepth, bounds.minDepth);
+          objectMaxDepth = std::max(objectMaxDepth, bounds.maxDepth);
+          visibleCadDraws.push_back(&candidate);
+        }
+        else
+        {
+          const double centerDepth = glm::dot(
+              candidate.center - cameraPos, frontVec);
+          overlayMinDepth = std::min(overlayMinDepth, centerDepth);
+          overlayMaxDepth = std::max(overlayMaxDepth, centerDepth);
+          tinyCadDraws.push_back(&candidate);
+        }
+      }
+      else
+      {
+        const CameraSpaceAabb bounds = perspectiveVisibility.cameraAabb(candidate);
+        const double useDepth = state == VisibilityState::Visible
+                                    ? bounds.minDepth
+                                    : glm::dot(candidate.center - cameraPos,
+                                               frontVec);
+        const double maxUseDepth = state == VisibilityState::Visible
+                                       ? bounds.maxDepth
+                                       : glm::dot(candidate.center - cameraPos,
+                                                  frontVec);
+        overlayMinDepth = std::min(overlayMinDepth, useDepth);
+        overlayMaxDepth = std::max(overlayMaxDepth, maxUseDepth);
+        if (state == VisibilityState::Visible)
+          visibleCadDraws.push_back(&candidate);
+        else
+          tinyCadDraws.push_back(&candidate);
       }
     }
 
@@ -2508,47 +4109,12 @@ void render()
         kNearDepthFloor, tanHalfVertical, tanHalfHorizontal,
         overlayMinDepth, overlayMaxDepth);
 
-    // Four corner rays bound the finite part of the visible plane.  At
-    // grazing angles one ray can meet the plane behind the eye; then the
-    // grid runs to the horizon and needs the conservative far cap.
-    if (std::abs(frontOnNormal) >= kMinGridPlaneCos &&
-        glm::dot(gridPlaneOrigin - cameraPos, planeNormal) /
-            frontOnNormal > 0.0)
-    {
-      bool planeExtentIsFinite = true;
-      for (int y = 0; y < 2; ++y)
-      {
-        for (int x = 0; x < 2; ++x)
-        {
-          const glm::dvec3 cornerDirection =
-              frontVec +
-              right * ((x ? tanHalfHorizontal : -tanHalfHorizontal)) +
-              up * ((y ? tanHalfVertical : -tanHalfVertical));
-          const double denominator =
-              glm::dot(cornerDirection, planeNormal);
-          if (std::abs(denominator) < 1.0e-12)
-          {
-            planeExtentIsFinite = false;
-            continue;
-          }
-
-          const double cornerDepth =
-              glm::dot(gridPlaneOrigin - cameraPos, planeNormal) /
-              denominator;
-          if (cornerDepth <= 0.0)
-          {
-            planeExtentIsFinite = false;
-            continue;
-          }
-
-          overlayMinDepth = std::min(overlayMinDepth, cornerDepth);
-          overlayMaxDepth = std::max(overlayMaxDepth, cornerDepth);
-        }
-      }
-
-      if (!planeExtentIsFinite)
-        overlayMaxDepth = std::max(overlayMaxDepth, kMaxPerspectiveFar);
-    }
+    // The infinite grid does not take part in camera depth-slab selection.
+    // It still writes depth for sorting, so give it a stable dedicated frustum
+    // and let its shader put distant background lines at depth one.
+    gridProjection = glm::mat4(glm::perspective(
+        glm::radians(45.0), (double)aspect,
+        kNearDepthFloor, kMaxPerspectiveFar));
 
     // Solid geometry receives a compact depth slab.  Infinite ground and the
     // 1e7 reference line are transparent overlays; if they share this slab,
@@ -2575,11 +4141,12 @@ void render()
                                       candidateObjectFar,
                                       stablePerspectiveNear,
                                       stablePerspectiveFar);
-    const float near = floatExpandOutward(stablePerspectiveNear, true);
-    const float far = floatExpandOutward(stablePerspectiveFar, false);
+    const double near = floatExpandOutward(stablePerspectiveNear, true);
+    const double far = floatExpandOutward(stablePerspectiveFar, false);
 
-    projection = glm::perspective(glm::radians(45.0f), aspect,
-                                  near, far);
+    const glm::dmat4 perspectiveDouble = glm::perspective(
+        glm::radians(45.0), (double)aspect, near, far);
+    projection = glm::mat4(perspectiveDouble);
     activeNear = near;
     activeFar  = far;
 
@@ -2600,8 +4167,9 @@ void render()
         stableOverlayNear, stableOverlayFar);
     overlayNear = floatExpandOutward(stableOverlayNear, true);
     overlayFar = floatExpandOutward(stableOverlayFar, false);
-    overlayProjection = glm::perspective(glm::radians(45.0f), aspect,
-                                         overlayNear, overlayFar);
+    const glm::dmat4 overlayDouble = glm::perspective(
+        glm::radians(45.0), (double)aspect, (double)overlayNear, (double)overlayFar);
+    overlayProjection = glm::mat4(overlayDouble);
 
     // Rough estimate around the orbit target, only used to seed the LOD
     // step; the shader computes exact per-fragment sizes for perspective.
@@ -2613,6 +4181,7 @@ void render()
   if (useOrthoProjection())
   {
     overlayProjection = projection;
+    gridProjection = projection;
     overlayNear = static_cast<float>(activeNear);
     overlayFar = static_cast<float>(activeFar);
     logDepth = glm::vec4(0.0f, overlayNear, overlayFar, 0.0f);
@@ -2639,7 +4208,7 @@ void render()
     referenceLineVisible = clipReferenceSegmentToOrtho(
         glm::dvec3(0.0), worldLineEnd, cameraPos, cameraRight, cameraUp,
         frontVec, activeNear, activeFar,
-        (double)orthoHalfHeight() * (double)aspect, orthoHalfHeight(),
+        orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
         referenceLineStart, referenceLineEnd);
   }
   else
@@ -2676,7 +4245,8 @@ void render()
   // stable grid size instead of continuously introducing finer cells.
   static float step = 1.0f;
   const float baseStep = 1.0f;
-  const bool freezeStep = useOrthoProjection() && orthoHalfHeight() < 1.0f;
+  const bool freezeStep =
+      useOrthoProjection() && orbitCam.orthoSize() < 1.0;
   if (!freezeStep)
   {
     float cellPx = step / pixelSize;
@@ -2735,7 +4305,7 @@ void render()
     const glm::dvec3 front(orbitCam.Front);
     const glm::dvec3 right(orbitCam.Right);
     const glm::dvec3 up(orbitCam.Up);
-    const double halfH = (double)orthoHalfHeight();
+    const double halfH = orbitCam.orthoSize();
     const double halfW = halfH * (double)aspect;
 
     // Resolve the orthographic plane mapping in double precision on the CPU.
@@ -2805,9 +4375,19 @@ void render()
   // The shader's p is already relative to the snapped grid anchor, so this
   // value intentionally stays grid-relative.  Resolving it against the frame
   // rebase would shift the world axes by one rebase chunk.
-  axisOriginGridRelative = glm::vec2(
-      (float)glm::dot(-originWorld, tangentU),
-      (float)glm::dot(-originWorld, tangentV));
+  // A world axis is a single line, not a repeating pattern, so its anchored
+  // constant must stay exact: reducing it modulo any period would repaint
+  // the axis on the nearest period-multiple grid anchor instead of at the
+  // true world origin.  Float32 is still safe here because the active LOD
+  // keeps one pixel worth of plane space at or above ULP(|constant|).
+  {
+    const glm::dvec3 gridPlaneToAnchor = gridPlaneOrigin - originWorld;
+    const double axisU = glm::dot(gridPlaneToAnchor, tangentU);
+    const double axisV = glm::dot(gridPlaneToAnchor, tangentV);
+    axisOriginGridRelative = glm::vec2(
+        static_cast<float>(axisU),
+        static_cast<float>(axisV));
+  }
 
   planeTangentU = glm::vec3(tangentU);
   planeTangentV = glm::vec3(tangentV);
@@ -2876,6 +4456,7 @@ void render()
 
   const glm::mat4 objectViewProj = projection * view;
   const glm::mat4 overlayViewProj = overlayProjection * view;
+  const glm::mat4 gridViewProj = gridProjection * view;
 
   bool gridPlaneVisible = false;
   if (useOrthoProjection())
@@ -2883,7 +4464,7 @@ void render()
     gridPlaneVisible = orthoPlaneValid;
     if (gridPlaneVisible && std::abs(frontOnNormal) > kMinGridPlaneCos)
     {
-      const float halfH = orthoHalfHeight();
+      const double halfH = orbitCam.orthoSize();
       const double halfW = (double)halfH * (double)aspect;
       const glm::dvec3 right(orbitCam.Right);
       const glm::dvec3 up(orbitCam.Up);
@@ -2902,7 +4483,7 @@ void render()
   }
   else
   {
-    const glm::dvec3 front = glm::normalize(glm::dvec3(orbitCam.Front));
+    const glm::dvec3 front = glm::normalize(orbitCam.Front);
     const double planeCos = std::abs(glm::dot(front, planeNormal));
     gridPlaneVisible = planeCos >= kMinGridPlaneCos;
     if (gridPlaneVisible)
@@ -3004,10 +4585,10 @@ void render()
 
     const rendering::GridRenderData gridRenderData{
       .view = view,
-        .projection = overlayProjection,
-        .invViewProj = glm::inverse(overlayViewProj),
-      .viewProj = overlayViewProj,
-      .camFront = orbitCam.Front,
+        .projection = gridProjection,
+        .invViewProj = glm::inverse(gridViewProj),
+      .viewProj = gridViewProj,
+      .camFront = glm::vec3(orbitCam.Front),
       .orthoPlaneCenter = orthoPlaneCenter,
       .orthoRight = orthoRight,
       .orthoUp = orthoUp,
@@ -3029,7 +4610,7 @@ void render()
       .axisLineX = axisLineX,
       .axisLineZ = axisLineZ,
       .orthoPlaneValid = orthoPlaneValid ? 1.0f : 0.0f,
-      .groundRelativeY = (float)(-rebase.y),
+      .groundRelativeY = 0.0f, // unused in current shader; was (float)(-rebase.y) which lost precision
       .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
       .step = step,
       .axisVisible = axisVisible,
@@ -3041,8 +4622,14 @@ void render()
       .logDepth = logDepth,
   };
   // Opaque geometry first so transparent passes can depth-test against it.
-  drawCube(view, projection, rebase, cubeWorldPosition,
-      glm::vec3(1.0f, 0.58f, 0.25f), 1.0f, 1.0f, logDepth);
+  const MeshEntityRecord centerCube = getCenterCubeEntity();
+  if (centerCubeInFrame)
+  {
+    drawMesh(viewRte, projection, orbitCam.Position, centerCube.worldPosition,
+             glm::vec3(meshEntityColor(centerCube)),
+             centerCube.entity.common.color.a,
+             centerCube.size, centerCube.mesh, logDepth);
+  }
 
   if (gridPlaneVisible)
     rendererBackend->drawGrid(gridRenderData);
@@ -3057,8 +4644,11 @@ void render()
 
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
-  drawLargeCoordinateObjects(view, projection, rebase, drawOrder, logDepth);
-  drawVectorPrimitivesDemo(view, projection, rebase, logDepth, cameraPos, frontVec, cameraRight, cameraUp, pixelSize);
+  drawLargeCoordinateObjects(viewRte, projection, orbitCam.Position, drawOrder, logDepth);
+  drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
+                           orbitCam.Position, logDepth,
+                           cameraPos, frontVec, cameraRight, cameraUp,
+                           pixelSize, visibleCadDraws, tinyCadDraws);
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -3069,12 +4659,13 @@ void render()
   for (const LargeCoordinateObject *object : tinyDraws)
   {
     pointInstances.push_back({
-        glm::vec3(object->worldPosition - rebase), object->color});
+        glm::vec3(object->worldPosition - orbitCam.Position),
+        glm::vec3(meshEntityColor(*object))});
   }
   if (!pointInstances.empty())
   {
     const rendering::TargetPointInstancesRenderData pointRenderData{
-        .view = view,
+        .view = viewRte,
         .projection = overlayProjection,
         .instances = pointInstances.data(),
         .instanceCount = static_cast<uint32_t>(pointInstances.size()),
@@ -3089,8 +4680,9 @@ void render()
   // Small 5-pixel "sphere" (disc-shaded point) at the orbit target so the
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
-    drawTargetPoint(view, projection, rebase, orbitCam.Target, logDepth,
-                   pixelSize);
+  // The camera focus marker remains a camera overlay, not a CAD entity.
+  drawTargetPoint(viewRte, projection, orbitCam.Position, orbitCam.Target,
+                  logDepth, pixelSize);
 
   if (frustumWireframeVisible)
   {
@@ -3147,12 +4739,13 @@ int main(int argc, char *argv[])
   // panning (or by pressing L) instead of generating on demand.
   printLargeCoordinateValidation();
 
+  double requestedOrthoHalfHeight = -1.0;
   if (const char *testOrtho = std::getenv("GRID_CAMERA_TEST_ORTHO");
       testOrtho && std::strcmp(testOrtho, "0") != 0)
   {
     useOrthoProjection() = true;
     if (const char *halfH = std::getenv("GRID_CAMERA_TEST_ORTHO_HALFH"))
-      orthoHalfHeight() = std::max(0.01f, (float)std::atof(halfH));
+      requestedOrthoHalfHeight = std::max(0.01, std::atof(halfH));
     std::cout << "Projection: ORTHOGRAPHIC (test)" << std::endl;
   }
 
@@ -3164,6 +4757,14 @@ int main(int argc, char *argv[])
   cubeWorldPosition =
       LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
   fitCameraToStressField();
+  // Keep the legacy automated zoom test working without a separate ortho
+  // size state: convert the requested half-height into the authoritative
+  // Distance after the OpenCAD-style fit has chosen its orientation.
+  if (requestedOrthoHalfHeight > 0.0)
+  {
+    const double tanHalfFov = std::tan(glm::radians(orbitCam.Zoom) * 0.5);
+    orbitCam.setTargetDistance(requestedOrthoHalfHeight / tanHalfFov);
+  }
   resetSlabStabilizers();
   SDL_SetWindowTitle(
       window, "grid plane - large-coordinate stress field");
@@ -3172,6 +4773,7 @@ int main(int argc, char *argv[])
   bool running = true;
   bool middleMouseDrag = false;
   bool testPanApplied = false;
+  bool originOrthoScenarioApplied = false;
 
 
   while (running)
@@ -3205,6 +4807,8 @@ int main(int argc, char *argv[])
           applyGridPlane(GridPlaneType::YZ);
         if (evt.key.key == SDLK_4)
           applyGridPlane(GridPlaneType::Custom);
+        if (evt.key.key == SDLK_R)
+          resetWorldUpAndPlaneFromCamera();
         if (evt.key.key == SDLK_C)
           setTargetPlaneConstraint(!targetPlaneConstraintEnabled);
         if (evt.key.key == SDLK_F)
@@ -3212,13 +4816,15 @@ int main(int argc, char *argv[])
           frustumCaptureRequested = true;
           std::cout << "Frustum wireframe: captured" << std::endl;
         }
-        if (evt.key.key == SDLK_K && cadAlgorithmDemoEnabled())
+        if (evt.key.key == SDLK_K)
         {
-          cadAlgorithmDemoStyle = (cadAlgorithmDemoStyle + 1) % 8;
-          std::cout << "CAD algorithm demo style: " << cadAlgorithmDemoStyle
-                    << " ("
-                    << kCadAlgorithmStyleNames[cadAlgorithmDemoStyle]
-                    << ")" << std::endl;
+          visualStyleManager.cycle();
+          if (rendererBackend)
+            rendererBackend->setRenderMode(visualStyleManager.mode());
+          std::cout << "Visual style: "
+                    << rendering::renderModeLabel(visualStyleManager.mode())
+                    << " [" << rendering::renderModeCommand(visualStyleManager.mode())
+                    << "]" << std::endl;
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
         {
@@ -3239,6 +4845,7 @@ int main(int argc, char *argv[])
           else
           {
             cubeWorldPosition = glm::dvec3(0.0);
+            orbitCam.clearDepthBounds();
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
             resetSlabStabilizers();
             SDL_SetWindowTitle(window, "grid plane");
@@ -3254,15 +4861,39 @@ int main(int argc, char *argv[])
           evt.button.button == SDL_BUTTON_MIDDLE)
       {
         middleMouseDrag = true;
+        orbitPivot = viewCenterObjectPivot().value_or(orbitCam.Target);
       }
       if (evt.type == SDL_EVENT_MOUSE_BUTTON_UP &&
           evt.button.button == SDL_BUTTON_MIDDLE)
       {
         middleMouseDrag = false;
+        // VSG persistent pivot: keep the pivot so the next orbit drag
+        // continues around the same scene point.  It is re-captured on
+        // the next middle-button down.
       }
       if (evt.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
       {
         middleMouseDrag = false;
+      }
+
+      // Double-click left button: autofocus at cursor position.
+      if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+          evt.button.button == SDL_BUTTON_LEFT &&
+          evt.button.clicks == 2)
+      {
+        int winW = 0, winH = 0;
+        SDL_GetWindowSize(window, &winW, &winH);
+        const double ndcX = cursorToNdcX(evt.button.x, winW);
+        const double ndcY = cursorToNdcY(evt.button.y, winH);
+        if (const std::optional<std::string> selectedEntity =
+                autofocusAtNdc(ndcX, ndcY))
+        {
+          std::cout << std::fixed << std::setprecision(3)
+                    << "Autofocus: entity=" << *selectedEntity
+                    << " target=(" << orbitCam.Target.x << ", "
+                    << orbitCam.Target.y << ", " << orbitCam.Target.z
+                    << ") distance=" << orbitCam.Distance << std::endl;
+        }
       }
 
       handleOrbitMouseMovement(evt, middleMouseDrag);
@@ -3279,17 +4910,8 @@ int main(int argc, char *argv[])
       if (testPanValue && testPanAtValue &&
           currentFrame >= std::atof(testPanAtValue))
       {
-        const float worldPerPixel = useOrthoProjection()
-            ? (2.0f * orthoHalfHeight()) / (float)currentDrawableHeight()
-            : (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target) *
-               std::tan(glm::radians(orbitCam.Zoom * 0.5f))) /
-              (float)currentDrawableHeight();
-        glm::dvec3 panTangentU;
-        glm::dvec3 panTangentV;
-        activePlaneTangents(panTangentU, panTangentV);
-        orbitCam.processMousePan((float)std::atof(testPanValue), 0.0f,
-                                 worldPerPixel, true, panTangentU,
-                                 panTangentV);
+        orbitCam.panScreen((float)std::atof(testPanValue), 0.0f,
+                           (float)currentDrawableHeight());
         testPanApplied = true;
       }
     }
@@ -3298,6 +4920,24 @@ int main(int argc, char *argv[])
     // orbiting, dolly/zoom, teleport shortcuts, and future input paths.
     if (targetPlaneConstraintEnabled)
       enforceTargetPlaneConstraint();
+
+    if (!originOrthoScenarioApplied)
+    {
+      const char *testAtValue = std::getenv(
+          "GRID_CAMERA_TEST_ORIGIN_ORTHO_AT_SECONDS");
+      if (testAtValue && currentFrame >= std::atof(testAtValue))
+      {
+        largeCoordinateCameraView = false;
+        cubeWorldPosition = glm::dvec3(0.0);
+        orbitCam.clearDepthBounds();
+        orbitCam.setOrbit(cubeWorldPosition, 15.0);
+        switchProjectionMode();
+        resetSlabStabilizers();
+        originOrthoScenarioApplied = true;
+        std::cout << "Camera test: origin orthographic convergence"
+                  << std::endl;
+      }
+    }
 
     render();
 

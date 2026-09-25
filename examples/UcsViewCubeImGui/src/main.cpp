@@ -7,56 +7,192 @@
 #include <imgui_impl_sdl3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
 namespace
 {
+    glm::quat normalizeQuat(const glm::quat& value)
+    {
+        const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
+        return length > 0.0f ? value / length : glm::quat{ 1.0f, 0.0f, 0.0f, 0.0f };
+    }
+
+    glm::quat basisToQuat(const glm::vec3& right, const glm::vec3& up, const glm::vec3& eye)
+    {
+        return normalizeQuat(glm::quat_cast(glm::mat3{ right, up, eye }));
+    }
+
+    // Mirrors OpenCADStudio's Camera::yaw_pitch_to_quat().
+    glm::quat yawPitchToQuat(float yaw, float pitch)
+    {
+        const glm::quat yawRotation = glm::angleAxis(yaw, glm::vec3{ 0.0f, 0.0f, 1.0f });
+        const glm::quat pitchRotation = glm::angleAxis(glm::radians(90.0f) - pitch, glm::vec3{ 1.0f, 0.0f, 0.0f });
+        return normalizeQuat(yawRotation * pitchRotation);
+    }
+
     struct CameraState
     {
+        glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
         double yaw{ 60.0 };
         double pitch{ 25.0 };
-        double roll{ 0.0 };
         double distance{ 12.0 };
         glm::dvec3 target{ 0.0, 0.0, 0.0 };
 
+        CameraState()
+        {
+            setYawPitch(yaw, pitch);
+        }
+
         glm::vec3 direction() const
         {
-            const double yawRadians = glm::radians(yaw);
-            const double pitchRadians = glm::radians(pitch);
-            const double cosine = std::cos(pitchRadians);
-            return glm::normalize(glm::vec3{
-                static_cast<float>(cosine * std::cos(yawRadians)),
-                static_cast<float>(cosine * std::sin(yawRadians)),
-                static_cast<float>(std::sin(pitchRadians))
-            });
+            return rotation * glm::vec3{ 0.0f, 0.0f, 1.0f };
+        }
+
+        glm::vec3 up() const
+        {
+            return rotation * glm::vec3{ 0.0f, 1.0f, 0.0f };
         }
 
         glm::mat4 viewMatrix() const
         {
             const glm::dvec3 eye = target + glm::dvec3(direction()) * distance;
-            const glm::vec3 up = std::abs(direction().z) > 0.999f
-                ? glm::vec3{ 0.0f, 1.0f, 0.0f }
-                : glm::vec3{ 0.0f, 0.0f, 1.0f };
-            glm::mat4 view = glm::lookAt(glm::vec3(eye), glm::vec3(target), up);
-            return glm::rotate(view, static_cast<float>(glm::radians(roll)), glm::vec3{ 0.0f, 0.0f, 1.0f });
+            return glm::lookAt(glm::vec3{ eye }, glm::vec3{ target }, up());
         }
 
-        void snapToDirection(const glm::vec3& worldDirection)
+        void syncYawPitch()
         {
-            const glm::vec3 direction = glm::normalize(worldDirection);
-            pitch = glm::degrees(std::asin(std::clamp(direction.z, -1.0f, 1.0f)));
-            yaw = glm::degrees(std::atan2(direction.y, direction.x));
-            roll = 0.0;
+            const glm::vec3 eye = direction();
+            pitch = glm::degrees(std::asin(std::clamp(eye.z, -1.0f, 1.0f)));
+            yaw = std::abs(eye.x) < 1.0e-6f && std::abs(eye.y) < 1.0e-6f
+                ? 0.0
+                : glm::degrees(std::atan2(eye.x, -eye.y));
+        }
+
+        void setYawPitch(double nextYaw, double nextPitch)
+        {
+            yaw = nextYaw;
+            pitch = std::clamp(nextPitch, -89.9, 89.9);
+            rotation = yawPitchToQuat(
+                static_cast<float>(glm::radians(yaw)),
+                static_cast<float>(glm::radians(pitch)));
+        }
+
+        void orbitBy(double deltaYaw, double deltaPitch)
+        {
+            setYawPitch(yaw + deltaYaw, pitch + deltaPitch);
+        }
+
+        void snapToFace(const glm::vec3& eyeDir, const glm::vec3& ucsY, const glm::vec3& ucsZ)
+        {
+            const glm::vec3 newEye = glm::normalize(eyeDir);
+            const glm::vec3 rawRef = std::abs(glm::dot(newEye, ucsZ)) > 0.9f ? ucsY : ucsZ;
+            glm::vec3 newUp = rawRef - newEye * glm::dot(rawRef, newEye);
+            if (glm::length(newUp) < 1.0e-5f)
+            {
+                newUp = ucsY;
+            }
+            newUp = glm::normalize(newUp);
+            const glm::vec3 newRight = glm::normalize(glm::cross(newUp, newEye));
+            rotation = basisToQuat(newRight, newUp, newEye);
+            syncYawPitch();
+        }
+
+        void snapToDirection(const glm::vec3& eyeDir, const glm::vec3& ucsY, const glm::vec3& ucsZ)
+        {
+            const glm::vec3 newEye = glm::normalize(eyeDir);
+            const glm::vec3 rawRef = std::abs(glm::dot(newEye, ucsZ)) > 0.9f ? ucsY : ucsZ;
+            const glm::vec3 currentUp = up();
+            const glm::vec3 upRef = glm::dot(currentUp, rawRef) < 0.0f ? -rawRef : rawRef;
+            glm::vec3 projected = upRef - newEye * glm::dot(upRef, newEye);
+            if (glm::length(projected) < 1.0e-5f)
+            {
+                projected = std::abs(glm::dot(newEye, ucsZ)) < 0.99f
+                    ? ucsZ - newEye * glm::dot(ucsZ, newEye)
+                    : ucsY - newEye * glm::dot(ucsY, newEye);
+            }
+            const glm::vec3 newUp = glm::normalize(projected);
+            const glm::vec3 newRight = glm::normalize(glm::cross(newUp, newEye));
+            rotation = basisToQuat(newRight, newUp, newEye);
+            syncYawPitch();
+        }
+
+        void homeView(const glm::vec3& ucsY, const glm::vec3& ucsZ)
+        {
+            snapToFace(ucsZ, ucsY, ucsZ);
+        }
+
+        void rollBy(float angle)
+        {
+            const glm::quat delta = glm::angleAxis(angle, glm::vec3{ 0.0f, 0.0f, 1.0f });
+            rotation = normalizeQuat(rotation * delta);
+            syncYawPitch();
+        }
+
+        void nudge90(bool horizontal, bool positive)
+        {
+            const glm::vec3 axis = horizontal ? up() : rotation * glm::vec3{ 1.0f, 0.0f, 0.0f };
+            const float angle = positive ? glm::radians(90.0f) : -glm::radians(90.0f);
+            const glm::quat delta = glm::angleAxis(angle, glm::normalize(axis));
+            rotation = normalizeQuat(delta * rotation);
+            syncYawPitch();
         }
     };
+
+    glm::mat3 ucsRotationFor(const std::string& name)
+    {
+        if (name == "UCS 1")
+        {
+            return glm::mat3{ glm::rotate(glm::mat4{ 1.0f }, glm::radians(30.0f), glm::vec3{ 0.0f, 0.0f, 1.0f }) };
+        }
+        return glm::mat3{ 1.0f };
+    }
+
+    cadui::ViewCubeRegion oppositeRegion(const cadui::ViewCubeRegion& region)
+    {
+        const glm::vec3 target = cadui::ViewCubeWidget::snapDirection(region);
+        int bestId = 0;
+        float bestDistance = std::numeric_limits<float>::max();
+        for (int id = 0; id < 26; ++id)
+        {
+            const glm::vec3 candidate = cadui::ViewCubeWidget::snapDirection(cadui::ViewCubeWidget::regionById(id));
+            const float distance = glm::length(candidate + target);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestId = id;
+            }
+        }
+        return cadui::ViewCubeWidget::regionById(bestId);
+    }
+
+    cadui::ViewCubeRegion cardinalFace(int cardinalIndex)
+    {
+        switch (cardinalIndex)
+        {
+        case 0: return cadui::ViewCubeWidget::regionById(3); // North -> BACK
+        case 1: return cadui::ViewCubeWidget::regionById(4); // East  -> RIGHT
+        case 2: return cadui::ViewCubeWidget::regionById(2); // South -> FRONT
+        case 3: return cadui::ViewCubeWidget::regionById(5); // West  -> LEFT
+        default: break;
+        }
+        return cadui::ViewCubeWidget::regionById(2);
+    }
+
+    bool shouldFlip(const CameraState& camera, const glm::vec3& targetDirection)
+    {
+        return glm::dot(camera.direction(), glm::normalize(targetDirection)) > 0.9999f;
+    }
 
     void* getNativeWindowHandle(SDL_Window* window)
     {
@@ -93,6 +229,40 @@ namespace
         bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x182029ff, 1.0f, 0);
         bgfx::setViewRect(0, 0, 0, outWidth, outHeight);
         return true;
+    }
+
+    void snapViewRegion(CameraState& camera,
+                        const cadui::ViewCubeRegion& region,
+                        const glm::mat3& ucs)
+    {
+        cadui::ViewCubeRegion target = region;
+        if (shouldFlip(camera, cadui::ViewCubeWidget::snapDirection(target)))
+        {
+            target = oppositeRegion(target);
+        }
+
+        const glm::vec3 eyeDir = ucs * cadui::ViewCubeWidget::snapDirection(target);
+        if (target.kind == cadui::RegionKind::Face)
+        {
+            camera.snapToFace(eyeDir, glm::normalize(ucs[1]), glm::normalize(ucs[2]));
+        }
+        else
+        {
+            camera.snapToDirection(eyeDir, glm::normalize(ucs[1]), glm::normalize(ucs[2]));
+        }
+    }
+
+    void snapWorldFace(CameraState& camera, const cadui::ViewCubeRegion& region)
+    {
+        cadui::ViewCubeRegion target = region;
+        if (shouldFlip(camera, cadui::ViewCubeWidget::snapDirection(target)))
+        {
+            target = oppositeRegion(target);
+        }
+        camera.snapToFace(
+            cadui::ViewCubeWidget::snapDirection(target),
+            glm::vec3{ 0.0f, 1.0f, 0.0f },
+            glm::vec3{ 0.0f, 0.0f, 1.0f });
     }
 
     void drawViewCubeOverlay(cadui::ViewCubeWidget& widget,
@@ -133,47 +303,47 @@ namespace
         options.activeUcs = activeUcs.c_str();
         options.ucsNames = &ucsNames;
 
-        const cadui::ViewCubeResult result = widget.render("CadViewCube", ImVec2(160.0f, 160.0f), viewRotation);
+        const glm::mat3 ucs = ucsRotationFor(activeUcs);
+        const cadui::ViewCubeResult result = widget.render("CadViewCube", ImVec2(160.0f, 160.0f), viewRotation, ucs, options);
         switch (result.action.kind)
         {
         case cadui::ViewCubeActionKind::Region:
-            statusText = "ViewCube: ";
-            statusText += result.action.region.label;
-            camera.snapToDirection(cadui::ViewCubeWidget::snapDirection(result.action.region));
+            snapViewRegion(camera, result.action.region, ucs);
+            statusText = std::string("View: ") + result.action.region.label;
             break;
         case cadui::ViewCubeActionKind::Cardinal:
-            statusText = "ViewCube: ";
-            statusText += result.action.region.label;
-            camera.snapToDirection(cadui::ViewCubeWidget::cardinalDirection(result.action.region.index));
+        {
+            const cadui::ViewCubeRegion worldFace = cardinalFace(result.action.region.index);
+            snapWorldFace(camera, worldFace);
+            statusText = std::string("View: ") + result.action.region.label;
             break;
+        }
         case cadui::ViewCubeActionKind::Home:
-            camera.yaw = 60.0;
-            camera.pitch = 25.0;
-            camera.roll = 0.0;
-            statusText = "ViewCube: home";
+            camera.homeView(glm::normalize(ucs[1]), glm::normalize(ucs[2]));
+            statusText = "View: Home";
             break;
         case cadui::ViewCubeActionKind::RollLeft:
-            camera.roll += 90.0;
+            camera.rollBy(-glm::radians(90.0f));
             statusText = "ViewCube: roll left";
             break;
         case cadui::ViewCubeActionKind::RollRight:
-            camera.roll -= 90.0;
+            camera.rollBy(glm::radians(90.0f));
             statusText = "ViewCube: roll right";
             break;
         case cadui::ViewCubeActionKind::NudgeUp:
-            camera.pitch += 90.0;
+            camera.nudge90(false, false);
             statusText = "ViewCube: nudge up";
             break;
         case cadui::ViewCubeActionKind::NudgeDown:
-            camera.pitch -= 90.0;
+            camera.nudge90(false, true);
             statusText = "ViewCube: nudge down";
             break;
         case cadui::ViewCubeActionKind::NudgeLeft:
-            camera.yaw -= 90.0;
+            camera.nudge90(true, false);
             statusText = "ViewCube: nudge left";
             break;
         case cadui::ViewCubeActionKind::NudgeRight:
-            camera.yaw += 90.0;
+            camera.nudge90(true, true);
             statusText = "ViewCube: nudge right";
             break;
         case cadui::ViewCubeActionKind::UcsChanged:
@@ -188,6 +358,7 @@ namespace
 
     void drawUcsOverlay(cadui::UcsIconWidget& widget,
                         const glm::mat3& viewRotation,
+                        const glm::mat3& ucs,
                         float height,
                         std::string& statusText)
     {
@@ -212,6 +383,9 @@ namespace
 
         cadui::UcsIconState state;
         state.viewRotation = viewRotation;
+        state.xAxis = glm::normalize(ucs[0]);
+        state.yAxis = glm::normalize(ucs[1]);
+        state.zAxis = glm::normalize(ucs[2]);
         state.selected = true;
         state.backgroundLuminance = 0.11f;
 
@@ -257,12 +431,14 @@ namespace
         }
         ImGui::End();
     }
+
 } // namespace
 
 int main(int argc, char** argv)
 {
-    (void)argc;
-    (void)argv;
+    const bool autoCapture = argc > 1 &&
+        (SDL_strcasecmp(argv[1], "--screenshot") == 0 ||
+         SDL_strcasecmp(argv[1], "/screenshot") == 0);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
     {
@@ -308,12 +484,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    imguiBgfxCreate(18.0f);
+    imguiBgfxCreate(18.0f, "C:/Windows/Fonts/msyh.ttc");
 
     cadui::ViewCubeBgfxRenderer viewCubeRenderer;
     if (!viewCubeRenderer.create())
     {
         std::cerr << "ViewCube BGFX renderer unavailable; using ImGui DrawList fallback\n";
+    }
+    else
+    {
+        viewCubeRenderer.setFontTexture(imguiBgfxGetFontTexture());
     }
     cadui::ViewCubeWidget viewCube;
     cadui::UcsIconWidget ucsIcon;
@@ -326,6 +506,7 @@ int main(int argc, char** argv)
     float previousMouseY = 0.0f;
     bool running = true;
     bool firstMouse = true;
+    uint32_t captureFrame = 0;
     uint16_t lastWidth = width;
     uint16_t lastHeight = height;
 
@@ -372,26 +553,39 @@ int main(int argc, char** argv)
         const bool mouseInViewport = !io.WantCaptureMouse;
         if (mouseInViewport && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0)
         {
-            camera.yaw += static_cast<double>(mouseX - previousMouseX) * 0.32;
-            camera.pitch += static_cast<double>(mouseY - previousMouseY) * 0.32;
-            camera.pitch = std::clamp(camera.pitch, -89.5, 89.5);
+            camera.orbitBy(
+                static_cast<double>(mouseX - previousMouseX) * 0.32,
+                static_cast<double>(mouseY - previousMouseY) * 0.32);
         }
         previousMouseX = mouseX;
         previousMouseY = mouseY;
 
         const glm::mat4 view = camera.viewMatrix();
         const glm::mat3 viewRotation(view);
+        // OpenCADStudio rotates the ViewCube and compass with camera.rotation
+        // (camera-local -> world).  glm::lookAt gives the inverse view basis,
+        // so passing viewRotation transposes the navigation aid.
+        const glm::mat3 cameraRotation = glm::mat3_cast(camera.rotation);
+        const glm::mat3 ucs = ucsRotationFor(activeUcs);
 
         bgfx::touch(0);
-        drawViewCubeOverlay(viewCube, viewCubeRenderer, viewRotation,
+        drawViewCubeOverlay(viewCube, viewCubeRenderer, cameraRotation,
                             static_cast<float>(width), static_cast<float>(height),
                             camera, ucsNames, activeUcs, statusText);
-        drawUcsOverlay(ucsIcon, viewRotation, static_cast<float>(height), statusText);
+        drawUcsOverlay(ucsIcon, viewRotation, ucs, static_cast<float>(height), statusText);
         drawStatusBar(statusText, static_cast<float>(width), static_cast<float>(height));
 
         ImGui::Render();
         imguiBgfxRenderDrawData(ImGui::GetDrawData(), 255);
         bgfx::frame();
+        if (autoCapture && ++captureFrame == 45)
+        {
+            bgfx::requestScreenShot(BGFX_INVALID_HANDLE, "E:/infinite-grid/viewcube_clone_shot");
+        }
+        if (autoCapture && captureFrame >= 75)
+        {
+            running = false;
+        }
     }
 
     viewCubeRenderer.destroy();

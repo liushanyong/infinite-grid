@@ -30,28 +30,17 @@ namespace ui
     void drawCommandLinePanel(IAppController& controller, const AppSnapshot& snapshot, ViewportHost* viewportHost)
     {
         (void)snapshot;
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        const float leftOffset = kLeftPanelWidth;
-        const float availableWidth = std::max(0.0f, viewport->WorkSize.x - leftOffset);
-        const float width = std::clamp(availableWidth * 0.48f, 320.0f, 910.0f);
-        const float x = viewport->WorkPos.x + leftOffset + (availableWidth - width) * 0.5f;
-        const float y = viewport->WorkPos.y + viewport->WorkSize.y - kStatusBarHeight - 44.0f;
-
-        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(width, 32.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(900.0f, 44.0f), ImGuiCond_FirstUseEver);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(45, 45, 45, 245));
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(35, 35, 35, 255));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(7.0f, 6.0f));
 
-        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration
-            | ImGuiWindowFlags_NoDocking
-            | ImGuiWindowFlags_NoMove
+        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse
             | ImGuiWindowFlags_NoScrollbar
-            | ImGuiWindowFlags_NoSavedSettings
             | ImGuiWindowFlags_NoFocusOnAppearing;
-        ImGui::Begin("##CommandOverlay", nullptr, flags);
+        ImGui::Begin("命令行", nullptr, flags);
 
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(74, 222, 128, 255));
         ImGui::TextUnformatted("命令:");

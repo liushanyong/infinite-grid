@@ -9,3 +9,14 @@ namespace ui
     inline constexpr float kLeftPanelWidth = 312.0f;
     inline constexpr float kStatusBarHeight = 40.0f;
 }
+
+namespace ui
+{
+    // Reset requests live outside UiHost so shell-level toolbar buttons can
+    // rebuild the same deterministic DockBuilder tree.
+    inline bool& dockLayoutResetRequest()
+    {
+        static bool requested = false;
+        return requested;
+    }
+}

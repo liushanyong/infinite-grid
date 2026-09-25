@@ -1,5 +1,6 @@
 #include "ToolbarPanel.hpp"
 #include "UiLayout.hpp"
+#include "UiLayout.hpp"
 
 #include <imgui.h>
 
@@ -336,6 +337,36 @@ namespace ui
             dl->AddText(ImVec2(o.x + 16.0f, o.y + 5.0f), active ? IM_COL32(240, 248, 255, 255) : IM_COL32(196, 196, 196, 255), tabs[i]);
             ImGui::PopID();
             tx += w + 4.0f;
+        }
+
+        // Shell layout controls. Keep the CAD shell fixed while dockable
+        // panels below can be rearranged freely.
+        {
+            const ImVec2 resetOrigin(base.x + std::max(tx + 18.0f, base.x + appWidth - 112.0f), base.y + 4.0f);
+            ImGui::SetCursorScreenPos(resetOrigin);
+            if (ImGui::InvisibleButton("ResetDockLayout", ImVec2(96.0f, 26.0f)))
+            {
+                dockLayoutResetRequest() = true;
+            }
+            const bool hovered = ImGui::IsItemHovered();
+            dl->AddRectFilled(resetOrigin, ImVec2(resetOrigin.x + 96.0f, resetOrigin.y + 26.0f), hovered ? IM_COL32(62, 62, 62, 255) : IM_COL32(50, 50, 50, 255), 2.0f);
+            const ImVec2 ts = ImGui::CalcTextSize("重置布局");
+            dl->AddText(ImVec2(resetOrigin.x + (96.0f - ts.x) * 0.5f, resetOrigin.y + 4.0f), IM_COL32(225, 225, 225, 255), "重置布局");
+        }
+
+        // Shell layout controls. Keep the CAD shell fixed while dockable
+        // panels below can be rearranged freely.
+        {
+            const ImVec2 resetOrigin(base.x + std::max(tx + 18.0f, base.x + appWidth - 112.0f), base.y + 4.0f);
+            ImGui::SetCursorScreenPos(resetOrigin);
+            if (ImGui::InvisibleButton("ResetDockLayout", ImVec2(96.0f, 26.0f)))
+            {
+                dockLayoutResetRequest() = true;
+            }
+            const bool hovered = ImGui::IsItemHovered();
+            dl->AddRectFilled(resetOrigin, ImVec2(resetOrigin.x + 96.0f, resetOrigin.y + 26.0f), hovered ? IM_COL32(62, 62, 62, 255) : IM_COL32(50, 50, 50, 255), 2.0f);
+            const ImVec2 ts = ImGui::CalcTextSize("重置布局");
+            dl->AddText(ImVec2(resetOrigin.x + (96.0f - ts.x) * 0.5f, resetOrigin.y + 4.0f), IM_COL32(225, 225, 225, 255), "重置布局");
         }
 
         // Ribbon body. Fixed positions deliberately mirror the reference shell.

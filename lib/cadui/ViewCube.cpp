@@ -24,6 +24,8 @@ namespace cadui
         constexpr float kRingR0 = 1.40f;
         constexpr float kRingR1 = 1.74f;
         constexpr float kCardinalR = 1.57f;
+        constexpr float kLabelHeight = 0.46f;
+        constexpr float kProjectionHalfExtent = 2000.0f;
 
         constexpr ImU32 kSurface = IM_COL32(158, 194, 214, 255);
         constexpr ImU32 kHover = IM_COL32(51, 184, 168, 255);
@@ -60,6 +62,25 @@ namespace cadui
                 region.label = options.faceLabels[static_cast<size_t>(id)];
             }
             return region;
+        }
+
+        // OpenCADStudio's hit test projects the raw region centroid, not the
+        // normalized snap direction.  Keeping this distinction is important:
+        // edges sit at |centroid| = 0.90 and corners sit at |centroid| = 1.56,
+        // which gives the corners their larger, reference-accurate hit areas.
+        glm::vec3 regionCentroid(int id)
+        {
+            static constexpr float centroids[26][3] = {
+                {0.0f, 0.0f,  kE}, {0.0f, 0.0f, -kE}, {0.0f, -kE, 0.0f},
+                {0.0f,  kE, 0.0f}, { kE, 0.0f, 0.0f}, {-kE, 0.0f, 0.0f},
+                {0.0f, -kM,  kM}, {0.0f,  kM,  kM}, { kM, 0.0f,  kM}, {-kM, 0.0f,  kM},
+                {0.0f, -kM, -kM}, {0.0f,  kM, -kM}, { kM, 0.0f, -kM}, {-kM, 0.0f, -kM},
+                { kM, -kM, 0.0f}, {-kM, -kM, 0.0f}, { kM,  kM, 0.0f}, {-kM,  kM, 0.0f},
+                { kM, -kM,  kM}, {-kM, -kM,  kM}, { kM,  kM,  kM}, {-kM,  kM,  kM},
+                { kM, -kM, -kM}, {-kM, -kM, -kM}, { kM,  kM, -kM}, {-kM,  kM, -kM}
+            };
+            id = std::clamp(id, 0, 25);
+            return { centroids[id][0], centroids[id][1], centroids[id][2] };
         }
 
         void appendQuad(std::vector<PolygonData>& polygons,
@@ -134,15 +155,18 @@ namespace cadui
             appendQuad(polygons, {{ { kF,  kE,  kF}, { kF,  kE, -kF}, { kE,  kF, -kF}, { kE,  kF,  kF} }}, 16, rotation, center, radius);
             appendQuad(polygons, {{ {-kF,  kE,  kF}, {-kF,  kE, -kF}, {-kE,  kF, -kF}, {-kE,  kF,  kF} }}, 17, rotation, center, radius);
 
+            // Corner order must match regionLabelById(), snapDirection() and the
+            // OpenCADStudio region_centroids() order:
+            // TFR, TFL, TBR, TBL, BFR, BFL, BBR, BBL.
             const std::array<std::array<glm::vec3, 3>, 8> corners{{
-                {{ { kF,  kF,  kE}, { kF,  kE,  kF}, { kE,  kF,  kF} }},
-                {{ {-kF,  kF,  kE}, {-kF,  kE,  kF}, {-kE,  kF,  kF} }},
-                {{ { kF,  kF, -kE}, { kF,  kE, -kF}, { kE,  kF, -kF} }},
-                {{ {-kF,  kF, -kE}, {-kF,  kE, -kF}, {-kE,  kF, -kF} }},
                 {{ { kF, -kF,  kE}, { kF, -kE,  kF}, { kE, -kF,  kF} }},
                 {{ {-kF, -kF,  kE}, {-kF, -kE,  kF}, {-kE, -kF,  kF} }},
+                {{ { kF,  kF,  kE}, { kF,  kE,  kF}, { kE,  kF,  kF} }},
+                {{ {-kF,  kF,  kE}, {-kF,  kE,  kF}, {-kE,  kF,  kF} }},
                 {{ { kF, -kF, -kE}, { kF, -kE, -kF}, { kE, -kF, -kF} }},
-                {{ {-kF, -kF, -kE}, {-kF, -kE, -kF}, {-kE, -kF, -kF} }}
+                {{ {-kF, -kF, -kE}, {-kF, -kE, -kF}, {-kE, -kF, -kF} }},
+                {{ { kF,  kF, -kE}, { kF,  kE, -kF}, { kE,  kF, -kF} }},
+                {{ {-kF,  kF, -kE}, {-kF,  kE, -kF}, {-kE,  kF, -kF} }}
             }};
             for (unsigned i = 0; i < 8; ++i)
             {
@@ -169,14 +193,47 @@ namespace cadui
 
         int hitTestPolygons(const ImVec2& mouse, const std::vector<PolygonData>& polygons)
         {
+            // glm::lookAt maps a normal pointing toward the camera to positive
+            // eye Z.  A convex cube can project several regions onto one screen
+            // point, so keep the region closest to the camera (largest Z).
             int bestId = -1;
-            float bestDepth = std::numeric_limits<float>::lowest();
+            float bestDepth = -std::numeric_limits<float>::max();
             for (const PolygonData& polygon : polygons)
             {
                 if (pointInPolygon(mouse, polygon) && polygon.depth > bestDepth)
                 {
                     bestDepth = polygon.depth;
                     bestId = polygon.id;
+                }
+            }
+            return bestId;
+        }
+
+        int hitTestRegion(const ImVec2& mouse,
+                          const glm::mat3& rotation,
+                          const ImVec2& center,
+                          float radius)
+        {
+            int bestId = -1;
+            float bestDistanceSq = std::numeric_limits<float>::max();
+            for (int id = 0; id < 26; ++id)
+            {
+                const glm::vec3 centroid = regionCentroid(id);
+                const glm::vec3 eye = rotation * centroid;
+                // OpenCADStudio uses the same +Z view direction and 0.05
+                // grazing cutoff for hit testing, hover and rendering.
+                if (eye.z < 0.05f)
+                {
+                    continue;
+                }
+                const float threshold = radius * (id < 6 ? 0.92f : id < 18 ? 0.38f : 0.28f);
+                const float dx = mouse.x - (center.x + eye.x * radius);
+                const float dy = mouse.y - (center.y - eye.y * radius);
+                const float distanceSq = dx * dx + dy * dy;
+                if (distanceSq <= threshold * threshold && distanceSq < bestDistanceSq)
+                {
+                    bestDistanceSq = distanceSq;
+                    bestId = id;
                 }
             }
             return bestId;
@@ -189,28 +246,38 @@ namespace cadui
         {
             std::sort(polygons.begin(), polygons.end(), [](const PolygonData& lhs, const PolygonData& rhs)
             {
-                return lhs.depth > rhs.depth;
+                // Far faces first (negative eye Z), near faces last (positive eye Z).
+                return lhs.depth < rhs.depth;
             });
 
-            if (fill)
+            for (const PolygonData& polygon : polygons)
             {
-                for (const PolygonData& polygon : polygons)
+                const bool hovered = polygon.id == hoveredId;
+                if (!fill && !hovered)
                 {
-                    const ImU32 color = polygon.id == hoveredId ? kHover : kSurface;
-                    if (polygon.count == 4)
-                    {
-                        drawList->AddConvexPolyFilled(polygon.points.data(), 4, color);
-                    }
-                    else
-                    {
-                        drawList->AddTriangleFilled(polygon.points[0], polygon.points[1], polygon.points[2], color);
-                    }
+                    continue;
+                }
+                // BGFX already highlights the hovered surface in its shader.
+                // Do not draw an ImGui polygon overlay on top of the depth-
+                // rendered cube, or hover can appear to select a back face.
+                if (!fill)
+                {
+                    continue;
+                }
+                const ImU32 color = hovered ? kHover : kSurface;
+                if (polygon.count == 4)
+                {
+                    drawList->AddConvexPolyFilled(polygon.points.data(), 4, color);
+                }
+                else
+                {
+                    drawList->AddTriangleFilled(polygon.points[0], polygon.points[1], polygon.points[2], color);
                 }
             }
 
             for (const PolygonData& polygon : polygons)
             {
-                if (polygon.depth >= 0.0f)
+                if (polygon.depth < 0.0f)
                 {
                     continue;
                 }
@@ -247,14 +314,34 @@ namespace cadui
         void drawTextCentered(ImDrawList* drawList, const ImVec2& position,
                               const char* text, ImU32 color, float size)
         {
+            const ImVec2 textSize = ImGui::CalcTextSize(text);
+            const ImVec2 centered{ position.x - textSize.x * 0.5f,
+                                   position.y - textSize.y * 0.5f };
             if (std::abs(size - ImGui::GetFontSize()) > 0.01f)
             {
-                drawList->AddText(nullptr, size, position, color, text);
+                drawList->AddText(nullptr, size, centered, color, text);
                 return;
             }
+            drawList->AddText(centered, color, text);
+        }
+
+        void drawTextWithHalo(ImDrawList* drawList, const ImVec2& position,
+                              const char* text, ImU32 color, float size)
+        {
             const ImVec2 textSize = ImGui::CalcTextSize(text);
-            drawList->AddText(ImVec2(position.x - textSize.x * 0.5f,
-                                     position.y - textSize.y * 0.5f), color, text);
+            const ImVec2 centered{ position.x - textSize.x * 0.5f,
+                                   position.y - textSize.y * 0.5f };
+            constexpr ImU32 halo = IM_COL32(255, 255, 255, 175);
+            constexpr float offsets[4][2] = {
+                { -1.0f, 0.0f }, { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 1.0f }
+            };
+            for (const auto& offset : offsets)
+            {
+                drawList->AddText(nullptr, size,
+                                  ImVec2(centered.x + offset[0], centered.y + offset[1]),
+                                  halo, text);
+            }
+            drawList->AddText(nullptr, size, centered, color, text);
         }
 
         void drawRingLabels(ImDrawList* drawList,
@@ -272,9 +359,193 @@ namespace cadui
             for (unsigned i = 0; i < 4; ++i)
             {
                 const glm::vec3 eye = rotation * directions[i];
-                drawTextCentered(drawList, { center.x + eye.x * radius, center.y - eye.y * radius },
-                                 names[i], kRingLabel, 11.0f);
+                drawTextWithHalo(drawList, { center.x + eye.x * radius, center.y - eye.y * radius },
+                                 names[i], IM_COL32(13, 20, 33, 255), 12.0f);
             }
+        }
+
+        void appendTextVertices(std::vector<ViewCubeLabelVertex>& output,
+                                const ImVec2& origin,
+                                ImVec2 position,
+                                const char* text,
+                                ImU32 color,
+                                float size,
+                                float eyeZ)
+        {
+            ImFont* font = ImGui::GetFont();
+            if (!font || !text)
+            {
+                return;
+            }
+
+            const float scale = size / font->FontSize;
+            const ImVec2 textSize = font->CalcTextSizeA(
+                size, std::numeric_limits<float>::max(), 0.0f, text, nullptr, nullptr);
+            position.x -= textSize.x * 0.5f;
+            position.y -= textSize.y * 0.5f;
+
+            const char* cursor = text;
+            const char* end = text + std::string::traits_type::length(text);
+            float x = position.x;
+            const float y = position.y;
+            while (cursor < end)
+            {
+                unsigned int codepoint = 0;
+                const int bytes = ImTextCharFromUtf8(&codepoint, cursor, end);
+                if (bytes <= 0 || codepoint == 0)
+                {
+                    break;
+                }
+                cursor += bytes;
+                const ImFontGlyph* glyph = font->FindGlyph(static_cast<ImWchar>(codepoint));
+                if (!glyph)
+                {
+                    glyph = font->FindGlyph(static_cast<ImWchar>('?'));
+                }
+                if (glyph && glyph->Visible)
+                {
+                    // label positions are widget-screen coordinates; convert them
+                    // into the private ViewCube framebuffer's local coordinates.
+                    const float x0 = x + glyph->X0 * scale - origin.x;
+                    const float y0 = y + glyph->Y0 * scale - origin.y;
+                    const float x1 = x + glyph->X1 * scale - origin.x;
+                    const float y1 = y + glyph->Y1 * scale - origin.y;
+                    const ImVec2 uv0{ glyph->U0, glyph->V0 };
+                    const ImVec2 uv1{ glyph->U1, glyph->V1 };
+                    ViewCubeLabelVertex corners[4] = {
+                        { ImVec2{ x0, y0 }, ImVec2{ uv0.x, uv0.y }, color, eyeZ },
+                        { ImVec2{ x1, y0 }, ImVec2{ uv1.x, uv0.y }, color, eyeZ },
+                        { ImVec2{ x1, y1 }, ImVec2{ uv1.x, uv1.y }, color, eyeZ },
+                        { ImVec2{ x0, y1 }, ImVec2{ uv0.x, uv1.y }, color, eyeZ }
+                    };
+                    constexpr unsigned int order[6] = { 0, 1, 2, 0, 2, 3 };
+                    for (unsigned int index : order)
+                    {
+                        output.push_back(corners[index]);
+                    }
+                }
+                x += glyph ? glyph->AdvanceX * scale : font->FallbackAdvanceX * scale;
+            }
+        }
+
+        void appendOrientedTextVertices(std::vector<ViewCubeLabelVertex>& output,
+                                        const ImVec2& origin,
+                                        const ImVec2& cubeCenter,
+                                        float radius,
+                                        const glm::mat3& rotation,
+                                        const glm::vec3& center,
+                                        const glm::vec3& u,
+                                        const glm::vec3& v,
+                                        const char* text,
+                                        ImU32 color,
+                                        float size)
+        {
+            ImFont* font = ImGui::GetFont();
+            if (!font || !text)
+            {
+                return;
+            }
+
+            const float scale = size / font->FontSize;
+            const ImVec2 textSize = font->CalcTextSizeA(
+                size, std::numeric_limits<float>::max(), 0.0f, text, nullptr, nullptr);
+            float x = -textSize.x * 0.5f;
+            const float y = -textSize.y * 0.5f;
+
+            const char* cursor = text;
+            const char* end = text + std::string::traits_type::length(text);
+            while (cursor < end)
+            {
+                unsigned int codepoint = 0;
+                const int bytes = ImTextCharFromUtf8(&codepoint, cursor, end);
+                if (bytes <= 0 || codepoint == 0)
+                {
+                    break;
+                }
+                cursor += bytes;
+
+                const ImFontGlyph* glyph = font->FindGlyph(static_cast<ImWchar>(codepoint));
+                if (!glyph)
+                {
+                    glyph = font->FindGlyph(static_cast<ImWchar>('?'));
+                }
+                if (glyph && glyph->Visible)
+                {
+                    // ImGui glyph coordinates are top-down.  The compass text
+                    // plane uses +Y as screen-up, exactly like OpenCADStudio.
+                    // The ring's local space is unit-sized; the glyph metrics
+                    // are widget pixels.  Convert pixels into local units so a
+                    // 12 px glyph stays 12 px after the renderer scales by radius.
+                    const float lx0 = (x + glyph->X0 * scale) / radius;
+                    const float ly0 = -(y + glyph->Y0 * scale) / radius;
+                    const float lx1 = (x + glyph->X1 * scale) / radius;
+                    const float ly1 = -(y + glyph->Y1 * scale) / radius;
+                    const glm::vec3 local[4] = {
+                        center + u * lx0 + v * ly0,
+                        center + u * lx1 + v * ly0,
+                        center + u * lx1 + v * ly1,
+                        center + u * lx0 + v * ly1
+                    };
+                    const ImVec2 uv0{ glyph->U0, glyph->V0 };
+                    const ImVec2 uv1{ glyph->U1, glyph->V1 };
+                    ViewCubeLabelVertex corners[4] = {
+                        { ImVec2{}, uv0, color, 0.0f },
+                        { ImVec2{}, uv1, color, 0.0f },
+                        { ImVec2{}, uv1, color, 0.0f },
+                        { ImVec2{}, uv0, color, 0.0f }
+                    };
+                    for (unsigned i = 0; i < 4; ++i)
+                    {
+                        const glm::vec3 eye = rotation * local[i];
+                        corners[i].position = ImVec2{
+                            cubeCenter.x + eye.x * radius - origin.x,
+                            cubeCenter.y - eye.y * radius - origin.y
+                        };
+                        corners[i].depth = eye.z;
+                    }
+                    constexpr unsigned int order[6] = { 0, 1, 2, 0, 2, 3 };
+                    for (unsigned int index : order)
+                    {
+                        output.push_back(corners[index]);
+                    }
+                }
+                x += glyph ? glyph->AdvanceX * scale : font->FallbackAdvanceX * scale;
+            }
+        }
+
+        void faceLabelAxes(int face, glm::vec3& u, glm::vec3& v)
+        {
+            switch (face)
+            {
+            case 0: u = {  1.0f, 0.0f, 0.0f }; v = { 0.0f,  1.0f, 0.0f }; break;
+            case 1: u = {  1.0f, 0.0f, 0.0f }; v = { 0.0f, -1.0f, 0.0f }; break;
+            case 2: u = {  1.0f, 0.0f, 0.0f }; v = { 0.0f,  0.0f, 1.0f }; break;
+            case 3: u = { -1.0f, 0.0f, 0.0f }; v = { 0.0f,  0.0f, 1.0f }; break;
+            case 4: u = {  0.0f, 1.0f, 0.0f }; v = { 0.0f,  0.0f, 1.0f }; break;
+            case 5: u = {  0.0f,-1.0f, 0.0f }; v = { 0.0f,  0.0f, 1.0f }; break;
+            default: u = { 1.0f, 0.0f, 0.0f }; v = { 0.0f,  1.0f, 0.0f }; break;
+            }
+        }
+
+        void appendTextWithHaloVertices(std::vector<ViewCubeLabelVertex>& output,
+                                        const ImVec2& origin,
+                                        const ImVec2& position,
+                                        const char* text,
+                                        ImU32 color,
+                                        float size,
+                                        float eyeZ)
+        {
+            constexpr ImU32 halo = IM_COL32(255, 255, 255, 175);
+            constexpr float offsets[4][2] = {
+                { -1.0f, 0.0f }, { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 1.0f }
+            };
+            for (const auto& offset : offsets)
+            {
+                appendTextVertices(output, origin,
+                                   ImVec2{ position.x + offset[0], position.y + offset[1] },
+                                   text, halo, size, eyeZ + 0.02f);
+            }
+            appendTextVertices(output, origin, position, text, color, size, eyeZ);
         }
 
         ImVec2 iconPoint(const ImVec2& center, float scale, float x, float y)
@@ -552,7 +823,8 @@ namespace cadui
 
             if (!controlHover)
             {
-                hoveredId = hitTestPolygons(mouse, polygons);
+                // Use the same projected polygons used by ImGui fallback/highlight.
+                hoveredId = hitTestRegion(mouse, cubeRotation, navRect.GetCenter(), radius);
                 if (hoveredId < 0)
                 {
                     const glm::vec2 delta{ mouse.x - navRect.GetCenter().x, mouse.y - navRect.GetCenter().y };
@@ -596,13 +868,58 @@ namespace cadui
             }
         }
 
+        const bool depthTestedLabels = m_renderer && m_renderer->isValid() && m_renderer->canRenderText();
+        std::vector<ViewCubeLabelVertex> labelVertices;
+        if (depthTestedLabels)
+        {
+            const ImVec2 origin = navRect.Min;
+            const ImVec2 cubeCenter = navRect.GetCenter();
+            for (unsigned face = 0; face < 6; ++face)
+            {
+                if (faceDepths[face] < 0.12f)
+                {
+                    continue;
+                }
+                const glm::vec3 normal = ViewCubeWidget::snapDirection(
+                    regionById(static_cast<int>(face)));
+                glm::vec3 u;
+                glm::vec3 v;
+                faceLabelAxes(static_cast<int>(face), u, v);
+                appendOrientedTextVertices(
+                    labelVertices, origin, cubeCenter, radius, cubeRotation,
+                    normal * 1.002f, u, v,
+                    options.faceLabels[face],
+                    IM_COL32(13, 20, 33, 255),
+                    kLabelHeight * radius);
+            }
+
+            const std::array<const char*, 4> names{ "N", "E", "S", "W" };
+            const std::array<glm::vec3, 4> directions{{
+                { 0.0f,  1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, -1.0f, 0.0f }, {-1.0f, 0.0f, 0.0f }
+            }};
+            for (unsigned index = 0; index < directions.size(); ++index)
+            {
+                const glm::vec3 center{
+                    directions[index].x * kCardinalR,
+                    directions[index].y * kCardinalR,
+                    kRingZ + 0.004f
+                };
+                appendOrientedTextVertices(
+                    labelVertices, origin, cubeCenter, radius, viewRotation,
+                    center, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f },
+                    names[index], IM_COL32(13, 20, 33, 255),
+                    kLabelHeight * radius);
+            }
+        }
+
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         drawList->PushClipRect(rectMin, rectMax, true);
         if (m_renderer && m_renderer->isValid())
         {
-            m_renderer->render(navRect.GetSize(), cubeRotation, viewRotation, hoveredId);
+            m_renderer->render(navRect.GetSize(), cubeRotation, viewRotation,
+                               hoveredId, labelVertices);
             drawList->AddImage(m_renderer->textureId(), navRect.Min, navRect.Max);
-            drawPolygons(drawList, polygons, hoveredId, false);
         }
         else
         {
@@ -610,20 +927,27 @@ namespace cadui
             drawPolygons(drawList, polygons, hoveredId, true);
         }
 
-        drawRingLabels(drawList, viewRotation, navRect.GetCenter(), radius);
-
-        for (unsigned face = 0; face < 6; ++face)
+        if (!depthTestedLabels)
         {
-            if (faceDepths[face] >= -0.03f)
+            drawRingLabels(drawList, viewRotation, navRect.GetCenter(), radius);
+        }
+
+        if (!depthTestedLabels)
+        {
+            for (unsigned face = 0; face < 6; ++face)
             {
-                continue;
+                if (faceDepths[face] < 0.12f)
+                {
+                    continue;
+                }
+                drawTextWithHalo(drawList, faceCenters[face],
+                                 options.faceLabels[face],
+                                 static_cast<int>(face) == hoveredId ? IM_COL32(255, 255, 255, 255) : IM_COL32(13, 20, 33, 255),
+                                 13.0f);
             }
-            drawTextCentered(drawList, faceCenters[face],
-                             options.faceLabels[face],
-                             static_cast<int>(face) == hoveredId ? IM_COL32(255, 255, 255, 240) : kEdge,
-                             11.0f);
         }
         drawList->PopClipRect();
+
 
         if (result.hasHover && !controlHover)
         {

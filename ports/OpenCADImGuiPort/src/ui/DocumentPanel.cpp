@@ -8,7 +8,7 @@ namespace ui
 {
     void drawDocumentPanel(IAppController& controller, const AppSnapshot& snapshot)
     {
-        if (!ImGui::Begin("Document"))
+        if (!ImGui::Begin("文档"))
         {
             ImGui::End();
             return;

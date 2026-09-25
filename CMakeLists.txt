@@ -33,6 +33,9 @@ set(BX_ROOT                "${CMAKE_SOURCE_DIR}/lib/bx")
 set(BIMG_ROOT              "${CMAKE_SOURCE_DIR}/lib/bimg")
 set(BGFX_ROOT              "${CMAKE_SOURCE_DIR}/lib/bgfx")
 
+# Mesh CAD rendering needs runtime decoding of PNG/JPG albedo textures.
+set(CAD_USE_BIMG_DECODE ON CACHE BOOL "" FORCE)
+
 # The bundled bgfx family uses these helpers from its reference build.
 include("${CMAKE_SOURCE_DIR}/cmake/Standard.cmake")
 
@@ -122,4 +125,5 @@ target_link_libraries(WINDOW PRIVATE
     bgfx
     bx
     bimg
+    bimg_decode
 )

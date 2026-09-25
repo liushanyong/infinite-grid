@@ -24,10 +24,7 @@ namespace ui
 
         bool beginProperties()
         {
-            const ImGuiViewport* vp = ImGui::GetMainViewport();
-            const float height = vp->WorkSize.y - kContentTop - kStatusBarHeight;
-            ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x, vp->WorkPos.y + kContentTop), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, height), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(kLeftPanelWidth, 700.0f), ImGuiCond_FirstUseEver);
             ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(42, 42, 42, 255));
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(53, 53, 53, 255));
             ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(48, 48, 48, 255));
@@ -41,9 +38,8 @@ namespace ui
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 3.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 3.0f));
 
-            constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking
-                | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
-            const bool open = ImGui::Begin("##PropertiesPanel", nullptr, flags);
+            constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+            const bool open = ImGui::Begin("特性", nullptr, flags);
             if (!open)
             {
                 ImGui::End();

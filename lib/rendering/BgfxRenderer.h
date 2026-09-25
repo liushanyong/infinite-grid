@@ -3,7 +3,10 @@
 #include "rendering/RendererBackend.h"
 
 #include <bgfx/bgfx.h>
+#include <array>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace rendering
 {
@@ -29,12 +32,19 @@ public:
     void drawTargetPoint(const TargetPointRenderData &data) override;
     void drawTargetPointInstances(const TargetPointInstancesRenderData &data) override;
     void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) override;
+    void setRenderMode(RenderMode mode) override;
+    RenderMode renderMode() const override;
+    RenderModeFlags renderModeFlags() const override;
     void drawPolylines(const PolylineRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+    uint32_t loadMeshTexture(const std::string &path) override;
+    void setRealisticLights(const RealisticLightsRenderData &lights) override;
 
 private:
 
     bool createRenderResources();
+    bool createSceneFrameBuffer();
+    void destroySceneFrameBuffer();
 
     SDL_Window *m_window = nullptr;
     GraphicsApi m_api = GraphicsApi::Auto;
@@ -68,14 +78,20 @@ private:
     bgfx::UniformHandle m_gridOpacity = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridOrthoPlaneValid = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_logDepth = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_layerOffset = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_gridProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_view = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_projection = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_meshEdgeOverride = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cubeRelativePosition = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cubeRelativePositionLow = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_eyeHigh = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_eyeLow = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cubeOpacity = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cubeColor = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_cubeProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_meshInstanceProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_pbrMeshProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_pointInstanceProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_cadAlgorithmProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cadView = BGFX_INVALID_HANDLE;
@@ -86,9 +102,22 @@ private:
     bgfx::UniformHandle m_cadStyleParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cadWireframeColor = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cadStrokeParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_cadFlatShade = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_polylineProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_fillProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_realisticMaterial = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_rAmbient = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_rDirection = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_rDirectionColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_rPointPositions = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_rPointColors = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_rParams = BGFX_INVALID_HANDLE;
+    RealisticLightsRenderData m_realisticLights;
+    bgfx::TextureHandle m_whiteTexture = BGFX_INVALID_HANDLE;
+    std::vector<bgfx::TextureHandle> m_meshTextures;
     bgfx::VertexLayout m_polylineLayout;
     bgfx::VertexLayout m_fillLayout;
     bgfx::VertexBufferHandle m_cadCubeBuffer = BGFX_INVALID_HANDLE;
@@ -99,6 +128,11 @@ private:
     bgfx::VertexBufferHandle m_sphereBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_coneBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_torusBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_instanceCubeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_cubeEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_sphereEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_coneEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_torusEdgeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_aabbBuffer = BGFX_INVALID_HANDLE;
 
     bgfx::UniformHandle m_lineStart = BGFX_INVALID_HANDLE;
@@ -115,6 +149,13 @@ private:
     bgfx::ProgramHandle m_pointProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_pointBuffer = BGFX_INVALID_HANDLE;
 
+    // The CAD passes render into one explicit MSAA target so every pass shares
+    // the same color/depth pair on every backend.
+    bgfx::FrameBufferHandle m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_presentProgram = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_presentQuadBuffer = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_presentSampler = BGFX_INVALID_HANDLE;
+
 
     // FPS overlay bookkeeping (debug text drawn in endFrame).
     float    m_fps = 0.0f;
@@ -123,6 +164,7 @@ private:
 
     uint16_t m_width = 0;
     uint16_t m_height = 0;
+    RenderModeManager m_renderMode;
     bool m_initialized = false;
 };
 

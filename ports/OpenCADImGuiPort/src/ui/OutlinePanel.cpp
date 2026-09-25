@@ -10,7 +10,7 @@ namespace ui
 {
     void drawOutlinePanel(IAppController& controller, const AppSnapshot& snapshot)
     {
-        if (!ImGui::Begin("Outline"))
+        if (!ImGui::Begin("大纲"))
         {
             ImGui::End();
             return;

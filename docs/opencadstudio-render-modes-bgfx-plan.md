@@ -2,15 +2,15 @@
 
 ## 1. 目标
 
-将 OpenCADStudio 中七种典型 CAD 渲染模式移植到本项目当前的 `SDL3 + bgfx` 渲染路径中，复用现有 `BgfxRenderer`、RTE/rebase 坐标体系和 D3D 深度投影转换：
+将 OpenCADStudio 的 CAD 渲染模式移植到本项目当前的 `SDL3 + bgfx` 渲染路径中，复用现有 `BgfxRenderer`、RTE/rebase 坐标体系和 D3D 深度投影转换。当前公共视觉样式已合并为五种：
 
 - Wireframe 2D
 - Wireframe 3D
 - Hidden Line
-- Flat Shaded
-- Gouraud Shaded
-- Flat Shaded + Edges
-- Gouraud Shaded + Edges
+- Shaded
+- Shaded + Edges
+
+Flat / Gouraud 在当前统一 shader 中视觉差异不足，且会造成模式重复；二者合并为 Shaded。Flat shading 仍可作为材质/effect 分支保留，但不再作为第二套公共 RenderMode 暴露。
 
 设计目标是让上层只需要传一个 `RenderMode`，底层自动决定 view 顺序、shader 程序、绘制状态和遮挡策略。
 
@@ -30,7 +30,7 @@ bgfx 没有 wgpu 那种显式 render pipeline 对象，因此将 OpenCADStudio �
 |---|---|
 | Render pipeline | Program + State + View |
 | Depth-only prepass | 关闭 color write 的 draw pass |
-| Flat / Gouraud | `uFlatShade` uniform 控制法线来源 |
+| Flat / Gouraud 历史分支 | 已合并为 Shaded；`u_flatShade` 仅作为可选材质分支 |
 | Wireframe 2D | CAD draw-order depth 或 Sequential 提交 |
 | Wireframe 3D | 真实 3D 深度 |
 | Hidden Line | Depth-only prepass + edge depth test |
@@ -47,10 +47,8 @@ enum class RenderMode {
     Wireframe2D,
     Wireframe3D,
     HiddenLine,
-    FlatShaded,
-    GouraudShaded,
-    FlatShadedWithEdges,
-    GouraudShadedWithEdges,
+    Shaded,
+    ShadedWithEdges,
 };
 ```
 
@@ -63,22 +61,19 @@ struct RenderModeFlags {
     bool show3dEdges;
     bool hiddenLine;
     bool show2dSolidFills;
-    bool flatShade;
     bool wireframe3d;
 };
 ```
 
 ### 3.3 模式到标志的映射
 
-| 模式 | face3dFill | meshFill | show3dEdges | hiddenLine | show2dSolidFills | flatShade |
+| 模式 | face3dFill | meshFill | show3dEdges | hiddenLine | show2dSolidFills | wireframe3d |
 |---|---:|---:|---:|---:|---:|---:|
 | Wireframe 2D | 0 | 0 | 1 | 0 | 1 | 0 |
-| Wireframe 3D | 0 | 0 | 1 | 0 | 0 | 0 |
+| Wireframe 3D | 0 | 0 | 1 | 0 | 0 | 1 |
 | Hidden Line | 1 | 1 | 1 | 1 | 1 | 0 |
-| Flat Shaded | 1 | 1 | 0 | 0 | 1 | 1 |
-| Gouraud Shaded | 1 | 1 | 0 | 0 | 1 | 0 |
-| Flat Shaded + Edges | 1 | 1 | 1 | 0 | 1 | 1 |
-| Gouraud Shaded + Edges | 1 | 1 | 1 | 0 | 1 | 0 |
+| Shaded | 1 | 1 | 0 | 0 | 1 | 0 |
+| Shaded + Edges | 1 | 1 | 1 | 0 | 1 | 0 |
 
 ---
 
@@ -138,7 +133,7 @@ bgfx::ProgramHandle mSilhouetteProgram; // 可选
 
 用途：
 
-- `mMeshFillProgram`：同时支持 Flat / Gouraud，由 uniform 控制。
+- `mMeshFillProgram`：统一 Shaded fill；可选 flat-normal 材质分支由 uniform 控制。
 - `mMeshDepthProgram`：Hidden Line 的 depth-only prepass。
 - `mMeshEdgeProgram`：绘制 mesh / B-rep 边线。
 - `mFaceFillProgram`：绘制 3DFACE / planar solid。
@@ -223,7 +218,7 @@ void drawScene(RenderMode mode) {
     }
 
     if (f.meshFill) {
-        submitMeshFill(f.flatShade);
+        submitMeshFill();
     }
 
     if (f.face3dFill) {
@@ -246,16 +241,14 @@ void drawScene(RenderMode mode) {
 | Wireframe 2D | 否 | 否 | 是 |
 | Wireframe 3D | 否 | 否 | 是 |
 | Hidden Line | 是 | 否 | 是 |
-| Flat Shaded | 否 | 是 | 否 |
-| Gouraud Shaded | 否 | 是 | 否 |
-| Flat Shaded + Edges | 否 | 是 | 是 |
-| Gouraud Shaded + Edges | 否 | 是 | 是 |
+| Shaded | 否 | 是 | 否 |
+| Shaded + Edges | 否 | 是 | 是 |
 
 ---
 
-## 8. Flat / Gouraud 着色实现
+## 8. Shading 分支与合并策略
 
-### 8.1 Uniform
+### 8.1 可选 Flat uniform
 
 ```cpp
 bgfx::UniformHandle uFlatShade;
@@ -265,7 +258,8 @@ uFlatShade = bgfx::createUniform("uFlatShade", bgfx::UniformType::Float1);
 提交前：
 
 ```cpp
-float flat = f.flatShade ? 1.0f : 0.0f;
+// RenderMode 不再区分 Flat/Gouraud；仅材质/effect 需要时启用。
+float flat = 0.0f;
 bgfx::setUniform(uFlatShade, &flat);
 ```
 
@@ -283,8 +277,8 @@ if (uFlatShade > 0.5) {
 说明：
 
 - Flat：使用屏幕空间导数重新计算 per-triangle face normal。
-- Gouraud：使用插值后的顶点 normal。
-- 实际光照可以在 fragment shader 中执行，视觉上等效于 smooth shading。
+- Smooth/Gouraud：使用插值后的顶点 normal。
+- 公共视觉样式统一走 Shaded；Flat 只作为材质/effect 选项，不单独参与 RenderMode 循环。
 
 ---
 
@@ -444,7 +438,7 @@ mModeFlags = flagsFor(mRenderMode);
 - 增加 `RenderMode` 与 `RenderModeFlags`。
 - 增加 view 布局。
 - 增加 mesh fill / edge / wire program。
-- 实现 Flat 与 Gouraud 的 uniform 分支。
+- 合并 Flat / Gouraud 为 Shaded，并保留可选 flat-normal 材质分支。
 - 实现基础 shaded fill 与 edge overlay。
 
 ### Phase 2：Hidden Line
@@ -478,8 +472,8 @@ mModeFlags = flagsFor(mRenderMode);
 3. 大坐标场景下的 pan / zoom / orbit。
 4. Wireframe 2D 与 Wireframe 3D 的遮挡差异。
 5. Hidden Line 下被挡住的边线是否消失。
-6. Flat / Gouraud 的明暗差异。
-7. Flat + Edges / Gouraud + Edges 的黑色边界是否正确。
+6. Shaded 与 Shaded + Edges 的边界/填充差异。
+7. 可选 flat-normal 材质分支与默认 smooth normal 的差异。
 8. 透明实体的显示顺序。
 9. MSAA 与非 MSAA 下的一致性。
 

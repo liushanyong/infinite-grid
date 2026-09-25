@@ -8,7 +8,7 @@ namespace ui
 {
     void drawLayersPanel(IAppController& controller, const AppSnapshot& snapshot)
     {
-        if (!ImGui::Begin("Layers"))
+        if (!ImGui::Begin("图层"))
         {
             ImGui::End();
             return;

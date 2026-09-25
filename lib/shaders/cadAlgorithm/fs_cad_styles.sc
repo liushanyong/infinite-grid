@@ -8,6 +8,7 @@ uniform vec4 u_cameraPos;
 uniform vec4 u_styleParams;
 uniform vec4 u_wireframeColor;
 uniform vec4 u_strokeParams;
+uniform vec4 u_flatShade;
 uniform vec4 uLogDepth;
 
 float hash(vec2 p)
@@ -155,6 +156,11 @@ void main()
 {
     gl_FragDepth = outputDepth(gl_FragCoord.z, v_depth);
     vec3 n = normalize(v_normal);
+    if (u_flatShade.x > 0.5)
+    {
+        vec3 flatNormal = normalize(cross(dFdy(v_worldPos), dFdx(v_worldPos)));
+        n = dot(flatNormal, n) < 0.0 ? -flatNormal : flatNormal;
+    }
     vec3 v = normalize(v_view);
     vec3 l = normalize(u_lightDir.xyz);
     float style = u_styleParams.x;
@@ -211,6 +217,11 @@ void main()
         float edge = 1.0 - interior;
         color = mix(color, u_wireframeColor.rgb, edge);
         gl_FragColor = vec4(color, (u_baseColor.a * v_color0.a));
+    }
+    else if (style < 7.5)
+    {
+        float depthT = outputDepth(gl_FragCoord.z, v_depth);
+        gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
     }
     else
     {

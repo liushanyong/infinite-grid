@@ -5,6 +5,7 @@ $input v_normal, v_viewDepth
 uniform vec4 uCubeOpacity;
 uniform vec4 uObjectColor;
 uniform vec4 uLogDepth;
+uniform vec4 uPrimParams;
 
 float outputDepth(float rawDepth, float viewDepth)
 {
@@ -22,6 +23,12 @@ float outputDepth(float rawDepth, float viewDepth)
 void main()
 {
     gl_FragDepth = outputDepth(gl_FragCoord.z, v_viewDepth);
+    if (uPrimParams.x > 6.5 && uPrimParams.x < 7.5)
+    {
+        float depthT = outputDepth(gl_FragCoord.z, v_viewDepth);
+        gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
+        return;
+    }
     vec3 normal = normalize(v_normal);
     vec3 lightDirection = normalize(vec3(0.4, 0.8, 0.55));
     float diffuse = max(dot(normal, lightDirection), 0.0);

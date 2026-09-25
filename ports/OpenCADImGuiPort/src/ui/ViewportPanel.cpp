@@ -76,31 +76,15 @@ namespace ui
         const InputRouter& router
     )
     {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        constexpr float leftOffset = kLeftPanelWidth;
-        const ImVec2 position(
-            viewport->WorkPos.x + leftOffset,
-            viewport->WorkPos.y + kContentTop
-        );
-        const ImVec2 size(
-            std::max(0.0f, viewport->WorkSize.x - leftOffset),
-            std::max(0.0f, viewport->WorkSize.y - kContentTop - kStatusBarHeight)
-        );
-
-        ImGui::SetNextWindowPos(position, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(1100.0f, 700.0f), ImGuiCond_FirstUseEver);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration
-            | ImGuiWindowFlags_NoDocking
-            | ImGuiWindowFlags_NoMove
+        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse
             | ImGuiWindowFlags_NoScrollbar
-            | ImGuiWindowFlags_NoScrollWithMouse
-            | ImGuiWindowFlags_NoSavedSettings
-            | ImGuiWindowFlags_NoBringToFrontOnFocus;
-        const bool open = ImGui::Begin("##Viewport", nullptr, flags);
+            | ImGuiWindowFlags_NoScrollWithMouse;
+        const bool open = ImGui::Begin("视口", nullptr, flags);
         if (!open)
         {
             ImGui::End();

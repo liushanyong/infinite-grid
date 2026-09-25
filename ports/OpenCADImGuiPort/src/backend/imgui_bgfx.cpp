@@ -46,7 +46,7 @@ struct BgfxImGuiContext
     bgfx::UniformHandle imageLodEnabled = BGFX_INVALID_HANDLE;
     bool created = false;
 
-    void create(float fontSize)
+    void create(float fontSize, const char* cjkFontPath)
     {
         IMGUI_CHECKVERSION();
 
@@ -85,6 +85,19 @@ struct BgfxImGuiContext
             &config,
             ranges
         );
+
+        if (cjkFontPath != nullptr)
+        {
+            ImFontConfig cjkConfig;
+            cjkConfig.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF(
+                cjkFontPath,
+                fontSize,
+                &cjkConfig,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+            );
+        }
+
         io.Fonts->AddFontFromMemoryTTF(
             const_cast<void*>(static_cast<const void*>(s_robotoMonoRegularTtf)),
             static_cast<int>(sizeof(s_robotoMonoRegularTtf)),
@@ -229,7 +242,13 @@ struct BgfxImGuiContext
                     } textureData;
                     textureData.pointer = cmd->TextureId;
 
-                    if (0 != (1 & textureData.packed.flags))
+                    if (0 != (2 & textureData.packed.flags))
+                    {
+                        // Premultiplied render target (e.g. ViewCube private FB).
+                        state = (state & ~BGFX_STATE_BLEND_MASK) |
+                                BGFX_STATE_BLEND_NORMAL;
+                    }
+                    else if (0 != (1 & textureData.packed.flags))
                     {
                         state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
                     }
@@ -281,9 +300,9 @@ BgfxImGuiContext s_context;
 
 } // namespace
 
-void imguiBgfxCreate(float fontSize)
+void imguiBgfxCreate(float fontSize, const char* cjkFontPath)
 {
-    s_context.create(fontSize);
+    s_context.create(fontSize, cjkFontPath);
 }
 
 void imguiBgfxDestroy()
@@ -294,4 +313,9 @@ void imguiBgfxDestroy()
 void imguiBgfxRenderDrawData(ImDrawData* drawData, bgfx::ViewId viewId)
 {
     s_context.render(drawData, viewId);
+}
+
+bgfx::TextureHandle imguiBgfxGetFontTexture()
+{
+    return s_context.texture;
 }

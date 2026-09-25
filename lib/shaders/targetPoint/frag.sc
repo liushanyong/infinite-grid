@@ -1,8 +1,9 @@
-$input v_pointCoord
+$input v_pointCoord, v_depth
 
 #include "bgfx_shader.sh"
 
 uniform vec4 uColor;
+uniform vec4 uPrimParams;
 
 void main()
 {
@@ -14,6 +15,11 @@ void main()
     }
 
     float z = sqrt(1.0 - r2);
+    if (uPrimParams.x > 0.5)
+    {
+        gl_FragColor = vec4(vec3_splat(1.0 - v_depth), 1.0);
+        return;
+    }
     float shade = 0.4 + 0.6 * z;
     gl_FragColor = vec4(uColor.xyz * shade, 1.0);
 }

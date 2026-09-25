@@ -5,8 +5,7 @@ This shader family ports the main CADplatformer mesh/visual-style algorithms int
 ## Ported algorithm groups
 
 - Mesh instancing
-- Unified mesh shading
-- Visual styles:
+- Unified mesh shading branches:
   - Realistic
   - Conceptual
   - Depth only
@@ -30,27 +29,31 @@ This shader family ports the main CADplatformer mesh/visual-style algorithms int
 
 ## Demo switch
 
-The demo is enabled by default. Optionally set the following environment variables before starting the application:
+The demo is enabled by default. Optionally set the following environment variable before starting the application:
 
 ```powershell
 $env:GRID_CAD_SHADER_DEMO = "1"   # optional; enabled by default
-$env:GRID_CAD_STYLE = "0"   # 0..7
 ```
 
-Style index:
+Press `K` to cycle the six consolidated render modes.  Flat/Gouraud variants were visually redundant in the current unified shader, so the public `RenderMode` now exposes Shaded, Shaded + Edges, and Depth Buffer.  Shader branches such as Realistic, Conceptual, Grayscale, Sketch, and X-ray remain available as material/effect algorithms, not as a second visual-style selector:
 
-0. Realistic
-1. Conceptual
-2. Depth only
-3. Grayscale
+1. Wireframe 2D
+2. Wireframe 3D
+3. Hidden Line
 4. Shaded
-5. Sketch
-6. Wireframe
-7. X-ray
+5. Shaded + Edges
+6. Depth Buffer
 
-By default, the renderer replaces the normal mesh-instancing pass with the CAD algorithm demo shader and keeps the large-coordinate scene and camera behavior unchanged. Set `GRID_CAD_SHADER_DEMO=0` to restore the normal path.
+The renderer now uses fixed bgfx views:
 
-Press `K` while the demo is enabled to cycle through the eight visual styles without restarting the application.
+0. background / grid
+1. hidden-line depth prepass
+2. solid fill
+3. mesh edges
+4. CAD wires
+5. overlay points/lines
+
+The six scene views target one explicit MSAA framebuffer.  Only view 0 clears color and depth; later views inherit that depth buffer so Hidden Line can occlude edges with a depth-only prepass.  A final present view resolves the MSAA scene target to the backbuffer.
 
 ## Compile / build
 
@@ -62,9 +65,7 @@ lib\compile_shaders_all.bat -Filter cadAlgorithm -Force
 ## Run demo
 
 ```powershell
-$env:GRID_CAD_STYLE = "0"
-$env:GRID_CAMERA_LARGE = "1"
-$env:GRID_STRESS_COUNT = "1"
-# Set GRID_CAD_SHADER_DEMO=0 to disable the demo
 build_ninja\bin\WINDOW.exe
 ```
+
+The large-coordinate stress scene and CAD vector-primitive demo load by default. `GRID_CAD_SHADER_DEMO=0` is still supported to disable the CAD shader demo.

@@ -27,5 +27,11 @@ void main()
     float alpha = 1.0 - smoothstep(1.0 - aa, 1.0, abs(v_edge));
     if (alpha <= 0.0)
         discard;
+    if (uPrimParams.z > 6.5 && uPrimParams.z < 7.5)
+    {
+        float depthT = outputDepth(gl_FragCoord.z, v_depth);
+        gl_FragColor = vec4(vec3_splat(1.0 - depthT), alpha);
+        return;
+    }
     gl_FragColor = vec4(v_color.rgb, v_color.a * alpha);
 }
