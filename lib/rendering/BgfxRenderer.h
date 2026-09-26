@@ -40,6 +40,12 @@ public:
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,
                           MeshType mesh, uint32_t objectId) override;
+    void queueGpuTrianglePick(const FillVertex *vertices,
+                              uint32_t vertexCount,
+                              const glm::mat4 &view,
+                              const glm::mat4 &projection,
+                              const glm::vec4 &logDepth,
+                              uint32_t objectId) override;
     GpuPickResult pollGpuPick() override;
     uint32_t loadMeshTexture(const std::string &path) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
@@ -53,6 +59,8 @@ private:
     void destroyGpuPickResources();
     glm::mat4 gpuPickProjection(const GpuPickRequest &request) const;
     bool gpuPickInstanceIsCandidate(const MeshInstance &instance) const;
+    bool gpuPickVerticesAreCandidate(const FillVertex *vertices,
+                                     uint32_t vertexCount) const;
     void renderGpuPickPass();
     void completeGpuPickReadback();
 
@@ -178,6 +186,15 @@ private:
     GpuPickRequest m_gpuPickRequest;
     std::vector<std::pair<MeshInstance, std::pair<MeshType, uint32_t>>>
         m_gpuPickInstances;
+    struct GpuTrianglePickBatch
+    {
+        glm::mat4 view;
+        glm::mat4 projection;
+        glm::vec4 logDepth;
+        uint32_t objectId = 0;
+        std::vector<FillVertex> vertices;
+    };
+    std::vector<GpuTrianglePickBatch> m_gpuPickTriangles;
     GpuPickResult m_gpuPickLastResult;
     std::array<uint8_t, 4> m_gpuPickReadbackData{};
     uint32_t m_gpuPickNextToken = 1;

@@ -216,6 +216,7 @@ struct GpuPickRequest
     double ndcY = 0.0;
     double nearDepth = 0.01;
     double farDepth = 1.0;
+    glm::vec4 logDepth{0.0f};
 };
 
 struct GpuPickResult
@@ -332,6 +333,15 @@ public:
     virtual uint32_t requestGpuPick(const GpuPickRequest &request) { return 0; }
     virtual void queueGpuMeshPick(const MeshInstance &instance,
                                   MeshType mesh, uint32_t objectId) {}
+    // A triangle soup already expressed in rebase-relative view-input space.
+    // The fragment color is the entity ID; this lets lines, fills, and point
+    // impostors share one small asynchronous ID submission.
+    virtual void queueGpuTrianglePick(const FillVertex *vertices,
+                                      uint32_t vertexCount,
+                                      const glm::mat4 &view,
+                                      const glm::mat4 &projection,
+                                      const glm::vec4 &logDepth,
+                                      uint32_t objectId) {}
     virtual GpuPickResult pollGpuPick() { return {}; }
 
     // Zero is a renderer-provided white texture; other ids are allocated by

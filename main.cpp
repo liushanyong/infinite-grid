@@ -819,11 +819,38 @@ struct MeshEntityRecord
 
 using LargeCoordinateObject = MeshEntityRecord;
 
-std::unordered_map<uint32_t, const MeshEntityRecord *> &gpuPickRegistry()
+enum class VisibilityKind
 {
-  static std::unordered_map<uint32_t, const MeshEntityRecord *> registry;
+  MeshObject,
+  CenterCube,
+  CadMesh,
+  CadStroke,
+  CadFill,
+  CadPoint
+};
+
+struct CadEntityRange;
+
+struct GpuPickEntity
+{
+  VisibilityKind kind = VisibilityKind::MeshObject;
+  const MeshEntityRecord *mesh = nullptr;
+  const CadEntityRange *cadRange = nullptr;
+
+  bool operator==(const GpuPickEntity &other) const
+  {
+    return kind == other.kind && mesh == other.mesh &&
+           cadRange == other.cadRange;
+  }
+};
+
+std::unordered_map<uint32_t, GpuPickEntity> &gpuPickRegistry()
+{
+  static std::unordered_map<uint32_t, GpuPickEntity> registry;
   return registry;
 }
+
+uint32_t gpuPickNextEntityId = 2;
 
 static bool gpuPickEnabled()
 {
@@ -832,28 +859,39 @@ static bool gpuPickEnabled()
          std::strcmp(value, "0") != 0;
 }
 
-uint32_t registerGpuPickEntity(const MeshEntityRecord *entity)
+uint32_t registerGpuPickEntity(GpuPickEntity entity)
 {
-  static std::unordered_map<uint32_t, const MeshEntityRecord *> &registry =
-      gpuPickRegistry();
-  uint32_t id = uint32_t((reinterpret_cast<uintptr_t>(entity) >> 4) *
-                         2654435761u);
-  id = id % 0xfffffffeu + 1;
-  while (id != 0 && id != 0xffffffffu && id != 1)
+  auto &registry = gpuPickRegistry();
+  for (uint32_t count = 0; count < 0xfffffffcu; ++count)
   {
+    const uint32_t id = gpuPickNextEntityId;
+    gpuPickNextEntityId = gpuPickNextEntityId >= 0xfffffffeu
+                              ? 2
+                              : gpuPickNextEntityId + 1;
+    if (id == 0 || id == 0xffffffffu || id == 1)
+      continue;
+
     auto [existing, inserted] = registry.emplace(id, entity);
     if (inserted || existing->second == entity)
       return id;
-    ++id;
   }
   return 0;
 }
 
-const MeshEntityRecord *findGpuPickEntity(uint32_t id)
+glm::vec4 encodeGpuPickId(uint32_t id)
+{
+  return {
+      float((id >> 16) & 0xff) / 255.0f,
+      float((id >> 8) & 0xff) / 255.0f,
+      float(id & 0xff) / 255.0f,
+      float((id >> 24) & 0xff) / 255.0f};
+}
+
+const GpuPickEntity *findGpuPickEntity(uint32_t id)
 {
   auto &registry = gpuPickRegistry();
   const auto found = registry.find(id);
-  return found != registry.end() ? found->second : nullptr;
+  return found != registry.end() ? &found->second : nullptr;
 }
 
 constexpr uint32_t kGpuPickCenterCubeId = 1;
@@ -903,7 +941,9 @@ static void queueGpuMeshEntity(const MeshEntityRecord *entity)
 {
   if (!entity)
     return;
-  queueGpuMeshEntity(*entity, registerGpuPickEntity(entity));
+  queueGpuMeshEntity(*entity,
+                     registerGpuPickEntity({VisibilityKind::MeshObject,
+                                            entity, nullptr}));
 }
 
 glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
@@ -1034,16 +1074,6 @@ struct CadEntityRange
   size_t count = 0;
 };
 
-enum class VisibilityKind
-{
-  MeshObject,
-  CenterCube,
-  CadMesh,
-  CadStroke,
-  CadFill,
-  CadPoint
-};
-
 enum class VisibilityState
 {
   Offscreen,
@@ -1058,6 +1088,7 @@ struct VisibilityCandidate
 {
   VisibilityKind kind = VisibilityKind::MeshObject;
   size_t entityIndex = 0;
+  const CadEntityRange *cadRange = nullptr;
   size_t rangeBegin = 0;
   size_t rangeCount = 0;
   const MeshEntityRecord *mesh = nullptr;
@@ -1565,6 +1596,133 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   };
 
   const entities::TessellatedEntity &tess = tessellation.geometry;
+  static std::vector<rendering::FillVertex> gpuPickVertices;
+  const bool gpuPickQueueActive =
+      rendererBackend && gpuPickEnabled() && gpuPickFocus.waitingResult;
+  auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId) {
+    if (!gpuPickQueueActive || objectId == 0 || gpuPickVertices.size() < 3)
+      return;
+
+    constexpr size_t kMaxPickChunkVertices = 3 * 21000;
+    for (size_t first = 0; first < gpuPickVertices.size();
+         first += kMaxPickChunkVertices)
+    {
+      const size_t count = std::min(kMaxPickChunkVertices,
+                                    gpuPickVertices.size() - first);
+      rendererBackend->queueGpuTrianglePick(
+          gpuPickVertices.data() + first, uint32_t(count), view,
+          pickProjection, logDepth, objectId);
+    }
+  };
+  auto appendPickRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
+                              const glm::vec4 &color, float halfWidth) {
+    const glm::vec3 direction = rb - ra;
+    if (glm::length(direction) < 1.0e-5f)
+      return;
+    const glm::vec3 side =
+        glm::normalize(glm::cross(direction, camFront)) * halfWidth;
+    gpuPickVertices.push_back({ra - side, color});
+    gpuPickVertices.push_back({ra + side, color});
+    gpuPickVertices.push_back({rb + side, color});
+    gpuPickVertices.push_back({ra - side, color});
+    gpuPickVertices.push_back({rb + side, color});
+    gpuPickVertices.push_back({rb - side, color});
+  };
+  auto appendPickPoint = [&](const glm::vec3 &center, float radius,
+                             const glm::vec4 &color) {
+    const glm::vec3 right = camRight * radius;
+    const glm::vec3 up = camUp * radius;
+    gpuPickVertices.push_back({center - right - up, color});
+    gpuPickVertices.push_back({center + right - up, color});
+    gpuPickVertices.push_back({center + right + up, color});
+    gpuPickVertices.push_back({center - right - up, color});
+    gpuPickVertices.push_back({center + right + up, color});
+    gpuPickVertices.push_back({center - right + up, color});
+  };
+  auto queueCadFill = [&](const VisibilityCandidate &candidate) {
+    if (!candidate.cadRange || !candidate.cadRange->count)
+      return;
+    const CadEntityRange &range = *candidate.cadRange;
+    const uint32_t objectId = registerGpuPickEntity(
+        {VisibilityKind::CadFill, nullptr, &range});
+    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    gpuPickVertices.clear();
+    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    {
+      const entities::Triangle &triangle = tess.fills[i];
+      if (!triangle.common.visible)
+        continue;
+      gpuPickVertices.push_back({glm::vec3(triangle.a - rebase), idColor});
+      gpuPickVertices.push_back({glm::vec3(triangle.b - rebase), idColor});
+      gpuPickVertices.push_back({glm::vec3(triangle.c - rebase), idColor});
+    }
+    queueGpuSoup(projection, objectId);
+  };
+  auto queueCadStroke = [&](const VisibilityCandidate &candidate) {
+    if (!candidate.cadRange || !candidate.cadRange->count)
+      return;
+    const CadEntityRange &range = *candidate.cadRange;
+    const uint32_t objectId = registerGpuPickEntity(
+        {VisibilityKind::CadStroke, nullptr, &range});
+    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    gpuPickVertices.clear();
+    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    {
+      const entities::Stroke &stroke = tess.strokes[i];
+      const size_t count = stroke.points.size();
+      if (!stroke.common.visible || count < 2)
+        continue;
+      const float halfWidth = std::max(
+          stroke.lineWeight > 0.0 ? float(stroke.lineWeight) * 0.5f : 2.0f,
+          pixelSizeWorld * 1.5f);
+      const size_t segmentCount =
+          stroke.closed ? count : count - 1;
+      for (size_t segment = 0; segment < segmentCount; ++segment)
+      {
+        appendPickRibbon(
+            glm::vec3(stroke.points[segment] - rebase),
+            glm::vec3(stroke.points[(segment + 1) % count] - rebase),
+            idColor, halfWidth);
+      }
+    }
+    queueGpuSoup(overlayProjection, objectId);
+  };
+  auto queueCadPoint = [&](const VisibilityCandidate &candidate) {
+    if (!candidate.cadRange || !candidate.cadRange->count)
+      return;
+    const CadEntityRange &range = *candidate.cadRange;
+    const uint32_t objectId = registerGpuPickEntity(
+        {VisibilityKind::CadPoint, nullptr, &range});
+    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    gpuPickVertices.clear();
+    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    {
+      const entities::TessellatedPoint &point = tess.points[i];
+      if (!point.common.visible)
+        continue;
+      const float radius = std::max(
+          float(point.pointSize) * 0.5f, pixelSizeWorld * 3.0f);
+      appendPickPoint(glm::vec3(point.location - rebase), radius, idColor);
+    }
+    queueGpuSoup(overlayProjection, objectId);
+  };
+  auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
+    if (!candidate.cadRange || !candidate.cadRange->count)
+      return;
+    const CadEntityRange &range = *candidate.cadRange;
+    const uint32_t objectId = registerGpuPickEntity(
+        {candidate.kind, nullptr, &range});
+    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    gpuPickVertices.clear();
+    appendPickPoint(glm::vec3(candidate.center - rebase),
+                    std::max(candidate.overlayPointSize,
+                             pixelSizeWorld > 0.0f
+                                 ? 3.0f * pixelSizeWorld
+                                 : 3.0f),
+                    idColor);
+    queueGpuSoup(overlayProjection, objectId);
+  };
+
   strokeVisible.assign(tess.strokes.size(), false);
   fillVisible.assign(tess.fills.size(), false);
   pointVisible.assign(tess.points.size(), false);
@@ -1632,6 +1790,30 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         glm::vec3(candidate->center - rebase),
         glm::vec3(candidate->overlayColor),
         candidate->overlayPointSize});
+  }
+
+  if (gpuPickQueueActive)
+  {
+    for (const VisibilityCandidate *candidate : visibleCad)
+    {
+      if (candidate && candidate->kind == VisibilityKind::CadFill)
+        queueCadFill(*candidate);
+    }
+    for (const VisibilityCandidate *candidate : visibleCad)
+    {
+      if (candidate && candidate->kind == VisibilityKind::CadStroke)
+        queueCadStroke(*candidate);
+    }
+    for (const VisibilityCandidate *candidate : visibleCad)
+    {
+      if (candidate && candidate->kind == VisibilityKind::CadPoint)
+        queueCadPoint(*candidate);
+    }
+    for (const VisibilityCandidate *candidate : tinyCad)
+    {
+      if (candidate && candidate->cadRange)
+        queueTinyCadPoint(*candidate);
+    }
   }
 
   if (rendererBackend && !cadPoints.empty())
@@ -2753,6 +2935,22 @@ double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint)
     return worldPerPixel * 3.0;
 }
 
+double cadStrokePickTolerance(const PickRay &ray,
+                              const entities::Stroke &stroke,
+                              const glm::dvec3 &worldPoint)
+{
+    const double renderedHalfWidth =
+        stroke.lineWeight > 0.0 ? stroke.lineWeight * 0.5 : 2.0;
+    return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
+}
+
+double cadPointPickTolerance(const PickRay &ray,
+                             const entities::TessellatedPoint &point)
+{
+    return std::max(cadPickTolerance(ray, point.location),
+                    point.pointSize * 0.5);
+}
+
 bool pickDebugEnabled()
 {
     static const bool enabled = [] {
@@ -3119,7 +3317,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                         (stroke.points[i] + stroke.points[next]) * 0.5;
                     if (rayIntersectsSegment(ray, stroke.points[i],
                                              stroke.points[next],
-                                             cadPickTolerance(ray, midpoint),
+                                             cadStrokePickTolerance(
+                                                 ray, stroke, midpoint),
                                              hitDepth))
                     {
                         considerCadOverlayHit(
@@ -3182,7 +3381,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
 
                 double hitDepth = 0.0;
                 if (rayIntersectsPoint(ray, point.location,
-                                       cadPickTolerance(ray, point.location),
+                                       cadPointPickTolerance(ray, point),
                                        hitDepth))
                 {
                     considerCadOverlayHit(
@@ -3260,35 +3459,153 @@ std::optional<AutofocusResult> autofocusAtNdc(double ndcX, double ndcY)
     return AutofocusResult{result.objectName, result.pivot, viewDepth};
 }
 
-// The GPU pass only identifies the mesh.  Refine against the exact triangle
-// on the CPU so all mesh hit points share one face-based result contract.
+// The GPU pass only identifies an entity.  Refine against its CPU geometry so
+// every hit point still comes from the same exact primitive tests used by the
+// fallback picker.
 std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                                 double ndcX, double ndcY)
 {
     const PickRay ray = pickRayFromNdc(ndcX, ndcY);
-    const bool centerCube = objectId == kGpuPickCenterCubeId;
-    const MeshEntityRecord *entity =
-        centerCube ? nullptr : findGpuPickEntity(objectId);
+    const GpuPickEntity *pickEntity = findGpuPickEntity(objectId);
     MeshEntityRecord center;
-    if (centerCube)
+    const MeshEntityRecord *meshEntity =
+        pickEntity && (pickEntity->kind == VisibilityKind::MeshObject ||
+                       pickEntity->kind == VisibilityKind::CadMesh)
+            ? pickEntity->mesh
+            : nullptr;
+    if (objectId == kGpuPickCenterCubeId)
     {
         center = getCenterCubeEntity();
-        entity = &center;
+        meshEntity = &center;
     }
-    if (!entity || !meshEntityVisible(*entity))
+
+    if (meshEntity)
+    {
+        if (!meshEntityVisible(*meshEntity))
+            return std::nullopt;
+
+        double hitDepth = 0.0;
+        size_t faceIndex = 0;
+        if (!rayIntersectsRenderedMesh(ray, *meshEntity, hitDepth,
+                                       &faceIndex))
+            return std::nullopt;
+
+        const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
+        const double viewDepth =
+            glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+        orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+        return AutofocusResult{meshEntity->displayName(), hitPivot,
+                               viewDepth, faceIndex};
+    }
+
+    if (!pickEntity || !pickEntity->cadRange)
         return std::nullopt;
 
-    double hitDepth = 0.0;
-    size_t faceIndex = 0;
-    if (!rayIntersectsRenderedMesh(ray, *entity, hitDepth, &faceIndex))
+    const VectorPrimitivesTessellation &cad =
+        getVectorPrimitivesTessellation();
+    const CadEntityRange &range = *pickEntity->cadRange;
+    if (!range.count)
         return std::nullopt;
 
-    const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
-    const double viewDepth =
-        glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+    bool hit = false;
+    double bestDepth = std::numeric_limits<double>::infinity();
+    size_t primitiveIndex = 0;
+    auto considerPrimitive = [&](double depth, size_t index) {
+        if (depth < bestDepth)
+        {
+            hit = true;
+            bestDepth = depth;
+            primitiveIndex = index;
+        }
+    };
+
+    if (pickEntity->kind == VisibilityKind::CadStroke)
+    {
+        if (range.begin >= cad.geometry.strokes.size())
+            return std::nullopt;
+        const size_t end = std::min(cad.geometry.strokes.size(),
+                                    range.begin + range.count);
+        for (size_t strokeIndex = range.begin; strokeIndex < end;
+             ++strokeIndex)
+        {
+            const entities::Stroke &stroke = cad.geometry.strokes[strokeIndex];
+            const size_t pointCount = stroke.points.size();
+            if (!stroke.common.visible || pointCount < 2)
+                continue;
+
+            const size_t segmentCount =
+                stroke.closed ? pointCount : pointCount - 1;
+            for (size_t segment = 0; segment < segmentCount; ++segment)
+            {
+                const size_t next = (segment + 1) % pointCount;
+                const glm::dvec3 midpoint =
+                    (stroke.points[segment] + stroke.points[next]) * 0.5;
+                double depth = 0.0;
+                if (rayIntersectsSegment(ray, stroke.points[segment],
+                                         stroke.points[next],
+                                         cadStrokePickTolerance(ray, stroke,
+                                                                midpoint),
+                                         depth))
+                {
+                    considerPrimitive(depth, strokeIndex);
+                }
+            }
+        }
+    }
+    else if (pickEntity->kind == VisibilityKind::CadFill)
+    {
+        if (range.begin >= cad.geometry.fills.size())
+            return std::nullopt;
+        const size_t end = std::min(cad.geometry.fills.size(),
+                                    range.begin + range.count);
+        for (size_t fillIndex = range.begin; fillIndex < end; ++fillIndex)
+        {
+            const entities::Triangle &triangle = cad.geometry.fills[fillIndex];
+            if (!triangle.common.visible)
+                continue;
+
+            double depth = 0.0;
+            if (rayIntersectsTriangle(ray, triangle.a, triangle.b,
+                                      triangle.c, depth))
+            {
+                considerPrimitive(depth, fillIndex);
+            }
+        }
+    }
+    else if (pickEntity->kind == VisibilityKind::CadPoint)
+    {
+        if (range.begin >= cad.geometry.points.size())
+            return std::nullopt;
+        const size_t end = std::min(cad.geometry.points.size(),
+                                    range.begin + range.count);
+        for (size_t pointIndex = range.begin; pointIndex < end; ++pointIndex)
+        {
+            const entities::TessellatedPoint &point =
+                cad.geometry.points[pointIndex];
+            if (!point.common.visible)
+                continue;
+
+            double depth = 0.0;
+            if (rayIntersectsPoint(ray, point.location,
+                                   cadPointPickTolerance(ray, point), depth))
+            {
+                considerPrimitive(depth, pointIndex);
+            }
+        }
+    }
+    else
+    {
+        return std::nullopt;
+    }
+
+    if (!hit)
+        return std::nullopt;
+
+    const glm::dvec3 hitPivot = ray.origin + ray.direction * bestDepth;
+    const double viewDepth = glm::dot(hitPivot - orbitCam.Position,
+                                      orbitCam.Front);
     orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
-    return AutofocusResult{entity->displayName(), hitPivot, viewDepth,
-                           faceIndex};
+    return AutofocusResult{range.name, hitPivot, viewDepth, primitiveIndex};
 }
 
 void reportAutofocus(const AutofocusResult &selected)
@@ -3691,6 +4008,7 @@ VisibilityCandidate makeCadRangeCandidate(
   VisibilityCandidate candidate;
   candidate.kind = kind;
   candidate.entityIndex = 0;
+  candidate.cadRange = &range;
   candidate.rangeBegin = range.begin;
   candidate.rangeCount = range.count;
   candidate.overlayPointSize = 2.0f;
@@ -4578,10 +4896,13 @@ void render()
         .ndcY = gpuPickFocus.ndcY,
         .nearDepth = activeNear,
         .farDepth = activeFar,
+        .logDepth = logDepth,
     };
     const uint32_t requestToken = rendererBackend->requestGpuPick(request);
     if (requestToken != 0)
     {
+      gpuPickRegistry().clear();
+      gpuPickNextEntityId = 2;
       gpuPickFocus.requestToken = requestToken;
       gpuPickFocus.pendingNdc = false;
       gpuPickFocus.waitingResult = true;

@@ -1064,6 +1064,7 @@ void BgfxRenderer::destroyGpuPickResources()
         *buffer = BGFX_INVALID_HANDLE;
     }
     m_gpuPickInstances.clear();
+    m_gpuPickTriangles.clear();
     m_gpuPickActive = false;
     m_gpuPickReadPending = false;
 }
@@ -1995,6 +1996,40 @@ bool BgfxRenderer::gpuPickInstanceIsCandidate(
            std::abs(delta.y) <= radiusNdcY;
 }
 
+bool BgfxRenderer::gpuPickVerticesAreCandidate(
+    const FillVertex *vertices, uint32_t vertexCount) const
+{
+    if (!vertices || vertexCount == 0)
+        return false;
+
+    glm::vec3 center(0.0f);
+    for (uint32_t i = 0; i < vertexCount; ++i)
+        center += vertices[i].position;
+    center /= float(vertexCount);
+
+    float radiusSquared = 0.0f;
+    for (uint32_t i = 0; i < vertexCount; ++i)
+        radiusSquared = std::max(radiusSquared,
+                                 glm::dot(vertices[i].position - center,
+                                          vertices[i].position - center));
+    const float radius = std::sqrt(radiusSquared) * 1.5f;
+
+    const glm::vec4 clip = m_gpuPickRequest.projection *
+        m_gpuPickRequest.view * glm::vec4(center, 1.0f);
+    if (!(clip.w > std::numeric_limits<float>::epsilon()))
+        return false;
+
+    const float radiusNdcX =
+        radius * std::abs(m_gpuPickRequest.projection[0][0]) / clip.w;
+    const float radiusNdcY =
+        radius * std::abs(m_gpuPickRequest.projection[1][1]) / clip.w;
+    const glm::vec2 delta(
+        clip.x / clip.w - float(m_gpuPickRequest.ndcX),
+        clip.y / clip.w - float(m_gpuPickRequest.ndcY));
+    return std::abs(delta.x) <= radiusNdcX &&
+           std::abs(delta.y) <= radiusNdcY;
+}
+
 uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 {
     if (!m_initialized || !bgfx::isValid(m_gpuPickProgram))
@@ -2006,6 +2041,7 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 
     m_gpuPickRequest = request;
     m_gpuPickInstances.clear();
+    m_gpuPickTriangles.clear();
     m_gpuPickActive = true;
     m_gpuPickLastResult.ready = false;
     m_gpuPickLastResult.hit = false;
@@ -2027,6 +2063,30 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
     }
     m_gpuPickInstances.emplace_back(instance,
                                     std::make_pair(mesh, objectId));
+}
+
+void BgfxRenderer::queueGpuTrianglePick(const FillVertex *vertices,
+                                        uint32_t vertexCount,
+                                        const glm::mat4 &view,
+                                        const glm::mat4 &projection,
+                                        const glm::vec4 &logDepth,
+                                        uint32_t objectId)
+{
+    constexpr size_t kMaxGpuPickTriangleBatches = 1024;
+    if (!m_gpuPickActive || objectId == 0 || objectId == 0xffffffffu ||
+        !vertices || vertexCount < 3 || vertexCount > 65535 ||
+        m_gpuPickTriangles.size() >= kMaxGpuPickTriangleBatches ||
+        !gpuPickVerticesAreCandidate(vertices, vertexCount))
+    {
+        return;
+    }
+
+    GpuTrianglePickBatch &batch = m_gpuPickTriangles.emplace_back();
+    batch.view = view;
+    batch.projection = projection;
+    batch.logDepth = logDepth;
+    batch.objectId = objectId;
+    batch.vertices.assign(vertices, vertices + vertexCount);
 }
 
 GpuPickResult BgfxRenderer::pollGpuPick()
@@ -2109,6 +2169,44 @@ void BgfxRenderer::renderGpuPickPass()
             bgfx::setInstanceDataBuffer(&instanceBuffer);
             bgfx::submit(kViewGpuPick, m_gpuPickProgram);
         }
+    }
+
+    for (const GpuTrianglePickBatch &batch : m_gpuPickTriangles)
+    {
+        if (batch.vertices.empty() || !bgfx::isValid(m_fillProgram))
+            continue;
+
+        bgfx::TransientVertexBuffer tvb;
+        if (batch.vertices.size() >
+            bgfx::getAvailTransientVertexBuffer(
+                uint32_t(batch.vertices.size()), m_fillLayout))
+        {
+            continue;
+        }
+        bgfx::allocTransientVertexBuffer(
+            &tvb, uint32_t(batch.vertices.size()), m_fillLayout);
+        std::memcpy(tvb.data, batch.vertices.data(),
+                    batch.vertices.size() * sizeof(FillVertex));
+
+        glm::mat4 identity = glm::mat4(1.0f);
+        bgfx::setTransform(glm::value_ptr(identity));
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setUniform(m_view, glm::value_ptr(batch.view));
+        const glm::mat4 projection =
+            projectionForDirect3D(batch.projection);
+        bgfx::setUniform(m_projection, glm::value_ptr(projection));
+        const float logDepth[4] = {
+            batch.logDepth.x, batch.logDepth.y,
+            batch.logDepth.z, batch.logDepth.w};
+        bgfx::setUniform(m_logDepth, logDepth);
+        const float primParams[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(m_primParams, primParams);
+        const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(m_layerOffset, layerOffset);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LEQUAL |
+                       BGFX_STATE_MSAA);
+        bgfx::submit(kViewGpuPick, m_fillProgram);
     }
 
     bgfx::blit(kViewGpuPickBlit, m_gpuPickReadback, 0, 0,
