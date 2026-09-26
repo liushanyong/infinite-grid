@@ -1654,11 +1654,26 @@ static bool cadAlgorithmDemoEnabled()
 void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 const glm::mat4 &projection,
                                 const glm::dvec3 &rebaseOrigin,
-                                std::vector<const LargeCoordinateObject *> &drawOrder,
+                                const std::vector<const LargeCoordinateObject *> &drawOrder,
                                 const glm::vec4 &logDepth)
 {
   const glm::dvec3 cameraPos(orbitCam.Position);
   const glm::dvec3 &cameraFront = orbitCam.Front;
+
+  // Depth values feed both sort comparisons, so cache them once per frame.
+  static std::vector<std::pair<double, const LargeCoordinateObject *>>
+      sortedDraws;
+  sortedDraws.clear();
+  sortedDraws.reserve(drawOrder.size());
+  for (const LargeCoordinateObject *object : drawOrder)
+  {
+    sortedDraws.emplace_back(
+        glm::dot(object->worldPosition - cameraPos, cameraFront), object);
+  }
+  std::sort(sortedDraws.begin(), sortedDraws.end(),
+            [](const auto &lhs, const auto &rhs) {
+              return lhs.first > rhs.first;
+            });
 
   rendering::RealisticLightsRenderData realisticLights;
   realisticLights.pointLights[0].position =
@@ -1678,23 +1693,14 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
 
   if (cadAlgorithmDemoEnabled())
   {
-    std::sort(drawOrder.begin(), drawOrder.end(),
-        [&](const LargeCoordinateObject *lhs,
-            const LargeCoordinateObject *rhs) {
-          const double lhsDepth =
-              glm::dot(lhs->worldPosition - cameraPos, cameraFront);
-          const double rhsDepth =
-              glm::dot(rhs->worldPosition - cameraPos, cameraFront);
-          return lhsDepth > rhsDepth;
-        });
-
     constexpr size_t kCadMeshCount = 4;
     static std::array<std::vector<rendering::MeshInstance>, kCadMeshCount>
         cadGroups;
     for (auto &group : cadGroups)
       group.clear();
-    for (const LargeCoordinateObject *object : drawOrder)
+    for (const auto &entry : sortedDraws)
     {
+        const LargeCoordinateObject *object = entry.second;
       if (!meshEntityVisible(*object))
         continue;
       const size_t meshIndex = static_cast<size_t>(object->mesh);
@@ -1738,16 +1744,6 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     }
     return;
   }
-  std::sort(drawOrder.begin(), drawOrder.end(),
-      [&](const LargeCoordinateObject *lhs,
-          const LargeCoordinateObject *rhs) {
-        const double lhsDepth =
-            glm::dot(lhs->worldPosition - cameraPos, cameraFront);
-        const double rhsDepth =
-            glm::dot(rhs->worldPosition - cameraPos, cameraFront);
-        return lhsDepth > rhsDepth;
-      });
-
   // CAD and PBR meshes share the global far-to-near painter order. Depth
   // buckets preserve that order across compatible instancing groups while
   // keeping the number of draw calls bounded.
@@ -1767,17 +1763,18 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     const size_t orderCount = drawOrder.size();
     for (size_t orderIndex = 0; orderIndex < orderCount; ++orderIndex)
     {
-        const LargeCoordinateObject *object = drawOrder[orderIndex];
+        const LargeCoordinateObject *object = sortedDraws[orderIndex].second;
+        const size_t bucketIndex = orderIndex * kDepthBucketCount /
+                                   std::max(orderCount, size_t(1));
+        if (!meshEntityVisible(*object))
+          continue;
+
         const bool realistic = object->realistic();
         const glm::vec4 material = meshEntityRenderMaterial(*object);
         const glm::vec4 color = meshEntityColor(*object);
-        const size_t bucketIndex = orderIndex * kDepthBucketCount /
-                                   std::max(orderCount, size_t(1));
         const rendering::DoubleSingleVec3 objectPosition =
             rendering::encodeDoubleSingle(object->worldPosition);
         const float scale = object->size;
-        if (!meshEntityVisible(*object))
-          continue;
 
         std::vector<InstanceGroup> &groups = buckets[bucketIndex];
         auto groupIt = std::find_if(
@@ -2914,6 +2911,10 @@ VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
                                       VisibilityKind kind,
                                       size_t entityIndex = 0);
 
+VisibilityCandidate makeCadRangeCandidate(
+    const VectorPrimitivesTessellation &tessellation,
+    const CadEntityRange &range, VisibilityKind kind);
+
 UnifiedVisibilityQuery makePickingVisibilityQuery()
 {
   const double aspect = (double)currentDrawableWidth() /
@@ -2976,31 +2977,21 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     PickDebugTrace localTrace;
     PickDebugTrace &trace = debugTrace ? *debugTrace : localTrace;
     const UnifiedVisibilityQuery pickVisibility = makePickingVisibilityQuery();
-    std::vector<VisibilityCandidate> visibilityCandidates;
-    buildVisibilityCandidates(visibilityCandidates);
-    const auto visibleState = [&](VisibilityKind kind, size_t entityIndex,
-                                  size_t rangeBegin) {
-        const auto found = std::find_if(
-            visibilityCandidates.begin(), visibilityCandidates.end(),
-            [&](const VisibilityCandidate &candidate) {
-                return candidate.kind == kind &&
-                       candidate.entityIndex == entityIndex &&
-                       candidate.rangeBegin == rangeBegin;
-            });
-        return found == visibilityCandidates.end()
-                   ? VisibilityState::Offscreen
-                   : pickVisibility.classify(*found);
-    };
     const auto meshObjectState = [&](const MeshEntityRecord *object) {
-        const auto found = std::find_if(
-            visibilityCandidates.begin(), visibilityCandidates.end(),
-            [&](const VisibilityCandidate &candidate) {
-                return candidate.kind == VisibilityKind::MeshObject &&
-                       candidate.mesh == object;
-            });
-        return found == visibilityCandidates.end()
-                   ? VisibilityState::Offscreen
-                   : pickVisibility.classify(*found);
+        if (!meshEntityVisible(*object))
+            return VisibilityState::Offscreen;
+        return pickVisibility.classify(
+            makeMeshCandidate(*object, VisibilityKind::MeshObject));
+    };
+    const auto rangeForIndex =
+        [](const std::vector<CadEntityRange> &ranges,
+           size_t index) -> const CadEntityRange * {
+        for (const CadEntityRange &range : ranges)
+        {
+            if (index >= range.begin && index < range.begin + range.count)
+                return &range;
+        }
+        return nullptr;
     };
     double nearestDepth = std::numeric_limits<double>::infinity();
     double nearestMeshDepth = std::numeric_limits<double>::infinity();
@@ -3062,20 +3053,18 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     // Refine with exact per-object AABBs (leaf bounds may be merged).
     for (const LargeCoordinateObject *object : candidates)
     {
-        if (meshObjectState(object) == VisibilityState::Offscreen)
-        {
+        if (!meshEntityVisible(*object))
             continue;
-        }
         const glm::dvec3 halfExtent(object->size * 0.5);
         const WorldAabb2 objBounds{object->worldPosition - halfExtent,
                                    object->worldPosition + halfExtent};
         double hitDepth = 0.0;
         if (rayIntersectsAabb(ray, objBounds, hitDepth) &&
             hitDepth < nearestDepth &&
+            meshObjectState(object) != VisibilityState::Offscreen &&
             rayIntersectsRenderedMesh(ray, *object, hitDepth))
         {
-            if (meshEntityVisible(*object))
-                considerMeshHit(hitDepth, object->displayName());
+            considerMeshHit(hitDepth, object->displayName());
         }
     }
 
@@ -3099,19 +3088,16 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     {
         const VectorPrimitivesTessellation &cad =
             getVectorPrimitivesTessellation();
-        const auto cadState = [&](VisibilityKind kind, size_t rangeBegin) {
-            return visibleState(kind, 0, rangeBegin);
+        const auto cadState = [&](VisibilityKind kind,
+                                  const CadEntityRange &range) {
+            return pickVisibility.classify(
+                makeCadRangeCandidate(cad, range, kind));
         };
-        const auto cadMeshState = [&](size_t meshIndex) {
-            const auto found = std::find_if(
-                visibilityCandidates.begin(), visibilityCandidates.end(),
-                [&](const VisibilityCandidate &candidate) {
-                    return candidate.kind == VisibilityKind::CadMesh &&
-                           candidate.entityIndex == meshIndex;
-                });
-            return found == visibilityCandidates.end()
-                       ? VisibilityState::Offscreen
-                       : pickVisibility.classify(*found);
+        const auto cadMeshState = [&](const MeshEntityRecord &mesh) {
+            if (!meshEntityVisible(mesh))
+                return VisibilityState::Offscreen;
+            return pickVisibility.classify(
+                makeMeshCandidate(mesh, VisibilityKind::CadMesh));
         };
         if (debugTrace)
         {
@@ -3122,25 +3108,15 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         size_t strokeIndex = 0;
         for (const entities::Stroke &stroke : cad.geometry.strokes)
         {
-            const CadEntityRange *range = nullptr;
-            for (const CadEntityRange &candidateRange : cad.strokeRanges)
-            {
-                if (candidateRange.begin == strokeIndex)
-                {
-                    range = &candidateRange;
-                    break;
-                }
-            }
-            if (!range ||
-                cadState(VisibilityKind::CadStroke, range->begin) ==
-                    VisibilityState::Offscreen)
+            const CadEntityRange *range =
+                rangeForIndex(cad.strokeRanges, strokeIndex);
+            if (!range || !stroke.common.visible || stroke.points.size() < 2)
             {
                 ++strokeIndex;
                 continue;
             }
-            if (stroke.points.size() < 2)
-                continue;
-            if (!stroke.common.visible)
+            if (cadState(VisibilityKind::CadStroke, *range) ==
+                VisibilityState::Offscreen)
                 continue;
 
             const size_t segmentCount =
@@ -3166,18 +3142,15 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         size_t fillIndex = 0;
         for (const entities::Triangle &triangle : cad.geometry.fills)
         {
-            const CadEntityRange *range = nullptr;
-            for (const CadEntityRange &candidateRange : cad.fillRanges)
+            const CadEntityRange *range =
+                rangeForIndex(cad.fillRanges, fillIndex);
+            if (!range || !triangle.common.visible)
             {
-                if (candidateRange.begin == fillIndex)
-                {
-                    range = &candidateRange;
-                    break;
-                }
+                ++fillIndex;
+                continue;
             }
-            if (!range ||
-                cadState(VisibilityKind::CadFill, range->begin) ==
-                    VisibilityState::Offscreen)
+            if (cadState(VisibilityKind::CadFill, *range) ==
+                VisibilityState::Offscreen)
             {
                 ++fillIndex;
                 continue;
@@ -3186,8 +3159,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             if (rayIntersectsTriangle(ray, triangle.a, triangle.b, triangle.c,
                                       hitDepth))
             {
-                if (triangle.common.visible)
-                    considerCadHit(hitDepth, cad.fillNameAt(fillIndex));
+                considerCadHit(hitDepth, cad.fillNameAt(fillIndex));
             }
             ++fillIndex;
         }
@@ -3196,30 +3168,25 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         {
             const MeshEntityRecord &mesh = cad.meshes[meshIndex];
             double hitDepth = 0.0;
-            if (cadMeshState(meshIndex) !=
-                    VisibilityState::Offscreen &&
+            if (cadMeshState(mesh) != VisibilityState::Offscreen &&
                 rayIntersectsRenderedMesh(ray, mesh, hitDepth))
             {
-                if (meshEntityVisible(mesh))
-                    considerCadHit(hitDepth, mesh.displayName().c_str());
+                considerCadHit(hitDepth, mesh.displayName().c_str());
             }
         }
 
         size_t pointIndex = 0;
         for (const entities::TessellatedPoint &point : cad.geometry.points)
         {
-            const CadEntityRange *range = nullptr;
-            for (const CadEntityRange &candidateRange : cad.pointRanges)
+            const CadEntityRange *range =
+                rangeForIndex(cad.pointRanges, pointIndex);
+            if (!range || !point.common.visible)
             {
-                if (candidateRange.begin == pointIndex)
-                {
-                    range = &candidateRange;
-                    break;
-                }
+                ++pointIndex;
+                continue;
             }
-            if (!range ||
-                cadState(VisibilityKind::CadPoint, range->begin) ==
-                    VisibilityState::Offscreen)
+            if (cadState(VisibilityKind::CadPoint, *range) ==
+                VisibilityState::Offscreen)
             {
                 ++pointIndex;
                 continue;
@@ -3229,9 +3196,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                                    cadPickTolerance(ray, point.location),
                                    hitDepth))
             {
-                if (point.common.visible)
-                    considerCadOverlayHit(
-                        hitDepth, cad.pointNameAt(pointIndex));
+                considerCadOverlayHit(
+                    hitDepth, cad.pointNameAt(pointIndex));
             }
             ++pointIndex;
         }

@@ -1600,19 +1600,12 @@ void BgfxRenderer::drawTargetPointInstances(
         for (uint32_t i = 0; i < available; ++i)
         {
             const TargetPointInstance &input = data.instances[first + i];
-            const float pointSize = input.pointSize > 0.0f
-                                        ? input.pointSize
-                                        : data.pointSize;
-            const glm::vec2 pixelSizeNdc(
-                pointSize * 2.0f / float(m_width),
-                pointSize * 2.0f / float(m_height));
-            const glm::vec4 clip = projection * data.view *
-                                   glm::vec4(input.relativePosition, 1.0f);
+            const glm::vec4 viewPosition = data.view *
+                glm::vec4(input.relativePosition, 1.0f);
+            const glm::vec4 clip = projection * viewPosition;
             if (!(clip.w > 0.0f))
                 continue;
             const glm::vec2 ndc(clip.x / clip.w, clip.y / clip.w);
-            const glm::vec4 viewPosition = data.view *
-                glm::vec4(input.relativePosition, 1.0f);
             float depth = clip.z / clip.w;
             if (data.isOrtho <= 0.5f)
             {
@@ -1623,6 +1616,13 @@ void BgfxRenderer::drawTargetPointInstances(
                     std::max(viewDepth - biasWorld, data.logDepth.y),
                     data.logDepth);
             }
+
+            const float pointSize = input.pointSize > 0.0f
+                                        ? input.pointSize
+                                        : data.pointSize;
+            const glm::vec2 pixelSizeNdc(
+                pointSize * 2.0f / float(m_width),
+                pointSize * 2.0f / float(m_height));
 
             visibleInputs.push_back({
                 glm::vec4(ndc, depth, 1.0f),
