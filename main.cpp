@@ -83,7 +83,7 @@ RequestedRenderer resolveRequestedBackend()
   }
   else if (backendName == "bgfx-webgpu" || backendName == "webgpu")
   {
-    requested.type = rendering::BackendType::WebGpuMigration;
+    requested.type = rendering::BackendType::WebGpu;
     requested.api = rendering::GraphicsApi::WebGPU;
   }
   else

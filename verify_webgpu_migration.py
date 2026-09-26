@@ -11,7 +11,8 @@ STATE_PATTERN = re.compile(
     r"\[(PERSP|ORTHO)\]\s+near=([0-9.eE+-]+)\s+far=([0-9.eE+-]+)"
 )
 BACKEND_PATTERN = re.compile(
-    r"Renderer backend: bgfx-webgpu-migration \((Direct3D11|Direct3D12)\)"
+    r"Renderer backend: (bgfx-webgpu-migration \((Direct3D11|Direct3D12)\)"
+    r"|webgpu-native \(WebGPU\))"
 )
 
 
@@ -48,7 +49,7 @@ def main() -> None:
             sys.stdout.write(line)
             match = BACKEND_PATTERN.search(line)
             if match:
-                active_api = match.group(1)
+                active_api = match.group(2) or "WebGPU"
             state = STATE_PATTERN.search(line)
             if state:
                 states.append(state)

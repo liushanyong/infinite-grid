@@ -102,6 +102,7 @@ set(WINDOW_SOURCES
     main.cpp
     lib/rendering/RendererBackend.cpp
     lib/rendering/BgfxRenderer.cpp
+    lib/rendering/WebGpuRenderer.cpp
     lib/rendering/ProceduralMesh.cpp
 )
 
@@ -117,6 +118,7 @@ target_include_directories(WINDOW PRIVATE
     "${CMAKE_SOURCE_DIR}/lib/SDL/include"
     "${CMAKE_SOURCE_DIR}/lib/SDL/include/SDL3"
     "${CMAKE_SOURCE_DIR}/lib"
+    "${CMAKE_SOURCE_DIR}/lib/wgpu/include"
 )
 
 target_link_libraries(WINDOW PRIVATE
@@ -127,3 +129,13 @@ target_link_libraries(WINDOW PRIVATE
     bimg
     bimg_decode
 )
+
+# wgpu-native is dynamically loaded so a missing optional runtime still allows
+# every legacy backend to build and run.
+if(EXISTS "${CMAKE_SOURCE_DIR}/lib/wgpu/bin/wgpu_native-release.dll")
+    add_custom_command(TARGET WINDOW POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/lib/wgpu/bin/wgpu_native-release.dll"
+                "$<TARGET_FILE_DIR:WINDOW>"
+    )
+endif()

@@ -35,6 +35,7 @@ inline DoubleSingleVec3 encodeDoubleSingle(const glm::dvec3 &value)
 enum class BackendType
 {
     Bgfx,
+    WebGpu,
     WebGpuMigration,
 };
 
