@@ -856,9 +856,9 @@ uint32_t gpuPickNextEntityId = 2;
 
 static bool gpuPickEnabled()
 {
+  // GPU rough-picking is the default; GRID_GPU_PICK=0 selects the CPU path.
   const char *value = std::getenv("GRID_GPU_PICK");
-  return value != nullptr && *value != '\0' &&
-         std::strcmp(value, "0") != 0;
+  return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
 uint32_t registerGpuPickEntity(GpuPickEntity entity)
