@@ -2779,7 +2779,9 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
         const WorldAabb2 bounds{object.worldPosition - halfExtent,
                                 object.worldPosition + halfExtent};
         if (rayIntersectsAabb(ray, bounds, best))
-            best /= directionLength;
+            // The AABB depth is already in world units; convert it to the
+            // local ray parameter expected by the shared conversion below.
+            best = best * directionLength / scale;
         break;
     }
     }
