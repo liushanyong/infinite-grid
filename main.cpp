@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 #include <limits>
 #include <chrono>
@@ -818,6 +819,61 @@ struct MeshEntityRecord
 
 using LargeCoordinateObject = MeshEntityRecord;
 
+std::unordered_map<uint32_t, const MeshEntityRecord *> &gpuPickRegistry()
+{
+  static std::unordered_map<uint32_t, const MeshEntityRecord *> registry;
+  return registry;
+}
+
+static bool gpuPickEnabled()
+{
+  const char *value = std::getenv("GRID_GPU_PICK");
+  return value != nullptr && *value != '\0' &&
+         std::strcmp(value, "0") != 0;
+}
+
+uint32_t registerGpuPickEntity(const MeshEntityRecord *entity)
+{
+  static std::unordered_map<uint32_t, const MeshEntityRecord *> &registry =
+      gpuPickRegistry();
+  uint32_t id = uint32_t((reinterpret_cast<uintptr_t>(entity) >> 4) *
+                         2654435761u);
+  id = id % 0xfffffffeu + 1;
+  while (id != 0 && id != 0xffffffffu && id != 1)
+  {
+    auto [existing, inserted] = registry.emplace(id, entity);
+    if (inserted || existing->second == entity)
+      return id;
+    ++id;
+  }
+  return 0;
+}
+
+const MeshEntityRecord *findGpuPickEntity(uint32_t id)
+{
+  auto &registry = gpuPickRegistry();
+  const auto found = registry.find(id);
+  return found != registry.end() ? found->second : nullptr;
+}
+
+constexpr uint32_t kGpuPickCenterCubeId = 1;
+
+struct GpuPickFocusState
+{
+  double ndcX = 0.0;
+  double ndcY = 0.0;
+  uint32_t requestToken = 0;
+  bool pendingNdc = false;
+  bool waitingResult = false;
+};
+
+GpuPickFocusState gpuPickFocus;
+
+static bool gpuPickFocusWaiting()
+{
+  return gpuPickEnabled() && gpuPickFocus.waitingResult;
+}
+
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
   return entity.entity.common.color;
@@ -826,6 +882,28 @@ glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 bool meshEntityVisible(const MeshEntityRecord &entity)
 {
   return entity.entity.common.visible && entity.entity.common.color.a > 0.0f;
+}
+
+static void queueGpuMeshEntity(const MeshEntityRecord &entity,
+                               uint32_t objectId)
+{
+  if (!rendererBackend || !gpuPickFocusWaiting() ||
+      !meshEntityVisible(entity) || objectId == 0)
+    return;
+
+  const rendering::DoubleSingleVec3 objectPosition =
+      rendering::encodeDoubleSingle(entity.worldPosition);
+  const glm::vec4 color = meshEntityColor(entity);
+  const rendering::MeshInstance instance = makeMeshInstance(
+      entity.size, glm::vec3(color), color.a, objectPosition);
+  rendererBackend->queueGpuMeshPick(instance, entity.mesh, objectId);
+}
+
+static void queueGpuMeshEntity(const MeshEntityRecord *entity)
+{
+  if (!entity)
+    return;
+  queueGpuMeshEntity(*entity, registerGpuPickEntity(entity));
 }
 
 glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
@@ -1612,6 +1690,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     drawMesh(view, projection, rebase, mesh.worldPosition,
              glm::vec3(meshEntityColor(mesh)), mesh.entity.common.color.a,
              mesh.size, mesh.mesh, logDepth);
+    queueGpuMeshEntity(&mesh);
   }
 }
 
@@ -1688,6 +1767,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       const glm::vec4 color = meshEntityColor(*object);
       cadGroups[meshIndex].push_back(makeMeshInstance(
           scale, glm::vec3(color), color.a, objectPosition));
+      queueGpuMeshEntity(object);
     }
 
     const rendering::MeshType cadMeshTypes[kCadMeshCount] = {
@@ -1771,6 +1851,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         groupIt->instances.push_back(
             makeMeshInstance(
                 scale, glm::vec3(color), color.a, objectPosition));
+        queueGpuMeshEntity(object);
     }
 
   for (auto &bucket : buckets)
@@ -2862,6 +2943,7 @@ struct AutofocusResult
     std::string entityName;
     glm::dvec3 hitPivot;
     double viewDepth = 0.0;
+    size_t faceIndex = 0;
 };
 
 PickResult pickObjectAlongRay(const PickRay &ray,
@@ -3176,6 +3258,50 @@ std::optional<AutofocusResult> autofocusAtNdc(double ndcX, double ndcY)
         glm::dot(result.pivot - orbitCam.Position, orbitCam.Front);
     orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
     return AutofocusResult{result.objectName, result.pivot, viewDepth};
+}
+
+// The GPU pass only identifies the mesh.  Refine against the exact triangle
+// on the CPU so all mesh hit points share one face-based result contract.
+std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
+                                                double ndcX, double ndcY)
+{
+    const PickRay ray = pickRayFromNdc(ndcX, ndcY);
+    const bool centerCube = objectId == kGpuPickCenterCubeId;
+    const MeshEntityRecord *entity =
+        centerCube ? nullptr : findGpuPickEntity(objectId);
+    MeshEntityRecord center;
+    if (centerCube)
+    {
+        center = getCenterCubeEntity();
+        entity = &center;
+    }
+    if (!entity || !meshEntityVisible(*entity))
+        return std::nullopt;
+
+    double hitDepth = 0.0;
+    size_t faceIndex = 0;
+    if (!rayIntersectsRenderedMesh(ray, *entity, hitDepth, &faceIndex))
+        return std::nullopt;
+
+    const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
+    const double viewDepth =
+        glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+    orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+    return AutofocusResult{entity->displayName(), hitPivot, viewDepth,
+                           faceIndex};
+}
+
+void reportAutofocus(const AutofocusResult &selected)
+{
+    std::cout << std::fixed << std::setprecision(3)
+              << "Autofocus: entity=" << selected.entityName
+              << " pivot=(" << selected.hitPivot.x << ", "
+              << selected.hitPivot.y << ", " << selected.hitPivot.z << ")"
+              << " target=(" << orbitCam.Target.x << ", "
+              << orbitCam.Target.y << ", " << orbitCam.Target.z << ")"
+              << " depth=" << selected.viewDepth
+              << " distance=" << orbitCam.Distance
+              << " face=" << selected.faceIndex << std::endl;
 }
 
 // Deterministic diagnostics for entities that render but lose CPU picking.
@@ -4004,6 +4130,24 @@ void render()
   if (!rendererBackend->beginFrame(glm::vec4(0.1f, 0.1f, 0.1f, 1.0f)))
     return;
 
+  if (gpuPickEnabled() && gpuPickFocus.waitingResult)
+  {
+    const rendering::GpuPickResult gpuResult = rendererBackend->pollGpuPick();
+    if (gpuResult.ready &&
+        gpuResult.requestToken == gpuPickFocus.requestToken)
+    {
+      gpuPickFocus.waitingResult = false;
+      std::optional<AutofocusResult> selectedEntity =
+          autofocusGpuPick(gpuResult.objectId, gpuPickFocus.ndcX,
+                           gpuPickFocus.ndcY);
+      if (!selectedEntity)
+        selectedEntity = autofocusAtNdc(gpuPickFocus.ndcX,
+                                        gpuPickFocus.ndcY);
+      if (selectedEntity)
+        reportAutofocus(*selectedEntity);
+    }
+  }
+
   // �� Rebase layer ����������������������������������������������������������
   // Snap the world origin to the current camera chunk once per frame.
   // Every GPU-bound coordinate (view matrix translation, per-object
@@ -4423,6 +4567,26 @@ void render()
 
   logSlabIfChanged(useOrthoProjection(), activeNear, activeFar,
                    overlayNear, overlayFar);
+
+  if (gpuPickEnabled() && gpuPickFocus.pendingNdc)
+  {
+    const rendering::GpuPickRequest request{
+        .view = viewRte,
+        .projection = projection,
+        .eye = rendering::encodeDoubleSingle(orbitCam.Position),
+        .ndcX = gpuPickFocus.ndcX,
+        .ndcY = gpuPickFocus.ndcY,
+        .nearDepth = activeNear,
+        .farDepth = activeFar,
+    };
+    const uint32_t requestToken = rendererBackend->requestGpuPick(request);
+    if (requestToken != 0)
+    {
+      gpuPickFocus.requestToken = requestToken;
+      gpuPickFocus.pendingNdc = false;
+      gpuPickFocus.waitingResult = true;
+    }
+  }
 
   const glm::dvec3 cameraRight(orbitCam.Right);
   const glm::dvec3 cameraUp(orbitCam.Up);
@@ -4852,6 +5016,7 @@ void render()
              glm::vec3(meshEntityColor(centerCube)),
              centerCube.entity.common.color.a,
              centerCube.size, centerCube.mesh, logDepth);
+    queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
   }
 
   if (gridPlaneVisible)
@@ -5113,18 +5278,17 @@ int main(int argc, char *argv[])
         SDL_GetWindowSize(window, &winW, &winH);
         const double ndcX = cursorToNdcX(evt.button.x, winW);
         const double ndcY = cursorToNdcY(evt.button.y, winH);
-        if (const std::optional<AutofocusResult> selectedEntity =
-                autofocusAtNdc(ndcX, ndcY))
+        if (gpuPickEnabled())
         {
-          std::cout << std::fixed << std::setprecision(3)
-                    << "Autofocus: entity=" << selectedEntity->entityName
-                    << " pivot=(" << selectedEntity->hitPivot.x << ", "
-                    << selectedEntity->hitPivot.y << ", "
-                    << selectedEntity->hitPivot.z << ")"
-                    << " target=(" << orbitCam.Target.x << ", "
-                    << orbitCam.Target.y << ", " << orbitCam.Target.z
-                    << ") depth=" << selectedEntity->viewDepth
-                    << " distance=" << orbitCam.Distance << std::endl;
+          gpuPickFocus.ndcX = ndcX;
+          gpuPickFocus.ndcY = ndcY;
+          gpuPickFocus.pendingNdc = true;
+          gpuPickFocus.waitingResult = false;
+        }
+        else if (const std::optional<AutofocusResult> selectedEntity =
+                     autofocusAtNdc(ndcX, ndcY))
+        {
+          reportAutofocus(*selectedEntity);
         }
       }
 

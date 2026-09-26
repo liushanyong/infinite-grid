@@ -8,7 +8,9 @@
 #include <iomanip>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 #include <glm/gtc/type_ptr.hpp>
@@ -78,6 +80,11 @@ namespace PresentShaders
 #include "shaders/present/vs_present.h"
 #include "shaders/present/fs_present.h"
 } // namespace PresentShaders
+namespace GpuPickShaders
+{
+#include "shaders/gpuPick/vs_gpu_pick.h"
+#include "shaders/gpuPick/fs_gpu_pick.h"
+} // namespace GpuPickShaders
 
 namespace rendering
 {
@@ -92,6 +99,8 @@ constexpr bgfx::ViewId kViewSolidFill = 2;
 constexpr bgfx::ViewId kViewEdges = 3;
 constexpr bgfx::ViewId kViewWire = 4;
 constexpr bgfx::ViewId kViewOverlay = 5;
+constexpr bgfx::ViewId kViewGpuPick = 6;
+constexpr bgfx::ViewId kViewGpuPickBlit = 7;
 constexpr bgfx::ViewId kViewPresent = 8;
 
 // Layer compositing: layer N shifts its geometry closer in view space so it
@@ -567,6 +576,23 @@ ShaderBinary selectShaderBinary(
         NAMESPACE::NAME##_glsl, sizeof(NAMESPACE::NAME##_glsl),                \
         NAMESPACE::NAME##_spv, sizeof(NAMESPACE::NAME##_spv))
 
+std::vector<float> makeGpuPickMeshVertices(MeshType mesh)
+{
+    const std::vector<float> &source = proceduralMeshVertices(mesh);
+    std::vector<float> result;
+    result.reserve(source.size() + source.size() / 8);
+    const size_t faceCount = source.size() / (3 * kProceduralMeshFloatStride);
+    for (size_t face = 0; face < faceCount; ++face)
+    {
+        const size_t first = face * 3 * kProceduralMeshFloatStride;
+        result.insert(result.end(), source.begin() + first,
+                      source.begin() + first + 3 * kProceduralMeshFloatStride);
+        for (size_t vertex = 0; vertex < 3; ++vertex)
+            result.push_back(static_cast<float>(face));
+    }
+    return result;
+}
+
 } // namespace
 
 
@@ -883,6 +909,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_pointSize);
     destroyUniform(m_pointColor);
 
+    destroyGpuPickResources();
     destroySceneFrameBuffer();
 
     bgfx::shutdown();
@@ -934,10 +961,119 @@ void BgfxRenderer::destroySceneFrameBuffer()
     m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
 }
 
+bool BgfxRenderer::createGpuPickResources()
+{
+    const auto pickVertexBinary =
+        SELECT_SHADER_BINARY(GpuPickShaders, vs_gpu_pick);
+    const auto pickFragmentBinary =
+        SELECT_SHADER_BINARY(GpuPickShaders, fs_gpu_pick);
+    const bgfx::ShaderHandle vertexShader = bgfx::createShader(
+        bgfx::copy(pickVertexBinary.data, pickVertexBinary.size));
+    const bgfx::ShaderHandle fragmentShader = bgfx::createShader(
+        bgfx::copy(pickFragmentBinary.data, pickFragmentBinary.size));
+    bgfx::setName(vertexShader, "gpu_pick_vs");
+    bgfx::setName(fragmentShader, "gpu_pick_fs");
+    m_gpuPickProgram = bgfx::createProgram(vertexShader, fragmentShader, true);
+    m_gpuPickObjectId = bgfx::createUniform(
+        "u_object_index", bgfx::UniformType::Vec4);
+
+    m_gpuPickLayout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord1, 1, bgfx::AttribType::Float)
+        .end();
+
+    const auto createBuffer = [this](MeshType mesh) {
+        const std::vector<float> vertices = makeGpuPickMeshVertices(mesh);
+        return bgfx::createVertexBuffer(
+            bgfx::copy(vertices.data(),
+                       static_cast<uint32_t>(vertices.size() * sizeof(float))),
+            m_gpuPickLayout);
+    };
+    m_gpuPickCubeBuffer = createBuffer(MeshType::Cube);
+    m_gpuPickSphereBuffer = createBuffer(MeshType::Sphere);
+    m_gpuPickConeBuffer = createBuffer(MeshType::Cone);
+    m_gpuPickTorusBuffer = createBuffer(MeshType::Torus);
+
+    const uint64_t rtFlags = BGFX_TEXTURE_RT |
+                             BGFX_SAMPLER_MIN_POINT |
+                             BGFX_SAMPLER_MAG_POINT |
+                             BGFX_SAMPLER_U_CLAMP |
+                             BGFX_SAMPLER_V_CLAMP;
+    const uint64_t readbackFlags = BGFX_TEXTURE_READ_BACK |
+                                   BGFX_TEXTURE_BLIT_DST |
+                                   BGFX_SAMPLER_MIN_POINT |
+                                   BGFX_SAMPLER_MAG_POINT |
+                                   BGFX_SAMPLER_U_CLAMP |
+                                   BGFX_SAMPLER_V_CLAMP;
+    bgfx::TextureHandle color = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::BGRA8, rtFlags);
+    bgfx::TextureHandle depth = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::D24S8, rtFlags);
+    m_gpuPickReadback = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::BGRA8, readbackFlags);
+    if (bgfx::isValid(color) && bgfx::isValid(depth) &&
+        bgfx::isValid(m_gpuPickReadback))
+    {
+        const bgfx::TextureHandle attachments[2] = {color, depth};
+        m_gpuPickFrameBuffer = bgfx::createFrameBuffer(2, attachments, true);
+    }
+    else
+    {
+        if (bgfx::isValid(color))
+            bgfx::destroy(color);
+        if (bgfx::isValid(depth))
+            bgfx::destroy(depth);
+    }
+    bgfx::setName(m_gpuPickFrameBuffer, "GpuPick1x1");
+    bgfx::setName(m_gpuPickReadback, "GpuPickReadback");
+
+    return bgfx::isValid(m_gpuPickFrameBuffer) &&
+           bgfx::isValid(m_gpuPickReadback) &&
+           bgfx::isValid(m_gpuPickProgram) &&
+           bgfx::isValid(m_gpuPickObjectId) &&
+           bgfx::isValid(m_gpuPickCubeBuffer) &&
+           bgfx::isValid(m_gpuPickSphereBuffer) &&
+           bgfx::isValid(m_gpuPickConeBuffer) &&
+           bgfx::isValid(m_gpuPickTorusBuffer);
+}
+
+void BgfxRenderer::destroyGpuPickResources()
+{
+    if (bgfx::isValid(m_gpuPickFrameBuffer))
+        bgfx::destroy(m_gpuPickFrameBuffer);
+    m_gpuPickFrameBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_gpuPickReadback))
+        bgfx::destroy(m_gpuPickReadback);
+    m_gpuPickReadback = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_gpuPickProgram))
+        bgfx::destroy(m_gpuPickProgram);
+    m_gpuPickProgram = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_gpuPickObjectId))
+        bgfx::destroy(m_gpuPickObjectId);
+    m_gpuPickObjectId = BGFX_INVALID_HANDLE;
+
+    bgfx::VertexBufferHandle *buffers[] = {
+        &m_gpuPickCubeBuffer, &m_gpuPickSphereBuffer,
+        &m_gpuPickConeBuffer, &m_gpuPickTorusBuffer};
+    for (bgfx::VertexBufferHandle *buffer : buffers)
+    {
+        if (bgfx::isValid(*buffer))
+            bgfx::destroy(*buffer);
+        *buffer = BGFX_INVALID_HANDLE;
+    }
+    m_gpuPickInstances.clear();
+    m_gpuPickActive = false;
+    m_gpuPickReadPending = false;
+}
+
 bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
 {
     if (!m_initialized)
         return false;
+
+    ++m_frame;
 
     int width = 0;
     int height = 0;
@@ -1032,6 +1168,8 @@ void BgfxRenderer::endFrame()
     bgfx::dbgTextClear();
     bgfx::dbgTextPrintf(1, 1, 0x0f, "FPS: %.1f (%.1f ms)",
                         m_fps, m_fps > 0.0f ? 1000.0f / m_fps : 0.0f);
+
+    renderGpuPickPass();
 
     // Resolve the explicit MSAA scene target to the backbuffer.  This happens
     // after debug text, so the text belongs to the resolved image too.
@@ -1793,6 +1931,212 @@ void BgfxRenderer::drawAabb(const AabbRenderData &data)
     bgfx::submit(kViewWire, m_cubeProgram);
 }
 
+glm::mat4 BgfxRenderer::gpuPickProjection(const GpuPickRequest &request) const
+{
+    const bool orthographic = request.projection[3][3] > 0.5f;
+    double left = 0.0;
+    double right = 0.0;
+    double bottom = 0.0;
+    double top = 0.0;
+    const double nearDepth = std::max(request.nearDepth, 0.01);
+    const double farDepth = std::max(request.farDepth, nearDepth + 0.01);
+
+    if (orthographic)
+    {
+        const double halfWidth =
+            1.0 / std::max(std::abs(request.projection[0][0]), 1.0e-12f);
+        const double halfHeight =
+            1.0 / std::max(std::abs(request.projection[1][1]), 1.0e-12f);
+        const double pixelWidth = halfWidth / std::max(1, int(m_width));
+        const double pixelHeight = halfHeight / std::max(1, int(m_height));
+        left = request.ndcX * halfWidth - pixelWidth;
+        right = request.ndcX * halfWidth + pixelWidth;
+        bottom = request.ndcY * halfHeight - pixelHeight;
+        top = request.ndcY * halfHeight + pixelHeight;
+        return glm::ortho(left, right, bottom, top, nearDepth, farDepth);
+    }
+
+    const double halfWidthAtNear =
+        nearDepth / std::max(std::abs(request.projection[0][0]), 1.0e-12f);
+    const double halfHeightAtNear =
+        nearDepth / std::max(std::abs(request.projection[1][1]), 1.0e-12f);
+    const double pixelWidthAtNear = halfWidthAtNear / std::max(1, int(m_width));
+    const double pixelHeightAtNear = halfHeightAtNear / std::max(1, int(m_height));
+    left = request.ndcX * halfWidthAtNear - pixelWidthAtNear;
+    right = request.ndcX * halfWidthAtNear + pixelWidthAtNear;
+    bottom = request.ndcY * halfHeightAtNear - pixelHeightAtNear;
+    top = request.ndcY * halfHeightAtNear + pixelHeightAtNear;
+    return glm::frustum(left, right, bottom, top, nearDepth, farDepth);
+}
+
+bool BgfxRenderer::gpuPickInstanceIsCandidate(
+    const MeshInstance &instance) const
+{
+    const glm::vec3 center =
+        glm::vec3(instance.positionHigh) - m_gpuPickRequest.eye.high +
+        glm::vec3(instance.positionLow) - m_gpuPickRequest.eye.low;
+    const glm::vec4 clip = m_gpuPickRequest.projection *
+        m_gpuPickRequest.view * glm::vec4(center, 1.0f);
+    if (!(clip.w > std::numeric_limits<float>::epsilon()))
+        return false;
+
+    const float radius = std::max({
+        glm::length(glm::vec3(instance.transformColumn0)),
+        glm::length(glm::vec3(instance.transformColumn1)),
+        glm::length(glm::vec3(instance.transformColumn2))}) * 1.5f;
+    const float radiusNdcX =
+        radius * std::abs(m_gpuPickRequest.projection[0][0]) / clip.w;
+    const float radiusNdcY =
+        radius * std::abs(m_gpuPickRequest.projection[1][1]) / clip.w;
+    const glm::vec2 delta(
+        clip.x / clip.w - float(m_gpuPickRequest.ndcX),
+        clip.y / clip.w - float(m_gpuPickRequest.ndcY));
+    return std::abs(delta.x) <= radiusNdcX &&
+           std::abs(delta.y) <= radiusNdcY;
+}
+
+uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
+{
+    if (!m_initialized || !bgfx::isValid(m_gpuPickProgram))
+        return 0;
+
+    completeGpuPickReadback();
+    if (m_gpuPickReadPending)
+        return 0;
+
+    m_gpuPickRequest = request;
+    m_gpuPickInstances.clear();
+    m_gpuPickActive = true;
+    m_gpuPickLastResult.ready = false;
+    m_gpuPickLastResult.hit = false;
+    m_gpuPickLastResult.requestToken = m_gpuPickNextToken++;
+    m_gpuPickLastResult.objectId = 0;
+    m_gpuPickLastResult.faceIndex = 0;
+    return m_gpuPickLastResult.requestToken;
+}
+
+void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
+                                    MeshType mesh, uint32_t objectId)
+{
+    constexpr size_t kMaxGpuPickInstances = 256;
+    if (!m_gpuPickActive || objectId == 0 || objectId == 0xffffffffu ||
+        m_gpuPickInstances.size() >= kMaxGpuPickInstances ||
+        !gpuPickInstanceIsCandidate(instance))
+    {
+        return;
+    }
+    m_gpuPickInstances.emplace_back(instance,
+                                    std::make_pair(mesh, objectId));
+}
+
+GpuPickResult BgfxRenderer::pollGpuPick()
+{
+    completeGpuPickReadback();
+    return m_gpuPickLastResult;
+}
+
+void BgfxRenderer::renderGpuPickPass()
+{
+    if (!m_gpuPickActive || !bgfx::isValid(m_gpuPickProgram) ||
+        !bgfx::isValid(m_gpuPickFrameBuffer) ||
+        !bgfx::isValid(m_gpuPickReadback))
+    {
+        return;
+    }
+
+    bgfx::setViewName(kViewGpuPick, "CAD Gpu Pick");
+    bgfx::setViewName(kViewGpuPickBlit, "CAD Gpu Pick Blit");
+    bgfx::setViewFrameBuffer(kViewGpuPick, m_gpuPickFrameBuffer);
+    bgfx::setViewRect(kViewGpuPick, 0, 0, 1, 1);
+    bgfx::setViewRect(kViewGpuPickBlit, 0, 0, 1, 1);
+    bgfx::setViewClear(kViewGpuPick,
+                       BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                       0xffffffff, 1.0f, 0);
+    bgfx::setViewTransform(kViewGpuPick,
+                           glm::value_ptr(m_gpuPickRequest.view),
+                           glm::value_ptr(m_gpuPickRequest.projection));
+
+    const glm::mat4 projection = projectionForDirect3D(
+        gpuPickProjection(m_gpuPickRequest));
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_WRITE_Z |
+                           BGFX_STATE_DEPTH_TEST_LESS |
+                           BGFX_STATE_CULL_CW;
+    bgfx::setUniform(m_view, glm::value_ptr(m_gpuPickRequest.view));
+    bgfx::setUniform(m_projection, glm::value_ptr(projection));
+    bgfx::setUniform(m_eyeHigh,
+                     glm::value_ptr(glm::vec4(m_gpuPickRequest.eye.high, 0.0f)));
+    bgfx::setUniform(m_eyeLow,
+                     glm::value_ptr(glm::vec4(m_gpuPickRequest.eye.low, 0.0f)));
+    bgfx::setState(state);
+
+    if (m_gpuPickInstances.empty())
+    {
+        bgfx::touch(kViewGpuPick);
+    }
+    else
+    {
+        constexpr uint16_t kStride = sizeof(MeshInstance);
+        for (const auto &entry : m_gpuPickInstances)
+        {
+            bgfx::VertexBufferHandle buffer = m_gpuPickCubeBuffer;
+            switch (entry.second.first)
+            {
+            case MeshType::Sphere:
+                buffer = m_gpuPickSphereBuffer;
+                break;
+            case MeshType::Cone:
+                buffer = m_gpuPickConeBuffer;
+                break;
+            case MeshType::Torus:
+                buffer = m_gpuPickTorusBuffer;
+                break;
+            case MeshType::Cube:
+                break;
+            }
+
+            bgfx::InstanceDataBuffer instanceBuffer;
+            bgfx::allocInstanceDataBuffer(&instanceBuffer, 1, kStride);
+            *reinterpret_cast<MeshInstance *>(instanceBuffer.data) = entry.first;
+            const uint32_t objectId = entry.second.second;
+            const float encodedId[4] = {
+                float((objectId >> 16) & 0xff) / 255.0f,
+                float((objectId >> 8) & 0xff) / 255.0f,
+                float(objectId & 0xff) / 255.0f,
+                float((objectId >> 24) & 0xff) / 255.0f};
+            bgfx::setUniform(m_gpuPickObjectId, encodedId);
+            bgfx::setVertexBuffer(0, buffer);
+            bgfx::setInstanceDataBuffer(&instanceBuffer);
+            bgfx::submit(kViewGpuPick, m_gpuPickProgram);
+        }
+    }
+
+    bgfx::blit(kViewGpuPickBlit, m_gpuPickReadback, 0, 0,
+               bgfx::getTexture(m_gpuPickFrameBuffer));
+    bgfx::touch(kViewGpuPickBlit);
+    m_gpuPickReadPending = true;
+    m_gpuPickReadFrame = bgfx::readTexture(
+        m_gpuPickReadback, m_gpuPickReadbackData.data());
+}
+
+void BgfxRenderer::completeGpuPickReadback()
+{
+    if (!m_gpuPickReadPending || m_frame <= m_gpuPickReadFrame)
+        return;
+
+    m_gpuPickReadPending = false;
+    const uint32_t packed =
+        uint32_t(m_gpuPickReadbackData[0]) |
+        (uint32_t(m_gpuPickReadbackData[1]) << 8) |
+        (uint32_t(m_gpuPickReadbackData[2]) << 16) |
+        (uint32_t(m_gpuPickReadbackData[3]) << 24);
+    m_gpuPickLastResult.ready = true;
+    m_gpuPickLastResult.hit = packed != 0xffffffffu && packed != 0;
+    m_gpuPickLastResult.objectId = m_gpuPickLastResult.hit ? packed : 0;
+    m_gpuPickLastResult.faceIndex = 0;
+    m_gpuPickActive = false;
+}
+
 void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_lineProgram))
@@ -2015,6 +2359,7 @@ bool BgfxRenderer::createRenderResources()
     const bgfx::ShaderHandle fillFragment = createShader(
         fillFragmentBinary.data, fillFragmentBinary.size, "prim_fill_fs");
     m_fillProgram = bgfx::createProgram(fillVertex, fillFragment, true);
+    createGpuPickResources();
     m_polylineLayout.begin()
     .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
     .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
@@ -2277,6 +2622,7 @@ m_fillLayout.begin()
                 bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer) &&
                 bgfx::isValid(m_presentQuadBuffer) &&
                 bgfx::isValid(m_presentProgram) &&
+                bgfx::isValid(m_gpuPickProgram) &&
                 createSceneFrameBuffer();
         if (!ready)
             std::cerr << "Failed to create bgfx vertex buffers." << std::endl;

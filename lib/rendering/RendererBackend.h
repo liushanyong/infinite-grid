@@ -3,6 +3,7 @@
 #include <SDL.h>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -204,6 +205,28 @@ struct CadAlgorithmDemoRenderData
     DoubleSingleVec3 eye;
 };
 
+// A one-pixel GPU id pass. The full-camera projection is kept here for
+// conservative culling; the renderer derives the tiny pick frustum itself.
+struct GpuPickRequest
+{
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    DoubleSingleVec3 eye;
+    double ndcX = 0.0;
+    double ndcY = 0.0;
+    double nearDepth = 0.01;
+    double farDepth = 1.0;
+};
+
+struct GpuPickResult
+{
+    bool ready = false;
+    bool hit = false;
+    uint32_t requestToken = 0;
+    uint32_t objectId = 0;
+    uint32_t faceIndex = 0;
+};
+
 // CAD vector primitives ported from CADplatformer's lines_pass: wide
 // polylines with round joins/caps and edge anti-aliasing, plus arbitrary
 // filled triangle soups. Vertices are already rebase-relative.
@@ -301,6 +324,15 @@ public:
     virtual RenderModeFlags renderModeFlags() const = 0;
     virtual void drawPolylines(const PolylineRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
+
+    // Optional asynchronous mesh picking. Calls to queueGpuMeshPick are valid
+    // only between requestGpuPick() and the next endFrame().
+    // Returns the token for an accepted request, or zero while the previous
+    // asynchronous readback is still pending.
+    virtual uint32_t requestGpuPick(const GpuPickRequest &request) { return 0; }
+    virtual void queueGpuMeshPick(const MeshInstance &instance,
+                                  MeshType mesh, uint32_t objectId) {}
+    virtual GpuPickResult pollGpuPick() { return {}; }
 
     // Zero is a renderer-provided white texture; other ids are allocated by
     // the active backend and remain valid until shutdown().

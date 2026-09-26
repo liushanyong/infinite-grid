@@ -37,6 +37,10 @@ public:
     RenderModeFlags renderModeFlags() const override;
     void drawPolylines(const PolylineRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+    uint32_t requestGpuPick(const GpuPickRequest &request) override;
+    void queueGpuMeshPick(const MeshInstance &instance,
+                          MeshType mesh, uint32_t objectId) override;
+    GpuPickResult pollGpuPick() override;
     uint32_t loadMeshTexture(const std::string &path) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
 
@@ -45,6 +49,12 @@ private:
     bool createRenderResources();
     bool createSceneFrameBuffer();
     void destroySceneFrameBuffer();
+    bool createGpuPickResources();
+    void destroyGpuPickResources();
+    glm::mat4 gpuPickProjection(const GpuPickRequest &request) const;
+    bool gpuPickInstanceIsCandidate(const MeshInstance &instance) const;
+    void renderGpuPickPass();
+    void completeGpuPickReadback();
 
     SDL_Window *m_window = nullptr;
     GraphicsApi m_api = GraphicsApi::Auto;
@@ -156,9 +166,28 @@ private:
     bgfx::VertexBufferHandle m_presentQuadBuffer = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentSampler = BGFX_INVALID_HANDLE;
 
+    bgfx::FrameBufferHandle m_gpuPickFrameBuffer = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle m_gpuPickReadback = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_gpuPickProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_gpuPickObjectId = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickCubeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickSphereBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickConeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickTorusBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout m_gpuPickLayout;
+    GpuPickRequest m_gpuPickRequest;
+    std::vector<std::pair<MeshInstance, std::pair<MeshType, uint32_t>>>
+        m_gpuPickInstances;
+    GpuPickResult m_gpuPickLastResult;
+    std::array<uint8_t, 4> m_gpuPickReadbackData{};
+    uint32_t m_gpuPickNextToken = 1;
+    bool m_gpuPickActive = false;
+    bool m_gpuPickReadPending = false;
+    uint32_t m_gpuPickReadFrame = 0;
 
     // FPS overlay bookkeeping (debug text drawn in endFrame).
     float    m_fps = 0.0f;
+    uint32_t m_frame = 0;
     uint32_t m_frameCount = 0;
     uint32_t m_fpsLastTick = 0;
 
