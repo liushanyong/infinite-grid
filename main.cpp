@@ -2778,7 +2778,8 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
         const glm::dvec3 halfExtent(object.size * 0.5);
         const WorldAabb2 bounds{object.worldPosition - halfExtent,
                                 object.worldPosition + halfExtent};
-        rayIntersectsAabb(ray, bounds, best);
+        if (rayIntersectsAabb(ray, bounds, best))
+            best /= directionLength;
         break;
     }
     }
