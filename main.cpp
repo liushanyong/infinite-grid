@@ -1,6 +1,14 @@
-#include "main.h"
+#include <SDL.h>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include "coordinate/WorldRebase.h"
+#include "camera/orbit.h"
+#include "rendering/RendererBackend.h"
 #include "entities/tessellate.h"
 #include "rendering/ProceduralMesh.h"
+#include <iostream>
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
@@ -21,6 +29,21 @@
 
 namespace
 {
+
+constexpr int SCREEN_WIDTH = 1200;
+constexpr int SCREEN_HEIGHT = 768;
+
+bool &useOrthoProjection()
+{
+    static bool enabled = false;
+    return enabled;
+}
+
+WorldRebase &worldRebase()
+{
+    static WorldRebase instance;
+    return instance;
+}
 
 struct RequestedRenderer
 {
@@ -439,8 +462,6 @@ void resetWorldUpAndPlaneFromCamera()
               << orbitCam.WorldUp.x << ", " << orbitCam.WorldUp.y << ", "
               << orbitCam.WorldUp.z << ")" << std::endl;
 }
-
-FPSCamera fpsCam(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f), -90.0f, 0.0f);
 
 } // namespace
 
@@ -2282,11 +2303,6 @@ void printLargeCoordinateValidation()
   }
 }
 
-void update()
-{
-  // FPS Update logic
-}
-
 bool cameraDebugEnabled()
 {
   static const bool enabled = [] {
@@ -2374,51 +2390,6 @@ void switchProjectionMode()
   std::cout << "Projection: "
             << (isOrtho ? "ORTHOGRAPHIC" : "PERSPECTIVE")
             << std::endl;
-}
-
-// -------------------------------------------------------------------------
-// FPS camera scaffolding -- built but not wired into render().
-//
-// fpsCam is constructed at startup, the keyboard/mouse handlers below mutate
-// it, but the active scene is rendered from orbitCam via worldRebase() /
-// RTE uniforms.  fpsCam.updatePhysics(deltaTime) is intentionally commented
-// out in main() because nothing in the render path observes fpsCam yet.
-// This is the path the README "FPS-style camera movement" line promises;
-// completing it is a TODO.  Mouse handler is currently orphaned -- the
-// only call site was the commented-out handleFPSMouseMovement(evt) line
-// that this cleanup removed.
-// -------------------------------------------------------------------------
-
-void handleFPSMouseMovement(const SDL_Event &event)
-{
-  if (event.type == SDL_EVENT_MOUSE_MOTION)
-  {
-    float xoffset = event.motion.xrel;
-    float yoffset = -event.motion.yrel; // Invert y for typical FPS
-    fpsCam.processMouseMovement(xoffset, yoffset);
-  }
-}
-
-void handleFPSKeyMovement(SDL_Scancode key, float deltaTime)
-{
-  // GLuint num;
-  const bool *keystates = SDL_GetKeyboardState(NULL);
-
-  if (keystates[SDL_SCANCODE_W])
-    fpsCam.processKeyboard("FORWARD", deltaTime);
-  if (keystates[SDL_SCANCODE_S])
-    fpsCam.processKeyboard("BACKWARD", deltaTime);
-  if (keystates[SDL_SCANCODE_A])
-    fpsCam.processKeyboard("LEFT", deltaTime);
-  if (keystates[SDL_SCANCODE_D])
-    fpsCam.processKeyboard("RIGHT", deltaTime);
-  if (keystates[SDL_SCANCODE_SPACE])
-    fpsCam.jump();
-}
-
-void handleKeys(SDL_Scancode key, float deltaTime)
-{
-  handleFPSKeyMovement(key, deltaTime);
 }
 
 glm::dvec3 normalizedNdcLine(const glm::dvec3 &line)
@@ -5462,9 +5433,6 @@ void render()
 
 int main(int argc, char *argv[])
 {
-  float deltaTime = 0.0f;
-  float lastFrame = 0.0f;
-
   SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
 
   if (!init())
@@ -5522,8 +5490,6 @@ int main(int argc, char *argv[])
   while (running)
   {
     float currentFrame = SDL_GetTicks() / 1000.0f;
-    deltaTime = currentFrame - lastFrame;
-    lastFrame = currentFrame;
 
     while (SDL_PollEvent(&evt))
     {
@@ -5533,7 +5499,6 @@ int main(int argc, char *argv[])
       }
       if (evt.type == SDL_EVENT_KEY_DOWN)
       {
-        handleKeys(evt.key.scancode, deltaTime);
         if (evt.key.key == SDLK_ESCAPE)
         {
           running = false;

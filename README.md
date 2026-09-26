@@ -4,7 +4,6 @@ A simple infinite grid plane built using **SDL3** with a **bgfx renderer backend
 
 ## Features
 - Infinite procedural grid rendering
-- FPS-style camera movement
 - Orbit camera movement
 - Renderer backend boundary extracted to `lib/rendering/RendererBackend.*` and now served by bgfx backend implementation
 - Large-coordinate rendering validation with **Rebase + RTE** two-layer scheme:
@@ -32,9 +31,7 @@ A simple infinite grid plane built using **SDL3** with a **bgfx renderer backend
 ```
 /lib           -> Source (.cpp) and header (.h) files
 /lib/rendering -> Renderer backend interface + bgfx backend implementation
-build.sh       -> Build script
 main.cpp       -> Entry point
-main.h         -> Main header
 .gitignore     -> Git ignore rules
 CMakeLists.txt -> CMake build configuration
 README.md      -> Project documentation
@@ -48,7 +45,6 @@ README.md      -> Project documentation
 - BgfxRenderer now loads and validates those bgfx shader source files during initialization before entering the render loop.
 
 ## Controls
-- **WASD** — Move camera (FPS movement)
 - **Middle Mouse + Drag** — Pan the orbit target
 - **Shift + Middle Mouse + Drag** — Orbit around the target
 - **Mouse Scroll** — Zoom in/out
@@ -59,6 +55,7 @@ README.md      -> Project documentation
 ```bash
 git clone https://github.com/tasvln/infinite-grid-plane.git
 cd infinite-grid-plane
-./build.sh
+cmake -S . -B build2022
+cmake --build build2022 --config Release
 ```
 > Ensure SDL3 is properly installed and linked.

@@ -111,7 +111,6 @@ add_executable(WINDOW ${WINDOW_SOURCES})
 #   * lib/SDL/include           -- so SDL3's own headers can do
 #                                  #include <SDL3/SDL_xxx.h>
 #   * lib/SDL/include/SDL3      -- for the legacy #include <SDL.h> style
-#                                  used by main.h
 #   * lib                        -- for "lib/camera/*.h" and the shader
 #                                  directory layout
 target_include_directories(WINDOW PRIVATE
