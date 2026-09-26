@@ -1,11 +1,11 @@
 # Infinite Grid Plane
 
-A simple infinite grid plane built using **SDL3** with a **bgfx renderer backend**, inspired by the viewport grids in **Unity**, **Unreal Engine**, and **Blender**.
+A simple CAD viewport built using **SDL3** with pluggable **bgfx** and native **WebGPU** renderer backends, inspired by the viewport grids in **Unity**, **Unreal Engine**, and **Blender**.
 
 ## Features
 - Infinite procedural grid rendering
 - Orbit camera movement
-- Renderer backend boundary extracted to `lib/rendering/RendererBackend.*` and now served by bgfx backend implementation
+- Renderer backend boundary extracted to `lib/rendering/RendererBackend.*` and served by bgfx and native WebGPU implementations
 - Large-coordinate rendering validation with **Rebase + RTE** two-layer scheme:
   - **Rebase** (chunk-anchored world origin, see `lib/coordinate/WorldRebase.h`): once per frame the world origin snaps to the nearest 1e4-unit chunk; every GPU-bound coordinate is expressed relative to this anchor so its magnitude stays bounded to ~chunkSize/2 no matter how far the camera flies.
   - **RTE** (relative-to-eye): the view matrix is built as `lookAt(camera - rebase, target - rebase, up)` with translation included, and every object's `uModelRelativePosition = objectWorld - rebase`.  The two layers cancel in the per-vertex dot product, leaving the rendered geometry mathematically identical to the pre-rebase pipeline.
@@ -25,12 +25,13 @@ A simple infinite grid plane built using **SDL3** with a **bgfx renderer backend
 ### Prerequisites
 - SDL3
 - bgfx backend implementation
-- C++ Compiler (g++, clang++, etc.)
+- wgpu-native runtime (`lib/wgpu`) for the WebGPU backend
+- C++ Compiler (MSVC is used by the supplied Windows build)
 
 ### Project Structure
 ```
 /lib           -> Source (.cpp) and header (.h) files
-/lib/rendering -> Renderer backend interface + bgfx backend implementation
+/lib/rendering -> Renderer backend interface, bgfx implementation, and native WebGPU implementation
 main.cpp       -> Entry point
 .gitignore     -> Git ignore rules
 CMakeLists.txt -> CMake build configuration
@@ -40,7 +41,9 @@ README.md      -> Project documentation
 ### Renderer Status
 - The application loop talks to the renderer interface in `lib/rendering/RendererBackend.h`.
 - OpenGL fallback/selection has been removed from runtime and build scripts.
-- `lib/rendering/BgfxRenderer.*` is now the default and only renderer backend path in this project.
+- `lib/rendering/BgfxRenderer.*` remains the default production backend.
+- `lib/rendering/WebGpuRenderer.*` implements the scene render path with WGSL pipelines for meshes, line ribbons, fills, points, and the grid.
+- Select the native WebGPU backend at runtime with `set WINDOW_RENDERER=webgpu` before starting `WINDOW.exe`.
 - bgfx shader sources are now migrated under `lib/shaders/bgfx/*/{vertex.sc,frag.sc}` for grid/cube/worldLine/targetPoint passes.
 - BgfxRenderer now loads and validates those bgfx shader source files during initialization before entering the render loop.
 
