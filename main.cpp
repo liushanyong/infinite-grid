@@ -2718,22 +2718,31 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
         const double e = quadraticConstant * quadraticConstant -
                          4.0 * majorRadius * majorRadius *
                              (ox * ox + oz * oz);
-        // The local ray origin is (camera - object) / size, so its distance
-        // can be very large for remote large-coordinate objects.  A fixed
-        // near-object interval would miss the first positive torus root.
-        const double maximumDepth = std::max(0.5, glm::length(origin) + 0.5);
+        // Search close to the torus bounding sphere. The ray may intersect
+        // the tube twice, so one full-range sign bracket is insufficient.
+        const double originDistance = glm::length(origin);
+        const double searchLow = std::max(0.0, originDistance - 1.0);
+        const double searchHigh = originDistance + 1.0;
 
         auto polynomial = [&](double t) {
             return (((a * t + b) * t + c) * t + d) * t + e;
         };
-        double low = 0.0;
-        double high = maximumDepth;
+        double low = searchLow;
+        double high = searchHigh;
         double fLow = polynomial(low);
-        double fHigh = polynomial(high);
-        if (std::abs(fLow) < 1.0e-14)
-            best = low;
-        else if (fLow * fHigh < 0.0)
+        for (int segment = 0; segment < 64; ++segment)
         {
+            const double highCandidate =
+                low + (high - low) * double(segment + 1) / 64.0;
+            const double fCandidate = polynomial(highCandidate);
+            if (fLow * fCandidate > 0.0)
+            {
+                low = highCandidate;
+                fLow = fCandidate;
+                continue;
+            }
+
+            high = highCandidate;
             for (int iteration = 0; iteration < 48; ++iteration)
             {
                 const double middle = 0.5 * (low + high);
@@ -2747,6 +2756,7 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
                 }
             }
             best = 0.5 * (low + high);
+            break;
         }
         break;
     }
@@ -3304,10 +3314,12 @@ bool runCadPickAudit()
     glm::dvec3 location;
     double extent = 0.0;
     VisibilityCandidate candidate;
+    const MeshEntityRecord *mesh = nullptr;
   };
   std::vector<AuditSample> samples;
   samples.reserve(cad.strokeRanges.size() + cad.fillRanges.size() +
-                  cad.pointRanges.size() + cad.fillRanges.size());
+                  cad.pointRanges.size() + cad.fillRanges.size() +
+                  cad.meshes.size() + 4);
 
   for (const CadEntityRange &range : cad.strokeRanges)
   {
@@ -3367,6 +3379,45 @@ bool runCadPickAudit()
     sample.candidate = makeCadRangeCandidate(
         cad, range, VisibilityKind::CadPoint);
     samples.push_back(std::move(sample));
+  }
+
+  auto addMeshSample = [&](const MeshEntityRecord &mesh,
+                           VisibilityKind kind) {
+    if (!meshEntityVisible(mesh))
+      return;
+
+    AuditSample sample;
+    sample.name = mesh.displayName();
+    sample.kind = kind;
+    sample.location = mesh.worldPosition;
+    sample.extent = mesh.size;
+    sample.candidate = makeMeshCandidate(mesh, kind);
+    sample.mesh = &mesh;
+    if (mesh.mesh == rendering::MeshType::Torus)
+    {
+      // A ray through the torus center passes through the hole. Aim at a
+      // point on the tube so the diagnostic validates the rendered surface.
+      sample.location += glm::dvec3(0.325, 0.175, 0.0) *
+          static_cast<double>(mesh.size);
+    }
+    samples.push_back(std::move(sample));
+  };
+
+  for (const MeshEntityRecord &mesh : cad.meshes)
+    addMeshSample(mesh, VisibilityKind::CadMesh);
+
+  static constexpr rendering::MeshType kAuditMeshTypes[] = {
+      rendering::MeshType::Cube, rendering::MeshType::Sphere,
+      rendering::MeshType::Cone, rendering::MeshType::Torus};
+  for (const rendering::MeshType meshType : kAuditMeshTypes)
+  {
+    const auto found = std::find_if(
+        getStressObjects().begin(), getStressObjects().end(),
+        [&](const MeshEntityRecord &mesh) {
+          return mesh.mesh == meshType;
+        });
+    if (found != getStressObjects().end())
+      addMeshSample(*found, VisibilityKind::MeshObject);
   }
 
   std::cout << "CAD pick audit: samples="
@@ -3458,6 +3509,11 @@ bool runCadPickAudit()
             ray, fill.a, fill.b, fill.c, depth);
       }
     }
+    else if (sample.mesh)
+    {
+      double depth = 0.0;
+      directHit = rayIntersectsRenderedMesh(ray, *sample.mesh, depth);
+    }
     else
     {
       for (size_t i = sample.candidate.rangeBegin;
@@ -3518,7 +3574,8 @@ bool runCadPickAudit()
               << " kind="
               << (key.first == VisibilityKind::CadStroke ? "stroke"
                     : key.first == VisibilityKind::CadFill ? "fill"
-                    : "point")
+                    : key.first == VisibilityKind::CadPoint ? "point"
+                    : "mesh")
               << " samples=" << stats.samples
               << " matched=" << stats.matched
               << " offscreen=" << stats.offscreen
