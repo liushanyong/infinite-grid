@@ -903,6 +903,7 @@ struct GpuPickFocusState
   double ndcX = 0.0;
   double ndcY = 0.0;
   uint32_t requestToken = 0;
+  uint32_t pendingFrames = 0;
   bool pendingNdc = false;
   bool waitingResult = false;
 };
@@ -3623,6 +3624,13 @@ void reportAutofocus(const AutofocusResult &selected)
               << " face=" << selected.faceIndex << std::endl;
 }
 
+static void reportGpuPickFallback(double ndcX, double ndcY)
+{
+  if (const std::optional<AutofocusResult> selectedEntity =
+          autofocusAtNdc(ndcX, ndcY))
+    reportAutofocus(*selectedEntity);
+}
+
 // Deterministic diagnostics for entities that render but lose CPU picking.
 // Each range contributes one representative sample (the first segment midpoint,
 // stable interior triangle point, or point), probed from several orbit views.
@@ -4453,18 +4461,30 @@ void render()
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
     const rendering::GpuPickResult gpuResult = rendererBackend->pollGpuPick();
-    if (gpuResult.ready &&
-        gpuResult.requestToken == gpuPickFocus.requestToken)
+    const bool resultMatches = gpuResult.ready &&
+        gpuResult.requestToken == gpuPickFocus.requestToken;
+    ++gpuPickFocus.pendingFrames;
+    // bgfx readTexture() becomes readable two frames after submission.  Keep
+    // one extra frame for driver latency, then always answer the double click.
+    if (resultMatches || gpuPickFocus.pendingFrames >= 4)
     {
       gpuPickFocus.waitingResult = false;
-      std::optional<AutofocusResult> selectedEntity =
-          autofocusGpuPick(gpuResult.objectId, gpuPickFocus.ndcX,
-                           gpuPickFocus.ndcY);
+      gpuPickFocus.pendingFrames = 0;
+      std::optional<AutofocusResult> selectedEntity;
+      if (resultMatches)
+      {
+        selectedEntity = autofocusGpuPick(gpuResult.objectId,
+                                          gpuPickFocus.ndcX,
+                                          gpuPickFocus.ndcY);
+      }
       if (!selectedEntity)
-        selectedEntity = autofocusAtNdc(gpuPickFocus.ndcX,
-                                        gpuPickFocus.ndcY);
-      if (selectedEntity)
+      {
+        reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
+      }
+      else
+      {
         reportAutofocus(*selectedEntity);
+      }
     }
   }
 
@@ -4906,8 +4926,15 @@ void render()
       gpuPickRegistry().clear();
       gpuPickNextEntityId = 2;
       gpuPickFocus.requestToken = requestToken;
+      gpuPickFocus.pendingFrames = 0;
       gpuPickFocus.pendingNdc = false;
       gpuPickFocus.waitingResult = true;
+    }
+    else if (++gpuPickFocus.pendingFrames >= 3)
+    {
+      gpuPickFocus.pendingNdc = false;
+      gpuPickFocus.pendingFrames = 0;
+      reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
     }
   }
 
@@ -5606,6 +5633,7 @@ int main(int argc, char *argv[])
           gpuPickFocus.ndcX = ndcX;
           gpuPickFocus.ndcY = ndcY;
           gpuPickFocus.pendingNdc = true;
+          gpuPickFocus.pendingFrames = 0;
           gpuPickFocus.waitingResult = false;
         }
         else if (const std::optional<AutofocusResult> selectedEntity =
