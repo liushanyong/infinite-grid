@@ -795,6 +795,8 @@ void drawMesh(const glm::mat4 &view, const glm::mat4 &projection,
       .opacity = opacity,
       .mesh = mesh,
       .logDepth = logDepth,
+      .eye = rendering::encodeDoubleSingle(rebaseOrigin),
+      .object = rendering::encodeDoubleSingle(objectWorldPosition),
   };
   rendererBackend->drawCube(renderData);
 }
