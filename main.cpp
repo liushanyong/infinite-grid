@@ -1,5 +1,6 @@
 #include "main.h"
 #include "entities/tessellate.h"
+#include "rendering/ProceduralMesh.h"
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
@@ -2610,12 +2611,12 @@ bool rayIntersectsPoint(const PickRay &ray,
     return true;
 }
 
-// Mesh instances are unrotated and uniformly scaled. Refine the candidate
-// AABB to the rendered sphere/cone/torus surface; an empty corner of a
+// Mesh instances are unrotated and uniformly scaled. Refine the candidate AABB
+// to the same triangle faces submitted to the renderer; an empty corner of a
 // transparent mesh box must not steal focus from a nearby CAD vector.
 bool rayIntersectsRenderedMesh(const PickRay &ray,
                                const LargeCoordinateObject &object,
-                               double &hitDepth)
+                               double &hitDepth, size_t *faceIndex = nullptr)
 {
     const double scale = std::max(1.0e-12, static_cast<double>(object.size));
     const double directionLength = glm::length(ray.direction);
@@ -2625,152 +2626,30 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     const glm::dvec3 origin = (ray.origin - object.worldPosition) / scale;
     const glm::dvec3 direction = ray.direction / directionLength;
     double best = std::numeric_limits<double>::infinity();
+    const PickRay localRay{origin, direction};
+    const std::vector<float> &soup =
+        rendering::proceduralMeshVertices(object.mesh);
+    constexpr size_t kVertexFloats =
+        rendering::kProceduralMeshFloatStride;
 
-    auto accept = [&](double depth) {
-        if (depth > 0.0 && depth < best)
+    for (size_t vertex = 0; vertex + 2 < soup.size() / kVertexFloats;
+         vertex += 3)
+    {
+        const auto position = [&](size_t index) {
+            const size_t first = index * kVertexFloats;
+            return glm::dvec3(soup[first], soup[first + 1], soup[first + 2]);
+        };
+
+        double depth = 0.0;
+        if (rayIntersectsTriangle(localRay, position(vertex),
+                                  position(vertex + 1),
+                                  position(vertex + 2), depth) &&
+            depth > 0.0 && depth < best)
+        {
             best = depth;
-    };
-
-    switch (object.mesh)
-    {
-    case rendering::MeshType::Sphere:
-    {
-        const double a = glm::dot(direction, direction);
-        const double b = 2.0 * glm::dot(origin, direction);
-        const double c = glm::dot(origin, origin) - 0.25;
-        const double discriminant = b * b - 4.0 * a * c;
-        if (discriminant >= 0.0)
-        {
-            const double root = std::sqrt(discriminant);
-            accept((-b - root) / (2.0 * a));
-            accept((-b + root) / (2.0 * a));
+            if (faceIndex)
+                *faceIndex = vertex / 3;
         }
-        break;
-    }
-    case rendering::MeshType::Cone:
-    {
-        const double a = direction.x * direction.x +
-                         direction.z * direction.z -
-                         0.25 * direction.y * direction.y;
-        const double b = 2.0 * (origin.x * direction.x +
-                                origin.z * direction.z) -
-                         0.5 * origin.y * direction.y +
-                         0.25 * direction.y;
-        const double c = origin.x * origin.x + origin.z * origin.z -
-                         0.25 * (0.5 - origin.y) * (0.5 - origin.y);
-        auto acceptConeRoot = [&](double depth) {
-            if (depth <= 0.0)
-                return;
-            const double y = origin.y + direction.y * depth;
-            if (y >= -0.5 && y <= 0.5)
-                accept(depth);
-        };
-        if (std::abs(a) < 1.0e-24)
-        {
-            if (std::abs(b) > 1.0e-24)
-                acceptConeRoot(-c / b);
-        }
-        else
-        {
-            const double discriminant = b * b - 4.0 * a * c;
-            if (discriminant >= 0.0)
-            {
-                const double root = std::sqrt(discriminant);
-                acceptConeRoot((-b - root) / (2.0 * a));
-                acceptConeRoot((-b + root) / (2.0 * a));
-            }
-        }
-
-        if (std::abs(direction.y) > 1.0e-20)
-        {
-            const double depth = (-0.5 - origin.y) / direction.y;
-            const glm::dvec3 local = origin + direction * depth;
-            if (depth > 0.0 &&
-                local.x * local.x + local.z * local.z <= 0.25)
-                accept(depth);
-        }
-        break;
-    }
-    case rendering::MeshType::Torus:
-    {
-        constexpr double majorRadius = 0.325;
-        constexpr double minorRadius = 0.175;
-        const double ox = origin.x;
-        const double oy = origin.y;
-        const double oz = origin.z;
-        const double dx = direction.x;
-        const double dy = direction.y;
-        const double dz = direction.z;
-        const double radial2 = dx * dx + dz * dz;
-        const double originDot = ox * dx + oz * dz;
-        const double quadraticConstant = ox * ox + oy * oy + oz * oz +
-                                         majorRadius * majorRadius -
-                                         minorRadius * minorRadius;
-        const double linearQ = originDot + oy * dy;
-        const double quadraticQ = radial2 + dy * dy;
-        const double a = quadraticQ * quadraticQ;
-        const double b = 4.0 * linearQ * quadraticQ;
-        const double c = 4.0 * linearQ * linearQ +
-                         2.0 * quadraticQ * quadraticConstant -
-                         4.0 * majorRadius * majorRadius * radial2;
-        const double d = 4.0 * linearQ * quadraticConstant -
-                         8.0 * majorRadius * majorRadius * originDot;
-        const double e = quadraticConstant * quadraticConstant -
-                         4.0 * majorRadius * majorRadius *
-                             (ox * ox + oz * oz);
-        // Search close to the torus bounding sphere. The ray may intersect
-        // the tube twice, so one full-range sign bracket is insufficient.
-        const double originDistance = glm::length(origin);
-        const double searchLow = std::max(0.0, originDistance - 1.0);
-        const double searchHigh = originDistance + 1.0;
-
-        auto polynomial = [&](double t) {
-            return (((a * t + b) * t + c) * t + d) * t + e;
-        };
-        double low = searchLow;
-        double high = searchHigh;
-        double fLow = polynomial(low);
-        for (int segment = 0; segment < 64; ++segment)
-        {
-            const double highCandidate =
-                low + (high - low) * double(segment + 1) / 64.0;
-            const double fCandidate = polynomial(highCandidate);
-            if (fLow * fCandidate > 0.0)
-            {
-                low = highCandidate;
-                fLow = fCandidate;
-                continue;
-            }
-
-            high = highCandidate;
-            for (int iteration = 0; iteration < 48; ++iteration)
-            {
-                const double middle = 0.5 * (low + high);
-                const double fMiddle = polynomial(middle);
-                if (fLow * fMiddle <= 0.0)
-                    high = middle;
-                else
-                {
-                    low = middle;
-                    fLow = fMiddle;
-                }
-            }
-            best = 0.5 * (low + high);
-            break;
-        }
-        break;
-    }
-    case rendering::MeshType::Cube:
-    {
-        const glm::dvec3 halfExtent(object.size * 0.5);
-        const WorldAabb2 bounds{object.worldPosition - halfExtent,
-                                object.worldPosition + halfExtent};
-        if (rayIntersectsAabb(ray, bounds, best))
-            // The AABB depth is already in world units; convert it to the
-            // local ray parameter expected by the shared conversion below.
-            best = best * directionLength / scale;
-        break;
-    }
     }
 
     if (!std::isfinite(best) || best <= 0.0)
@@ -2974,6 +2853,8 @@ struct PickResult
     double hitDepth = 0.0;
     bool hit = false;
     std::string objectName = "Scene";
+    // Zero-based index into the selected procedural mesh's triangle list.
+    std::optional<size_t> faceIndex;
 };
 
 struct AutofocusResult
@@ -3000,7 +2881,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     double nearestMeshDepth = std::numeric_limits<double>::infinity();
     double nearestCadDepth = std::numeric_limits<double>::infinity();
     double nearestCadSurfaceDepth = std::numeric_limits<double>::infinity();
-    const auto considerHit = [&](double hitDepth, const std::string &name) {
+    const auto considerHit = [&](double hitDepth, const std::string &name,
+                                 std::optional<size_t> faceIndex = std::nullopt) {
         if (hitDepth >= nearestDepth)
             return;
         nearestDepth = hitDepth;
@@ -3008,8 +2890,10 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         result.pivot = ray.origin + ray.direction * hitDepth;
         result.hit = true;
         result.objectName = name;
+        result.faceIndex = faceIndex;
     };
-    const auto considerMeshHit = [&](double hitDepth, const std::string &name) {
+    const auto considerMeshHit = [&](double hitDepth, const std::string &name,
+                                     size_t faceIndex) {
         if (hitDepth < nearestMeshDepth)
         {
             nearestMeshDepth = hitDepth;
@@ -3017,9 +2901,10 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.meshDepth = hitDepth;
             trace.meshName = name;
         }
-        considerHit(hitDepth, name);
+        considerHit(hitDepth, name, faceIndex);
     };
-    const auto considerCadHit = [&](double hitDepth, const char *name) {
+    const auto considerCadHit = [&](double hitDepth, const char *name,
+                                    std::optional<size_t> faceIndex = std::nullopt) {
         if (hitDepth < nearestCadDepth)
         {
             nearestCadDepth = hitDepth;
@@ -3027,13 +2912,14 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.cadDepth = hitDepth;
             trace.cadName = name;
         }
-        considerHit(hitDepth, name);
+        considerHit(hitDepth, name, faceIndex);
     };
     const auto considerCadSurfaceHit = [&](double hitDepth,
-                                           const char *name) {
+                                           const char *name,
+                                           std::optional<size_t> faceIndex = std::nullopt) {
         if (hitDepth < nearestCadSurfaceDepth)
             nearestCadSurfaceDepth = hitDepth;
-        considerCadHit(hitDepth, name);
+        considerCadHit(hitDepth, name, faceIndex);
     };
     // Strokes and points are rendered as cursor-sized screen-space overlays.
     // Since the demo meshes are intentionally translucent, honor their visible
@@ -3077,26 +2963,29 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         const WorldAabb2 objBounds{object->worldPosition - halfExtent,
                                    object->worldPosition + halfExtent};
         double hitDepth = 0.0;
+        size_t faceIndex = 0;
         if (rayIntersectsAabb(ray, objBounds, hitDepth) &&
             hitDepth < nearestDepth &&
             meshObjectState(object) != VisibilityState::Offscreen &&
-            rayIntersectsRenderedMesh(ray, *object, hitDepth))
+            rayIntersectsRenderedMesh(ray, *object, hitDepth, &faceIndex))
         {
-            considerMeshHit(hitDepth, object->displayName());
+            considerMeshHit(hitDepth, object->displayName(), faceIndex);
         }
     }
 
     // Also test the center cube, which is rendered outside the BVH.
     {
         double hitDepth = 0.0;
+        size_t faceIndex = 0;
         const MeshEntityRecord centerCube = getCenterCubeEntity();
         if (classifyMeshVisibility(pickVisibility, centerCube,
                                    VisibilityKind::CenterCube) !=
                 VisibilityState::Offscreen &&
-            rayIntersectsRenderedMesh(ray, centerCube, hitDepth) &&
+            rayIntersectsRenderedMesh(ray, centerCube, hitDepth,
+                                      &faceIndex) &&
             hitDepth < nearestDepth)
         {
-            considerMeshHit(hitDepth, centerCube.displayName());
+            considerMeshHit(hitDepth, centerCube.displayName(), faceIndex);
         }
     }
 
@@ -3186,10 +3075,12 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         {
             const MeshEntityRecord &mesh = cad.meshes[meshIndex];
             double hitDepth = 0.0;
+            size_t faceIndex = 0;
             if (cadMeshState(mesh) != VisibilityState::Offscreen &&
-                rayIntersectsRenderedMesh(ray, mesh, hitDepth))
+                rayIntersectsRenderedMesh(ray, mesh, hitDepth, &faceIndex))
             {
-                considerCadSurfaceHit(hitDepth, mesh.displayName().c_str());
+                considerCadSurfaceHit(hitDepth, mesh.displayName().c_str(),
+                                      faceIndex);
             }
         }
 
@@ -3239,6 +3130,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             result.hitDepth = trace.cadOverlayDepth;
             result.pivot = overlayPivot;
             result.objectName = trace.cadOverlayName;
+            result.faceIndex.reset();
         }
     }
 

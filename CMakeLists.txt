@@ -102,6 +102,7 @@ set(WINDOW_SOURCES
     main.cpp
     lib/rendering/RendererBackend.cpp
     lib/rendering/BgfxRenderer.cpp
+    lib/rendering/ProceduralMesh.cpp
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})
