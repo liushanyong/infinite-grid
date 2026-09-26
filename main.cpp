@@ -8,9 +8,11 @@
 #include <cstring>
 #include <iterator>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include <limits>
 #include <chrono>
@@ -995,31 +997,6 @@ struct VectorPrimitivesTessellation
   std::vector<CadEntityRange> strokeRanges;
   std::vector<CadEntityRange> fillRanges;
   std::vector<CadEntityRange> pointRanges;
-
-  const char *strokeNameAt(size_t index) const
-  {
-    return nameAt(strokeRanges, index, "CADStroke");
-  }
-  const char *fillNameAt(size_t index) const
-  {
-    return nameAt(fillRanges, index, "CADFill");
-  }
-  const char *pointNameAt(size_t index) const
-  {
-    return nameAt(pointRanges, index, "CADPoint");
-  }
-
-private:
-  static const char *nameAt(const std::vector<CadEntityRange> &ranges,
-                            size_t index, const char *fallback)
-  {
-    for (const CadEntityRange &range : ranges)
-    {
-      if (index >= range.begin && index < range.begin + range.count)
-        return range.name.c_str();
-    }
-    return fallback;
-  }
 };
 
 template <typename EntityType>
@@ -2803,7 +2780,7 @@ double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint)
               glm::dot(worldPoint - ray.origin, orbitCam.Front)) *
           std::tan(glm::radians(45.0) * 0.5) /
           currentDrawableHeight();
-    return std::max(6.0, worldPerPixel * 3.0);
+    return worldPerPixel * 3.0;
 }
 
 bool pickDebugEnabled()
@@ -2945,6 +2922,21 @@ VisibilityState classifyMeshVisibility(
   return query.classify(makeMeshCandidate(mesh, kind));
 }
 
+int cadOverlayPriority(VisibilityKind kind)
+{
+    // Points are smallest and easiest to miss, so they resolve exact-depth
+    // overlaps with curves. Curves then resolve against filled surfaces.
+    switch (kind)
+    {
+    case VisibilityKind::CadPoint:
+        return 2;
+    case VisibilityKind::CadStroke:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 struct PickDebugTrace
 {
     std::string meshName;
@@ -2954,6 +2946,7 @@ struct PickDebugTrace
     double cadDepth = 0.0;
     bool cadHit = false;
     std::string cadOverlayName;
+    VisibilityKind cadOverlayKind = VisibilityKind::CadStroke;
     double cadOverlayDepth = 0.0;
     bool cadOverlayHit = false;
     size_t cadStrokeCount = 0;
@@ -2993,19 +2986,10 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         return pickVisibility.classify(
             makeMeshCandidate(*object, VisibilityKind::MeshObject));
     };
-    const auto rangeForIndex =
-        [](const std::vector<CadEntityRange> &ranges,
-           size_t index) -> const CadEntityRange * {
-        for (const CadEntityRange &range : ranges)
-        {
-            if (index >= range.begin && index < range.begin + range.count)
-                return &range;
-        }
-        return nullptr;
-    };
     double nearestDepth = std::numeric_limits<double>::infinity();
     double nearestMeshDepth = std::numeric_limits<double>::infinity();
     double nearestCadDepth = std::numeric_limits<double>::infinity();
+    double nearestCadSurfaceDepth = std::numeric_limits<double>::infinity();
     const auto considerHit = [&](double hitDepth, const std::string &name) {
         if (hitDepth >= nearestDepth)
             return;
@@ -3035,13 +3019,27 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         }
         considerHit(hitDepth, name);
     };
+    const auto considerCadSurfaceHit = [&](double hitDepth,
+                                           const char *name) {
+        if (hitDepth < nearestCadSurfaceDepth)
+            nearestCadSurfaceDepth = hitDepth;
+        considerCadHit(hitDepth, name);
+    };
     // Strokes and points are rendered as cursor-sized screen-space overlays.
     // Since the demo meshes are intentionally translucent, honor their visible
     // hit even when a mesh surface is slightly closer along the same ray.
-    const auto considerCadOverlayHit = [&](double hitDepth, const char *name) {
-        if (!trace.cadOverlayHit || hitDepth < trace.cadOverlayDepth)
+    const auto considerCadOverlayHit = [&](double hitDepth,
+                                           const char *name,
+                                           VisibilityKind kind) {
+        constexpr double overlayEpsilon = 1.0e-6;
+        const int priority = cadOverlayPriority(kind);
+        if (!trace.cadOverlayHit ||
+            hitDepth < trace.cadOverlayDepth - overlayEpsilon ||
+            (hitDepth <= trace.cadOverlayDepth + overlayEpsilon &&
+             priority > cadOverlayPriority(trace.cadOverlayKind)))
         {
             trace.cadOverlayHit = true;
+            trace.cadOverlayKind = kind;
             trace.cadOverlayDepth = hitDepth;
             trace.cadOverlayName = name;
         }
@@ -3115,63 +3113,63 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.cadFillCount = cad.geometry.fills.size();
             trace.cadPointCount = cad.geometry.points.size();
         }
-        size_t strokeIndex = 0;
-        for (const entities::Stroke &stroke : cad.geometry.strokes)
+        for (const CadEntityRange &range : cad.strokeRanges)
         {
-            const CadEntityRange *range =
-                rangeForIndex(cad.strokeRanges, strokeIndex);
-            if (!range || !stroke.common.visible || stroke.points.size() < 2)
-            {
-                ++strokeIndex;
-                continue;
-            }
-            if (cadState(VisibilityKind::CadStroke, *range) ==
-                VisibilityState::Offscreen)
+            if (!range.count || cadState(VisibilityKind::CadStroke, range) ==
+                                    VisibilityState::Offscreen)
                 continue;
 
-            const size_t segmentCount =
-                stroke.closed ? stroke.points.size() : stroke.points.size() - 1;
-            for (size_t i = 0; i < segmentCount; ++i)
+            for (size_t strokeIndex = range.begin;
+                 strokeIndex < range.begin + range.count; ++strokeIndex)
             {
-                double hitDepth = 0.0;
-                const size_t next = (i + 1) % stroke.points.size();
-                const glm::dvec3 midpoint =
-                    (stroke.points[i] + stroke.points[next]) * 0.5;
-                if (rayIntersectsSegment(ray, stroke.points[i],
-                                         stroke.points[next],
-                                         cadPickTolerance(ray, midpoint),
-                                         hitDepth))
+                const entities::Stroke &stroke =
+                    cad.geometry.strokes[strokeIndex];
+                if (!stroke.common.visible || stroke.points.size() < 2)
+                    continue;
+
+                const size_t segmentCount =
+                    stroke.closed ? stroke.points.size()
+                                  : stroke.points.size() - 1;
+                for (size_t i = 0; i < segmentCount; ++i)
                 {
-                    considerCadOverlayHit(hitDepth,
-                                          cad.strokeNameAt(strokeIndex));
+                    double hitDepth = 0.0;
+                    const size_t next = (i + 1) % stroke.points.size();
+                    const glm::dvec3 midpoint =
+                        (stroke.points[i] + stroke.points[next]) * 0.5;
+                    if (rayIntersectsSegment(ray, stroke.points[i],
+                                             stroke.points[next],
+                                             cadPickTolerance(ray, midpoint),
+                                             hitDepth))
+                    {
+                        considerCadOverlayHit(
+                            hitDepth, range.name.c_str(),
+                            VisibilityKind::CadStroke);
+                    }
                 }
             }
-            ++strokeIndex;
         }
 
-        size_t fillIndex = 0;
-        for (const entities::Triangle &triangle : cad.geometry.fills)
+        for (const CadEntityRange &range : cad.fillRanges)
         {
-            const CadEntityRange *range =
-                rangeForIndex(cad.fillRanges, fillIndex);
-            if (!range || !triangle.common.visible)
-            {
-                ++fillIndex;
+            if (!range.count || cadState(VisibilityKind::CadFill, range) ==
+                                    VisibilityState::Offscreen)
                 continue;
-            }
-            if (cadState(VisibilityKind::CadFill, *range) ==
-                VisibilityState::Offscreen)
+
+            for (size_t fillIndex = range.begin;
+                 fillIndex < range.begin + range.count; ++fillIndex)
             {
-                ++fillIndex;
-                continue;
+                const entities::Triangle &triangle =
+                    cad.geometry.fills[fillIndex];
+                if (!triangle.common.visible)
+                    continue;
+
+                double hitDepth = 0.0;
+                if (rayIntersectsTriangle(ray, triangle.a, triangle.b,
+                                          triangle.c, hitDepth))
+                {
+                    considerCadSurfaceHit(hitDepth, range.name.c_str());
+                }
             }
-            double hitDepth = 0.0;
-            if (rayIntersectsTriangle(ray, triangle.a, triangle.b, triangle.c,
-                                      hitDepth))
-            {
-                considerCadHit(hitDepth, cad.fillNameAt(fillIndex));
-            }
-            ++fillIndex;
         }
 
         for (size_t meshIndex = 0; meshIndex < cad.meshes.size(); ++meshIndex)
@@ -3181,44 +3179,57 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             if (cadMeshState(mesh) != VisibilityState::Offscreen &&
                 rayIntersectsRenderedMesh(ray, mesh, hitDepth))
             {
-                considerCadHit(hitDepth, mesh.displayName().c_str());
+                considerCadSurfaceHit(hitDepth, mesh.displayName().c_str());
             }
         }
 
-        size_t pointIndex = 0;
-        for (const entities::TessellatedPoint &point : cad.geometry.points)
+        for (const CadEntityRange &range : cad.pointRanges)
         {
-            const CadEntityRange *range =
-                rangeForIndex(cad.pointRanges, pointIndex);
-            if (!range || !point.common.visible)
-            {
-                ++pointIndex;
+            if (!range.count || cadState(VisibilityKind::CadPoint, range) ==
+                                    VisibilityState::Offscreen)
                 continue;
-            }
-            if (cadState(VisibilityKind::CadPoint, *range) ==
-                VisibilityState::Offscreen)
+
+            for (size_t pointIndex = range.begin;
+                 pointIndex < range.begin + range.count; ++pointIndex)
             {
-                ++pointIndex;
-                continue;
+                const entities::TessellatedPoint &point =
+                    cad.geometry.points[pointIndex];
+                if (!point.common.visible)
+                    continue;
+
+                double hitDepth = 0.0;
+                if (rayIntersectsPoint(ray, point.location,
+                                       cadPickTolerance(ray, point.location),
+                                       hitDepth))
+                {
+                    considerCadOverlayHit(
+                        hitDepth, range.name.c_str(),
+                        VisibilityKind::CadPoint);
+                }
             }
-            double hitDepth = 0.0;
-            if (rayIntersectsPoint(ray, point.location,
-                                   cadPickTolerance(ray, point.location),
-                                   hitDepth))
-            {
-                considerCadOverlayHit(
-                    hitDepth, cad.pointNameAt(pointIndex));
-            }
-            ++pointIndex;
         }
     }
 
     if (trace.cadOverlayHit)
     {
-        result.hit = true;
-        result.hitDepth = trace.cadOverlayDepth;
-        result.pivot = ray.origin + ray.direction * trace.cadOverlayDepth;
-        result.objectName = trace.cadOverlayName;
+        const glm::dvec3 overlayPivot =
+            ray.origin + ray.direction * trace.cadOverlayDepth;
+        const double overlayDepthTolerance =
+            cadPickTolerance(ray, overlayPivot);
+
+        // Screen-space overlays win ties and small depth differences, which
+        // keeps curve strokes pickable where they lie on a surface.  Do not
+        // let a tolerant stroke hit replace a visibly closer solid fill such
+        // as an arrowhead sharing an endpoint with its leader line.
+        if (!std::isfinite(nearestCadSurfaceDepth) ||
+            trace.cadOverlayDepth <=
+                nearestCadSurfaceDepth + overlayDepthTolerance)
+        {
+            result.hit = true;
+            result.hitDepth = trace.cadOverlayDepth;
+            result.pivot = overlayPivot;
+            result.objectName = trace.cadOverlayName;
+        }
     }
 
     return result;
@@ -3263,6 +3274,273 @@ std::optional<AutofocusResult> autofocusAtNdc(double ndcX, double ndcY)
         glm::dot(result.pivot - orbitCam.Position, orbitCam.Front);
     orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
     return AutofocusResult{result.objectName, result.pivot, viewDepth};
+}
+
+// Deterministic diagnostics for entities that render but lose CPU picking.
+// Each range contributes one representative sample (the first segment midpoint,
+// stable interior triangle point, or point), probed from several orbit views.
+bool runCadPickAudit()
+{
+  const char *flag = std::getenv("GRID_PICK_AUDIT");
+  if (!flag || *flag == '\0' || std::strcmp(flag, "0") == 0)
+    return false;
+
+  struct AuditStats
+  {
+    VisibilityKind kind = VisibilityKind::CadStroke;
+    size_t samples = 0;
+    size_t matched = 0;
+    size_t misses = 0;
+    size_t offscreen = 0;
+    size_t direct = 0;
+    std::map<std::string, size_t> blockers;
+  };
+
+  const VectorPrimitivesTessellation &cad = getVectorPrimitivesTessellation();
+  struct AuditSample
+  {
+    std::string name;
+    VisibilityKind kind;
+    glm::dvec3 location;
+    double extent = 0.0;
+    VisibilityCandidate candidate;
+  };
+  std::vector<AuditSample> samples;
+  samples.reserve(cad.strokeRanges.size() + cad.fillRanges.size() +
+                  cad.pointRanges.size() + cad.fillRanges.size());
+
+  for (const CadEntityRange &range : cad.strokeRanges)
+  {
+    if (!range.count)
+      continue;
+    const entities::Stroke &stroke =
+        cad.geometry.strokes[range.begin];
+    if (!stroke.common.visible || stroke.points.size() < 2)
+      continue;
+    const double extent = makeCadRangeCandidate(
+        cad, range, VisibilityKind::CadStroke).lodSize;
+    const glm::dvec3 location =
+        (stroke.points[0] + stroke.points[1]) * 0.5;
+    AuditSample sample{range.name, VisibilityKind::CadStroke,
+                       location, extent};
+    sample.candidate = makeCadRangeCandidate(
+        cad, range, VisibilityKind::CadStroke);
+    samples.push_back(std::move(sample));
+  }
+  for (const CadEntityRange &range : cad.fillRanges)
+  {
+    if (!range.count)
+      continue;
+    const entities::Triangle &fill = cad.geometry.fills[range.begin];
+    if (!fill.common.visible)
+      continue;
+    const double extent = makeCadRangeCandidate(
+        cad, range, VisibilityKind::CadFill).lodSize;
+    const double localExtent = std::max(
+        {glm::distance(fill.a, fill.b),
+         glm::distance(fill.b, fill.c),
+         glm::distance(fill.c, fill.a)});
+    AuditSample sample{range.name, VisibilityKind::CadFill,
+                       (fill.a + fill.b + fill.c) / 3.0, localExtent};
+    sample.candidate = makeCadRangeCandidate(
+        cad, range, VisibilityKind::CadFill);
+    AuditSample interiorSample = sample;
+    // Avoid the centroid/median: a leader stroke can own that line even when
+    // the rest of the fill remains directly selectable.
+    interiorSample.location =
+        fill.a * 0.20 + fill.b * 0.30 + fill.c * 0.50;
+    samples.push_back(std::move(sample));
+    samples.push_back(std::move(interiorSample));
+  }
+  for (const CadEntityRange &range : cad.pointRanges)
+  {
+    if (!range.count)
+      continue;
+    const entities::TessellatedPoint &point =
+        cad.geometry.points[range.begin];
+    if (!point.common.visible)
+      continue;
+    const double extent = makeCadRangeCandidate(
+        cad, range, VisibilityKind::CadPoint).lodSize;
+    AuditSample sample{range.name, VisibilityKind::CadPoint,
+                       point.location, extent};
+    sample.candidate = makeCadRangeCandidate(
+        cad, range, VisibilityKind::CadPoint);
+    samples.push_back(std::move(sample));
+  }
+
+  std::cout << "CAD pick audit: samples="
+            << samples.size() << std::endl;
+  if (samples.empty())
+    return true;
+
+  const bool previousOrtho = useOrthoProjection();
+  const glm::dquat previousRotation = orbitCam.Rotation;
+  const glm::dvec3 previousTarget = orbitCam.Target;
+  const double previousDistance = orbitCam.Distance;
+  const glm::dvec3 previousWorldUp = orbitCam.WorldUp;
+  const float previousZoom = orbitCam.Zoom;
+  useOrthoProjection() = true;
+  orbitCam.Zoom = 45.0f;
+
+  constexpr int kAzimuthCount = 8;
+  constexpr double kElevations[] = {
+      glm::radians(35.0), glm::radians(70.0)};
+  using AuditKey = std::pair<VisibilityKind, std::string>;
+  std::map<AuditKey, AuditStats> results;
+  for (const AuditSample &sample : samples)
+  {
+    AuditStats stats;
+    stats.kind = sample.kind;
+    results.emplace(AuditKey{sample.kind, sample.name}, stats);
+  }
+
+  auto setAuditCamera = [&](const glm::dvec3 &target,
+                            const glm::dvec3 &viewDirection, double distance) {
+    const glm::dvec3 front = glm::normalize(viewDirection);
+    glm::dvec3 right(1.0, 0.0, 0.0);
+    if (std::abs(front.z) < 0.999)
+      right = glm::normalize(
+          glm::cross(front, glm::dvec3(0.0, 0.0, 1.0)));
+    const glm::dvec3 up = glm::normalize(glm::cross(right, front));
+    orbitCam.Rotation = glm::dquat(
+        glm::dmat3(right, up, -front));
+    orbitCam.setOrbit(target, std::max(1.0, distance));
+  };
+
+  auto recordResult = [&](const AuditSample &sample,
+                          const PickResult &result) {
+    AuditStats &stats =
+        results[AuditKey{sample.kind, sample.name}];
+    ++stats.samples;
+    if (result.hit && result.objectName == sample.name)
+    {
+      ++stats.matched;
+      return;
+    }
+    if (result.hit)
+      ++stats.blockers[result.objectName];
+    else
+      ++stats.misses;
+  };
+
+  auto recordSample = [&](const AuditSample &sample,
+                          const PickResult &result) {
+    const UnifiedVisibilityQuery visibility = makePickingVisibilityQuery();
+    AuditStats &stats =
+        results[AuditKey{sample.kind, sample.name}];
+    const PickRay ray{orbitCam.Position,
+                      glm::normalize(sample.location - orbitCam.Position)};
+    bool directHit = false;
+    if (sample.kind == VisibilityKind::CadStroke)
+    {
+      for (size_t i = sample.candidate.rangeBegin;
+           i < sample.candidate.rangeBegin + sample.candidate.rangeCount; ++i)
+      {
+        const entities::Stroke &stroke = cad.geometry.strokes[i];
+        for (size_t j = 0; j + 1 < stroke.points.size(); ++j)
+        {
+          double depth = 0.0;
+          directHit |= rayIntersectsSegment(
+              ray, stroke.points[j], stroke.points[j + 1],
+              cadPickTolerance(ray, sample.location), depth);
+        }
+      }
+    }
+    else if (sample.kind == VisibilityKind::CadFill)
+    {
+      for (size_t i = sample.candidate.rangeBegin;
+           i < sample.candidate.rangeBegin + sample.candidate.rangeCount; ++i)
+      {
+        const entities::Triangle &fill = cad.geometry.fills[i];
+        double depth = 0.0;
+        directHit |= rayIntersectsTriangle(
+            ray, fill.a, fill.b, fill.c, depth);
+      }
+    }
+    else
+    {
+      for (size_t i = sample.candidate.rangeBegin;
+           i < sample.candidate.rangeBegin + sample.candidate.rangeCount; ++i)
+      {
+        double depth = 0.0;
+        directHit |= rayIntersectsPoint(
+            ray, cad.geometry.points[i].location,
+            cadPickTolerance(ray, sample.location), depth);
+      }
+    }
+    if (directHit)
+      ++stats.direct;
+    if (sample.candidate.lodSize > 0.0 &&
+        visibility.classify(sample.candidate) == VisibilityState::Offscreen)
+      ++stats.offscreen;
+    else
+      recordResult(sample, result);
+  };
+
+  for (const AuditSample &sample : samples)
+  {
+    const double distance = std::max(
+        32.0, std::max(sample.extent * 2.0, sample.extent + 32.0));
+
+    for (int azimuth = 0; azimuth < kAzimuthCount; ++azimuth)
+    {
+      const double angle = glm::two_pi<double>() * azimuth / kAzimuthCount;
+      for (const double elevation : kElevations)
+      {
+        const glm::dvec3 viewDirection = glm::normalize(glm::dvec3(
+            std::cos(elevation) * std::cos(angle),
+            std::cos(elevation) * std::sin(angle),
+            std::sin(elevation)));
+        setAuditCamera(sample.location, viewDirection, distance);
+        const PickRay ray{orbitCam.Position,
+                          glm::normalize(sample.location - orbitCam.Position)};
+        recordSample(sample, pickObjectAlongRay(ray));
+      }
+    }
+
+    setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, -1.0), distance);
+    recordSample(sample, pickObjectAlongRay(
+        {orbitCam.Position, glm::dvec3(0.0, 0.0, -1.0)}));
+    setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, 1.0), distance);
+    recordSample(sample, pickObjectAlongRay(
+        {orbitCam.Position, glm::dvec3(0.0, 0.0, 1.0)}));
+
+  }
+
+  for (const auto &[key, stats] : results)
+  {
+    if (stats.matched != 0)
+      continue;
+
+    std::cout << std::fixed << std::setprecision(3)
+              << "CAD pick audit FAIL name=" << key.second
+              << " kind="
+              << (key.first == VisibilityKind::CadStroke ? "stroke"
+                    : key.first == VisibilityKind::CadFill ? "fill"
+                    : "point")
+              << " samples=" << stats.samples
+              << " matched=" << stats.matched
+              << " offscreen=" << stats.offscreen
+              << " direct=" << stats.direct
+              << " misses=" << stats.misses << " blockers={";
+    bool firstBlocker = true;
+    for (const auto &[blockerName, count] : stats.blockers)
+    {
+      if (!firstBlocker)
+        std::cout << ", ";
+      firstBlocker = false;
+      std::cout << blockerName << "=" << count;
+    }
+    std::cout << "}" << std::defaultfloat << std::endl;
+  }
+
+  useOrthoProjection() = previousOrtho;
+  orbitCam.Zoom = previousZoom;
+  orbitCam.WorldUp = previousWorldUp;
+  orbitCam.Rotation = previousRotation;
+  orbitCam.setOrbit(previousTarget, previousDistance);
+  return true;
 }
 
 // Convert SDL window coordinates to NDC [-1, 1].
@@ -4753,6 +5031,11 @@ int main(int argc, char *argv[])
   cubeWorldPosition =
       LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
   fitCameraToStressField();
+  if (runCadPickAudit())
+  {
+    close();
+    return 0;
+  }
   // Keep the legacy automated zoom test working without a separate ortho
   // size state: convert the requested half-height into the authoritative
   // Distance after the OpenCAD-style fit has chosen its orientation.
