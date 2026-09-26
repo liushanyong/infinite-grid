@@ -1127,6 +1127,7 @@ struct VisibilityCandidate
 struct VectorPrimitivesTessellation
 {
   entities::TessellatedEntity geometry;
+  glm::dvec3 anchor{0.0};
   std::vector<MeshEntityRecord> meshes;
   std::vector<CadEntityRange> strokeRanges;
   std::vector<CadEntityRange> fillRanges;
@@ -1186,6 +1187,7 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 
     const glm::dvec3 cadAnchor =
         vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
+    target.anchor = cadAnchor;
     const entities::TesselationOptions options;
 
     entities::Line line;
@@ -1519,6 +1521,46 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
   return tessellation;
 }
 
+static uint64_t cadGpuPickGeometryKey(const CadEntityRange *range,
+                                      size_t chunkIndex)
+{
+  const uint64_t pointer =
+      static_cast<uint64_t>(reinterpret_cast<uintptr_t>(range));
+  return pointer * 0x9e3779b97f4a7c15ULL + static_cast<uint64_t>(chunkIndex);
+}
+
+// CAD fill tessellation is immutable.  Cache each entity's pick soup in
+// anchor-relative coordinates so repeated GPU pick requests reuse the same
+// renderer-side vertex buffer instead of rebuilding large-coordinate copies.
+static const std::vector<rendering::FillVertex> &
+cadGpuPickFillVertices(const CadEntityRange &range, const glm::vec4 &idColor)
+{
+  static std::unordered_map<const CadEntityRange *,
+                            std::vector<rendering::FillVertex>>
+      cache;
+  auto [it, inserted] = cache.try_emplace(&range);
+  if (!inserted)
+    return it->second;
+
+  const VectorPrimitivesTessellation &tessellation =
+      getVectorPrimitivesTessellation();
+  std::vector<rendering::FillVertex> &vertices = it->second;
+  vertices.reserve(range.count * 3);
+  for (size_t i = range.begin; i < range.begin + range.count; ++i)
+  {
+    const entities::Triangle &triangle = tessellation.geometry.fills[i];
+    if (!triangle.common.visible)
+      continue;
+    vertices.push_back(
+        {glm::vec3(triangle.a - tessellation.anchor), idColor});
+    vertices.push_back(
+        {glm::vec3(triangle.b - tessellation.anchor), idColor});
+    vertices.push_back(
+        {glm::vec3(triangle.c - tessellation.anchor), idColor});
+  }
+  return vertices;
+}
+
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
                                      const glm::mat4 &overlayProjection,
@@ -1538,6 +1580,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront));
   const VectorPrimitivesTessellation &tessellation =
       getVectorPrimitivesTessellation();
+  const glm::mat4 cadAnchorView = view * glm::translate(
+      glm::mat4(1.0f), glm::vec3(tessellation.anchor - rebase));
   static std::vector<rendering::PrimVertex> polyVerts;
   static std::vector<rendering::FillVertex> fillVerts;
   static std::vector<rendering::FillVertex> surfaceFillVerts;
@@ -1595,9 +1639,29 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       return;
     }
 
-    for (const glm::dvec3 &world : stroke.points)
+    for (size_t pointIndex = 0; pointIndex < count; ++pointIndex)
     {
-      const glm::vec3 center = glm::vec3(world - rebase);
+      const glm::vec3 center =
+          glm::vec3(stroke.points[pointIndex] - rebase);
+      if (!stroke.closed && (pointIndex != 0 &&
+                             pointIndex + 1 != count))
+      {
+        const glm::dvec3 &previous = stroke.points[pointIndex - 1];
+        const glm::dvec3 &next = stroke.points[pointIndex + 1];
+        const glm::dvec3 incoming = previous - stroke.points[pointIndex];
+        const glm::dvec3 outgoing = next - stroke.points[pointIndex];
+        const double lengthProduct =
+            glm::length(incoming) * glm::length(outgoing);
+        if (lengthProduct > 1.0e-12)
+        {
+          const double cosine =
+              glm::dot(incoming, outgoing) / lengthProduct;
+          // Nearly straight interior points do not need a round join.
+          if (cosine > 0.98)
+            continue;
+        }
+      }
+
       for (int side = 0; side < 8; ++side)
       {
         const float a0 = side * 0.7853982f;
@@ -1634,7 +1698,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const size_t count = std::min(kMaxPickChunkVertices,
                                     gpuPickVertices.size() - first);
       rendererBackend->queueGpuTrianglePick(
-          gpuPickVertices.data() + first, uint32_t(count), view,
+          0, gpuPickVertices.data() + first, uint32_t(count), view,
           pickProjection, logDepth, objectId);
     }
   };
@@ -1670,17 +1734,19 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
     const glm::vec4 idColor = encodeGpuPickId(objectId);
-    gpuPickVertices.clear();
-    for (size_t i = range.begin; i < range.begin + range.count; ++i)
+    const std::vector<rendering::FillVertex> &pickVertices =
+        cadGpuPickFillVertices(range, idColor);
+    constexpr size_t kMaxPickChunkVertices = 3 * 21000;
+    for (size_t chunk = 0, first = 0; first < pickVertices.size();
+         ++chunk, first += kMaxPickChunkVertices)
     {
-      const entities::Triangle &triangle = tess.fills[i];
-      if (!triangle.common.visible)
-        continue;
-      gpuPickVertices.push_back({glm::vec3(triangle.a - rebase), idColor});
-      gpuPickVertices.push_back({glm::vec3(triangle.b - rebase), idColor});
-      gpuPickVertices.push_back({glm::vec3(triangle.c - rebase), idColor});
+      const size_t count = std::min(kMaxPickChunkVertices,
+                                    pickVertices.size() - first);
+      rendererBackend->queueGpuTrianglePick(
+          cadGpuPickGeometryKey(&range, chunk),
+          pickVertices.data() + first, uint32_t(count), cadAnchorView,
+          projection, logDepth, objectId);
     }
-    queueGpuSoup(projection, objectId);
   };
   auto queueCadStroke = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
@@ -2759,6 +2825,142 @@ bool rayIntersectsAabb(const PickRay &ray,
     return true;
 }
 
+const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
+
+// CAD entities are immutable after tessellation, so their world-space bounds
+// can back a static BVH. Exact primitive tests remain outside this class: the
+// BVH answers which ranges the ray can reach, not which surface wins overlaps.
+class CadRangeBvh
+{
+public:
+    void build(std::vector<const VisibilityCandidate *> ranges)
+    {
+        objects = std::move(ranges);
+        nodes.clear();
+        if (objects.empty())
+            return;
+
+        nodes.reserve(objects.size() * 2);
+        buildRange(0, static_cast<uint32_t>(objects.size()));
+    }
+
+    template <typename Visitor>
+    void collect(Visitor &&rayHitsBounds,
+                 std::vector<const VisibilityCandidate *> &output) const
+    {
+        output.clear();
+        if (nodes.empty())
+            return;
+
+        std::array<uint32_t, 128> stack{};
+        size_t stackTop = 0;
+        stack[stackTop++] = 0;
+        while (stackTop > 0)
+        {
+            const Node &node = nodes[stack[--stackTop]];
+            if (!rayHitsBounds(node.bounds))
+                continue;
+            if (node.leaf)
+            {
+                for (uint32_t i = node.begin; i < node.end; ++i)
+                    output.push_back(objects[i]);
+            }
+            else
+            {
+                stack[stackTop++] = node.rightChild;
+                stack[stackTop++] = node.leftChild;
+            }
+        }
+    }
+
+private:
+    struct Node
+    {
+        WorldAabb2 bounds{};
+        uint32_t leftChild = 0;
+        uint32_t rightChild = 0;
+        uint32_t begin = 0;
+        uint32_t end = 0;
+        bool leaf = false;
+    };
+
+    static WorldAabb2 objectBounds(const VisibilityCandidate &candidate)
+    {
+        return {candidate.min, candidate.max};
+    }
+
+    static WorldAabb2 mergeBounds(const WorldAabb2 &a, const WorldAabb2 &b)
+    {
+        return {glm::min(a.min, b.min), glm::max(a.max, b.max)};
+    }
+
+    uint32_t buildRange(uint32_t begin, uint32_t end)
+    {
+        WorldAabb2 bounds = objectBounds(*objects[begin]);
+        glm::dvec3 centroidSum = objects[begin]->center;
+        for (uint32_t i = begin + 1; i < end; ++i)
+        {
+            const WorldAabb2 itemBounds = objectBounds(*objects[i]);
+            bounds = mergeBounds(bounds, itemBounds);
+            centroidSum += objects[i]->center;
+        }
+
+        const uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
+        nodes.push_back({bounds, 0, 0, begin, end, false});
+        const uint32_t count = end - begin;
+        if (count <= 4)
+        {
+            nodes[nodeIndex].leaf = true;
+            return nodeIndex;
+        }
+
+        const glm::dvec3 extent = bounds.max - bounds.min;
+        int axis = 0;
+        if (extent.y > extent.x && extent.y >= extent.z)
+            axis = 1;
+        else if (extent.z > extent.x && extent.z > extent.y)
+            axis = 2;
+
+        const uint32_t middle = begin + count / 2;
+        std::nth_element(objects.begin() + begin, objects.begin() + middle,
+                         objects.begin() + end,
+                         [axis](const VisibilityCandidate *lhs,
+                                const VisibilityCandidate *rhs) {
+                             return lhs->center[axis] < rhs->center[axis];
+                         });
+
+        const uint32_t leftChild = buildRange(begin, middle);
+        nodes[nodeIndex].leftChild = leftChild;
+        const uint32_t rightChild = buildRange(middle, end);
+        nodes[nodeIndex].rightChild = rightChild;
+        nodes[nodeIndex].leaf = false;
+        return nodeIndex;
+    }
+
+    std::vector<const VisibilityCandidate *> objects;
+    std::vector<Node> nodes;
+};
+
+const CadRangeBvh &getCadRangeBvh()
+{
+    static const CadRangeBvh bvh = [] {
+        const std::vector<VisibilityCandidate> &candidates =
+            cadRangeVisibilityCandidates();
+        std::vector<const VisibilityCandidate *> ranges;
+        ranges.reserve(candidates.size());
+        for (const VisibilityCandidate &candidate : candidates)
+        {
+            if (candidate.lodSize > 0.0)
+                ranges.push_back(&candidate);
+        }
+
+        CadRangeBvh result;
+        result.build(std::move(ranges));
+        return result;
+    }();
+    return bvh;
+}
+
 // Closest approach between a normalized picking ray and a finite segment.
 // Keeping every intermediate value in double avoids false hits/misses in the
 // large-coordinate CAD demo.
@@ -3037,6 +3239,8 @@ VisibilityCandidate makeCadRangeCandidate(
     const VectorPrimitivesTessellation &tessellation,
     const CadEntityRange &range, VisibilityKind kind);
 
+const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
+
 UnifiedVisibilityQuery makePickingVisibilityQuery()
 {
   const double aspect = (double)currentDrawableWidth() /
@@ -3249,11 +3453,23 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     {
         const VectorPrimitivesTessellation &cad =
             getVectorPrimitivesTessellation();
-        const auto cadState = [&](VisibilityKind kind,
-                                  const CadEntityRange &range) {
-            return pickVisibility.classify(
-                makeCadRangeCandidate(cad, range, kind));
-        };
+        std::vector<const VisibilityCandidate *> cadHits;
+        getCadRangeBvh().collect(
+            [&](const WorldAabb2 &bounds) {
+                double hitDepth = 0.0;
+                return rayIntersectsAabb(ray, bounds, hitDepth);
+            },
+            cadHits);
+        std::array<std::vector<const VisibilityCandidate *>, 3>
+            cadCandidates;
+        for (const VisibilityCandidate *candidate : cadHits)
+        {
+            const size_t slot =
+                candidate->kind == VisibilityKind::CadStroke ? 0
+                : candidate->kind == VisibilityKind::CadFill ? 1
+                                                             : 2;
+            cadCandidates[slot].push_back(candidate);
+        }
         const auto cadMeshState = [&](const MeshEntityRecord &mesh) {
             if (!meshEntityVisible(mesh))
                 return VisibilityState::Offscreen;
@@ -3266,11 +3482,9 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.cadFillCount = cad.geometry.fills.size();
             trace.cadPointCount = cad.geometry.points.size();
         }
-        for (const CadEntityRange &range : cad.strokeRanges)
+        for (const VisibilityCandidate *candidate : cadCandidates[0])
         {
-            if (!range.count || cadState(VisibilityKind::CadStroke, range) ==
-                                    VisibilityState::Offscreen)
-                continue;
+            const CadEntityRange &range = *candidate->cadRange;
 
             for (size_t strokeIndex = range.begin;
                  strokeIndex < range.begin + range.count; ++strokeIndex)
@@ -3303,11 +3517,9 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             }
         }
 
-        for (const CadEntityRange &range : cad.fillRanges)
+        for (const VisibilityCandidate *candidate : cadCandidates[1])
         {
-            if (!range.count || cadState(VisibilityKind::CadFill, range) ==
-                                    VisibilityState::Offscreen)
-                continue;
+            const CadEntityRange &range = *candidate->cadRange;
 
             for (size_t fillIndex = range.begin;
                  fillIndex < range.begin + range.count; ++fillIndex)
@@ -3339,11 +3551,9 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             }
         }
 
-        for (const CadEntityRange &range : cad.pointRanges)
+        for (const VisibilityCandidate *candidate : cadCandidates[2])
         {
-            if (!range.count || cadState(VisibilityKind::CadPoint, range) ==
-                                    VisibilityState::Offscreen)
-                continue;
+            const CadEntityRange &range = *candidate->cadRange;
 
             for (size_t pointIndex = range.begin;
                  pointIndex < range.begin + range.count; ++pointIndex)
@@ -4057,7 +4267,7 @@ VisibilityCandidate makeCadRangeCandidate(
   return candidate;
 }
 
-static const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
+const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
 {
   static const std::vector<VisibilityCandidate> candidates = [] {
     const VectorPrimitivesTessellation &cad =
@@ -4428,6 +4638,24 @@ void render()
 
   if (!rendererBackend->beginFrame(glm::vec4(0.1f, 0.1f, 0.1f, 1.0f)))
     return;
+
+  if (gpuPickEnabled() && gpuPickFocus.waitingResult)
+  {
+    const rendering::GpuPickQueueStats queueStats =
+        rendererBackend->gpuPickQueueStats();
+    if (queueStats.capacityExceeded())
+    {
+      gpuPickFocus.waitingResult = false;
+      gpuPickFocus.pendingFrames = 0;
+      std::cout << "GPU pick capacity exceeded meshes="
+                << queueStats.droppedMeshes << "/"
+                << queueStats.meshCapacity
+                << " triangles=" << queueStats.droppedTriangles
+                << "/" << queueStats.triangleCapacity
+                << "; using CPU fallback" << std::endl;
+      reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
+    }
+  }
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {

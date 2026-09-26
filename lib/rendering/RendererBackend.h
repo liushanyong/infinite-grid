@@ -219,6 +219,19 @@ struct GpuPickRequest
     glm::vec4 logDepth{0.0f};
 };
 
+struct GpuPickQueueStats
+{
+    size_t meshCapacity = 0;
+    size_t triangleCapacity = 0;
+    size_t droppedMeshes = 0;
+    size_t droppedTriangles = 0;
+
+    bool capacityExceeded() const
+    {
+        return droppedMeshes != 0 || droppedTriangles != 0;
+    }
+};
+
 struct GpuPickResult
 {
     bool ready = false;
@@ -333,10 +346,14 @@ public:
     virtual uint32_t requestGpuPick(const GpuPickRequest &request) { return 0; }
     virtual void queueGpuMeshPick(const MeshInstance &instance,
                                   MeshType mesh, uint32_t objectId) {}
-    // A triangle soup already expressed in rebase-relative view-input space.
+    virtual GpuPickQueueStats gpuPickQueueStats() const { return {}; }
+    // Triangle vertices are expressed in the coordinate space represented by
+    // view. A non-zero geometryKey marks reusable static geometry; transient
+    // soups use zero and are copied for the pick request.
     // The fragment color is the entity ID; this lets lines, fills, and point
     // impostors share one small asynchronous ID submission.
-    virtual void queueGpuTrianglePick(const FillVertex *vertices,
+    virtual void queueGpuTrianglePick(uint64_t geometryKey,
+                                      const FillVertex *vertices,
                                       uint32_t vertexCount,
                                       const glm::mat4 &view,
                                       const glm::mat4 &projection,

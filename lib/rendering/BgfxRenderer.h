@@ -5,6 +5,7 @@
 #include <bgfx/bgfx.h>
 #include <array>
 #include <cstdint>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -40,7 +41,9 @@ public:
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,
                           MeshType mesh, uint32_t objectId) override;
-    void queueGpuTrianglePick(const FillVertex *vertices,
+    GpuPickQueueStats gpuPickQueueStats() const override;
+    void queueGpuTrianglePick(uint64_t geometryKey,
+                              const FillVertex *vertices,
                               uint32_t vertexCount,
                               const glm::mat4 &view,
                               const glm::mat4 &projection,
@@ -188,13 +191,26 @@ private:
         m_gpuPickInstances;
     struct GpuTrianglePickBatch
     {
+        uint64_t geometryKey = 0;
         glm::mat4 view;
         glm::mat4 projection;
         glm::vec4 logDepth;
         uint32_t objectId = 0;
-        std::vector<FillVertex> vertices;
+        std::vector<FillVertex> transientVertices;
     };
+    struct GpuTrianglePickGeometry
+    {
+        bgfx::VertexBufferHandle buffer = BGFX_INVALID_HANDLE;
+        glm::vec3 center{0.0f};
+        float radius = 0.0f;
+    };
+    bool gpuPickCachedVerticesAreCandidate(
+        const GpuTrianglePickGeometry &geometry,
+        const glm::mat4 &view) const;
     std::vector<GpuTrianglePickBatch> m_gpuPickTriangles;
+    std::unordered_map<uint64_t, GpuTrianglePickGeometry>
+        m_gpuPickTriangleGeometry;
+    GpuPickQueueStats m_gpuPickQueueStats;
     GpuPickResult m_gpuPickLastResult;
     std::array<uint8_t, 4> m_gpuPickReadbackData{};
     uint32_t m_gpuPickNextToken = 1;

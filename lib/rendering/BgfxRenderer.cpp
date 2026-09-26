@@ -110,6 +110,8 @@ constexpr bgfx::ViewId kViewPresent = 8;
 constexpr float kLayerNormalizedBias = 1.0f / 65536.0f;
 constexpr float kEdgeNormalizedDepthBias = 1.0f / 65536.0f;
 constexpr float kLn2 = 0.6931471805599453f;
+constexpr size_t kMaxGpuPickInstances = 256;
+constexpr size_t kMaxGpuPickTriangleBatches = 1024;
 
 float logDepthDenominator(const glm::vec4 &logDepth)
 {
@@ -1063,6 +1065,12 @@ void BgfxRenderer::destroyGpuPickResources()
             bgfx::destroy(*buffer);
         *buffer = BGFX_INVALID_HANDLE;
     }
+    for (auto &entry : m_gpuPickTriangleGeometry)
+    {
+        if (bgfx::isValid(entry.second.buffer))
+            bgfx::destroy(entry.second.buffer);
+    }
+    m_gpuPickTriangleGeometry.clear();
     m_gpuPickInstances.clear();
     m_gpuPickTriangles.clear();
     m_gpuPickActive = false;
@@ -1785,45 +1793,55 @@ RenderModeFlags BgfxRenderer::renderModeFlags() const
 
 void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
     if (!bgfx::isValid(m_polylineProgram) || data.vertexCount < 2 || !data.vertices) return;
-    if (data.vertexCount > 65535) return;
-
-    bgfx::TransientVertexBuffer tvb;
     const uint32_t vertSize = sizeof(PrimVertex);
-    const uint32_t totalBytes = data.vertexCount * vertSize;
-    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_polylineLayout)) return;
-    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_polylineLayout);
-    memcpy(tvb.data, data.vertices, totalBytes);
-
-    glm::mat4 identity = glm::mat4(1.0f);
-    bgfx::setTransform(glm::value_ptr(identity));
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setUniform(m_view, glm::value_ptr(data.view));
     const glm::mat4 proj = projectionForDirect3D(data.projection);
-    bgfx::setUniform(m_projection, glm::value_ptr(proj));
     float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w };
-    bgfx::setUniform(m_logDepth, logDepth);
     const float depthStyle = depthStyleForRenderMode(m_renderMode.mode());
     float prim[4] = { 0.15f, data.edgeSoftness, depthStyle, 0.0f };
-    bgfx::setUniform(m_primParams, prim);
-    // Layer compositing for the wire channel (offset in view space).
-    glm::vec3 centroid(0.0f);
-    for (uint32_t i = 0; i < data.vertexCount; ++i)
-        centroid += data.vertices[i].position;
-    centroid /= float(data.vertexCount);
-    const glm::vec4 centroidView = data.view * glm::vec4(centroid, 1.0f);
     const float denom = logDepthDenominator(data.logDepth);
-    const float centroidDepth = -centroidView.z;
-    const float layerOffsetValue =
-        layerOffsetUnits(data.layer, centroidDepth, data.logDepth);
-    const uint32_t sortDepth =
-        normalizedSortDepth(centroidDepth - layerOffsetValue, data.logDepth, denom);
-    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
-    bgfx::setUniform(m_layerOffset, layerOffset);
-
     constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A
         | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-    bgfx::setState(state);
-    bgfx::submit(kViewWire, m_polylineProgram, sortDepth);
+
+    constexpr uint32_t kMaxChunkVertices = 63000;
+    for (uint32_t first = 0; first < data.vertexCount;)
+    {
+        uint32_t count = std::min({data.vertexCount - first,
+                                   kMaxChunkVertices,
+                                   bgfx::getAvailTransientVertexBuffer(
+                                       kMaxChunkVertices, m_polylineLayout)});
+        count -= count % 6;
+        if (count < 6)
+            return;
+
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, count, m_polylineLayout);
+        std::memcpy(tvb.data, data.vertices + first, count * vertSize);
+
+        glm::mat4 identity = glm::mat4(1.0f);
+        bgfx::setTransform(glm::value_ptr(identity));
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setUniform(m_view, glm::value_ptr(data.view));
+        bgfx::setUniform(m_projection, glm::value_ptr(proj));
+        bgfx::setUniform(m_logDepth, logDepth);
+        bgfx::setUniform(m_primParams, prim);
+
+        glm::vec3 centroid(0.0f);
+        for (uint32_t i = first; i < first + count; ++i)
+            centroid += data.vertices[i].position;
+        centroid /= float(count);
+        const glm::vec4 centroidView = data.view * glm::vec4(centroid, 1.0f);
+        const float centroidDepth = -centroidView.z;
+        const float layerOffsetValue =
+            layerOffsetUnits(data.layer, centroidDepth, data.logDepth);
+        const uint32_t sortDepth = normalizedSortDepth(
+            centroidDepth - layerOffsetValue, data.logDepth, denom);
+        const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(m_layerOffset, layerOffset);
+
+        bgfx::setState(state);
+        bgfx::submit(kViewWire, m_polylineProgram, sortDepth);
+        first += count;
+    }
 }
 
 void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
@@ -1831,61 +1849,69 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
     const RenderModeFlags modeFlags = m_renderMode.flags();
     if (!data.is3DFace && !modeFlags.show2dSolidFills)
         return;
+    if (data.is3DFace && !modeFlags.face3dFill && !modeFlags.hiddenLine)
+        return;
     if (!bgfx::isValid(m_fillProgram) || data.vertexCount < 3 || !data.vertices)
         return;
-    if (data.vertexCount > 65535)
-        return;
-
-    bgfx::TransientVertexBuffer tvb;
     const uint32_t vertSize = sizeof(FillVertex);
-    const uint32_t totalBytes = data.vertexCount * vertSize;
-    if (data.vertexCount > bgfx::getAvailTransientVertexBuffer(data.vertexCount, m_fillLayout))
-        return;
-    bgfx::allocTransientVertexBuffer(&tvb, data.vertexCount, m_fillLayout);
-    memcpy(tvb.data, data.vertices, totalBytes);
-
-    glm::mat4 identity = glm::mat4(1.0f);
-    bgfx::setTransform(glm::value_ptr(identity));
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setUniform(m_view, glm::value_ptr(data.view));
     const glm::mat4 proj = projectionForDirect3D(data.projection);
-    bgfx::setUniform(m_projection, glm::value_ptr(proj));
     float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w };
-    bgfx::setUniform(m_logDepth, logDepth);
     const float fillStyle[4] = { depthStyleForRenderMode(m_renderMode.mode()), 0.0f, 0.0f, 0.0f };
-    bgfx::setUniform(m_primParams, fillStyle);
-    // Depth-sort fills against meshes inside the solid channel and apply
-    // the requested compositing layer.
-    glm::vec3 centroid(0.0f);
-    for (uint32_t i = 0; i < data.vertexCount; ++i)
-        centroid += data.vertices[i].position;
-    centroid /= float(data.vertexCount);
-    const glm::vec4 centroidView = data.view * glm::vec4(centroid, 1.0f);
     const float denom = logDepthDenominator(data.logDepth);
-    const float centroidDepth = -centroidView.z;
-    const float layerOffsetValue =
-        layerOffsetUnits(data.layer, centroidDepth, data.logDepth);
-    const uint32_t sortDepth =
-        normalizedSortDepth(centroidDepth - layerOffsetValue, data.logDepth, denom);
-    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
-    bgfx::setUniform(m_layerOffset, layerOffset);
-
     const uint64_t prepassState = BGFX_STATE_DEPTH_TEST_LEQUAL |
         BGFX_STATE_WRITE_Z | BGFX_STATE_MSAA;
     const uint64_t fillState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
         BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
 
-    if (data.is3DFace && modeFlags.hiddenLine)
+    constexpr uint32_t kMaxChunkVertices = 63000;
+    for (uint32_t first = 0; first < data.vertexCount;)
     {
-        bgfx::setState(prepassState);
-        bgfx::submit(kViewDepthPrepass, m_fillProgram, sortDepth);
-        return;
-    }
+        uint32_t count = std::min({data.vertexCount - first,
+                                   kMaxChunkVertices,
+                                   bgfx::getAvailTransientVertexBuffer(
+                                       kMaxChunkVertices, m_fillLayout)});
+        count -= count % 3;
+        if (count < 3)
+            return;
 
-    if (data.is3DFace && !modeFlags.face3dFill)
-        return;
-    bgfx::setState(fillState | BGFX_STATE_WRITE_Z);
-    bgfx::submit(kViewSolidFill, m_fillProgram, sortDepth);
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, count, m_fillLayout);
+        std::memcpy(tvb.data, data.vertices + first, count * vertSize);
+
+        glm::mat4 identity = glm::mat4(1.0f);
+        bgfx::setTransform(glm::value_ptr(identity));
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setUniform(m_view, glm::value_ptr(data.view));
+        bgfx::setUniform(m_projection, glm::value_ptr(proj));
+        bgfx::setUniform(m_logDepth, logDepth);
+        bgfx::setUniform(m_primParams, fillStyle);
+
+        glm::vec3 centroid(0.0f);
+        for (uint32_t i = first; i < first + count; ++i)
+            centroid += data.vertices[i].position;
+        centroid /= float(count);
+        const glm::vec4 centroidView = data.view * glm::vec4(centroid, 1.0f);
+        const float centroidDepth = -centroidView.z;
+        const float layerOffsetValue =
+            layerOffsetUnits(data.layer, centroidDepth, data.logDepth);
+        const uint32_t sortDepth = normalizedSortDepth(
+            centroidDepth - layerOffsetValue, data.logDepth, denom);
+        const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+        bgfx::setUniform(m_layerOffset, layerOffset);
+
+        if (data.is3DFace && modeFlags.hiddenLine)
+        {
+            bgfx::setState(prepassState);
+            bgfx::submit(kViewDepthPrepass, m_fillProgram, sortDepth);
+        }
+        else if (!data.is3DFace || modeFlags.face3dFill)
+        {
+            bgfx::setState(fillState | BGFX_STATE_WRITE_Z);
+            bgfx::submit(kViewSolidFill, m_fillProgram, sortDepth);
+        }
+
+        first += count;
+    }
 }
 
 void BgfxRenderer::drawAabb(const AabbRenderData &data)
@@ -2030,6 +2056,28 @@ bool BgfxRenderer::gpuPickVerticesAreCandidate(
            std::abs(delta.y) <= radiusNdcY;
 }
 
+bool BgfxRenderer::gpuPickCachedVerticesAreCandidate(
+    const GpuTrianglePickGeometry &geometry,
+    const glm::mat4 &view) const
+{
+    const glm::vec4 clip = m_gpuPickRequest.projection *
+        view * glm::vec4(geometry.center, 1.0f);
+    if (!(clip.w > std::numeric_limits<float>::epsilon()))
+        return false;
+
+    const float radiusNdcX =
+        geometry.radius * std::abs(m_gpuPickRequest.projection[0][0]) /
+        clip.w;
+    const float radiusNdcY =
+        geometry.radius * std::abs(m_gpuPickRequest.projection[1][1]) /
+        clip.w;
+    const glm::vec2 delta(
+        clip.x / clip.w - float(m_gpuPickRequest.ndcX),
+        clip.y / clip.w - float(m_gpuPickRequest.ndcY));
+    return std::abs(delta.x) <= radiusNdcX &&
+           std::abs(delta.y) <= radiusNdcY;
+}
+
 uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 {
     if (!m_initialized || !bgfx::isValid(m_gpuPickProgram))
@@ -2042,6 +2090,9 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
     m_gpuPickRequest = request;
     m_gpuPickInstances.clear();
     m_gpuPickTriangles.clear();
+    m_gpuPickQueueStats = {};
+    m_gpuPickQueueStats.meshCapacity = kMaxGpuPickInstances;
+    m_gpuPickQueueStats.triangleCapacity = kMaxGpuPickTriangleBatches;
     m_gpuPickActive = true;
     m_gpuPickLastResult.ready = false;
     m_gpuPickLastResult.hit = false;
@@ -2054,39 +2105,103 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
                                     MeshType mesh, uint32_t objectId)
 {
-    constexpr size_t kMaxGpuPickInstances = 256;
+    const bool capacityFull =
+        m_gpuPickInstances.size() >= kMaxGpuPickInstances;
+    if (capacityFull)
+        ++m_gpuPickQueueStats.droppedMeshes;
+
     if (!m_gpuPickActive || objectId == 0 || objectId == 0xffffffffu ||
-        m_gpuPickInstances.size() >= kMaxGpuPickInstances ||
-        !gpuPickInstanceIsCandidate(instance))
+        capacityFull || !gpuPickInstanceIsCandidate(instance))
     {
         return;
     }
+
     m_gpuPickInstances.emplace_back(instance,
                                     std::make_pair(mesh, objectId));
 }
 
-void BgfxRenderer::queueGpuTrianglePick(const FillVertex *vertices,
+GpuPickQueueStats BgfxRenderer::gpuPickQueueStats() const
+{
+    return m_gpuPickQueueStats;
+}
+
+void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
+                                        const FillVertex *vertices,
                                         uint32_t vertexCount,
                                         const glm::mat4 &view,
                                         const glm::mat4 &projection,
                                         const glm::vec4 &logDepth,
                                         uint32_t objectId)
 {
-    constexpr size_t kMaxGpuPickTriangleBatches = 1024;
+    const bool capacityFull =
+        m_gpuPickTriangles.size() >= kMaxGpuPickTriangleBatches;
+    if (capacityFull)
+        ++m_gpuPickQueueStats.droppedTriangles;
+
+    const bool transient = geometryKey == 0;
     if (!m_gpuPickActive || objectId == 0 || objectId == 0xffffffffu ||
         !vertices || vertexCount < 3 || vertexCount > 65535 ||
-        m_gpuPickTriangles.size() >= kMaxGpuPickTriangleBatches ||
-        !gpuPickVerticesAreCandidate(vertices, vertexCount))
+        capacityFull)
     {
         return;
     }
 
-    GpuTrianglePickBatch &batch = m_gpuPickTriangles.emplace_back();
-    batch.view = view;
-    batch.projection = projection;
-    batch.logDepth = logDepth;
-    batch.objectId = objectId;
-    batch.vertices.assign(vertices, vertices + vertexCount);
+    if (transient)
+    {
+        if (!gpuPickVerticesAreCandidate(vertices, vertexCount))
+            return;
+
+        GpuTrianglePickBatch &batch = m_gpuPickTriangles.emplace_back();
+        batch.geometryKey = 0;
+        batch.view = view;
+        batch.projection = projection;
+        batch.logDepth = logDepth;
+        batch.objectId = objectId;
+        batch.transientVertices.assign(vertices, vertices + vertexCount);
+        return;
+    }
+
+    auto [geometryIt, inserted] =
+        m_gpuPickTriangleGeometry.try_emplace(geometryKey);
+    if (inserted)
+    {
+        glm::vec3 center(0.0f);
+        for (uint32_t i = 0; i < vertexCount; ++i)
+            center += vertices[i].position;
+        center /= float(vertexCount);
+
+        float radiusSquared = 0.0f;
+        for (uint32_t i = 0; i < vertexCount; ++i)
+        {
+            const glm::vec3 delta = vertices[i].position - center;
+            radiusSquared = std::max(radiusSquared, glm::dot(delta, delta));
+        }
+
+        geometryIt->second.center = center;
+        geometryIt->second.radius = std::sqrt(radiusSquared) * 1.5f;
+        if (!gpuPickCachedVerticesAreCandidate(geometryIt->second, view))
+        {
+            m_gpuPickTriangleGeometry.erase(geometryIt);
+            return;
+        }
+
+        geometryIt->second.buffer = bgfx::createVertexBuffer(
+            bgfx::copy(vertices, vertexCount * sizeof(FillVertex)),
+            m_fillLayout);
+        if (!bgfx::isValid(geometryIt->second.buffer))
+        {
+            m_gpuPickTriangleGeometry.erase(geometryIt);
+            ++m_gpuPickQueueStats.droppedTriangles;
+            return;
+        }
+    }
+    else if (!gpuPickCachedVerticesAreCandidate(geometryIt->second, view))
+    {
+        return;
+    }
+
+    m_gpuPickTriangles.push_back({geometryKey, view, projection,
+                                  logDepth, objectId});
 }
 
 GpuPickResult BgfxRenderer::pollGpuPick()
@@ -2173,24 +2288,46 @@ void BgfxRenderer::renderGpuPickPass()
 
     for (const GpuTrianglePickBatch &batch : m_gpuPickTriangles)
     {
-        if (batch.vertices.empty() || !bgfx::isValid(m_fillProgram))
+        const bool transient = batch.geometryKey == 0;
+        const auto geometryIt = transient
+            ? m_gpuPickTriangleGeometry.end()
+            : m_gpuPickTriangleGeometry.find(batch.geometryKey);
+        const bool validBuffer = transient
+            ? !batch.transientVertices.empty()
+            : geometryIt != m_gpuPickTriangleGeometry.end() &&
+              bgfx::isValid(geometryIt->second.buffer);
+        if (!validBuffer || !bgfx::isValid(m_fillProgram))
             continue;
 
+        bgfx::VertexBufferHandle persistentBuffer = BGFX_INVALID_HANDLE;
         bgfx::TransientVertexBuffer tvb;
-        if (batch.vertices.size() >
-            bgfx::getAvailTransientVertexBuffer(
-                uint32_t(batch.vertices.size()), m_fillLayout))
+        if (transient)
         {
-            continue;
+            if (batch.transientVertices.size() >
+                bgfx::getAvailTransientVertexBuffer(
+                    uint32_t(batch.transientVertices.size()),
+                    m_fillLayout))
+            {
+                continue;
+            }
+            bgfx::allocTransientVertexBuffer(
+                &tvb, uint32_t(batch.transientVertices.size()),
+                m_fillLayout);
+            std::memcpy(tvb.data, batch.transientVertices.data(),
+                        batch.transientVertices.size() *
+                            sizeof(FillVertex));
         }
-        bgfx::allocTransientVertexBuffer(
-            &tvb, uint32_t(batch.vertices.size()), m_fillLayout);
-        std::memcpy(tvb.data, batch.vertices.data(),
-                    batch.vertices.size() * sizeof(FillVertex));
+        else
+        {
+            persistentBuffer = geometryIt->second.buffer;
+        }
 
         glm::mat4 identity = glm::mat4(1.0f);
         bgfx::setTransform(glm::value_ptr(identity));
-        bgfx::setVertexBuffer(0, &tvb);
+        if (transient)
+            bgfx::setVertexBuffer(0, &tvb);
+        else
+            bgfx::setVertexBuffer(0, persistentBuffer);
         bgfx::setUniform(m_view, glm::value_ptr(batch.view));
         const glm::mat4 projection =
             projectionForDirect3D(batch.projection);
