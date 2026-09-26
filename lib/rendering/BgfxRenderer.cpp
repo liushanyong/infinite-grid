@@ -601,11 +601,58 @@ std::vector<float> makeGpuPickMeshVertices(MeshType mesh)
 BgfxRenderer::BgfxRenderer(GraphicsApi api)
     : m_api(api)
 {
+    // The vendored bgfx build has no WebGPU device backend yet. Keep the
+    // requested WebGPU selection addressable through a D3D12 compatibility
+    // adapter while the native renderer is introduced incrementally.
+    m_webgpuMigration = api == GraphicsApi::WebGPU;
+    if (m_webgpuMigration)
+        m_api = GraphicsApi::Direct3D12;
 }
 
 const char *BgfxRenderer::name() const
 {
-    return "bgfx";
+    return m_webgpuMigration ? "bgfx-webgpu-migration" : "bgfx";
+}
+
+const char *BgfxRenderer::graphicsApiName() const
+{
+    if (m_initialized)
+    {
+        switch (bgfx::getRendererType())
+        {
+        case bgfx::RendererType::Direct3D11:
+            return "Direct3D11";
+        case bgfx::RendererType::Direct3D12:
+            return "Direct3D12";
+        case bgfx::RendererType::OpenGL:
+            return "OpenGL";
+        case bgfx::RendererType::OpenGLES:
+            return "OpenGL ES";
+        case bgfx::RendererType::Vulkan:
+            return "Vulkan";
+        case bgfx::RendererType::Metal:
+            return "Metal";
+        default:
+            break;
+        }
+    }
+
+    switch (m_api)
+    {
+    case GraphicsApi::Direct3D11:
+        return "Direct3D11";
+    case GraphicsApi::Direct3D12:
+        return "Direct3D12";
+    case GraphicsApi::WebGPU:
+        return "WebGPU";
+    case GraphicsApi::OpenGL:
+        return "OpenGL";
+    case GraphicsApi::Vulkan:
+        return "Vulkan";
+    case GraphicsApi::Auto:
+        return "Auto";
+    }
+    return "Unknown";
 }
 
 void BgfxRenderer::setRealisticLights(const RealisticLightsRenderData &lights)
@@ -720,7 +767,8 @@ bool BgfxRenderer::initialize(SDL_Window *window)
 
     if (!bgfx::init(init))
     {
-        std::cerr << "Failed to initialize bgfx D3D11 renderer." << std::endl;
+        std::cerr << "Failed to initialize bgfx " << graphicsApiName()
+                  << " renderer." << std::endl;
         return false;
     }
 

@@ -8,6 +8,8 @@ std::unique_ptr<RendererBackend> createRenderer(BackendType type, GraphicsApi ap
 {
     switch (type)
     {
+    case BackendType::WebGpuMigration:
+        return std::make_unique<BgfxRenderer>(GraphicsApi::WebGPU);
     case BackendType::Bgfx:
     default:
         return std::make_unique<BgfxRenderer>(api);

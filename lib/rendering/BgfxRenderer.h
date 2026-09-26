@@ -18,6 +18,7 @@ public:
     explicit BgfxRenderer(GraphicsApi api = GraphicsApi::Auto);
 
     const char *name() const override;
+    const char *graphicsApiName() const override;
     Uint32 windowFlags() const override;
     bool configureSDL() override;
     bool initialize(SDL_Window *window) override;
@@ -69,6 +70,7 @@ private:
 
     SDL_Window *m_window = nullptr;
     GraphicsApi m_api = GraphicsApi::Auto;
+    bool m_webgpuMigration = false;
     bgfx::UniformHandle m_gridInvViewProj = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridViewProj = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_gridCamFront = BGFX_INVALID_HANDLE;

@@ -35,6 +35,7 @@ inline DoubleSingleVec3 encodeDoubleSingle(const glm::dvec3 &value)
 enum class BackendType
 {
     Bgfx,
+    WebGpuMigration,
 };
 
 enum class GraphicsApi
@@ -42,6 +43,7 @@ enum class GraphicsApi
     Auto,
     Direct3D11,
     Direct3D12,
+    WebGPU,
     OpenGL,
     Vulkan,
 };
@@ -318,6 +320,9 @@ public:
     virtual ~RendererBackend() = default;
 
     virtual const char *name() const = 0;
+    // The API that actually owns the swapchain. A migration backend can be
+    // selected as WebGPU while reporting the native compatibility API it uses.
+    virtual const char *graphicsApiName() const = 0;
     virtual Uint32 windowFlags() const = 0;
     virtual bool configureSDL() = 0;
     virtual bool initialize(SDL_Window *window) = 0;

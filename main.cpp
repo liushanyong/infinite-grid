@@ -81,10 +81,16 @@ RequestedRenderer resolveRequestedBackend()
   {
     requested.api = rendering::GraphicsApi::Vulkan;
   }
+  else if (backendName == "bgfx-webgpu" || backendName == "webgpu")
+  {
+    requested.type = rendering::BackendType::WebGpuMigration;
+    requested.api = rendering::GraphicsApi::WebGPU;
+  }
   else
   {
     std::cerr << "Unknown WINDOW_RENDERER value '" << backendName
-              << "'. Supported: bgfx, dx11, dx12, gl, vk." << std::endl;
+              << "'. Supported: bgfx, dx11, dx12, webgpu, gl, vk."
+              << std::endl;
   }
   return requested;
 }
@@ -506,7 +512,9 @@ bool init()
     return false;
   }
 
-  std::cout << "Renderer backend: " << rendererBackend->name() << std::endl;
+  std::cout << "Renderer backend: " << rendererBackend->name()
+            << " (" << rendererBackend->graphicsApiName() << ")"
+            << std::endl;
 
   // Optional startup visual style (0=Wireframe2D .. 5=DepthBuffer), used by
   // tooling/screenshots to render specific styles without key input.
