@@ -2970,6 +2970,13 @@ struct PickResult
     std::string objectName = "Scene";
 };
 
+struct AutofocusResult
+{
+    std::string entityName;
+    glm::dvec3 hitPivot;
+    double viewDepth = 0.0;
+};
+
 PickResult pickObjectAlongRay(const PickRay &ray,
                               PickDebugTrace *debugTrace = nullptr)
 {
@@ -3224,10 +3231,10 @@ std::optional<glm::dvec3> viewCenterObjectPivot()
     return std::nullopt;
 }
 
-// Double-click autofocus: move the orbit target along the view ray to the
-// nearest object AABB under the cursor, keeping the eye fixed.  In
-// orthographic mode, Zoom is compensated to preserve the frame size.
-std::optional<std::string> autofocusAtNdc(double ndcX, double ndcY)
+// Double-click autofocus: focus at the view depth of the nearest object under
+// the cursor while keeping the eye fixed.  The orbit target remains on the
+// camera's center axis; orthographic zoom is compensated to preserve framing.
+std::optional<AutofocusResult> autofocusAtNdc(double ndcX, double ndcY)
 {
     const PickRay ray = pickRayFromNdc(ndcX, ndcY);
     PickDebugTrace trace;
@@ -3246,11 +3253,13 @@ std::optional<std::string> autofocusAtNdc(double ndcX, double ndcY)
         return std::nullopt;
 
     // Project the ray hit onto the camera Front axis to get the view depth
-    // (distance along the gaze direction, not the slant-ray distance).
+    // (distance along the gaze direction, not the slant-ray distance). The
+    // orbit target stays on the camera's center axis; it is intentionally not
+    // moved to an off-center cursor ray's world-space hit pivot.
     const double viewDepth =
         glm::dot(result.pivot - orbitCam.Position, orbitCam.Front);
     orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
-    return result.objectName;
+    return AutofocusResult{result.objectName, result.pivot, viewDepth};
 }
 
 // Convert SDL window coordinates to NDC [-1, 1].
@@ -4869,14 +4878,18 @@ int main(int argc, char *argv[])
         SDL_GetWindowSize(window, &winW, &winH);
         const double ndcX = cursorToNdcX(evt.button.x, winW);
         const double ndcY = cursorToNdcY(evt.button.y, winH);
-        if (const std::optional<std::string> selectedEntity =
+        if (const std::optional<AutofocusResult> selectedEntity =
                 autofocusAtNdc(ndcX, ndcY))
         {
           std::cout << std::fixed << std::setprecision(3)
-                    << "Autofocus: entity=" << *selectedEntity
+                    << "Autofocus: entity=" << selectedEntity->entityName
+                    << " pivot=(" << selectedEntity->hitPivot.x << ", "
+                    << selectedEntity->hitPivot.y << ", "
+                    << selectedEntity->hitPivot.z << ")"
                     << " target=(" << orbitCam.Target.x << ", "
                     << orbitCam.Target.y << ", " << orbitCam.Target.z
-                    << ") distance=" << orbitCam.Distance << std::endl;
+                    << ") depth=" << selectedEntity->viewDepth
+                    << " distance=" << orbitCam.Distance << std::endl;
         }
       }
 
