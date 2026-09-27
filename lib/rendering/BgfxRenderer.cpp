@@ -2012,11 +2012,14 @@ glm::mat4 BgfxRenderer::gpuPickProjection(const GpuPickRequest &request) const
     double right = 0.0;
     double bottom = 0.0;
     double top = 0.0;
-    const double nearDepth = std::max(request.nearDepth, 0.01);
-    const double farDepth = std::max(request.farDepth, nearDepth + 0.01);
+    double nearDepth = request.nearDepth;
+    double farDepth = std::max(request.farDepth, nearDepth + 0.01);
 
     if (orthographic)
     {
+        // The shared ortho depth slab can intentionally start behind the
+        // camera. Preserve it so the pick pass clips identically to the
+        // main render pass.
         const double halfWidth =
             1.0 / std::max(std::abs(request.projection[0][0]), 1.0e-12f);
         const double halfHeight =
@@ -2029,6 +2032,9 @@ glm::mat4 BgfxRenderer::gpuPickProjection(const GpuPickRequest &request) const
         top = request.ndcY * halfHeight + pixelHeight;
         return glm::ortho(left, right, bottom, top, nearDepth, farDepth);
     }
+
+    nearDepth = std::max(nearDepth, 0.01);
+    farDepth = std::max(farDepth, nearDepth + 0.01);
 
     const double halfWidthAtNear =
         nearDepth / std::max(std::abs(request.projection[0][0]), 1.0e-12f);

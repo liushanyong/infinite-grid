@@ -3630,16 +3630,10 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     {
         const glm::dvec3 overlayPivot =
             ray.origin + ray.direction * trace.cadOverlayDepth;
-        const double overlayDepthTolerance =
-            cadPickTolerance(ray, overlayPivot);
-
-        // Screen-space overlays win ties and small depth differences, which
-        // keeps curve strokes pickable where they lie on a surface.  Do not
-        // let a tolerant stroke hit replace a visibly closer solid fill such
-        // as an arrowhead sharing an endpoint with its leader line.
+        // Overlays follow the same nearest-depth rule as surfaces.  No
+        // transparency or overlay priority may replace a nearer hit.
         if (!std::isfinite(nearestCadSurfaceDepth) ||
-            trace.cadOverlayDepth <=
-                nearestCadSurfaceDepth + overlayDepthTolerance)
+            trace.cadOverlayDepth <= nearestCadSurfaceDepth)
         {
             result.hit = true;
             result.hitDepth = trace.cadOverlayDepth;
