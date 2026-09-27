@@ -39,6 +39,7 @@ public:
     RenderModeFlags renderModeFlags() const override;
     void drawPolylines(const PolylineRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+    void drawCurves(const CurveRenderData &data) override;
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,
                           MeshType mesh, uint32_t objectId) override;
@@ -128,6 +129,12 @@ private:
     bgfx::UniformHandle m_cadFlatShade = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_polylineProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_fillProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_curveProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_curveCP = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_curveKnot = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_curveParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_curveColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_curveArc = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
@@ -143,6 +150,7 @@ private:
     std::vector<bgfx::TextureHandle> m_meshTextures;
     bgfx::VertexLayout m_polylineLayout;
     bgfx::VertexLayout m_fillLayout;
+    bgfx::VertexLayout m_curveLayout;
     bgfx::VertexBufferHandle m_cadCubeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_cadSphereBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_cadConeBuffer = BGFX_INVALID_HANDLE;

@@ -194,6 +194,28 @@ struct SurfaceMaterial
     float lineWidth = 1.0f;
 };
 
+enum class CurveAlgorithm
+{
+    Bezier,
+    BSpline,
+    NURBS,
+    Arc
+};
+
+struct CurveRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::vec4 logDepth;
+    std::array<glm::vec4, 16> controlPoints{};
+    std::array<glm::vec4, 4> knots{};
+    glm::vec4 params{0.0f, 3.0f, 4.0f, 0.0f};
+    glm::vec4 arc{1.0f, 0.0f, 6.2831853f, 0.0f};
+    glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    uint32_t sampleCount = 64;
+    float layer = 0.0f;
+};
+
 struct RealisticLight
 {
     glm::vec3 position{0.0f};
@@ -370,6 +392,7 @@ public:
     virtual RenderModeFlags renderModeFlags() const = 0;
     virtual void drawPolylines(const PolylineRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
+    virtual void drawCurves(const CurveRenderData &data) {}
 
     // Optional asynchronous mesh picking. Calls to queueGpuMeshPick are valid
     // only between requestGpuPick() and the next endFrame().

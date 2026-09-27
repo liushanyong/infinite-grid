@@ -128,6 +128,12 @@ static bool centerCubeForced()
   return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
 }
 
+static bool gpuCurveDemoEnabled()
+{
+  const char *value = std::getenv("GRID_CURVE_GPU");
+  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
 static uint32_t gMeshTextureIndex = 0;
 static float meshHeadlight()
 {
@@ -836,6 +842,65 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
   for (scene::MeshBatchCommand &batch : drawList.meshBatches())
     submitMeshBatch(batch, view, projection, logDepth,
                     rendering::encodeDoubleSingle(cameraPosition));
+
+  for (scene::CurveBatchCommand &curve : drawList.curveBatches())
+  {
+    if (curve.controlPoints.empty() && curve.algorithm !=
+        rendering::CurveAlgorithm::Arc)
+      continue;
+    rendering::CurveRenderData curveData;
+    curveData.view = view;
+    curveData.projection = projection;
+    curveData.logDepth = logDepth;
+    curveData.params = glm::vec4(
+        float(static_cast<int>(curve.algorithm)), float(curve.degree),
+        float(std::min(curve.controlPoints.size(), size_t(16))), 0.0f);
+    curveData.arc = glm::vec4(float(curve.radius), float(curve.startAngle),
+                              float(curve.sweep), 0.0f);
+    curveData.color = curve.acgiMaterial.baseColor;
+    curveData.sampleCount = curve.sampleCount;
+    for (size_t i = 0; i < std::min(curve.controlPoints.size(), size_t(16)); ++i)
+    {
+      const double weight = i < curve.weights.size()
+                                ? curve.weights[i] : 1.0;
+      curveData.controlPoints[i] = glm::vec4(
+          glm::vec3(curve.controlPoints[i] - rebase), float(weight));
+    }
+    if (curve.algorithm == rendering::CurveAlgorithm::Arc)
+    {
+      curveData.controlPoints[0] = glm::vec4(
+          glm::vec3(curve.center - rebase), 1.0f);
+      curveData.controlPoints[1] = glm::vec4(
+          glm::vec3(curve.axisU), 0.0f);
+      curveData.controlPoints[2] = glm::vec4(
+          glm::vec3(curve.axisV), 0.0f);
+    }
+    if (!curve.knots.empty())
+    {
+      for (size_t i = 0; i < 16; ++i)
+      {
+        const double knot = i < curve.knots.size() ? curve.knots[i] : 0.0;
+        curveData.knots[i / 4][i % 4] = float(knot);
+      }
+    }
+    else
+    {
+      const int numCP = int(std::min(curve.controlPoints.size(), size_t(16)));
+      const int degree = std::clamp(curve.degree, 1, numCP - 1);
+      const int inner = numCP - degree - 1;
+      for (int i = 0; i < 16; ++i)
+      {
+        float knot = 0.0f;
+        if (i > degree && i < numCP)
+          knot = float(std::max(0, std::min(inner, i - degree))) /
+                 float(std::max(1, inner));
+        else if (i >= numCP)
+          knot = 1.0f;
+        curveData.knots[i / 4][i % 4] = knot;
+      }
+    }
+    rendererBackend->drawCurves(curveData);
+  }
 
   static std::vector<rendering::PrimVertex> polylineVertices;
   polylineVertices.clear();
@@ -5702,6 +5767,21 @@ void render()
   {
     appendMeshEntityToScene(centerCube, sceneOverlay);
     queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
+  }
+
+  if (gpuCurveDemoEnabled())
+  {
+    scene::CurveBatchCommand &bezier = sceneOverlay.addCurveBatch();
+    bezier.algorithm = rendering::CurveAlgorithm::Bezier;
+    bezier.degree = 3;
+    bezier.sampleCount = 192;
+    bezier.controlPoints = {
+        glm::dvec3(-240.0, -120.0, 0.0),
+        glm::dvec3(-80.0, 220.0, 0.0),
+        glm::dvec3(80.0, -220.0, 0.0),
+        glm::dvec3(240.0, 120.0, 0.0)};
+    bezier.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+    bezier.acgiMaterial.baseColor = glm::vec4(0.15f, 1.0f, 0.55f, 1.0f);
   }
 
   // The logical line still runs through the literal world origin.  Only its

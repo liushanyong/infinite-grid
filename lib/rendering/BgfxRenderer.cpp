@@ -75,6 +75,12 @@ namespace PrimFilledShaders
 #include "shaders/cadPrimitives/filled/fs_filled.h"
 } // namespace PrimFilledShaders
 
+namespace PrimCurveShaders
+{
+#include "shaders/cadPrimitives/curve/vs_curve.h"
+#include "shaders/cadPrimitives/curve/fs_curve.h"
+} // namespace PrimCurveShaders
+
 namespace PresentShaders
 {
 #include "shaders/present/vs_present.h"
@@ -816,6 +822,8 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_polylineProgram);
     if (bgfx::isValid(m_fillProgram))
         bgfx::destroy(m_fillProgram);
+    if (bgfx::isValid(m_curveProgram))
+        bgfx::destroy(m_curveProgram);
     m_cubeProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_cubeBuffer))
         bgfx::destroy(m_cubeBuffer);
@@ -903,6 +911,11 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_cadStrokeParams);
     destroyUniform(m_cadFlatShade);
     destroyUniform(m_primParams);
+    destroyUniform(m_curveCP);
+    destroyUniform(m_curveKnot);
+    destroyUniform(m_curveParams);
+    destroyUniform(m_curveColor);
+    destroyUniform(m_curveArc);
     destroyUniform(m_meshSurface);
     destroyUniform(m_albedoSampler);
     destroyUniform(m_realisticMaterial);
@@ -1991,6 +2004,66 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
     }
 }
 
+void BgfxRenderer::drawCurves(const CurveRenderData& data)
+{
+    if (!m_initialized || !bgfx::isValid(m_curveProgram) ||
+        data.sampleCount < 2)
+        return;
+
+    struct CurveVertex
+    {
+        float t;
+        float unused;
+    };
+
+    const glm::mat4 proj = projectionForDirect3D(data.projection);
+    const float logDepth[4] = {
+        data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w };
+    const uint32_t sampleCount = std::min<uint32_t>(data.sampleCount, 512);
+    const uint32_t available = bgfx::getAvailTransientVertexBuffer(
+        sampleCount, m_curveLayout);
+    if (available < sampleCount)
+        return;
+
+    glm::vec3 center(0.0f);
+    for (const glm::vec4 &point : data.controlPoints)
+        center += glm::vec3(point);
+    center /= float(data.controlPoints.size());
+    const glm::vec4 centerView = data.view * glm::vec4(center, 1.0f);
+    const float centerDepth = -centerView.z;
+    const float denom = logDepthDenominator(data.logDepth);
+    const float layerOffsetValue =
+        layerOffsetUnits(data.layer, centerDepth, data.logDepth);
+    const uint32_t sortDepth = normalizedSortDepth(
+        centerDepth - layerOffsetValue, data.logDepth, denom);
+    const float layerOffset[4] = { layerOffsetValue, 0.0f, 0.0f, 0.0f };
+
+    bgfx::TransientVertexBuffer tvb;
+    bgfx::allocTransientVertexBuffer(&tvb, sampleCount, m_curveLayout);
+    auto *vertices = reinterpret_cast<CurveVertex*>(tvb.data);
+    for (uint32_t i = 0; i < sampleCount; ++i)
+    {
+        vertices[i].t = float(i) / float(sampleCount - 1);
+        vertices[i].unused = 0.0f;
+    }
+
+    bgfx::setTransform(glm::value_ptr(glm::mat4(1.0f)));
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setUniform(m_view, glm::value_ptr(data.view));
+    bgfx::setUniform(m_projection, glm::value_ptr(proj));
+    bgfx::setUniform(m_logDepth, logDepth);
+    bgfx::setUniform(m_layerOffset, layerOffset);
+    bgfx::setUniform(m_curveCP, glm::value_ptr(data.controlPoints.front()), 16);
+    bgfx::setUniform(m_curveKnot, glm::value_ptr(data.knots.front()), 4);
+    bgfx::setUniform(m_curveParams, glm::value_ptr(data.params));
+    bgfx::setUniform(m_curveColor, glm::value_ptr(data.color));
+    bgfx::setUniform(m_curveArc, glm::value_ptr(data.arc));
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                   BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINESTRIP |
+                   BGFX_STATE_LINEAA | BGFX_STATE_MSAA);
+    bgfx::submit(kViewWire, m_curveProgram, sortDepth);
+}
+
 void BgfxRenderer::drawAabb(const AabbRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_cubeProgram) ||
@@ -2695,6 +2768,16 @@ bool BgfxRenderer::createRenderResources()
     const bgfx::ShaderHandle fillFragment = createShader(
         fillFragmentBinary.data, fillFragmentBinary.size, "prim_fill_fs");
     m_fillProgram = bgfx::createProgram(fillVertex, fillFragment, true);
+
+    const auto curveVertexBinary =
+        SELECT_SHADER_BINARY(PrimCurveShaders, vs_curve);
+    const auto curveFragmentBinary =
+        SELECT_SHADER_BINARY(PrimCurveShaders, fs_curve);
+    const bgfx::ShaderHandle curveVertex = createShader(
+        curveVertexBinary.data, curveVertexBinary.size, "cad_curve_vs");
+    const bgfx::ShaderHandle curveFragment = createShader(
+        curveFragmentBinary.data, curveFragmentBinary.size, "cad_curve_fs");
+    m_curveProgram = bgfx::createProgram(curveVertex, curveFragment, true);
     createGpuPickResources();
     m_polylineLayout.begin()
     .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
@@ -2705,6 +2788,9 @@ m_fillLayout.begin()
     .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
     .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
     .end();
+m_curveLayout.begin()
+    .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+    .end();
 
 
     bool ready = bgfx::isValid(m_gridProgram) &&
@@ -2714,6 +2800,7 @@ m_fillLayout.begin()
                  bgfx::isValid(m_cadAlgorithmProgram) &&
                  bgfx::isValid(m_polylineProgram) &&
                  bgfx::isValid(m_fillProgram) &&
+                 bgfx::isValid(m_curveProgram) &&
                  bgfx::isValid(m_cubeProgram) &&
                  bgfx::isValid(m_lineProgram) &&
                  bgfx::isValid(m_pointProgram);
@@ -2726,6 +2813,7 @@ m_fillLayout.begin()
     if (!bgfx::isValid(m_cadAlgorithmProgram)) std::cerr << "Invalid program: CAD algorithm" << std::endl;
     if (!bgfx::isValid(m_polylineProgram)) std::cerr << "Invalid program: polyline" << std::endl;
     if (!bgfx::isValid(m_fillProgram)) std::cerr << "Invalid program: fill" << std::endl;
+    if (!bgfx::isValid(m_curveProgram)) std::cerr << "Invalid program: curve" << std::endl;
     if (!bgfx::isValid(m_cubeProgram)) std::cerr << "Invalid program: cube" << std::endl;
     if (!bgfx::isValid(m_lineProgram)) std::cerr << "Invalid program: line" << std::endl;
     if (!bgfx::isValid(m_pointProgram)) std::cerr << "Invalid program: point" << std::endl;
@@ -2794,6 +2882,11 @@ m_fillLayout.begin()
         m_cadFlatShade = createUniformHandle("u_flatShade", bgfx::UniformType::Vec4);
         m_presentSampler = createUniformHandle("s_texColor", bgfx::UniformType::Sampler);
         m_primParams = createUniformHandle("uPrimParams", bgfx::UniformType::Vec4);
+        m_curveCP = createUniformHandle("uCurveCP", bgfx::UniformType::Vec4, 16);
+        m_curveKnot = createUniformHandle("uCurveKnot", bgfx::UniformType::Vec4, 4);
+        m_curveParams = createUniformHandle("uCurveParams", bgfx::UniformType::Vec4);
+        m_curveColor = createUniformHandle("uCurveColor", bgfx::UniformType::Vec4);
+        m_curveArc = createUniformHandle("uArc", bgfx::UniformType::Vec4);
         m_meshSurface = createUniformHandle("uMeshSurface", bgfx::UniformType::Vec4);
         m_albedoSampler = createUniformHandle("s_albedo", bgfx::UniformType::Sampler);
         m_realisticMaterial = createUniformHandle("u_material", bgfx::UniformType::Vec4);
@@ -2862,6 +2955,11 @@ m_fillLayout.begin()
                 bgfx::isValid(m_primParams) &&
                 bgfx::isValid(m_meshSurface) &&
                 bgfx::isValid(m_albedoSampler);
+        ready = ready && bgfx::isValid(m_curveCP) &&
+                bgfx::isValid(m_curveKnot) &&
+                bgfx::isValid(m_curveParams) &&
+                bgfx::isValid(m_curveColor) &&
+                bgfx::isValid(m_curveArc);
         ready = ready && bgfx::isValid(m_realisticMaterial) &&
                 bgfx::isValid(m_rAmbient) &&
                 bgfx::isValid(m_rDirection) &&

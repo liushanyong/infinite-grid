@@ -51,6 +51,25 @@ struct MeshBatchCommand
     std::vector<rendering::MeshInstance> instances;
 };
 
+// GPU curve commands keep double-precision authoring data on the CPU. The
+// submitter rebases them; the curve shader performs the parameter evaluation.
+struct CurveBatchCommand
+{
+    rendering::CurveAlgorithm algorithm = rendering::CurveAlgorithm::Bezier;
+    int degree = 3;
+    uint32_t sampleCount = 64;
+    AcGiMaterial acgiMaterial;
+    std::vector<glm::dvec3> controlPoints;
+    std::vector<double> weights;
+    std::vector<double> knots;
+    glm::dvec3 center{0.0};
+    glm::dvec3 axisU{1.0, 0.0, 0.0};
+    glm::dvec3 axisV{0.0, 1.0, 0.0};
+    double radius = 1.0;
+    double startAngle = 0.0;
+    double sweep = glm::two_pi<double>();
+};
+
 // The infinite grid is a protocol command, not a finite tessellated CAD line
 // soup.  It keeps the shader-side infinite plane while making the renderer
 // call explicit and owned by the scene submitter.
@@ -85,6 +104,21 @@ public:
     [[nodiscard]] std::vector<MeshBatchCommand> &meshBatches()
     {
         return meshBatches_;
+    }
+
+    [[nodiscard]] std::vector<CurveBatchCommand> &curveBatches()
+    {
+        return curveBatches_;
+    }
+    [[nodiscard]] const std::vector<CurveBatchCommand> &curveBatches() const
+    {
+        return curveBatches_;
+    }
+
+    CurveBatchCommand &addCurveBatch()
+    {
+        curveBatches_.emplace_back();
+        return curveBatches_.back();
     }
     [[nodiscard]] const std::vector<MeshBatchCommand> &meshBatches() const
     {
@@ -146,6 +180,7 @@ public:
 private:
     entities::TessellatedEntity geometry_;
     std::vector<MeshBatchCommand> meshBatches_;
+    std::vector<CurveBatchCommand> curveBatches_;
     std::optional<GridCommand> grid_;
 };
 
