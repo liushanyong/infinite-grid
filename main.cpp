@@ -7,6 +7,8 @@
 #include "camera/orbit.h"
 #include "rendering/RendererBackend.h"
 #include "entities/tessellate.h"
+#include "entities/world_draw.h"
+#include "scene/DrawContext.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
@@ -1156,42 +1158,24 @@ void appendVectorPrimitive(const EntityType &entity, const char *name,
   const size_t strokeBegin = target.geometry.strokes.size();
   const size_t fillBegin = target.geometry.fills.size();
   const size_t pointBegin = target.geometry.points.size();
-  entities::tessellate(entity, target.geometry, options);
-  for (size_t i = strokeBegin; i < target.geometry.strokes.size(); ++i)
-  {
-    entities::Stroke &stroke = target.geometry.strokes[i];
-    stroke.common = entity.common;
-    stroke.lineWeight = entity.common.lineWeight;
-  }
-  for (size_t i = fillBegin; i < target.geometry.fills.size(); ++i)
-  {
-    entities::Triangle &fill = target.geometry.fills[i];
-    fill.common = entity.common;
-    fill.is3DFace = fillIs3DFace;
-  }
-  for (size_t i = pointBegin; i < target.geometry.points.size(); ++i)
-  {
-    entities::TessellatedPoint &point = target.geometry.points[i];
-    point.common = entity.common;
-    point.pointSize = entity.common.lineWeight > 0.0
-                          ? entity.common.lineWeight
-                          : 7.0;
-  }
+  scene::ViewportDraw draw(target.geometry, options);
+  draw.subEntityTraits().setFrom(entity.common);
+  entities::worldDraw(entity, draw, fillIs3DFace);
   addRange(target.strokeRanges, strokeBegin,
            target.geometry.strokes.size());
   addRange(target.fillRanges, fillBegin, target.geometry.fills.size());
   addRange(target.pointRanges, pointBegin, target.geometry.points.size());
 }
 
-// The CAD vector demo is authored as formal entities.  One immutable
-// tessellation is shared by drawing and CPU picking.
-const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
+// The CAD vector demo is authored as formal entities.  The cached draw list is
+// shared by drawing and CPU picking; dynamic documents replace this builder's
+// revision with a dirty-document notification.
+VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 {
-  static const VectorPrimitivesTessellation tessellation = [] {
-    VectorPrimitivesTessellation target;
-    entities::TessellatedEntity &result = target.geometry;
-    if (!cadEntityDemoEnabled())
-      return target;
+  VectorPrimitivesTessellation target;
+  entities::TessellatedEntity &result = target.geometry;
+  if (!cadEntityDemoEnabled())
+    return target;
 
     const glm::dvec3 cadAnchor =
         vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
@@ -1524,9 +1508,19 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
         target.meshes.push_back(std::move(mesh));
       }
     }
-    return target;
-  }();
-  return tessellation;
+  return target;
+}
+
+const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
+{
+  static constexpr std::uint64_t cadDemoRevision = 1;
+  static constexpr std::uint64_t cadDemoTraitsVersion = 1;
+  static constexpr std::uint32_t cadDemoToleranceBucket = 0;
+  const scene::DrawListKey key{
+      cadDemoRevision, cadDemoTraitsVersion,
+      vectorPrimitivesAnchor(), cadDemoToleranceBucket};
+  static scene::DrawListCache cache;
+  return cache.get(key, buildVectorPrimitivesTessellation);
 }
 
 static uint64_t cadGpuPickGeometryKey(const CadEntityRange *range,
