@@ -203,7 +203,6 @@ private:
         uint64_t geometryKey = 0;
         glm::mat4 view;
         uint32_t objectId = 0;
-        float alpha = 1.0f;
         std::vector<FillVertex> transientVertices;
     };
     struct GpuTrianglePickGeometry

@@ -1924,10 +1924,6 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
         bgfx::TransientVertexBuffer tvb;
         bgfx::allocTransientVertexBuffer(&tvb, count, m_fillLayout);
         std::memcpy(tvb.data, data.vertices + first, count * vertSize);
-        float alphaSum = 0.0f;
-        for (uint32_t i = first; i < first + count; ++i)
-            alphaSum += data.vertices[i].color.a;
-        const float fillAlpha = alphaSum / float(count);
 
         glm::mat4 identity = glm::mat4(1.0f);
         bgfx::setTransform(glm::value_ptr(identity));
@@ -1957,9 +1953,7 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
         }
         else if (!data.is3DFace || modeFlags.face3dFill)
         {
-            bgfx::setState(fillAlpha >= 0.999f
-                ? fillState | BGFX_STATE_WRITE_Z
-                : fillState);
+            bgfx::setState(fillState | BGFX_STATE_WRITE_Z);
             bgfx::submit(kViewSolidFill, m_fillProgram, sortDepth);
         }
 
@@ -2178,7 +2172,6 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
     primitive.meshInstance = instance;
     primitive.meshType = mesh;
     primitive.objectId = objectId;
-    primitive.alpha = instance.positionHigh.w;
 }
 
 GpuPickQueueStats BgfxRenderer::gpuPickQueueStats() const
@@ -2222,10 +2215,6 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         primitive.geometryKey = 0;
         primitive.view = view;
         primitive.objectId = objectId;
-        float alphaSum = 0.0f;
-        for (uint32_t i = 0; i < vertexCount; ++i)
-            alphaSum += vertices[i].color.a;
-        primitive.alpha = alphaSum / float(vertexCount);
         primitive.transientVertices.assign(vertices, vertices + vertexCount);
         return;
     }
@@ -2274,10 +2263,6 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
     primitive.geometryKey = geometryKey;
     primitive.view = view;
     primitive.objectId = objectId;
-    float alphaSum = 0.0f;
-    for (uint32_t i = 0; i < vertexCount; ++i)
-        alphaSum += vertices[i].color.a;
-    primitive.alpha = alphaSum / float(vertexCount);
 }
 
 GpuPickResult BgfxRenderer::pollGpuPick()
@@ -2362,9 +2347,6 @@ void BgfxRenderer::renderGpuPickPass()
                 bgfx::setUniform(m_gpuPickObjectId, encodedId);
                 bgfx::setVertexBuffer(0, buffer);
                 bgfx::setInstanceDataBuffer(&instanceBuffer);
-                bgfx::setState(primitive.alpha >= 0.999f
-                                   ? state
-                                   : state & ~BGFX_STATE_WRITE_Z);
                 bgfx::submit(kViewGpuPick, m_gpuPickProgram);
             }
             else
@@ -2421,10 +2403,9 @@ void BgfxRenderer::renderGpuPickPass()
                 bgfx::setUniform(m_primParams, primParams);
                 const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                 bgfx::setUniform(m_layerOffset, layerOffset);
-                bgfx::setState(
-                    BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                    (primitive.alpha >= 0.999f ? BGFX_STATE_WRITE_Z : 0) |
-                    BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA);
+                bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                               BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
+                               BGFX_STATE_MSAA);
                 bgfx::submit(kViewGpuPick, m_fillProgram);
             }
         }
