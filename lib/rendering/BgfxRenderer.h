@@ -189,14 +189,19 @@ private:
     bgfx::VertexBufferHandle m_gpuPickTorusBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout m_gpuPickLayout;
     GpuPickRequest m_gpuPickRequest;
-    std::vector<std::pair<MeshInstance, std::pair<MeshType, uint32_t>>>
-        m_gpuPickInstances;
-    struct GpuTrianglePickBatch
+    struct GpuPickPrimitive
     {
+        enum class Kind
+        {
+            Mesh,
+            Triangle
+        };
+
+        Kind kind = Kind::Mesh;
+        MeshInstance meshInstance;
+        MeshType meshType = MeshType::Cube;
         uint64_t geometryKey = 0;
         glm::mat4 view;
-        glm::mat4 projection;
-        glm::vec4 logDepth;
         uint32_t objectId = 0;
         std::vector<FillVertex> transientVertices;
     };
@@ -209,7 +214,7 @@ private:
     bool gpuPickCachedVerticesAreCandidate(
         const GpuTrianglePickGeometry &geometry,
         const glm::mat4 &view) const;
-    std::vector<GpuTrianglePickBatch> m_gpuPickTriangles;
+    std::vector<GpuPickPrimitive> m_gpuPickPrimitives;
     std::unordered_map<uint64_t, GpuTrianglePickGeometry>
         m_gpuPickTriangleGeometry;
     GpuPickQueueStats m_gpuPickQueueStats;

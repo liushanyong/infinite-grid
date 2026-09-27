@@ -1119,8 +1119,7 @@ void BgfxRenderer::destroyGpuPickResources()
             bgfx::destroy(entry.second.buffer);
     }
     m_gpuPickTriangleGeometry.clear();
-    m_gpuPickInstances.clear();
-    m_gpuPickTriangles.clear();
+    m_gpuPickPrimitives.clear();
     m_gpuPickActive = false;
     m_gpuPickReadPending = false;
 }
@@ -2136,8 +2135,7 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
         return 0;
 
     m_gpuPickRequest = request;
-    m_gpuPickInstances.clear();
-    m_gpuPickTriangles.clear();
+    m_gpuPickPrimitives.clear();
     m_gpuPickQueueStats = {};
     m_gpuPickQueueStats.meshCapacity = kMaxGpuPickInstances;
     m_gpuPickQueueStats.triangleCapacity = kMaxGpuPickTriangleBatches;
@@ -2153,8 +2151,13 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
                                     MeshType mesh, uint32_t objectId)
 {
+    const size_t meshCount = std::count_if(
+        m_gpuPickPrimitives.begin(), m_gpuPickPrimitives.end(),
+        [](const GpuPickPrimitive &primitive) {
+            return primitive.kind == GpuPickPrimitive::Kind::Mesh;
+        });
     const bool capacityFull =
-        m_gpuPickInstances.size() >= kMaxGpuPickInstances;
+        meshCount >= kMaxGpuPickInstances;
     if (capacityFull)
         ++m_gpuPickQueueStats.droppedMeshes;
 
@@ -2164,8 +2167,11 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
         return;
     }
 
-    m_gpuPickInstances.emplace_back(instance,
-                                    std::make_pair(mesh, objectId));
+    GpuPickPrimitive &primitive = m_gpuPickPrimitives.emplace_back();
+    primitive.kind = GpuPickPrimitive::Kind::Mesh;
+    primitive.meshInstance = instance;
+    primitive.meshType = mesh;
+    primitive.objectId = objectId;
 }
 
 GpuPickQueueStats BgfxRenderer::gpuPickQueueStats() const
@@ -2181,8 +2187,13 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
                                         const glm::vec4 &logDepth,
                                         uint32_t objectId)
 {
+    const size_t triangleCount = std::count_if(
+        m_gpuPickPrimitives.begin(), m_gpuPickPrimitives.end(),
+        [](const GpuPickPrimitive &primitive) {
+            return primitive.kind == GpuPickPrimitive::Kind::Triangle;
+        });
     const bool capacityFull =
-        m_gpuPickTriangles.size() >= kMaxGpuPickTriangleBatches;
+        triangleCount >= kMaxGpuPickTriangleBatches;
     if (capacityFull)
         ++m_gpuPickQueueStats.droppedTriangles;
 
@@ -2199,13 +2210,12 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         if (!gpuPickVerticesAreCandidate(vertices, vertexCount))
             return;
 
-        GpuTrianglePickBatch &batch = m_gpuPickTriangles.emplace_back();
-        batch.geometryKey = 0;
-        batch.view = view;
-        batch.projection = projection;
-        batch.logDepth = logDepth;
-        batch.objectId = objectId;
-        batch.transientVertices.assign(vertices, vertices + vertexCount);
+        GpuPickPrimitive &primitive = m_gpuPickPrimitives.emplace_back();
+        primitive.kind = GpuPickPrimitive::Kind::Triangle;
+        primitive.geometryKey = 0;
+        primitive.view = view;
+        primitive.objectId = objectId;
+        primitive.transientVertices.assign(vertices, vertices + vertexCount);
         return;
     }
 
@@ -2248,8 +2258,11 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         return;
     }
 
-    m_gpuPickTriangles.push_back({geometryKey, view, projection,
-                                  logDepth, objectId});
+    GpuPickPrimitive &primitive = m_gpuPickPrimitives.emplace_back();
+    primitive.kind = GpuPickPrimitive::Kind::Triangle;
+    primitive.geometryKey = geometryKey;
+    primitive.view = view;
+    primitive.objectId = objectId;
 }
 
 GpuPickResult BgfxRenderer::pollGpuPick()
@@ -2295,103 +2308,107 @@ void BgfxRenderer::renderGpuPickPass()
                      glm::value_ptr(m_gpuPickRequest.logDepth));
     bgfx::setState(state);
 
-    if (m_gpuPickInstances.empty())
+    if (m_gpuPickPrimitives.empty())
     {
         bgfx::touch(kViewGpuPick);
     }
     else
     {
         constexpr uint16_t kStride = sizeof(MeshInstance);
-        for (const auto &entry : m_gpuPickInstances)
+        for (const GpuPickPrimitive &primitive : m_gpuPickPrimitives)
         {
-            bgfx::VertexBufferHandle buffer = m_gpuPickCubeBuffer;
-            switch (entry.second.first)
+            if (primitive.kind == GpuPickPrimitive::Kind::Mesh)
             {
-            case MeshType::Sphere:
-                buffer = m_gpuPickSphereBuffer;
-                break;
-            case MeshType::Cone:
-                buffer = m_gpuPickConeBuffer;
-                break;
-            case MeshType::Torus:
-                buffer = m_gpuPickTorusBuffer;
-                break;
-            case MeshType::Cube:
-                break;
+                bgfx::VertexBufferHandle buffer = m_gpuPickCubeBuffer;
+                switch (primitive.meshType)
+                {
+                case MeshType::Sphere:
+                    buffer = m_gpuPickSphereBuffer;
+                    break;
+                case MeshType::Cone:
+                    buffer = m_gpuPickConeBuffer;
+                    break;
+                case MeshType::Torus:
+                    buffer = m_gpuPickTorusBuffer;
+                    break;
+                case MeshType::Cube:
+                    break;
+                }
+
+                bgfx::InstanceDataBuffer instanceBuffer;
+                bgfx::allocInstanceDataBuffer(&instanceBuffer, 1, kStride);
+                *reinterpret_cast<MeshInstance *>(instanceBuffer.data) = primitive.meshInstance;
+                const uint32_t objectId = primitive.objectId;
+                const float encodedId[4] = {
+                    float((objectId >> 16) & 0xff) / 255.0f,
+                    float((objectId >> 8) & 0xff) / 255.0f,
+                    float(objectId & 0xff) / 255.0f,
+                    float((objectId >> 24) & 0xff) / 255.0f};
+                bgfx::setUniform(m_gpuPickObjectId, encodedId);
+                bgfx::setVertexBuffer(0, buffer);
+                bgfx::setInstanceDataBuffer(&instanceBuffer);
+                bgfx::submit(kViewGpuPick, m_gpuPickProgram);
             }
-
-            bgfx::InstanceDataBuffer instanceBuffer;
-            bgfx::allocInstanceDataBuffer(&instanceBuffer, 1, kStride);
-            *reinterpret_cast<MeshInstance *>(instanceBuffer.data) = entry.first;
-            const uint32_t objectId = entry.second.second;
-            const float encodedId[4] = {
-                float((objectId >> 16) & 0xff) / 255.0f,
-                float((objectId >> 8) & 0xff) / 255.0f,
-                float(objectId & 0xff) / 255.0f,
-                float((objectId >> 24) & 0xff) / 255.0f};
-            bgfx::setUniform(m_gpuPickObjectId, encodedId);
-            bgfx::setVertexBuffer(0, buffer);
-            bgfx::setInstanceDataBuffer(&instanceBuffer);
-            bgfx::submit(kViewGpuPick, m_gpuPickProgram);
-        }
-    }
-
-    for (const GpuTrianglePickBatch &batch : m_gpuPickTriangles)
-    {
-        const bool transient = batch.geometryKey == 0;
-        const auto geometryIt = transient
-            ? m_gpuPickTriangleGeometry.end()
-            : m_gpuPickTriangleGeometry.find(batch.geometryKey);
-        const bool validBuffer = transient
-            ? !batch.transientVertices.empty()
-            : geometryIt != m_gpuPickTriangleGeometry.end() &&
-              bgfx::isValid(geometryIt->second.buffer);
-        if (!validBuffer || !bgfx::isValid(m_fillProgram))
-            continue;
-
-        bgfx::VertexBufferHandle persistentBuffer = BGFX_INVALID_HANDLE;
-        bgfx::TransientVertexBuffer tvb;
-        if (transient)
-        {
-            if (batch.transientVertices.size() >
-                bgfx::getAvailTransientVertexBuffer(
-                    uint32_t(batch.transientVertices.size()),
-                    m_fillLayout))
+            else
             {
-                continue;
-            }
-            bgfx::allocTransientVertexBuffer(
-                &tvb, uint32_t(batch.transientVertices.size()),
-                m_fillLayout);
-            std::memcpy(tvb.data, batch.transientVertices.data(),
-                        batch.transientVertices.size() *
-                            sizeof(FillVertex));
-        }
-        else
-        {
-            persistentBuffer = geometryIt->second.buffer;
-        }
+                const bool transient = primitive.geometryKey == 0;
+                const auto geometryIt = transient
+                    ? m_gpuPickTriangleGeometry.end()
+                    : m_gpuPickTriangleGeometry.find(primitive.geometryKey);
+                const bool validBuffer = transient
+                    ? !primitive.transientVertices.empty()
+                    : geometryIt != m_gpuPickTriangleGeometry.end() &&
+                      bgfx::isValid(geometryIt->second.buffer);
+                if (!validBuffer || !bgfx::isValid(m_fillProgram))
+                    continue;
 
-        glm::mat4 identity = glm::mat4(1.0f);
-        bgfx::setTransform(glm::value_ptr(identity));
-        if (transient)
-            bgfx::setVertexBuffer(0, &tvb);
-        else
-            bgfx::setVertexBuffer(0, persistentBuffer);
-        bgfx::setUniform(m_view, glm::value_ptr(batch.view));
-        bgfx::setUniform(m_projection, glm::value_ptr(projection));
-        const float logDepth[4] = {
-            batch.logDepth.x, batch.logDepth.y,
-            batch.logDepth.z, batch.logDepth.w};
-        bgfx::setUniform(m_logDepth, logDepth);
-        const float primParams[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        bgfx::setUniform(m_primParams, primParams);
-        const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        bgfx::setUniform(m_layerOffset, layerOffset);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
-                       BGFX_STATE_MSAA);
-        bgfx::submit(kViewGpuPick, m_fillProgram);
+                bgfx::VertexBufferHandle persistentBuffer = BGFX_INVALID_HANDLE;
+                bgfx::TransientVertexBuffer tvb;
+                if (transient)
+                {
+                    if (primitive.transientVertices.size() >
+                        bgfx::getAvailTransientVertexBuffer(
+                            uint32_t(primitive.transientVertices.size()),
+                            m_fillLayout))
+                    {
+                        continue;
+                    }
+                    bgfx::allocTransientVertexBuffer(
+                        &tvb, uint32_t(primitive.transientVertices.size()),
+                        m_fillLayout);
+                    std::memcpy(tvb.data, primitive.transientVertices.data(),
+                                primitive.transientVertices.size() *
+                                    sizeof(FillVertex));
+                }
+                else
+                {
+                    persistentBuffer = geometryIt->second.buffer;
+                }
+
+                glm::mat4 identity = glm::mat4(1.0f);
+                bgfx::setTransform(glm::value_ptr(identity));
+                if (transient)
+                    bgfx::setVertexBuffer(0, &tvb);
+                else
+                    bgfx::setVertexBuffer(0, persistentBuffer);
+                bgfx::setUniform(m_view, glm::value_ptr(primitive.view));
+                bgfx::setUniform(m_projection, glm::value_ptr(projection));
+                const float logDepth[4] = {
+                    m_gpuPickRequest.logDepth.x,
+                    m_gpuPickRequest.logDepth.y,
+                    m_gpuPickRequest.logDepth.z,
+                    m_gpuPickRequest.logDepth.w};
+                bgfx::setUniform(m_logDepth, logDepth);
+                const float primParams[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                bgfx::setUniform(m_primParams, primParams);
+                const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                bgfx::setUniform(m_layerOffset, layerOffset);
+                bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                               BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
+                               BGFX_STATE_MSAA);
+                bgfx::submit(kViewGpuPick, m_fillProgram);
+            }
+        }
     }
 
     bgfx::blit(kViewGpuPickBlit, m_gpuPickReadback, 0, 0,
