@@ -186,6 +186,7 @@ private:
     bgfx::ProgramHandle m_presentProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_presentQuadBuffer = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentSampler = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_presentParams = BGFX_INVALID_HANDLE;
 
     bgfx::FrameBufferHandle m_gpuPickFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle m_gpuPickReadback = BGFX_INVALID_HANDLE;

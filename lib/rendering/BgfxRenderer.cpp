@@ -963,6 +963,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_cubeColor);
     destroyUniform(m_meshEdgeOverride);
     destroyUniform(m_presentSampler);
+    destroyUniform(m_presentParams);
     destroyUniform(m_lineStart);
     destroyUniform(m_lineEnd);
     destroyUniform(m_lineColor);
@@ -1250,6 +1251,18 @@ void BgfxRenderer::endFrame()
             bgfx::setViewFrameBuffer(kViewPresent, BGFX_INVALID_HANDLE);
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                            BGFX_STATE_MSAA);
+            float fxaaEnabled = 0.0f;
+            if (std::getenv("GRID_FXAA") != nullptr)
+            {
+                fxaaEnabled = 1.0f;
+            }
+            const std::array<float, 4> presentParams = {
+                fxaaEnabled,
+                1.0f / static_cast<float>(m_width),
+                1.0f / static_cast<float>(m_height),
+                0.0f,
+            };
+            bgfx::setUniform(m_presentParams, presentParams.data());
             bgfx::setTexture(0, m_presentSampler, sceneColor);
             bgfx::setVertexBuffer(0, m_presentQuadBuffer);
             bgfx::submit(kViewPresent, m_presentProgram);
@@ -2881,6 +2894,7 @@ m_curveLayout.begin()
         m_cadStrokeParams = createUniformHandle("u_strokeParams", bgfx::UniformType::Vec4);
         m_cadFlatShade = createUniformHandle("u_flatShade", bgfx::UniformType::Vec4);
         m_presentSampler = createUniformHandle("s_texColor", bgfx::UniformType::Sampler);
+        m_presentParams = createUniformHandle("uPresentParams", bgfx::UniformType::Vec4);
         m_primParams = createUniformHandle("uPrimParams", bgfx::UniformType::Vec4);
         m_curveCP = createUniformHandle("uCurveCP", bgfx::UniformType::Vec4, 16);
         m_curveKnot = createUniformHandle("uCurveKnot", bgfx::UniformType::Vec4, 4);
@@ -2953,6 +2967,7 @@ m_curveLayout.begin()
                 bgfx::isValid(m_cadFlatShade) &&
                 bgfx::isValid(m_presentSampler) &&
                 bgfx::isValid(m_primParams) &&
+                bgfx::isValid(m_presentParams) &&
                 bgfx::isValid(m_meshSurface) &&
                 bgfx::isValid(m_albedoSampler);
         ready = ready && bgfx::isValid(m_curveCP) &&
