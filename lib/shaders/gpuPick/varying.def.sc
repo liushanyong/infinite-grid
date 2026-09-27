@@ -5,4 +5,4 @@ vec4 i_data1 : TEXCOORD6;
 vec4 i_data2 : TEXCOORD5;
 vec4 i_data3 : TEXCOORD4;
 vec4 i_data4 : TEXCOORD3;
-float v_pickUnused : TEXCOORD0;
+float v_pickDepth : TEXCOORD0;

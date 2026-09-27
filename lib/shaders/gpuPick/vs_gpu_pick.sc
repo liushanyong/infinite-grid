@@ -1,5 +1,5 @@
 $input a_position, a_normal, i_data0, i_data1, i_data2, i_data3, i_data4
-$output v_pickUnused
+$output v_pickDepth
 #include <bgfx_shader.sh>
 
 uniform mat4 uView;
@@ -16,6 +16,7 @@ void main()
         a_position.y * i_data1.xyz +
         a_position.z * i_data2.xyz +
         translation;
-    v_pickUnused = 0.0;
-    gl_Position = mul(projection, mul(uView, vec4(relative, 1.0)));
+    vec4 viewPosition = mul(uView, vec4(relative, 1.0));
+    v_pickDepth = -viewPosition.z;
+    gl_Position = mul(projection, viewPosition);
 }

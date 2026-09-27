@@ -2291,6 +2291,8 @@ void BgfxRenderer::renderGpuPickPass()
                      glm::value_ptr(glm::vec4(m_gpuPickRequest.eye.high, 0.0f)));
     bgfx::setUniform(m_eyeLow,
                      glm::value_ptr(glm::vec4(m_gpuPickRequest.eye.low, 0.0f)));
+    bgfx::setUniform(m_logDepth,
+                     glm::value_ptr(m_gpuPickRequest.logDepth));
     bgfx::setState(state);
 
     if (m_gpuPickInstances.empty())
@@ -2377,8 +2379,6 @@ void BgfxRenderer::renderGpuPickPass()
         else
             bgfx::setVertexBuffer(0, persistentBuffer);
         bgfx::setUniform(m_view, glm::value_ptr(batch.view));
-        const glm::mat4 projection =
-            projectionForDirect3D(batch.projection);
         bgfx::setUniform(m_projection, glm::value_ptr(projection));
         const float logDepth[4] = {
             batch.logDepth.x, batch.logDepth.y,
@@ -2389,7 +2389,7 @@ void BgfxRenderer::renderGpuPickPass()
         const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         bgfx::setUniform(m_layerOffset, layerOffset);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LEQUAL |
+                       BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
                        BGFX_STATE_MSAA);
         bgfx::submit(kViewGpuPick, m_fillProgram);
     }
