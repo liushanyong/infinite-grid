@@ -828,6 +828,8 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
           glm::vec3(curve.axisU), 0.0f);
       curveData.controlPoints[2] = glm::vec4(
           glm::vec3(curve.axisV), 0.0f);
+      rendererBackend->drawCurves(curveData);
+      continue;
     }
     if (!curve.knots.empty())
     {
