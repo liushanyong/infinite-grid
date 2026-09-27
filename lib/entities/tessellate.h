@@ -16,15 +16,19 @@
 #include "ellipse.h"
 #include "entity_common.h"
 #include "hatch.h"
+#include "light.h"
 #include "line.h"
 #include "lwpolyline.h"
+#include "mtext.h"
 #include "mesh.h"
 #include "mline.h"
 #include "point.h"
 #include "polyline.h"
 #include "ray.h"
 #include "solid.h"
+#include "solid3d.h"
 #include "spline.h"
+#include "text.h"
 
 namespace entities
 {
@@ -471,6 +475,97 @@ inline void tessellate(const MLine &mline, TessellatedEntity &result,
         result.fills.push_back(Triangle{{}, left.points[i], right.points[next],
                                          left.points[next]});
     }
+}
+
+inline void tessellate(const Text &text, TessellatedEntity &result,
+                       const TesselationOptions & = {})
+{
+    const double width = std::max(double(text.text.size()) *
+                                      text.height * 0.6,
+                                  text.height);
+    const double cosine = std::cos(text.rotation);
+    const double sine = std::sin(text.rotation);
+    const glm::dvec3 right(cosine, sine, 0.0);
+    const glm::dvec3 up(-sine, cosine, 0.0);
+    Stroke &frame = addStroke(result, true);
+    frame.points.reserve(5);
+    frame.points.push_back(text.insertion);
+    frame.points.push_back(text.insertion + right * width);
+    frame.points.push_back(text.insertion + right * width + up * text.height);
+    frame.points.push_back(text.insertion + up * text.height);
+    frame.points.push_back(text.insertion);
+    result.points.push_back({text.insertion});
+}
+
+inline void tessellate(const MText &text, TessellatedEntity &result,
+                       const TesselationOptions & = {})
+{
+    if (!(text.height > 0.0) || !std::isfinite(text.height))
+        return;
+    const size_t lineBreaks = static_cast<size_t>(
+        std::count(text.text.begin(), text.text.end(), '\n'));
+    const size_t longest = [&] {
+        size_t best = 0;
+        size_t current = 0;
+        for (char character : text.text)
+        {
+            if (character == '\n')
+            {
+                best = std::max(best, current);
+                current = 0;
+            }
+            else
+            {
+                ++current;
+            }
+        }
+        return std::max(best, current);
+    }();
+    const double width = text.width > 0.0
+                             ? text.width
+                             : std::max(double(longest) * text.height * 0.6,
+                                        text.height);
+    const glm::dvec3 right = glm::length(text.direction) > 1.0e-12
+                                 ? glm::normalize(text.direction)
+                                 : glm::dvec3(1.0, 0.0, 0.0);
+    const glm::dvec3 up = glm::normalize(glm::cross(
+        glm::dvec3(0.0, 0.0, 1.0), right));
+    Stroke &frame = addStroke(result, true);
+    const double frameHeight = text.height *
+                               double(std::max(size_t(1), lineBreaks + 1));
+    frame.points.reserve(5);
+    frame.points.push_back(text.insertion);
+    frame.points.push_back(text.insertion + right * width);
+    frame.points.push_back(text.insertion + right * width + up * frameHeight);
+    frame.points.push_back(text.insertion + up * frameHeight);
+    frame.points.push_back(text.insertion);
+    result.points.push_back({text.insertion});
+}
+
+inline void tessellate(const Solid3d &solid, TessellatedEntity &result,
+                       const TesselationOptions & = {})
+{
+    const auto &positions = solid.vertices;
+    for (size_t i = 0; i + 2 < solid.indices.size(); i += 3)
+    {
+        const uint32_t a = solid.indices[i];
+        const uint32_t b = solid.indices[i + 1];
+        const uint32_t c = solid.indices[i + 2];
+        if (a >= positions.size() || b >= positions.size() ||
+            c >= positions.size())
+        {
+            continue;
+        }
+        result.fills.push_back(
+            Triangle{{}, positions[a], positions[b], positions[c]});
+    }
+}
+
+inline void tessellate(const Light &light, TessellatedEntity &result,
+                       const TesselationOptions & = {})
+{
+    appendSegment(result, light.position, light.target);
+    result.points.push_back({light.position});
 }
 
 } // namespace entities

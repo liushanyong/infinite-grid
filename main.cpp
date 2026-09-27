@@ -1461,6 +1461,54 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     cadPoint.location = cadAnchor + glm::dvec3(512.0, 0.0, 0.0);
     appendVectorPrimitive(cadPoint, "Point", options, target);
 
+    entities::Text text;
+    text.common.color = glm::vec4(0.95f, 0.95f, 0.30f, 1.0f);
+    text.insertion = cadAnchor + glm::dvec3(1152.0, 128.0, 384.0);
+    text.height = 96.0;
+    text.text = "TEXT";
+    appendVectorPrimitive(text, "Text", options, target);
+
+    entities::MText mtext;
+    mtext.common.color = glm::vec4(0.35f, 0.90f, 0.95f, 1.0f);
+    mtext.insertion = cadAnchor + glm::dvec3(1152.0, 320.0, 384.0);
+    mtext.direction = glm::dvec3(1.0, 0.0, 0.0);
+    mtext.height = 64.0;
+    mtext.text = "MTEXT\nDEMO";
+    appendVectorPrimitive(mtext, "MText", options, target);
+
+    entities::Solid3d solid3d;
+    solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 0.80f);
+    solid3d.renderClass = entities::RenderClass::Cad;
+    const glm::dvec3 boxMin = cadAnchor + glm::dvec3(1536.0, 128.0, 384.0);
+    const glm::dvec3 boxMax = boxMin + glm::dvec3(256.0, 256.0, 256.0);
+    solid3d.vertices = {
+        glm::dvec3(boxMin.x, boxMin.y, boxMin.z),
+        glm::dvec3(boxMax.x, boxMin.y, boxMin.z),
+        glm::dvec3(boxMax.x, boxMax.y, boxMin.z),
+        glm::dvec3(boxMin.x, boxMax.y, boxMin.z),
+        glm::dvec3(boxMin.x, boxMin.y, boxMax.z),
+        glm::dvec3(boxMax.x, boxMin.y, boxMax.z),
+        glm::dvec3(boxMax.x, boxMax.y, boxMax.z),
+        glm::dvec3(boxMin.x, boxMax.y, boxMax.z)
+    };
+    solid3d.indices = {
+        0, 2, 1, 0, 3, 2,
+        4, 5, 6, 4, 6, 7,
+        0, 1, 5, 0, 5, 4,
+        1, 2, 6, 1, 6, 5,
+        2, 3, 7, 2, 7, 6,
+        3, 0, 4, 3, 4, 7
+    };
+    appendVectorPrimitive(solid3d, "Solid3d", options, target, true);
+
+    entities::Light light;
+    light.common.color = glm::vec4(1.0f, 0.90f, 0.55f, 1.0f);
+    light.type = entities::LightType::Spot;
+    light.position = cadAnchor + glm::dvec3(-1152.0, 256.0, 512.0);
+    light.target = cadAnchor + glm::dvec3(-768.0, 0.0, 0.0);
+    light.range = 1024.0f;
+    appendVectorPrimitive(light, "Light", options, target);
+
     // Former in-function demo geometry.  These are now ordinary CAD entities,
     // so the same tessellation drives rendering, names, and autofocus picking.
     const glm::dvec3 demoAnchor = vectorPrimitivesAnchor();
@@ -1696,7 +1744,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
 const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 {
-  static constexpr std::uint64_t cadDemoRevision = 1;
+  static constexpr std::uint64_t cadDemoRevision = 2;
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
   const scene::DrawListKey key{
