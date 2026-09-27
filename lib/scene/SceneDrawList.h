@@ -60,6 +60,7 @@ struct CurveBatchCommand
     uint32_t sampleCount = 64;
     AcGiMaterial acgiMaterial;
     std::vector<glm::dvec3> controlPoints;
+    std::string name = "Curve";
     std::vector<double> weights;
     std::vector<double> knots;
     glm::dvec3 center{0.0};

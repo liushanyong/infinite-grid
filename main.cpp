@@ -875,6 +875,60 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     polylineVertices.push_back({rb, color, {u1, 1.0f}});
     polylineVertices.push_back({rb, color, {u1, 0.0f}});
   };
+  auto appendLinePatternSegment = [&](const glm::vec3 &ra,
+                                      const glm::vec3 &rb,
+                                      const entities::Stroke &stroke) {
+    const std::string &type = stroke.common.lineType;
+    std::vector<std::pair<float, bool>> pattern;
+    if (type == "DASHED")
+      pattern = {{96.0f, true}, {48.0f, false}};
+    else if (type == "HIDDEN")
+      pattern = {{24.0f, true}, {12.0f, false}};
+    else if (type == "CENTER")
+      pattern = {{96.0f, true}, {12.0f, false}, {24.0f, true}, {24.0f, false}};
+    else if (type == "DOT")
+      pattern = {{2.0f, true}, {8.0f, false}};
+    else if (type == "PHANTOM")
+      pattern = {{48.0f, true}, {8.0f, false}, {12.0f, true}, {8.0f, false},
+                 {12.0f, true}, {24.0f, false}};
+    else
+    {
+      appendAcGiRibbon(ra, rb, stroke.common.color, 0.0f, 0.0f, 0.0f);
+      return;
+    }
+
+    const float halfWidth = stroke.lineWeight > 0.0
+                                ? float(stroke.lineWeight) * 0.5f
+                                : 2.0f;
+    const glm::dvec3 start(ra);
+    const glm::dvec3 end(rb);
+    const double total = glm::length(end - start);
+    if (total < 1.0e-12)
+      return;
+
+    double patternLength = 0.0;
+    for (const auto &mark : pattern)
+      patternLength += std::abs(mark.first);
+    double distance = 0.0;
+    size_t markIndex = 0;
+    while (distance < total && !pattern.empty())
+    {
+      const auto &mark = pattern[markIndex % pattern.size()];
+      const double markLength = std::abs(mark.first);
+      const double next = std::min(distance + markLength, total);
+      if (mark.second && next > distance)
+      {
+        appendAcGiRibbon(
+            glm::vec3(start + (end - start) * (distance / total)),
+            glm::vec3(start + (end - start) * (next / total)),
+            stroke.common.color, halfWidth,
+            float(distance / total), float(next / total));
+      }
+      distance = next;
+      ++markIndex;
+    }
+  };
+
   for (const entities::Stroke &stroke : drawList.geometry().strokes)
   {
     if (!stroke.common.visible || stroke.points.size() < 2)
@@ -883,24 +937,15 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
                                 ? float(stroke.lineWeight) * 0.5f
                                 : 2.0f;
     const size_t strokeCount = stroke.points.size();
-    if (stroke.common.lineType == "DASHED")
+    const bool patterned = stroke.common.lineType != "ByLayer" &&
+                           stroke.common.lineType != "CONTINUOUS";
+    if (patterned)
     {
-      const glm::dvec3 &start = stroke.points.front();
-      const glm::dvec3 &end = stroke.points.back();
-      if (glm::length(end - start) < 1.0e-12)
-        continue;
-      const glm::dvec3 direction = glm::normalize(end - start);
-      const double total = glm::length(end - start);
-      for (double d = 0.0; d < total; d += 144.0)
+      for (size_t i = 0; i + 1 < strokeCount; ++i)
       {
-        const double e = std::min(d + 96.0, total);
-        if (e - d < 1.0)
-          break;
-        appendAcGiRibbon(
-            glm::vec3(start + direction * d - cameraPosition),
-            glm::vec3(start + direction * e - cameraPosition),
-            stroke.common.color, halfWidth, float(d / total),
-            float(e / total));
+        appendLinePatternSegment(
+            glm::vec3(stroke.points[i] - cameraPosition),
+            glm::vec3(stroke.points[i + 1] - cameraPosition), stroke);
       }
       continue;
     }
@@ -1014,7 +1059,8 @@ enum class VisibilityKind
   CadMesh,
   CadStroke,
   CadFill,
-  CadPoint
+  CadPoint,
+  CadCurve
 };
 
 struct CadEntityRange;
@@ -1024,11 +1070,13 @@ struct GpuPickEntity
   VisibilityKind kind = VisibilityKind::MeshObject;
   const MeshEntityRecord *mesh = nullptr;
   const CadEntityRange *cadRange = nullptr;
+  const scene::CurveBatchCommand *curve = nullptr;
 
   bool operator==(const GpuPickEntity &other) const
   {
     return kind == other.kind && mesh == other.mesh &&
-           cadRange == other.cadRange;
+           cadRange == other.cadRange &&
+           curve == other.curve;
   }
 };
 
@@ -1309,6 +1357,7 @@ struct VisibilityCandidate
   size_t rangeBegin = 0;
   size_t rangeCount = 0;
   const MeshEntityRecord *mesh = nullptr;
+  const scene::CurveBatchCommand *curve = nullptr;
   glm::dvec3 min{0.0};
   glm::dvec3 max{0.0};
   glm::dvec3 center{0.0};
@@ -1325,6 +1374,7 @@ struct VectorPrimitivesTessellation
   std::vector<CadEntityRange> strokeRanges;
   std::vector<CadEntityRange> fillRanges;
   std::vector<CadEntityRange> pointRanges;
+  std::vector<scene::CurveBatchCommand> curves;
 };
 
 template <typename EntityType>
@@ -1643,6 +1693,28 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       }
     }
 
+    {
+      const char *lineTypes[] = {"CONTINUOUS", "DASHED", "HIDDEN", "CENTER",
+                                 "DOT", "PHANTOM"};
+      const glm::vec4 lineColors[] = {
+          {0.85f, 0.85f, 0.85f, 1.0f}, {0.95f, 0.25f, 0.75f, 1.0f},
+          {0.20f, 0.80f, 0.80f, 1.0f}, {1.00f, 0.70f, 0.20f, 1.0f},
+          {0.60f, 0.60f, 1.00f, 1.0f}, {0.80f, 0.20f, 0.20f, 1.0f}};
+      for (int i = 0; i < 6; ++i)
+      {
+        entities::Line specimen;
+        specimen.common.color = lineColors[i];
+        specimen.common.lineType = lineTypes[i];
+        specimen.common.lineWeight = 2.0;
+        specimen.start =
+            demoAnchor + glm::dvec3(-1024.0, 768.0 + i * 128.0, -512.0);
+        specimen.end = specimen.start + glm::dvec3(1024.0, 0.0, 0.0);
+        appendVectorPrimitive(
+            specimen, (std::string(lineTypes[i]) + "Line").c_str(),
+            options, target);
+      }
+    }
+
     entities::Polyline demoPolyline;
     demoPolyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     demoPolyline.common.lineWeight = 4.0;
@@ -1706,6 +1778,58 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         bezierBase + glm::dvec3(512.0, -128.0, -128.0),
         bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
     appendVectorPrimitive(bezier, "Bezier", options, target);
+
+    auto addCurveDemo = [&target](rendering::CurveAlgorithm algorithm,
+                                   const char *name,
+                                   const glm::vec4 &color,
+                                   std::vector<glm::dvec3> controlPoints,
+                                   int degree = 3,
+                                   std::vector<double> weights = {}) {
+      scene::CurveBatchCommand &curve = target.curves.emplace_back();
+      curve.algorithm = algorithm;
+      curve.name = name;
+      curve.degree = degree;
+      curve.sampleCount = 192;
+      curve.controlPoints = std::move(controlPoints);
+      curve.weights = std::move(weights);
+      curve.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+      curve.acgiMaterial.baseColor = color;
+    };
+
+    const glm::dvec3 curveCenter = demoAnchor;
+    addCurveDemo(rendering::CurveAlgorithm::Bezier, "BezierCurve",
+                 glm::vec4(0.15f, 1.0f, 0.55f, 1.0f),
+                 {curveCenter + glm::dvec3(-240.0, -120.0, 0.0),
+                  curveCenter + glm::dvec3(-80.0, 220.0, 0.0),
+                  curveCenter + glm::dvec3(80.0, -220.0, 0.0),
+                  curveCenter + glm::dvec3(240.0, 120.0, 0.0)});
+    addCurveDemo(rendering::CurveAlgorithm::BSpline, "BSplineCurve",
+                 glm::vec4(0.20f, 0.62f, 1.00f, 1.0f),
+                 {curveCenter + glm::dvec3(-320.0, -180.0, 0.0),
+                  curveCenter + glm::dvec3(-140.0, 180.0, 0.0),
+                  curveCenter + glm::dvec3(0.0, -140.0, 0.0),
+                  curveCenter + glm::dvec3(140.0, 180.0, 0.0),
+                  curveCenter + glm::dvec3(320.0, -180.0, 0.0)});
+    addCurveDemo(rendering::CurveAlgorithm::NURBS, "NurbsCurve",
+                 glm::vec4(0.95f, 0.82f, 0.25f, 1.0f),
+                 {curveCenter + glm::dvec3(-280.0, 260.0, 0.0),
+                  curveCenter + glm::dvec3(-110.0, -260.0, 0.0),
+                  curveCenter + glm::dvec3(110.0, 260.0, 0.0),
+                  curveCenter + glm::dvec3(280.0, -260.0, 0.0)},
+                 3, {1.0, 2.0, 2.0, 1.0});
+
+    scene::CurveBatchCommand &curveArc = target.curves.emplace_back();
+    curveArc.algorithm = rendering::CurveAlgorithm::Arc;
+    curveArc.name = "CurveArc";
+    curveArc.sampleCount = 192;
+    curveArc.center = curveCenter;
+    curveArc.axisU = glm::dvec3(1.0, 0.0, 0.0);
+    curveArc.axisV = glm::dvec3(0.0, 1.0, 0.0);
+    curveArc.radius = 360.0;
+    curveArc.startAngle = -0.35;
+    curveArc.sweep = 1.60;
+    curveArc.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+    curveArc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
 
     {
       // Demo meshes remain formal entities, but stay out of the default CAD
@@ -1793,6 +1917,8 @@ cadGpuPickFillVertices(const CadEntityRange &range, const glm::vec4 &idColor)
   }
   return vertices;
 }
+
+std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve);
 
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
@@ -1934,6 +2060,20 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
     queueGpuSoup(overlayProjection, objectId);
   };
+  auto queueCadCurve = [&](const VisibilityCandidate &candidate) {
+    if (!candidate.curve)
+      return;
+    const uint32_t objectId = registerGpuPickEntity(
+        {VisibilityKind::CadCurve, nullptr, nullptr, candidate.curve});
+    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    gpuPickVertices.clear();
+    const std::vector<glm::dvec3> points = sampleCurveBatch(*candidate.curve);
+    for (size_t i = 0; i + 1 < points.size(); ++i)
+      appendPickRibbon(
+          glm::vec3(points[i] - rebase),
+          glm::vec3(points[i + 1] - rebase), idColor, 2.0f);
+    queueGpuSoup(overlayProjection, objectId);
+  };
   auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
       return;
@@ -1993,6 +2133,12 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     cadDrawList.geometry().fills.push_back(triangle);
   }
+  for (const VisibilityCandidate *candidate : visibleCad)
+  {
+    if (candidate && candidate->kind == VisibilityKind::CadCurve && candidate->curve)
+      cadDrawList.addCurveBatch() = *candidate->curve;
+  }
+
   for (const entities::TessellatedPoint &point : tess.points)
   {
     if (!pointVisible.empty() && !pointVisible[&point - tess.points.data()])
@@ -2024,6 +2170,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     {
       if (candidate && candidate->kind == VisibilityKind::CadStroke)
         queueCadStroke(*candidate);
+    }
+    for (const VisibilityCandidate *candidate : visibleCad)
+    {
+      if (candidate && candidate->kind == VisibilityKind::CadCurve)
+        queueCadCurve(*candidate);
     }
     for (const VisibilityCandidate *candidate : visibleCad)
     {
@@ -2907,6 +3058,137 @@ bool rayIntersectsAabb(const PickRay &ray,
     return true;
 }
 
+
+std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve)
+{
+    std::vector<glm::dvec3> result;
+    const int samples = std::clamp(static_cast<int>(curve.sampleCount), 2, 512);
+    if (curve.algorithm == rendering::CurveAlgorithm::Arc)
+    {
+        result.reserve(samples);
+        for (int i = 0; i < samples; ++i)
+        {
+            const double t = static_cast<double>(i) / (samples - 1);
+            const double angle = curve.startAngle + curve.sweep * t;
+            result.push_back(curve.center +
+                             curve.axisU * std::cos(angle) +
+                             curve.axisV * std::sin(angle));
+        }
+        return result;
+    }
+
+    const size_t controlCount = curve.controlPoints.size();
+    if (controlCount < 2)
+        return result;
+
+    if (curve.algorithm == rendering::CurveAlgorithm::Bezier)
+    {
+        std::vector<glm::dvec4> points;
+        points.reserve(controlCount);
+        for (size_t i = 0; i < controlCount; ++i)
+        {
+            const double weight = i < curve.weights.size() ? curve.weights[i] : 1.0;
+            points.push_back(glm::dvec4(curve.controlPoints[i] * weight, weight));
+        }
+
+        result.reserve(samples);
+        for (int sample = 0; sample < samples; ++sample)
+        {
+            const double t = static_cast<double>(sample) / (samples - 1);
+            std::vector<glm::dvec4> value = points;
+            while (value.size() > 1)
+            {
+                for (size_t i = 0; i + 1 < value.size(); ++i)
+                    value[i] = glm::mix(value[i], value[i + 1], t);
+                value.pop_back();
+            }
+            const glm::dvec4 &homogeneous = value.front();
+            result.push_back(glm::dvec3(homogeneous) /
+                             std::max(1.0e-12, homogeneous.w));
+        }
+        return result;
+    }
+
+    const int degree = std::clamp(curve.degree, 1, 3);
+    if (controlCount < static_cast<size_t>(degree) + 1)
+        return result;
+
+    std::vector<double> knots = curve.knots;
+    if (knots.size() < controlCount + degree + 1)
+    {
+        knots.clear();
+        knots.reserve(controlCount + degree + 1);
+        const size_t innerCount = controlCount - degree - 1;
+        for (size_t i = 0; i <= degree; ++i)
+            knots.push_back(0.0);
+        for (size_t i = 1; i <= innerCount; ++i)
+            knots.push_back(static_cast<double>(i) / (innerCount + 1));
+        for (size_t i = 0; i <= degree; ++i)
+            knots.push_back(1.0);
+    }
+
+    size_t span = degree;
+    while (span < controlCount - 1 && 1.0 >= knots[span + 1])
+        ++span;
+
+    result.reserve(samples);
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        const double t = static_cast<double>(sample) / (samples - 1);
+        std::vector<glm::dvec4> points(degree + 1);
+        for (int i = 0; i <= degree; ++i)
+        {
+            const size_t index = span - degree + i;
+            const double weight = index < curve.weights.size() ? curve.weights[index] : 1.0;
+            points[i] = glm::dvec4(curve.controlPoints[index] * weight, weight);
+        }
+        for (int r = 1; r <= degree; ++r)
+        {
+            for (int j = degree; j >= r; --j)
+            {
+                const size_t index = span - degree + j;
+                const double denominator = knots[index + degree - r + 1] -
+                                           knots[index];
+                const double alpha = denominator > 1.0e-12
+                                         ? (t - knots[index]) / denominator
+                                         : 0.0;
+                points[j] = (1.0 - alpha) * points[j - 1] + alpha * points[j];
+            }
+        }
+        const glm::dvec4 &homogeneous = points[degree];
+        result.push_back(glm::dvec3(homogeneous) /
+                         std::max(1.0e-12, homogeneous.w));
+    }
+    return result;
+}
+
+VisibilityCandidate makeCurveCandidate(const scene::CurveBatchCommand &curve)
+{
+    VisibilityCandidate candidate;
+    candidate.kind = VisibilityKind::CadCurve;
+    candidate.curve = &curve;
+    candidate.overlayColor = curve.acgiMaterial.baseColor;
+    candidate.overlayPointSize = 2.0f;
+
+    const std::vector<glm::dvec3> points = sampleCurveBatch(curve);
+    if (points.empty())
+        return candidate;
+
+    glm::dvec3 minimum = points.front();
+    glm::dvec3 maximum = points.front();
+    for (const glm::dvec3 &point : points)
+    {
+        minimum = glm::min(minimum, point);
+        maximum = glm::max(maximum, point);
+    }
+
+    candidate.min = minimum;
+    candidate.max = maximum;
+    candidate.center = (minimum + maximum) * 0.5;
+    candidate.lodSize = glm::length(maximum - minimum);
+    return candidate;
+}
+
 const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
 
 // CAD entities are immutable after tessellation, so their world-space bounds
@@ -3359,6 +3641,7 @@ int cadOverlayPriority(VisibilityKind kind)
     case VisibilityKind::CadPoint:
         return 2;
     case VisibilityKind::CadStroke:
+    case VisibilityKind::CadCurve:
         return 1;
     default:
         return 0;
@@ -3542,14 +3825,15 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                 return rayIntersectsAabb(ray, bounds, hitDepth);
             },
             cadHits);
-        std::array<std::vector<const VisibilityCandidate *>, 3>
+        std::array<std::vector<const VisibilityCandidate *>, 4>
             cadCandidates;
         for (const VisibilityCandidate *candidate : cadHits)
         {
             const size_t slot =
                 candidate->kind == VisibilityKind::CadStroke ? 0
                 : candidate->kind == VisibilityKind::CadFill ? 1
-                                                             : 2;
+                : candidate->kind == VisibilityKind::CadCurve ? 2
+                                                             : 3;
             cadCandidates[slot].push_back(candidate);
         }
         const auto cadMeshState = [&](const MeshEntityRecord &mesh) {
@@ -3634,6 +3918,25 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         }
 
         for (const VisibilityCandidate *candidate : cadCandidates[2])
+        {
+            if (!candidate->curve)
+                continue;
+            const std::vector<glm::dvec3> points =
+                sampleCurveBatch(*candidate->curve);
+            for (size_t i = 0; i + 1 < points.size(); ++i)
+            {
+                double hitDepth = 0.0;
+                if (rayIntersectsSegment(ray, points[i], points[i + 1],
+                                         3.0, hitDepth))
+                {
+                    considerCadOverlayHit(
+                        hitDepth, candidate->curve->name.c_str(),
+                        VisibilityKind::CadCurve);
+                }
+            }
+        }
+
+        for (const VisibilityCandidate *candidate : cadCandidates[3])
         {
             const CadEntityRange &range = *candidate->cadRange;
 
@@ -3756,6 +4059,33 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
         return AutofocusResult{meshEntity->displayName(), hitPivot,
                                viewDepth, faceIndex};
+    }
+
+    if (pickEntity && pickEntity->kind == VisibilityKind::CadCurve &&
+        pickEntity->curve)
+    {
+        const std::vector<glm::dvec3> points =
+            sampleCurveBatch(*pickEntity->curve);
+        bool hit = false;
+        double bestDepth = std::numeric_limits<double>::infinity();
+        for (size_t i = 0; i + 1 < points.size(); ++i)
+        {
+            double depth = 0.0;
+            if (rayIntersectsSegment(ray, points[i], points[i + 1],
+                                     3.0, depth) &&
+                depth < bestDepth)
+            {
+                hit = true;
+                bestDepth = depth;
+            }
+        }
+        if (!hit)
+            return std::nullopt;
+        const glm::dvec3 hitPivot = ray.origin + ray.direction * bestDepth;
+        const double viewDepth =
+            glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+        orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+        return AutofocusResult{pickEntity->curve->name, hitPivot, viewDepth};
     }
 
     if (!pickEntity || !pickEntity->cadRange)
@@ -4350,7 +4680,7 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
         getVectorPrimitivesTessellation();
     std::vector<VisibilityCandidate> result;
     result.reserve(cad.strokeRanges.size() + cad.fillRanges.size() +
-                   cad.pointRanges.size());
+                   cad.pointRanges.size() + cad.curves.size());
     for (const CadEntityRange &range : cad.strokeRanges)
     {
       if (range.count)
@@ -4369,6 +4699,8 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
         result.push_back(makeCadRangeCandidate(
             cad, range, VisibilityKind::CadPoint));
     }
+    for (const scene::CurveBatchCommand &curve : cad.curves)
+      result.push_back(makeCurveCandidate(curve));
     return result;
   }();
   return candidates;
@@ -5644,58 +5976,6 @@ void render()
   {
     appendMeshEntityToScene(centerCube, sceneOverlay);
     queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
-  }
-
-  {
-    const glm::dvec3 curveCenter =
-        vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
-    auto addCurve = [](rendering::CurveAlgorithm algorithm,
-                                    const glm::vec4 &color,
-                                    std::vector<glm::dvec3> controlPoints,
-                                    int degree = 3,
-                                    std::vector<double> weights = {}) {
-      scene::CurveBatchCommand &curve = sceneOverlay.addCurveBatch();
-      curve.algorithm = algorithm;
-      curve.degree = degree;
-      curve.sampleCount = 192;
-      curve.controlPoints = std::move(controlPoints);
-      curve.weights = std::move(weights);
-      curve.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
-      curve.acgiMaterial.baseColor = color;
-    };
-
-    addCurve(rendering::CurveAlgorithm::Bezier,
-             glm::vec4(0.15f, 1.0f, 0.55f, 1.0f),
-             {curveCenter + glm::dvec3(-240.0, -120.0, 0.0),
-              curveCenter + glm::dvec3(-80.0, 220.0, 0.0),
-              curveCenter + glm::dvec3(80.0, -220.0, 0.0),
-              curveCenter + glm::dvec3(240.0, 120.0, 0.0)});
-    addCurve(rendering::CurveAlgorithm::BSpline,
-             glm::vec4(0.20f, 0.62f, 1.00f, 1.0f),
-             {curveCenter + glm::dvec3(-320.0, -180.0, 0.0),
-              curveCenter + glm::dvec3(-140.0, 180.0, 0.0),
-              curveCenter + glm::dvec3(0.0, -140.0, 0.0),
-              curveCenter + glm::dvec3(140.0, 180.0, 0.0),
-              curveCenter + glm::dvec3(320.0, -180.0, 0.0)});
-    addCurve(rendering::CurveAlgorithm::NURBS,
-             glm::vec4(0.95f, 0.82f, 0.25f, 1.0f),
-             {curveCenter + glm::dvec3(-280.0, 260.0, 0.0),
-              curveCenter + glm::dvec3(-110.0, -260.0, 0.0),
-              curveCenter + glm::dvec3(110.0, 260.0, 0.0),
-              curveCenter + glm::dvec3(280.0, -260.0, 0.0)},
-             3, {1.0, 2.0, 2.0, 1.0});
-
-    scene::CurveBatchCommand &arc = sceneOverlay.addCurveBatch();
-    arc.algorithm = rendering::CurveAlgorithm::Arc;
-    arc.sampleCount = 192;
-    arc.center = curveCenter;
-    arc.axisU = glm::dvec3(1.0, 0.0, 0.0);
-    arc.axisV = glm::dvec3(0.0, 1.0, 0.0);
-    arc.radius = 360.0;
-    arc.startAngle = -0.35;
-    arc.sweep = 1.60;
-    arc.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
-    arc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
   }
 
   // The logical line still runs through the literal world origin.  Only its
