@@ -128,12 +128,6 @@ static bool centerCubeForced()
   return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
 }
 
-static bool gpuCurveDemoEnabled()
-{
-  const char *value = std::getenv("GRID_CURVE_GPU");
-  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
-}
-
 static uint32_t gMeshTextureIndex = 0;
 static float meshHeadlight()
 {
@@ -786,10 +780,15 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
                          const glm::dvec3 &cameraUp,
                          const glm::dvec3 &cameraFront,
                          const glm::vec4 &logDepth,
-                         float pixelSizeWorld)
+                         float pixelSizeWorld = 0.0f,
+                         float edgeSoftness = 0.15f,
+                         float pointSize = 2.0f)
 {
   if (!rendererBackend)
     return;
+
+  if (drawList.lights())
+    rendererBackend->setRealisticLights(drawList.lights()->data);
 
   if (drawList.grid())
     rendererBackend->drawGrid(drawList.grid()->data);
@@ -919,31 +918,41 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
         .vertices = polylineVertices.data(),
         .vertexCount = static_cast<uint32_t>(polylineVertices.size()),
         .logDepth = logDepth,
-        .edgeSoftness = 0.15f,
+        .edgeSoftness = edgeSoftness,
     };
     rendererBackend->drawPolylines(polylineData);
   }
 
   static std::vector<rendering::FillVertex> fillVertices;
+  static std::vector<rendering::FillVertex> surfaceFillVertices;
   fillVertices.clear();
+  surfaceFillVertices.clear();
   for (const entities::Triangle &triangle : drawList.geometry().fills)
   {
     if (!triangle.common.visible)
       continue;
-    fillVertices.push_back({glm::vec3(triangle.a - rebase),
-                            triangle.common.color});
-    fillVertices.push_back({glm::vec3(triangle.b - rebase),
-                            triangle.common.color});
-    fillVertices.push_back({glm::vec3(triangle.c - rebase),
-                            triangle.common.color});
+    std::vector<rendering::FillVertex> &vertices =
+        triangle.is3DFace ? surfaceFillVertices : fillVertices;
+    vertices.push_back({glm::vec3(triangle.a - rebase),
+                        triangle.common.color});
+    vertices.push_back({glm::vec3(triangle.b - rebase),
+                        triangle.common.color});
+    vertices.push_back({glm::vec3(triangle.c - rebase),
+                        triangle.common.color});
   }
-  if (!fillVertices.empty())
+  for (const bool is3DFace : {false, true})
   {
+    std::vector<rendering::FillVertex> &vertices =
+        is3DFace ? surfaceFillVertices : fillVertices;
+    if (vertices.empty())
+      continue;
     const rendering::FilledTrianglesRenderData fillData{
         .view = view,
         .projection = projection,
-        .vertices = fillVertices.data(),
-        .vertexCount = static_cast<uint32_t>(fillVertices.size()),
+        .vertices = vertices.data(),
+        .vertexCount = static_cast<uint32_t>(vertices.size()),
+        .is3DFace = is3DFace,
+        .layer = envLayer("GRID_FILL_LAYER"),
         .logDepth = logDepth,
         .material = toSurfaceMaterial(scene::AcGiMaterial{}),
     };
@@ -967,7 +976,7 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
         .projection = overlayProjection,
         .instances = points.data(),
         .instanceCount = static_cast<uint32_t>(points.size()),
-        .pointSize = 2.0f,
+        .pointSize = pointSize,
         .pixelSizeWorld = pixelSizeWorld,
         .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
         .logDepth = logDepth,
@@ -1756,106 +1765,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       getVectorPrimitivesTessellation();
   const glm::mat4 cadAnchorView = view * glm::translate(
       glm::mat4(1.0f), glm::vec3(tessellation.anchor - rebase));
-  static std::vector<rendering::PrimVertex> polyVerts;
-  static std::vector<rendering::FillVertex> fillVerts;
-  static std::vector<rendering::FillVertex> surfaceFillVerts;
-  static std::vector<rendering::TargetPointInstance> cadPoints;
+  static scene::SceneDrawList cadDrawList;
+  cadDrawList.clear();
   static std::vector<bool> strokeVisible;
   static std::vector<bool> fillVisible;
   static std::vector<bool> pointVisible;
-  polyVerts.clear();
-  fillVerts.clear();
-  surfaceFillVerts.clear();
-  cadPoints.clear();
-
-  auto appendRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
-                          const glm::vec4 &color, float halfWidth,
-                          float u0, float u1) {
-    const glm::vec3 direction = rb - ra;
-    if (glm::length(direction) < 1.0e-5f)
-      return;
-    const glm::vec3 side =
-        glm::normalize(glm::cross(direction, camFront)) * halfWidth;
-    polyVerts.push_back({ra - side, color, {u0, 0.0f}});
-    polyVerts.push_back({ra + side, color, {u0, 1.0f}});
-    polyVerts.push_back({rb + side, color, {u1, 1.0f}});
-    polyVerts.push_back({ra - side, color, {u0, 0.0f}});
-    polyVerts.push_back({rb + side, color, {u1, 1.0f}});
-    polyVerts.push_back({rb - side, color, {u1, 0.0f}});
-  };
-
-  auto appendCadStroke = [&](const entities::Stroke &stroke) {
-    if (!stroke.common.visible)
-      return;
-    const glm::vec4 color = stroke.common.color;
-    const float halfWidth = stroke.lineWeight > 0.0
-                                ? float(stroke.lineWeight) * 0.5f
-                                : 2.0f;
-    const size_t count = stroke.points.size();
-    if (count < 2)
-      return;
-
-    if (stroke.common.lineType == "DASHED")
-    {
-      const glm::dvec3 start = stroke.points.front();
-      const glm::dvec3 end = stroke.points.back();
-      const glm::dvec3 direction = glm::normalize(end - start);
-      const double total = glm::length(end - start);
-      for (double d = 0.0; d < total; d += 144.0)
-      {
-        const double e = std::min(d + 96.0, total);
-        if (e - d < 1.0)
-          break;
-        appendRibbon(glm::vec3(start + direction * d - rebase),
-                     glm::vec3(start + direction * e - rebase), color,
-                     halfWidth, float(d / total), float(e / total));
-      }
-      return;
-    }
-
-    for (size_t pointIndex = 0; pointIndex < count; ++pointIndex)
-    {
-      const glm::vec3 center =
-          glm::vec3(stroke.points[pointIndex] - rebase);
-      if (!stroke.closed && (pointIndex != 0 &&
-                             pointIndex + 1 != count))
-      {
-        const glm::dvec3 &previous = stroke.points[pointIndex - 1];
-        const glm::dvec3 &next = stroke.points[pointIndex + 1];
-        const glm::dvec3 incoming = previous - stroke.points[pointIndex];
-        const glm::dvec3 outgoing = next - stroke.points[pointIndex];
-        const double lengthProduct =
-            glm::length(incoming) * glm::length(outgoing);
-        if (lengthProduct > 1.0e-12)
-        {
-          const double cosine =
-              glm::dot(incoming, outgoing) / lengthProduct;
-          // Nearly straight interior points do not need a round join.
-          if (cosine > 0.98)
-            continue;
-        }
-      }
-
-      for (int side = 0; side < 8; ++side)
-      {
-        const float a0 = side * 0.7853982f;
-        const float a1 = (side + 1) * 0.7853982f;
-        fillVerts.push_back({center, color});
-        fillVerts.push_back({center + camRight * halfWidth * std::cos(a0) +
-                                 camUp * halfWidth * std::sin(a0), color});
-        fillVerts.push_back({center + camRight * halfWidth * std::cos(a1) +
-                                 camUp * halfWidth * std::sin(a1), color});
-      }
-    }
-
-    const size_t segmentCount = stroke.closed ? count : count - 1;
-    for (size_t i = 0; i < segmentCount; ++i)
-    {
-      appendRibbon(glm::vec3(stroke.points[i] - rebase),
-                   glm::vec3(stroke.points[(i + 1) % count] - rebase),
-                   color, halfWidth, 0.0f, 1.0f);
-    }
-  };
 
   const entities::TessellatedEntity &tess = tessellation.geometry;
   static std::vector<rendering::FillVertex> gpuPickVertices;
@@ -2019,7 +1933,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   for (const entities::Stroke &stroke : tess.strokes)
   {
     if (strokeVisible.empty() || strokeVisible[&stroke - tess.strokes.data()])
-      appendCadStroke(stroke);
+      cadDrawList.geometry().strokes.push_back(stroke);
   }
   for (const entities::Triangle &triangle : tess.fills)
   {
@@ -2027,11 +1941,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     if (!triangle.common.visible)
       continue;
-    std::vector<rendering::FillVertex> &target =
-        triangle.is3DFace ? surfaceFillVerts : fillVerts;
-    target.push_back({glm::vec3(triangle.a - rebase), triangle.common.color});
-    target.push_back({glm::vec3(triangle.b - rebase), triangle.common.color});
-    target.push_back({glm::vec3(triangle.c - rebase), triangle.common.color});
+    cadDrawList.geometry().fills.push_back(triangle);
   }
   for (const entities::TessellatedPoint &point : tess.points)
   {
@@ -2039,9 +1949,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     if (!point.common.visible)
       continue;
-    cadPoints.push_back({glm::vec3(point.location - rebase),
-                         glm::vec3(point.common.color),
-                         float(point.pointSize)});
+    cadDrawList.geometry().points.push_back(point);
   }
 
   // A whole stroke, face, point group, or mesh below the pixel threshold is
@@ -2050,10 +1958,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   {
     if (!candidate)
       continue;
-    cadPoints.push_back({
-        glm::vec3(candidate->center - rebase),
-        glm::vec3(candidate->overlayColor),
-        candidate->overlayPointSize});
+    appendScenePoint(cadDrawList, candidate->center,
+                     glm::vec3(candidate->overlayColor),
+                     double(candidate->overlayPointSize));
   }
 
   if (gpuPickQueueActive)
@@ -2080,50 +1987,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
   }
 
-  if (rendererBackend && !cadPoints.empty())
-  {
-    const rendering::TargetPointInstancesRenderData cadPointData{
-      .view = view, .projection = overlayProjection, .instances = cadPoints.data(),
-      .instanceCount = static_cast<uint32_t>(cadPoints.size()),
-      .pointSize = 7.0f, .pixelSizeWorld = pixelSizeWorld,
-      .isOrtho = useOrthoProjection() ? 1.0f : 0.0f, .logDepth = logDepth};
-    rendererBackend->drawTargetPointInstances(cadPointData);
-  }
-
-  if (!surfaceFillVerts.empty()) {
-    rendering::FilledTrianglesRenderData surfaceFillData;
-    surfaceFillData.view = view;
-    surfaceFillData.projection = projection;
-    surfaceFillData.vertices = surfaceFillVerts.data();
-    surfaceFillData.vertexCount = static_cast<uint32_t>(surfaceFillVerts.size());
-    surfaceFillData.is3DFace = true;
-    surfaceFillData.layer = envLayer("GRID_FILL_LAYER");
-    surfaceFillData.logDepth = logDepth;
-    surfaceFillData.material = toSurfaceMaterial(scene::AcGiMaterial{});
-    rendererBackend->drawFilledTriangles(surfaceFillData);
-  }
-
-  if (!fillVerts.empty()) {
-    rendering::FilledTrianglesRenderData fillData;
-    fillData.view = view;
-    fillData.projection = projection;
-    fillData.vertices = fillVerts.data();
-    fillData.vertexCount = static_cast<uint32_t>(fillVerts.size());
-    fillData.layer = envLayer("GRID_FILL_LAYER");
-    fillData.logDepth = logDepth;
-    fillData.material = toSurfaceMaterial(scene::AcGiMaterial{});
-    rendererBackend->drawFilledTriangles(fillData);
-  }
-  if (!polyVerts.empty()) {
-    rendering::PolylineRenderData polyData;
-    polyData.view = view;
-    polyData.projection = overlayProjection;
-    polyData.vertices = polyVerts.data();
-    polyData.vertexCount = static_cast<uint32_t>(polyVerts.size());
-    polyData.logDepth = logDepth;
-    polyData.edgeSoftness = 2.0f;
-    rendererBackend->drawPolylines(polyData);
-  }
+  submitAcGiDrawable(cadDrawList, view, projection, overlayProjection,
+                     rebase, cameraPos, cameraRightD, cameraUpD, cameraFront,
+                     logDepth, pixelSizeWorld, 2.0f, 7.0f);
 
   for (const VisibilityCandidate *candidate : visibleCad)
   {
@@ -2196,10 +2062,10 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   realisticLights.pointLights[1].radius = 1024.0f;
   realisticLights.pointLights[1].color = glm::vec3(0.52f, 0.74f, 1.0f);
   realisticLights.pointLightCount = 2;
-  rendererBackend->setRealisticLights(realisticLights);
-
   if (cadAlgorithmDemoEnabled())
   {
+    scene::SceneDrawList cadDrawList;
+    cadDrawList.setLights(realisticLights);
     constexpr size_t kCadMeshCount = 4;
     static std::array<std::vector<rendering::MeshInstance>, kCadMeshCount>
         cadGroups;
@@ -2232,9 +2098,11 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       batch.prototype = cadMeshTypes[meshIndex];
       batch.cadAlgorithm = true;
       batch.instances = std::move(instances);
-      submitMeshBatch(batch, view, projection, logDepth,
-                      rendering::encodeDoubleSingle(orbitCam.Position));
+      cadDrawList.meshBatches().push_back(std::move(batch));
     }
+    submitAcGiDrawable(cadDrawList, view, projection, projection,
+                       rebaseOrigin, cameraPos, orbitCam.Right, orbitCam.Up,
+                       cameraFront, logDepth);
     return;
   }
   // CAD and PBR meshes share the global far-to-near painter order. Depth
@@ -2252,6 +2120,8 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   static std::array<std::vector<InstanceGroup>, kDepthBucketCount> buckets;
   for (auto &bucket : buckets)
     bucket.clear();
+  scene::SceneDrawList meshDrawList;
+  meshDrawList.setLights(realisticLights);
 
     const size_t orderCount = drawOrder.size();
     for (size_t orderIndex = 0; orderIndex < orderCount; ++orderIndex)
@@ -2306,9 +2176,11 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         batch.acgiMaterial.roughness = group.material.y;
         batch.acgiMaterial.transparency = 1.0f - group.opacity;
         batch.instances = std::move(group.instances);
-        submitMeshBatch(batch, view, projection, logDepth,
-                        rendering::encodeDoubleSingle(orbitCam.Position));
+        meshDrawList.meshBatches().push_back(std::move(batch));
     }
+  submitAcGiDrawable(meshDrawList, view, projection, projection,
+                     rebaseOrigin, cameraPos, orbitCam.Right, orbitCam.Up,
+                     cameraFront, logDepth);
 }
 
 int stressObjectCount()
@@ -5724,19 +5596,56 @@ void render()
     queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
   }
 
-  if (gpuCurveDemoEnabled())
   {
-    scene::CurveBatchCommand &bezier = sceneOverlay.addCurveBatch();
-    bezier.algorithm = rendering::CurveAlgorithm::Bezier;
-    bezier.degree = 3;
-    bezier.sampleCount = 192;
-    bezier.controlPoints = {
-        glm::dvec3(-240.0, -120.0, 0.0),
-        glm::dvec3(-80.0, 220.0, 0.0),
-        glm::dvec3(80.0, -220.0, 0.0),
-        glm::dvec3(240.0, 120.0, 0.0)};
-    bezier.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
-    bezier.acgiMaterial.baseColor = glm::vec4(0.15f, 1.0f, 0.55f, 1.0f);
+    const glm::dvec3 curveCenter =
+        vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
+    auto addCurve = [](rendering::CurveAlgorithm algorithm,
+                                    const glm::vec4 &color,
+                                    std::vector<glm::dvec3> controlPoints,
+                                    int degree = 3,
+                                    std::vector<double> weights = {}) {
+      scene::CurveBatchCommand &curve = sceneOverlay.addCurveBatch();
+      curve.algorithm = algorithm;
+      curve.degree = degree;
+      curve.sampleCount = 192;
+      curve.controlPoints = std::move(controlPoints);
+      curve.weights = std::move(weights);
+      curve.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+      curve.acgiMaterial.baseColor = color;
+    };
+
+    addCurve(rendering::CurveAlgorithm::Bezier,
+             glm::vec4(0.15f, 1.0f, 0.55f, 1.0f),
+             {curveCenter + glm::dvec3(-240.0, -120.0, 0.0),
+              curveCenter + glm::dvec3(-80.0, 220.0, 0.0),
+              curveCenter + glm::dvec3(80.0, -220.0, 0.0),
+              curveCenter + glm::dvec3(240.0, 120.0, 0.0)});
+    addCurve(rendering::CurveAlgorithm::BSpline,
+             glm::vec4(0.20f, 0.62f, 1.00f, 1.0f),
+             {curveCenter + glm::dvec3(-320.0, -180.0, 0.0),
+              curveCenter + glm::dvec3(-140.0, 180.0, 0.0),
+              curveCenter + glm::dvec3(0.0, -140.0, 0.0),
+              curveCenter + glm::dvec3(140.0, 180.0, 0.0),
+              curveCenter + glm::dvec3(320.0, -180.0, 0.0)});
+    addCurve(rendering::CurveAlgorithm::NURBS,
+             glm::vec4(0.95f, 0.82f, 0.25f, 1.0f),
+             {curveCenter + glm::dvec3(-280.0, 260.0, 0.0),
+              curveCenter + glm::dvec3(-110.0, -260.0, 0.0),
+              curveCenter + glm::dvec3(110.0, 260.0, 0.0),
+              curveCenter + glm::dvec3(280.0, -260.0, 0.0)},
+             3, {1.0, 2.0, 2.0, 1.0});
+
+    scene::CurveBatchCommand &arc = sceneOverlay.addCurveBatch();
+    arc.algorithm = rendering::CurveAlgorithm::Arc;
+    arc.sampleCount = 192;
+    arc.center = curveCenter;
+    arc.axisU = glm::dvec3(1.0, 0.0, 0.0);
+    arc.axisV = glm::dvec3(0.0, 1.0, 0.0);
+    arc.radius = 360.0;
+    arc.startAngle = -0.35;
+    arc.sweep = 1.60;
+    arc.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+    arc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
   }
 
   // The logical line still runs through the literal world origin.  Only its

@@ -78,6 +78,13 @@ struct GridCommand
     rendering::GridRenderData data;
 };
 
+// Environment state is explicit in the draw list so demo code does not need a
+// separate direct-to-renderer setup path.
+struct LightCommand
+{
+    rendering::RealisticLightsRenderData data;
+};
+
 // The protocol root for every renderer-visible object in this project.  A
 // drawable may collect strokes/fills/points, mesh batches, or protocol commands
 // such as the infinite grid into one frame draw list.
@@ -133,6 +140,14 @@ public:
     {
         return grid_;
     }
+    void setLights(const rendering::RealisticLightsRenderData &data)
+    {
+        lights_ = LightCommand{data};
+    }
+    [[nodiscard]] const std::optional<LightCommand> &lights() const
+    {
+        return lights_;
+    }
 
     MeshBatchCommand &addMeshBatch(const rendering::MeshType prototype,
                                    const bool opaque, const bool realistic,
@@ -166,6 +181,8 @@ public:
                              other.curveBatches_.end());
         if (other.grid_)
             grid_ = *other.grid_;
+        if (other.lights_)
+            lights_ = *other.lights_;
     }
 
     void collect(SceneDrawList &drawList) const override
@@ -179,6 +196,7 @@ public:
         meshBatches_.clear();
         curveBatches_.clear();
         grid_.reset();
+        lights_.reset();
     }
 
 private:
@@ -186,6 +204,7 @@ private:
     std::vector<MeshBatchCommand> meshBatches_;
     std::vector<CurveBatchCommand> curveBatches_;
     std::optional<GridCommand> grid_;
+    std::optional<LightCommand> lights_;
 };
 
 } // namespace scene
