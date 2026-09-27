@@ -5,3 +5,4 @@ vec2 a_texcoord0 : TEXCOORD0;
 vec4 v_color : COLOR0;
 float v_edge : TEXCOORD0;
 float v_depth : TEXCOORD1;
+float v_along : TEXCOORD2;

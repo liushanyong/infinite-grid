@@ -1,5 +1,5 @@
 $input a_position, a_color0, a_texcoord0
-$output v_color, v_edge, v_depth
+$output v_color, v_edge, v_depth, v_along
 
 #include <bgfx_shader.sh>
 
@@ -16,5 +16,6 @@ void main()
     v_color = a_color0;
     v_edge = a_texcoord0.y * 2.0 - 1.0;
     v_depth = -viewPosition.z;
+    v_along = a_texcoord0.x;
     gl_Position = mul(projection, viewPosition);
 }

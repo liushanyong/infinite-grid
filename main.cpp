@@ -837,14 +837,71 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     submitMeshBatch(batch, view, projection, logDepth,
                     rendering::encodeDoubleSingle(cameraPosition));
 
+  static std::vector<rendering::PrimVertex> polylineVertices;
+  polylineVertices.clear();
+  auto appendAcGiRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
+                              const glm::vec4 &color, float halfWidth,
+                              float u0, float u1) {
+    const glm::vec3 direction = rb - ra;
+    if (glm::length(direction) < 1.0e-5f)
+      return;
+    const glm::vec3 side = glm::normalize(
+        glm::cross(direction, glm::vec3(cameraFront))) * halfWidth;
+    polylineVertices.push_back({ra, color, {u0, 0.0f}});
+    polylineVertices.push_back({ra, color, {u0, 1.0f}});
+    polylineVertices.push_back({rb, color, {u1, 1.0f}});
+    polylineVertices.push_back({ra, color, {u0, 0.0f}});
+    polylineVertices.push_back({rb, color, {u1, 1.0f}});
+    polylineVertices.push_back({rb, color, {u1, 0.0f}});
+  };
   for (const entities::Stroke &stroke : drawList.geometry().strokes)
   {
     if (!stroke.common.visible || stroke.points.size() < 2)
       continue;
-    drawWorldLine(overlayProjection, cameraPosition, cameraRight, cameraUp,
-                  cameraFront, stroke.points.front(), stroke.points.back(),
-                  glm::vec3(stroke.common.color),
-                  float(stroke.common.color.a), logDepth);
+    const float halfWidth = stroke.lineWeight > 0.0
+                                ? float(stroke.lineWeight) * 0.5f
+                                : 2.0f;
+    const size_t strokeCount = stroke.points.size();
+    if (stroke.common.lineType == "DASHED")
+    {
+      const glm::dvec3 &start = stroke.points.front();
+      const glm::dvec3 &end = stroke.points.back();
+      if (glm::length(end - start) < 1.0e-12)
+        continue;
+      const glm::dvec3 direction = glm::normalize(end - start);
+      const double total = glm::length(end - start);
+      for (double d = 0.0; d < total; d += 144.0)
+      {
+        const double e = std::min(d + 96.0, total);
+        if (e - d < 1.0)
+          break;
+        appendAcGiRibbon(
+            glm::vec3(start + direction * d - cameraPosition),
+            glm::vec3(start + direction * e - cameraPosition),
+            stroke.common.color, halfWidth, float(d / total),
+            float(e / total));
+      }
+      continue;
+    }
+    for (size_t i = 0; i + 1 < strokeCount; ++i)
+    {
+      appendAcGiRibbon(
+          glm::vec3(stroke.points[i] - cameraPosition),
+          glm::vec3(stroke.points[i + 1] - cameraPosition),
+          stroke.common.color, halfWidth, 0.0f, 1.0f);
+    }
+  }
+  if (!polylineVertices.empty())
+  {
+    const rendering::PolylineRenderData polylineData{
+        .view = glm::mat4(1.0f),
+        .projection = overlayProjection,
+        .vertices = polylineVertices.data(),
+        .vertexCount = static_cast<uint32_t>(polylineVertices.size()),
+        .logDepth = logDepth,
+        .edgeSoftness = 0.15f,
+    };
+    rendererBackend->drawPolylines(polylineData);
   }
 
   static std::vector<rendering::FillVertex> fillVertices;
