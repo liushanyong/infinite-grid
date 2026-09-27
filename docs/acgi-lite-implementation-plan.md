@@ -25,7 +25,8 @@ entity value (Line, Arc, Polyline, ...)
   -> VectorPrimitives draw list
   -> DrawListCache keyed by revision, render origin, traits version,
       and chord-tolerance bucket
-  -> SceneDrawList (mesh batches, infinite-grid command, dynamic overlay)
+  -> AcGiDrawable / SceneDrawList
+       (protocol root, mesh batches, infinite-grid command, dynamic overlay)
   -> existing renderer back ends
 ```
 
@@ -177,6 +178,20 @@ Acceptance:
 * No per-document worlds yet.
 * No recursive block references or dimensions.
 * No marker-specific picking.
+
+### P3.4 AcGiDrawable root
+
+`scene::AcGiDrawable` is now the protocol root for renderer-visible content.
+`SceneDrawList` implements it and can merge another drawable's commands, so the
+frame submitter sees one command vocabulary instead of scattered renderer calls.
+Mesh batches and the infinite grid remain protocol commands; they are not
+flattened into triangle soup.
+
+Acceptance:
+
+* Every `SceneDrawList` submission goes through `submitAcGiDrawable()`.
+* Instanced meshes and the infinite-grid command keep their efficient paths.
+* Environment state such as lights and visual style stays outside geometry.
 
 These remain valuable follow-on phases, but they must not block the protocol and
 cache foundation.

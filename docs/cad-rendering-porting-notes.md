@@ -163,7 +163,7 @@ undo/符号表按 tag 分桶，隔离纪律全靠人，CAD 场景不划算。
 |---|---|---|
 | P1 | `DrawContext.h` + `tessellate()` → `worldDraw()` 语义迁移 + traits 应用（已完成） | 无（纯协议层） |
 | P2 | `DrawListCache` + 文档脏通知失效 + batch 提交接通（demo 缓存已完成，动态文档通知接入 P4） | P1 |
-| P3 | `ViewportDraw` 容差/LOD 通道 + SceneDrawList 全示例迁移（已完成） | P2 |
+| P3 | `ViewportDraw` 容差/LOD 通道 + SceneDrawList 全示例迁移 + `AcGiDrawable` 根（已完成） | P2 |
 | P4 | ECS 投影（组件化 + 七段流水线），文档仍为事实源 | P1-P3 |
 | P5 | DocumentManager 多文档（World per doc + View 绑定） | P4 |
 | 后续 | selection marker 子图元拾取、块引用/标注递归补全、xref | 按需 |

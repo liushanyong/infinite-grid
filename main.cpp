@@ -800,7 +800,7 @@ void appendScenePoint(scene::SceneDrawList &drawList,
 // Dynamic overlays stay in the AcGi-lite protocol but are never placed in the
 // immutable CAD draw-list cache.  The submitter preserves their cheap
 // view-space line and point pipelines.
-void submitSceneDrawList(scene::SceneDrawList &drawList,
+void submitAcGiDrawable(scene::SceneDrawList &drawList,
                          const glm::mat4 &view,
                          const glm::mat4 &projection,
                          const glm::mat4 &overlayProjection,
@@ -5628,7 +5628,7 @@ void render()
     appendSceneLine(sceneOverlay, referenceLineStart, referenceLineEnd,
                     glm::vec3(0.15f, 1.0f, 0.25f), 0.9f);
   }
-  submitSceneDrawList(sceneOverlay, viewRte, projection, overlayProjection,
+  submitAcGiDrawable(sceneOverlay, viewRte, projection, overlayProjection,
                       orbitCam.Position, cameraPos, cameraRight, cameraUp,
                       frontVec, logDepth, pixelSize);
 
@@ -5682,7 +5682,7 @@ void render()
     }
   }
 
-  submitSceneDrawList(sceneOverlay, viewRte, projection, overlayProjection,
+  submitAcGiDrawable(sceneOverlay, viewRte, projection, overlayProjection,
                       orbitCam.Position, cameraPos, cameraRight, cameraUp,
                       frontVec, logDepth, pixelSize);
 

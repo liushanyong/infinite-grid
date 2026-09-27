@@ -12,6 +12,8 @@
 namespace scene
 {
 
+class SceneDrawList;
+
 // A submission-ready mesh command preserves instancing.  Large stress fields
 // stay compact on the CPU while the backend retains control of its pipelines.
 struct MeshBatchCommand
@@ -32,10 +34,21 @@ struct GridCommand
     rendering::GridRenderData data;
 };
 
+// The protocol root for every renderer-visible object in this project.  A
+// drawable may collect strokes/fills/points, mesh batches, or protocol commands
+// such as the infinite grid into one frame draw list.
+class AcGiDrawable
+{
+public:
+    virtual ~AcGiDrawable() = default;
+
+    virtual void collect(SceneDrawList &drawList) const = 0;
+};
+
 // Frame-local and static draw lists share one command vocabulary.  Geometry
 // carries strokes/fills/points through the existing WorldDraw sink; mesh and
 // grid commands cover renderer-accelerated paths that must not be flattened.
-class SceneDrawList
+class SceneDrawList final : public AcGiDrawable
 {
 public:
     [[nodiscard]] entities::TessellatedEntity &geometry() { return geometry_; }
@@ -70,6 +83,29 @@ public:
         meshBatches_.push_back(
             {prototype, opaque, realistic, cadAlgorithm, material, {}});
         return meshBatches_.back();
+    }
+
+    void merge(const SceneDrawList &other)
+    {
+        geometry_.strokes.insert(geometry_.strokes.end(),
+                                 other.geometry_.strokes.begin(),
+                                 other.geometry_.strokes.end());
+        geometry_.fills.insert(geometry_.fills.end(),
+                               other.geometry_.fills.begin(),
+                               other.geometry_.fills.end());
+        geometry_.points.insert(geometry_.points.end(),
+                                other.geometry_.points.begin(),
+                                other.geometry_.points.end());
+        meshBatches_.insert(meshBatches_.end(),
+                            other.meshBatches_.begin(),
+                            other.meshBatches_.end());
+        if (other.grid_)
+            grid_ = *other.grid_;
+    }
+
+    void collect(SceneDrawList &drawList) const override
+    {
+        drawList.merge(*this);
     }
 
     void clear()
