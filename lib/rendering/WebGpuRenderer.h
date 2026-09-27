@@ -35,7 +35,6 @@ public:
     void drawCube(const CubeRenderData &data) override;
     void drawMeshInstances(const MeshInstancesRenderData &data) override;
     void drawAabb(const AabbRenderData &data) override;
-    void drawWorldLine(const WorldLineRenderData &data) override;
     void drawTargetPoint(const TargetPointRenderData &data) override;
     void drawTargetPointInstances(const TargetPointInstancesRenderData &data) override;
     void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) override;

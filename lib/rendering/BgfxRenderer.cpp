@@ -30,11 +30,6 @@ namespace CubeShaders
 #include "shaders/centerAnchor/vertex.h"
 #include "shaders/centerAnchor/frag.h"
 } // namespace CubeShaders
-namespace LineShaders
-{
-#include "shaders/worldLine/vertex.h"
-#include "shaders/worldLine/frag.h"
-} // namespace LineShaders
 namespace PointShaders
 {
 #include "shaders/targetPoint/vertex.h"
@@ -876,13 +871,6 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_aabbBuffer);
     m_aabbBuffer = BGFX_INVALID_HANDLE;
 
-    if (bgfx::isValid(m_lineProgram))
-        bgfx::destroy(m_lineProgram);
-    m_lineProgram = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(m_lineBuffer))
-        bgfx::destroy(m_lineBuffer);
-    m_lineBuffer = BGFX_INVALID_HANDLE;
-
     if (bgfx::isValid(m_pointProgram))
         bgfx::destroy(m_pointProgram);
     m_pointProgram = BGFX_INVALID_HANDLE;
@@ -964,11 +952,6 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_meshEdgeOverride);
     destroyUniform(m_presentSampler);
     destroyUniform(m_presentParams);
-    destroyUniform(m_lineStart);
-    destroyUniform(m_lineEnd);
-    destroyUniform(m_lineColor);
-    destroyUniform(m_lineWidth);
-    destroyUniform(m_lineDepthBias);
     destroyUniform(m_pointPosition);
     destroyUniform(m_pointSize);
     destroyUniform(m_pointColor);
@@ -2559,54 +2542,6 @@ void BgfxRenderer::completeGpuPickReadback()
     m_gpuPickActive = false;
 }
 
-void BgfxRenderer::drawWorldLine(const WorldLineRenderData &data)
-{
-    if (!m_initialized || !bgfx::isValid(m_lineProgram))
-        return;
-
-    // Ribbon quad: two triangles with (t, side) attributes.  The vertex
-    // shader expands the segment by lineWidth pixels in NDC, so D3D11 gets
-    // wide, MSAA-antialiased lines instead of unsupported 1px line prims.
-    const std::array<float, 12> vertices{
-        0.0f, -1.0f,  0.0f, 1.0f,  1.0f, -1.0f,
-        1.0f, -1.0f,  0.0f, 1.0f,  1.0f,  1.0f,
-    };
-    bgfx::update(m_lineBuffer, 0, bgfx::copy(vertices.data(), sizeof(vertices)));
-    const glm::mat4 projection = projectionForDirect3D(data.projection);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA |
-                   BGFX_STATE_MSAA);
-    bgfx::setVertexBuffer(0, m_lineBuffer);
-    // The reference line can be coplanar with the analytic grid.  Offset
-    // only fragment depth (not ribbon geometry): 1% camera distance is safe
-    // in log-depth perspective, and the same amount as a normalized ortho
-    // offset prevents one-ULP depth comparisons from hiding the ribbon.
-    const float cameraDepth = std::abs(data.viewStart.z);
-    const float depthBias = std::max(0.01f * cameraDepth, 1.0e-4f);
-    const float normalizedBias = std::clamp(
-        depthBias / std::max(data.logDepth.z - data.logDepth.y, 1.0f),
-        0.0f, 0.1f);
-    bgfx::setUniform(m_projection, glm::value_ptr(projection));
-    bgfx::setUniform(m_lineStart,
-                     glm::value_ptr(glm::vec4(data.viewStart, 1.0f)));
-    bgfx::setUniform(m_lineEnd,
-                     glm::value_ptr(glm::vec4(data.viewEnd, 1.0f)));
-    bgfx::setUniform(m_lineWidth,
-                     glm::value_ptr(glm::vec4(data.lineWidth, 0.0f,
-                                              0.0f, 0.0f)));
-    bgfx::setUniform(m_lineDepthBias,
-                     glm::value_ptr(glm::vec4(depthBias, normalizedBias,
-                                              0.0f, 0.0f)));
-    bgfx::setUniform(m_gridScreenWidth,
-                     glm::value_ptr(glm::vec4(static_cast<float>(m_width), 0.0f, 0.0f, 0.0f)));
-    bgfx::setUniform(m_gridScreenHeight,
-                     glm::value_ptr(glm::vec4(static_cast<float>(m_height), 0.0f, 0.0f, 0.0f)));
-    bgfx::setUniform(m_lineColor,
-                     glm::value_ptr(glm::vec4(data.color, data.opacity)));
-    bgfx::setUniform(m_logDepth, glm::value_ptr(data.logDepth));
-    bgfx::submit(kViewOverlay, m_lineProgram);
-}
-
 void BgfxRenderer::drawTargetPoint(const TargetPointRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_pointProgram))
@@ -2708,14 +2643,6 @@ bool BgfxRenderer::createRenderResources()
         "realistic_mesh_fs");
     m_pbrMeshProgram = bgfx::createProgram(pbrMeshVertex, pbrMeshFragment, true);
 
-    const auto lineVertexBinary = SELECT_SHADER_BINARY(LineShaders, vertex);
-    const auto lineFragmentBinary = SELECT_SHADER_BINARY(LineShaders, frag);
-    const bgfx::ShaderHandle lineVertex = createShader(
-        lineVertexBinary.data, lineVertexBinary.size, "line_vs");
-    const bgfx::ShaderHandle lineFragment = createShader(
-        lineFragmentBinary.data, lineFragmentBinary.size, "line_fs");
-    m_lineProgram = bgfx::createProgram(lineVertex, lineFragment, true);
-
     const auto pointVertexBinary = SELECT_SHADER_BINARY(PointShaders, vertex);
     const auto pointFragmentBinary = SELECT_SHADER_BINARY(PointShaders, frag);
     const bgfx::ShaderHandle pointVertex = createShader(
@@ -2815,8 +2742,7 @@ m_curveLayout.begin()
                  bgfx::isValid(m_fillProgram) &&
                  bgfx::isValid(m_curveProgram) &&
                  bgfx::isValid(m_cubeProgram) &&
-                 bgfx::isValid(m_lineProgram) &&
-                 bgfx::isValid(m_pointProgram);
+                bgfx::isValid(m_pointProgram);
     if (!ready)
         std::cerr << "Failed to create one or more bgfx shader programs." << std::endl;
     if (!bgfx::isValid(m_gridProgram)) std::cerr << "Invalid program: grid" << std::endl;
@@ -2828,7 +2754,6 @@ m_curveLayout.begin()
     if (!bgfx::isValid(m_fillProgram)) std::cerr << "Invalid program: fill" << std::endl;
     if (!bgfx::isValid(m_curveProgram)) std::cerr << "Invalid program: curve" << std::endl;
     if (!bgfx::isValid(m_cubeProgram)) std::cerr << "Invalid program: cube" << std::endl;
-    if (!bgfx::isValid(m_lineProgram)) std::cerr << "Invalid program: line" << std::endl;
     if (!bgfx::isValid(m_pointProgram)) std::cerr << "Invalid program: point" << std::endl;
 
     if (ready)
@@ -2874,11 +2799,6 @@ m_curveLayout.begin()
         m_eyeLow = createUniformHandle("uEyeLow", bgfx::UniformType::Vec4);
         m_cubeOpacity = createUniformHandle("uCubeOpacity", bgfx::UniformType::Vec4);
         m_cubeColor = createUniformHandle("uObjectColor", bgfx::UniformType::Vec4);
-        m_lineStart = createUniformHandle("uViewStart", bgfx::UniformType::Vec4);
-        m_lineEnd = createUniformHandle("uViewEnd", bgfx::UniformType::Vec4);
-        m_lineColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
-        m_lineWidth = createUniformHandle("uLineWidth", bgfx::UniformType::Vec4);
-        m_lineDepthBias = createUniformHandle("uDepthBias", bgfx::UniformType::Vec4);
         m_pointPosition = createUniformHandle("uRelativePosition", bgfx::UniformType::Vec4);
         m_pointSize = createUniformHandle("uPointSize", bgfx::UniformType::Vec4);
         m_pointColor = createUniformHandle("uColor", bgfx::UniformType::Vec4);
@@ -2950,10 +2870,6 @@ m_curveLayout.begin()
                 bgfx::isValid(m_cubeRelativePositionLow) &&
                 bgfx::isValid(m_eyeHigh) && bgfx::isValid(m_eyeLow) &&
                 bgfx::isValid(m_cubeOpacity) && bgfx::isValid(m_cubeColor) &&
-                bgfx::isValid(m_lineStart) && bgfx::isValid(m_lineEnd) &&
-                 bgfx::isValid(m_lineDepthBias) &&
-                bgfx::isValid(m_lineColor) &&
-                bgfx::isValid(m_lineWidth) &&
                 bgfx::isValid(m_pointPosition) && bgfx::isValid(m_pointSize) &&
                 bgfx::isValid(m_pointColor) &&
                 bgfx::isValid(m_cadView) &&
@@ -3021,14 +2937,6 @@ m_curveLayout.begin()
         m_aabbBuffer = bgfx::createVertexBuffer(
             bgfx::copy(aabbVertices.data(), sizeof(aabbVertices)), cubeLayout);
 
-        bgfx::VertexLayout lineLayout;
-        lineLayout.begin()
-            .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
-            .end();
-        // Two triangles per ribbon quad: (t, side) = (0,-1) (0,+1) (1,-1)
-        // and (1,-1) (0,+1) (1,+1).
-        m_lineBuffer = bgfx::createDynamicVertexBuffer(6, lineLayout);
-
         bgfx::VertexLayout pointLayout;
         pointLayout.begin()
             .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
@@ -3068,7 +2976,7 @@ m_curveLayout.begin()
                 bgfx::isValid(m_instanceCubeBuffer) &&
                 bgfx::isValid(m_whiteTexture) &&
                 bgfx::isValid(m_aabbBuffer) &&
-                bgfx::isValid(m_lineBuffer) && bgfx::isValid(m_pointBuffer) &&
+                bgfx::isValid(m_pointBuffer) &&
                 bgfx::isValid(m_presentQuadBuffer) &&
                 bgfx::isValid(m_presentProgram) &&
                 bgfx::isValid(m_gpuPickProgram) &&

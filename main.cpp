@@ -745,51 +745,6 @@ void logSlabIfChanged(bool isOrtho, double nearPlane, double farPlane,
     initialized[slot] = true;
 }
 
-// View-space Z is negative in front of the eye, while clipping code uses
-// positive distance along OrbitCamera::Front.  Evaluate in double here, then
-// let the shader interpolate already-projected, camera-sized endpoints.
-glm::dvec3 toViewSpace(const glm::dvec3 &worldPosition,
-                       const glm::dvec3 &cameraPosition,
-                       const glm::dvec3 &cameraRight,
-                       const glm::dvec3 &cameraUp,
-                       const glm::dvec3 &cameraFront)
-{
-  const glm::dvec3 delta = worldPosition - cameraPosition;
-  return {glm::dot(delta, cameraRight),
-          glm::dot(delta, cameraUp),
-          -glm::dot(delta, cameraFront)};
-}
-
-void drawWorldLine(const glm::mat4 &projection,
-                   const glm::dvec3 &cameraPosition,
-                   const glm::dvec3 &cameraRight,
-                   const glm::dvec3 &cameraUp,
-                   const glm::dvec3 &cameraFront,
-                   const glm::dvec3 &startWorldPosition,
-                   const glm::dvec3 &endWorldPosition,
-                   const glm::vec3 &color = glm::vec3(0.15f, 1.0f, 0.25f),
-                   float opacity = 0.9f,
-                   const glm::vec4 &logDepth = glm::vec4(0.0f))
-{
-  if (!rendererBackend)
-    return;
-
-  const rendering::WorldLineRenderData renderData{
-      .projection = projection,
-      .viewStart = glm::vec3(toViewSpace(startWorldPosition, cameraPosition,
-                                         cameraRight, cameraUp,
-                                         cameraFront)),
-      .viewEnd = glm::vec3(toViewSpace(endWorldPosition, cameraPosition,
-                                       cameraRight, cameraUp,
-                                       cameraFront)),
-      .lineWidth = 2.0f,
-      .color = color,
-      .opacity = opacity,
-      .logDepth = logDepth,
-  };
-  rendererBackend->drawWorldLine(renderData);
-}
-
 void appendSceneLine(scene::SceneDrawList &drawList,
                      const glm::dvec3 &start, const glm::dvec3 &end,
                      const glm::vec3 &color, float opacity,

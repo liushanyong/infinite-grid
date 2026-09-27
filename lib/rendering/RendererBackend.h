@@ -125,20 +125,6 @@ struct AabbRenderData
     DoubleSingleVec3 object;
 };
 
-struct WorldLineRenderData
-{
-    glm::mat4 projection;
-    // CPU-side double camera-space values converted to float.  The vertex
-    // shader projects these directly, avoiding a second large-coordinate
-    // transform and interpolation in world/rebase space.
-    glm::vec3 viewStart;
-    glm::vec3 viewEnd;
-    float lineWidth;
-    glm::vec3 color;
-    float opacity;
-    glm::vec4 logDepth;
-};
-
 struct MeshInstance
 {
     // Column-major 3x3 transform.  The .w components carry RGB because bgfx
@@ -383,7 +369,6 @@ public:
     virtual void drawCube(const CubeRenderData &data) = 0;
     virtual void drawMeshInstances(const MeshInstancesRenderData &data) = 0;
     virtual void drawAabb(const AabbRenderData &data) = 0;
-    virtual void drawWorldLine(const WorldLineRenderData &data) = 0;
     virtual void drawTargetPoint(const TargetPointRenderData &data) = 0;
     virtual void drawTargetPointInstances(const TargetPointInstancesRenderData &data) = 0;
     virtual void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) = 0;

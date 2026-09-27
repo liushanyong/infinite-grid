@@ -30,7 +30,6 @@ public:
     void drawCube(const CubeRenderData &data) override;
     void drawMeshInstances(const MeshInstancesRenderData &data) override;
     void drawAabb(const AabbRenderData &data) override;
-    void drawWorldLine(const WorldLineRenderData &data) override;
     void drawTargetPoint(const TargetPointRenderData &data) override;
     void drawTargetPointInstances(const TargetPointInstancesRenderData &data) override;
     void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) override;
@@ -165,14 +164,6 @@ private:
     bgfx::VertexBufferHandle m_coneEdgeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_torusEdgeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_aabbBuffer = BGFX_INVALID_HANDLE;
-
-    bgfx::UniformHandle m_lineStart = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle m_lineEnd = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle m_lineColor = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle m_lineWidth = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle m_lineDepthBias = BGFX_INVALID_HANDLE;
-    bgfx::ProgramHandle m_lineProgram = BGFX_INVALID_HANDLE;
-    bgfx::DynamicVertexBufferHandle m_lineBuffer = BGFX_INVALID_HANDLE;
 
     bgfx::UniformHandle m_pointPosition = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_pointSize = BGFX_INVALID_HANDLE;

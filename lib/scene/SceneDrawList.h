@@ -159,8 +159,11 @@ public:
                                 other.geometry_.points.begin(),
                                 other.geometry_.points.end());
         meshBatches_.insert(meshBatches_.end(),
-                            other.meshBatches_.begin(),
-                            other.meshBatches_.end());
+                             other.meshBatches_.begin(),
+                             other.meshBatches_.end());
+        curveBatches_.insert(curveBatches_.end(),
+                             other.curveBatches_.begin(),
+                             other.curveBatches_.end());
         if (other.grid_)
             grid_ = *other.grid_;
     }
@@ -174,6 +177,7 @@ public:
     {
         geometry_ = {};
         meshBatches_.clear();
+        curveBatches_.clear();
         grid_.reset();
     }
 

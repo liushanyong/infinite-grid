@@ -1442,27 +1442,6 @@ void WebGpuRenderer::drawAabb(const AabbRenderData &data)
     recordDraw(uniform, Pipeline::Line, count, 0, 0, start);
 }
 
-void WebGpuRenderer::drawWorldLine(const WorldLineRenderData &data)
-{
-    if (!m_initialized || !m_resourcesCreated || data.opacity <= 0.0f)
-        return;
-
-    const uint32_t start = static_cast<uint32_t>(m_lineStaging.size());
-    appendLineQuad(m_lineStaging, data.viewStart, data.viewEnd,
-                   glm::vec4(data.color, data.opacity),
-                   std::max(1.0f, data.lineWidth),
-                   projectionForWebGpu(data.projection), data.logDepth);
-    const uint32_t count = static_cast<uint32_t>(m_lineStaging.size() - start);
-    if (!count)
-        return;
-
-    DrawUniform uniform{};
-    uniform.projection = projectionForWebGpu(data.projection);
-    uniform.logDepth = data.logDepth;
-    uniform.style = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-    recordDraw(uniform, Pipeline::Line, count, 0, 0, start);
-}
-
 void WebGpuRenderer::drawTargetPoint(const TargetPointRenderData &data)
 {
     if (!m_initialized || !m_resourcesCreated)
