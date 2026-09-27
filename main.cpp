@@ -9,6 +9,7 @@
 #include "entities/tessellate.h"
 #include "entities/world_draw.h"
 #include "scene/DrawContext.h"
+#include "scene/SceneDrawList.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
@@ -159,6 +160,60 @@ static rendering::MeshInstance makeMeshInstance(
   return instance;
 }
 SDL_Window *window = nullptr;
+
+// Every demo path funnels renderer submissions through this helper.  The
+// protocol keeps instancing compact; only the submitter knows backend details.
+void submitMeshBatch(scene::MeshBatchCommand &command,
+                     const glm::mat4 &view, const glm::mat4 &projection,
+                     const glm::vec4 &logDepth,
+                     const rendering::DoubleSingleVec3 &eye)
+{
+  if (!rendererBackend || command.instances.empty())
+    return;
+
+  if (command.cadAlgorithm)
+  {
+    const rendering::CadAlgorithmDemoRenderData renderData{
+        .view = view,
+        .projection = projection,
+        .instances = command.instances.data(),
+        .instanceCount = static_cast<uint32_t>(command.instances.size()),
+        .mesh = command.prototype,
+        .renderMode = visualStyleManager.mode(),
+        .cameraPos = glm::vec3(0.0f),
+        .lightDir = glm::vec3(0.4f, 0.8f, 0.55f),
+        .baseColor = glm::vec3(1.0f),
+        .metallic = 0.0f,
+        .roughness = 0.35f,
+        .transparency = 0.5f,
+        .strokeWidth = 1.0f,
+        .strokeDensity = 1.0f,
+        .layer = envLayer("GRID_MESH_LAYER"),
+        .logDepth = logDepth,
+        .eye = eye,
+    };
+    rendererBackend->drawCadAlgorithmDemo(renderData);
+    return;
+  }
+
+  const rendering::MeshInstancesRenderData renderData{
+      .view = view,
+      .projection = projection,
+      .instances = command.instances.data(),
+      .instanceCount = static_cast<uint32_t>(command.instances.size()),
+      .mesh = command.prototype,
+      .opaque = command.opaque,
+      .layer = envLayer("GRID_MESH_LAYER"),
+      .logDepth = logDepth,
+      .eye = eye,
+      .diffuseTextureIndex = gMeshTextureIndex,
+      .headlight = meshHeadlight(),
+      .triplanarUv = meshTriplanar(),
+      .realistic = command.realistic,
+      .material = command.material,
+  };
+  rendererBackend->drawMeshInstances(renderData);
+}
 
 // All world-space object positions stay double precision on the CPU.
 // The GPU never sees these; only (objWorld - worldRebase().origin()) does.
@@ -559,28 +614,6 @@ void close()
   SDL_Quit();
 }
 
-void drawTargetPoint(const glm::mat4 &view, const glm::mat4 &projection,
-                     const glm::dvec3 &rebaseOrigin,
-                     const glm::dvec3 &targetWorldPosition,
-                     const glm::vec4 &logDepth,
-                     float pixelSizeWorld)
-{
-  if (!rendererBackend)
-    return;
-
-  const rendering::TargetPointRenderData renderData{
-      .view = view,
-      .projection = projection,
-      .relativePosition = glm::vec3(targetWorldPosition - rebaseOrigin),
-      .pointSize = 5.0f,
-        .pixelSizeWorld = pixelSizeWorld,
-      .color = glm::vec3(1.0f, 0.15f, 0.15f),
-      .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
-      .logDepth = logDepth,
-  };
-  rendererBackend->drawTargetPoint(renderData);
-}
-
 void logCameraTargetIfChanged(const glm::dvec3 &target)
 {
   static glm::dvec3 lastTarget(std::numeric_limits<double>::quiet_NaN());
@@ -691,78 +724,6 @@ void logSlabIfChanged(bool isOrtho, double nearPlane, double farPlane,
     initialized[slot] = true;
 }
 
-void drawAabbForCube(const rendering::CubeRenderData &renderData)
-{
-  if (!rendererBackend)
-    return;
-
-  // The renderer treats the model translation separately from the rebase
-  // position, so the AABB must do the same.
-  glm::mat4 modelNoTranslation = renderData.model;
-  modelNoTranslation[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-
-  glm::dvec3 relativeMin(std::numeric_limits<double>::max());
-  glm::dvec3 relativeMax(std::numeric_limits<double>::lowest());
-  const glm::dvec3 objectEncoded =
-      glm::dvec3(renderData.object.high) + glm::dvec3(renderData.object.low);
-  const glm::dvec3 eyeEncoded =
-      glm::dvec3(renderData.eye.high) + glm::dvec3(renderData.eye.low);
-  for (const float x : {-0.5f, 0.5f})
-  {
-    for (const float y : {-0.5f, 0.5f})
-    {
-      for (const float z : {-0.5f, 0.5f})
-      {
-        const glm::dvec3 relative = glm::dvec3(
-            modelNoTranslation * glm::vec4(x, y, z, 1.0f)) +
-            (objectEncoded - eyeEncoded);
-        relativeMin = glm::min(relativeMin, relative);
-        relativeMax = glm::max(relativeMax, relative);
-      }
-    }
-  }
-  const glm::dvec3 relativeCenter = (relativeMin + relativeMax) * 0.5;
-
-  const rendering::AabbRenderData aabb{
-      .view = renderData.view,
-      .projection = renderData.projection,
-      .relativeMin = glm::vec3(relativeMin),
-      .relativeMax = glm::vec3(relativeMax),
-      .color = glm::vec3(1.0f, 0.90f, 0.15f),
-      .opacity = 1.0f,
-      .logDepth = renderData.logDepth,
-      .eye = renderData.eye,
-      .object = rendering::encodeDoubleSingle(relativeCenter),
-  };
-  rendererBackend->drawAabb(aabb);
-}
-
-void drawCube(const glm::mat4 &view, const glm::mat4 &projection,
-              const glm::dvec3 &rebaseOrigin,
-              const glm::dvec3 &objectWorldPosition,
-              const glm::vec3 &objectColor,
-              float opacity,
-              float size,
-              const glm::vec4 &logDepth)
-{
-  if (!rendererBackend)
-    return;
-
-  const rendering::CubeRenderData renderData{
-      .model = glm::scale(glm::mat4(1.0f), glm::vec3(size)),
-      .view = view,
-      .projection = projection,
-      .modelRelativePosition = glm::vec3(objectWorldPosition - rebaseOrigin),
-      .objectColor = objectColor,
-      .opacity = opacity,
-      .logDepth = logDepth,
-      .eye = rendering::encodeDoubleSingle(orbitCam.Position),
-      .object = rendering::encodeDoubleSingle(objectWorldPosition),
-  };
-  rendererBackend->drawCube(renderData);
-  drawAabbForCube(renderData);
-}
-
 // View-space Z is negative in front of the eye, while clipping code uses
 // positive distance along OrbitCamera::Front.  Evaluate in double here, then
 // let the shader interpolate already-projected, camera-sized endpoints.
@@ -808,28 +769,118 @@ void drawWorldLine(const glm::mat4 &projection,
   rendererBackend->drawWorldLine(renderData);
 }
 
-void drawMesh(const glm::mat4 &view, const glm::mat4 &projection,
-              const glm::dvec3 &rebaseOrigin,
-              const glm::dvec3 &objectWorldPosition,
-              const glm::vec3 &objectColor, float opacity, float size,
-              rendering::MeshType mesh, const glm::vec4 &logDepth)
+void appendSceneLine(scene::SceneDrawList &drawList,
+                     const glm::dvec3 &start, const glm::dvec3 &end,
+                     const glm::vec3 &color, float opacity,
+                     double lineWeight = 2.0)
+{
+  scene::WorldDraw draw(drawList.geometry());
+  draw.subEntityTraits().setColor(glm::vec4(color, opacity));
+  draw.subEntityTraits().setLineWeight(lineWeight);
+
+  entities::Line line;
+  line.start = start;
+  line.end = end;
+  entities::worldDraw(line, draw);
+}
+
+void appendScenePoint(scene::SceneDrawList &drawList,
+                      const glm::dvec3 &location, const glm::vec3 &color,
+                      double pointSize)
+{
+  scene::WorldDraw draw(drawList.geometry());
+  draw.subEntityTraits().setColor(glm::vec4(color, 1.0f));
+  draw.subEntityTraits().setLineWeight(pointSize);
+
+  entities::Point point;
+  point.location = location;
+  entities::worldDraw(point, draw);
+}
+
+// Dynamic overlays stay in the AcGi-lite protocol but are never placed in the
+// immutable CAD draw-list cache.  The submitter preserves their cheap
+// view-space line and point pipelines.
+void submitSceneDrawList(scene::SceneDrawList &drawList,
+                         const glm::mat4 &view,
+                         const glm::mat4 &projection,
+                         const glm::mat4 &overlayProjection,
+                         const glm::dvec3 &rebase,
+                         const glm::dvec3 &cameraPosition,
+                         const glm::dvec3 &cameraRight,
+                         const glm::dvec3 &cameraUp,
+                         const glm::dvec3 &cameraFront,
+                         const glm::vec4 &logDepth,
+                         float pixelSizeWorld)
 {
   if (!rendererBackend)
     return;
 
-  const rendering::CubeRenderData renderData{
-      .model = glm::scale(glm::mat4(1.0f), glm::vec3(size)),
-      .view = view,
-      .projection = projection,
-      .modelRelativePosition = glm::vec3(objectWorldPosition - rebaseOrigin),
-      .objectColor = objectColor,
-      .opacity = opacity,
-      .mesh = mesh,
-      .logDepth = logDepth,
-      .eye = rendering::encodeDoubleSingle(rebaseOrigin),
-      .object = rendering::encodeDoubleSingle(objectWorldPosition),
-  };
-  rendererBackend->drawCube(renderData);
+  if (drawList.grid())
+    rendererBackend->drawGrid(drawList.grid()->data);
+
+  for (scene::MeshBatchCommand &batch : drawList.meshBatches())
+    submitMeshBatch(batch, view, projection, logDepth,
+                    rendering::encodeDoubleSingle(cameraPosition));
+
+  for (const entities::Stroke &stroke : drawList.geometry().strokes)
+  {
+    if (!stroke.common.visible || stroke.points.size() < 2)
+      continue;
+    drawWorldLine(overlayProjection, cameraPosition, cameraRight, cameraUp,
+                  cameraFront, stroke.points.front(), stroke.points.back(),
+                  glm::vec3(stroke.common.color),
+                  float(stroke.common.color.a), logDepth);
+  }
+
+  static std::vector<rendering::FillVertex> fillVertices;
+  fillVertices.clear();
+  for (const entities::Triangle &triangle : drawList.geometry().fills)
+  {
+    if (!triangle.common.visible)
+      continue;
+    fillVertices.push_back({glm::vec3(triangle.a - rebase),
+                            triangle.common.color});
+    fillVertices.push_back({glm::vec3(triangle.b - rebase),
+                            triangle.common.color});
+    fillVertices.push_back({glm::vec3(triangle.c - rebase),
+                            triangle.common.color});
+  }
+  if (!fillVertices.empty())
+  {
+    const rendering::FilledTrianglesRenderData fillData{
+        .view = view,
+        .projection = projection,
+        .vertices = fillVertices.data(),
+        .vertexCount = static_cast<uint32_t>(fillVertices.size()),
+        .logDepth = logDepth,
+    };
+    rendererBackend->drawFilledTriangles(fillData);
+  }
+
+  static std::vector<rendering::TargetPointInstance> points;
+  points.clear();
+  for (const entities::TessellatedPoint &point : drawList.geometry().points)
+  {
+    if (!point.common.visible)
+      continue;
+    points.push_back({glm::vec3(point.location - cameraPosition),
+                      glm::vec3(point.common.color),
+                      float(point.pointSize)});
+  }
+  if (!points.empty())
+  {
+    const rendering::TargetPointInstancesRenderData pointData{
+        .view = view,
+        .projection = overlayProjection,
+        .instances = points.data(),
+        .instanceCount = static_cast<uint32_t>(points.size()),
+        .pointSize = 2.0f,
+        .pixelSizeWorld = pixelSizeWorld,
+        .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
+        .logDepth = logDepth,
+    };
+    rendererBackend->drawTargetPointInstances(pointData);
+  }
 }
 
 struct MeshEntityRecord
@@ -978,6 +1029,25 @@ static void queueGpuMeshEntity(const MeshEntityRecord *entity)
   queueGpuMeshEntity(*entity,
                      registerGpuPickEntity({VisibilityKind::MeshObject,
                                             entity, nullptr}));
+}
+
+glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity);
+
+void appendMeshEntityToScene(const MeshEntityRecord &entity,
+                             scene::SceneDrawList &drawList,
+                             bool cadAlgorithm = false)
+{
+  if (!meshEntityVisible(entity))
+    return;
+
+  const glm::vec4 color = meshEntityColor(entity);
+  const glm::vec4 material = meshEntityRenderMaterial(entity);
+  scene::MeshBatchCommand &batch = drawList.addMeshBatch(
+      entity.mesh, color.a >= 1.0f, entity.realistic(), material,
+      cadAlgorithm);
+  batch.instances.push_back(makeMeshInstance(
+      entity.size, glm::vec3(color), color.a,
+      rendering::encodeDoubleSingle(entity.worldPosition), material));
 }
 
 glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
@@ -1961,9 +2031,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         tessellation.meshes[candidate->entityIndex];
     if (!meshEntityVisible(mesh))
       continue;
-    drawMesh(view, projection, rebase, mesh.worldPosition,
-             glm::vec3(meshEntityColor(mesh)), mesh.entity.common.color.a,
-             mesh.size, mesh.mesh, logDepth);
+    scene::SceneDrawList meshDrawList;
+    appendMeshEntityToScene(mesh, meshDrawList);
+    for (scene::MeshBatchCommand &batch : meshDrawList.meshBatches())
+      submitMeshBatch(batch, view, projection, logDepth,
+                      rendering::encodeDoubleSingle(rebase));
     queueGpuMeshEntity(&mesh);
   }
 }
@@ -2047,32 +2119,17 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     const rendering::MeshType cadMeshTypes[kCadMeshCount] = {
         rendering::MeshType::Cube, rendering::MeshType::Sphere,
         rendering::MeshType::Cone, rendering::MeshType::Torus};
-    const glm::vec3 relativeCameraPos(0.0f);
     for (size_t meshIndex = 0; meshIndex < kCadMeshCount; ++meshIndex)
     {
       auto &instances = cadGroups[meshIndex];
       if (instances.empty())
         continue;
-      const rendering::CadAlgorithmDemoRenderData renderData{
-          .view = view,
-          .projection = projection,
-          .instances = instances.data(),
-          .instanceCount = static_cast<uint32_t>(instances.size()),
-          .mesh = cadMeshTypes[meshIndex],
-            .renderMode = visualStyleManager.mode(),
-          .cameraPos = relativeCameraPos,
-          .lightDir = glm::vec3(0.4f, 0.8f, 0.55f),
-          .baseColor = glm::vec3(1.0f, 1.0f, 1.0f),
-          .metallic = 0.0f,
-          .roughness = 0.35f,
-          .transparency = 0.5f,
-          .strokeWidth = 1.0f,
-          .strokeDensity = 1.0f,
-          .layer = envLayer("GRID_MESH_LAYER"),
-          .logDepth = logDepth,
-          .eye = rendering::encodeDoubleSingle(orbitCam.Position),
-      };
-      rendererBackend->drawCadAlgorithmDemo(renderData);
+      scene::MeshBatchCommand batch;
+      batch.prototype = cadMeshTypes[meshIndex];
+      batch.cadAlgorithm = true;
+      batch.instances = std::move(instances);
+      submitMeshBatch(batch, view, projection, logDepth,
+                      rendering::encodeDoubleSingle(orbitCam.Position));
     }
     return;
   }
@@ -2129,27 +2186,18 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     }
 
   for (auto &bucket : buckets)
-    for (const InstanceGroup &group : bucket)
+    for (InstanceGroup &group : bucket)
     {
       if (group.instances.empty())
         continue;
-        const rendering::MeshInstancesRenderData renderData{
-            .view = view,
-            .projection = projection,
-            .instances = group.instances.data(),
-            .instanceCount = static_cast<uint32_t>(group.instances.size()),
-            .mesh = group.mesh,
-            .opaque = group.opacity >= 1.0f,
-            .layer = envLayer("GRID_MESH_LAYER"),
-            .logDepth = logDepth,
-            .eye = rendering::encodeDoubleSingle(orbitCam.Position),
-            .diffuseTextureIndex = gMeshTextureIndex,
-            .headlight = meshHeadlight(),
-            .triplanarUv = meshTriplanar(),
-            .realistic = group.realistic,
-            .material = group.material,
-        };
-        rendererBackend->drawMeshInstances(renderData);
+        scene::MeshBatchCommand batch;
+        batch.prototype = group.mesh;
+        batch.opaque = group.opacity >= 1.0f;
+        batch.realistic = group.realistic;
+        batch.material = group.material;
+        batch.instances = std::move(group.instances);
+        submitMeshBatch(batch, view, projection, logDepth,
+                        rendering::encodeDoubleSingle(orbitCam.Position));
     }
 }
 
@@ -5559,27 +5607,30 @@ void render()
       .gridOpacity = 0.6f,
       .logDepth = logDepth,
   };
+  static scene::SceneDrawList sceneOverlay;
+  sceneOverlay.clear();
+  if (gridPlaneVisible)
+    sceneOverlay.setGrid(gridRenderData);
+
   // Opaque geometry first so transparent passes can depth-test against it.
   const MeshEntityRecord centerCube = getCenterCubeEntity();
   if (centerCubeInFrame)
   {
-    drawMesh(viewRte, projection, orbitCam.Position, centerCube.worldPosition,
-             glm::vec3(meshEntityColor(centerCube)),
-             centerCube.entity.common.color.a,
-             centerCube.size, centerCube.mesh, logDepth);
+    appendMeshEntityToScene(centerCube, sceneOverlay);
     queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
   }
-
-  if (gridPlaneVisible)
-    rendererBackend->drawGrid(gridRenderData);
 
   // The logical line still runs through the literal world origin.  Only its
   // frustum-clipped portion is submitted, so both GPU endpoints remain small
   // after rebase even when the full segment spans 1e7 world units.
   if (referenceLineVisible)
-    drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
-                  referenceLineStart, referenceLineEnd,
-                  glm::vec3(0.15f, 1.0f, 0.25f), 0.9f, logDepth);
+  {
+    appendSceneLine(sceneOverlay, referenceLineStart, referenceLineEnd,
+                    glm::vec3(0.15f, 1.0f, 0.25f), 0.9f);
+  }
+  submitSceneDrawList(sceneOverlay, viewRte, projection, overlayProjection,
+                      orbitCam.Position, cameraPos, cameraRight, cameraUp,
+                      frontVec, logDepth, pixelSize);
 
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
@@ -5592,36 +5643,17 @@ void render()
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
   // transient-buffer chunk.
-  static std::vector<rendering::TargetPointInstance> pointInstances;
-  pointInstances.clear();
-  pointInstances.reserve(tinyDraws.size());
+  sceneOverlay.clear();
   for (const LargeCoordinateObject *object : tinyDraws)
-  {
-    pointInstances.push_back({
-        glm::vec3(object->worldPosition - orbitCam.Position),
-        glm::vec3(meshEntityColor(*object))});
-  }
-  if (!pointInstances.empty())
-  {
-    const rendering::TargetPointInstancesRenderData pointRenderData{
-        .view = viewRte,
-        .projection = overlayProjection,
-        .instances = pointInstances.data(),
-        .instanceCount = static_cast<uint32_t>(pointInstances.size()),
-        .pointSize = 2.0f,
-        .pixelSizeWorld = pixelSize,
-        .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
-        .logDepth = logDepth,
-    };
-    rendererBackend->drawTargetPointInstances(pointRenderData);
-  }
+    appendScenePoint(sceneOverlay, object->worldPosition,
+                     glm::vec3(meshEntityColor(*object)), 2.0);
 
   // Small 5-pixel "sphere" (disc-shaded point) at the orbit target so the
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
   // The camera focus marker remains a camera overlay, not a CAD entity.
-  drawTargetPoint(viewRte, projection, orbitCam.Position, orbitCam.Target,
-                  logDepth, pixelSize);
+  appendScenePoint(sceneOverlay, orbitCam.Target,
+                   glm::vec3(1.0f, 0.15f, 0.15f), 5.0);
 
   if (frustumWireframeVisible)
   {
@@ -5632,28 +5664,27 @@ void render()
     const glm::vec3 farColor(0.2f, 0.4f, 1.0f);
     const glm::vec3 sideColor(1.0f, 1.0f, 1.0f);
     for (const auto &e : nearEdges)
-    drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
-                    frustumCorners[e[0]], frustumCorners[e[1]],
-                    nearColor, 0.9f, logDepth);
+      appendSceneLine(sceneOverlay, frustumCorners[e[0]],
+                      frustumCorners[e[1]], nearColor, 0.9f);
     for (const auto &e : farEdges)
-      drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
-                    frustumCorners[e[0]], frustumCorners[e[1]],
-                    farColor, 0.9f, logDepth);
+      appendSceneLine(sceneOverlay, frustumCorners[e[0]],
+                      frustumCorners[e[1]], farColor, 0.9f);
     for (const auto &e : sideEdges)
-      drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp, frontVec,
-                    frustumCorners[e[0]], frustumCorners[e[1]],
-                    sideColor, 0.9f, logDepth);
+      appendSceneLine(sceneOverlay, frustumCorners[e[0]],
+                      frustumCorners[e[1]], sideColor, 0.9f);
     if (gridVisibleQuadValid)
     {
       const glm::vec3 gridQuadColor(1.0f, 0.85f, 0.1f);
       for (int i = 0; i < gridVisibleQuadCount; ++i)
-        drawWorldLine(overlayProjection, cameraPos, cameraRight, cameraUp,
-                      frontVec,
-                      gridVisibleQuad[i],
-                      gridVisibleQuad[(i + 1) % gridVisibleQuadCount],
-                      gridQuadColor, 0.9f, logDepth);
+        appendSceneLine(sceneOverlay, gridVisibleQuad[i],
+                        gridVisibleQuad[(i + 1) % gridVisibleQuadCount],
+                        gridQuadColor, 0.9f);
     }
   }
+
+  submitSceneDrawList(sceneOverlay, viewRte, projection, overlayProjection,
+                      orbitCam.Position, cameraPos, cameraRight, cameraUp,
+                      frontVec, logDepth, pixelSize);
 
   logCameraStateIfChanged(orbitCam.Target, activeNear, activeFar,
                           useOrthoProjection());

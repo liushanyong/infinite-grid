@@ -2,8 +2,9 @@
 
 ## Goal
 
-Status: P1-P3 are implemented in this pass. ECS projection and multi-document
-execution remain follow-on phases P4/P5.
+Status: P1-P3 and the full demo submission migration are implemented in this
+pass. ECS projection and multi-document execution remain follow-on phases
+P4/P5.
 
 Bring the reusable part of the ObjectARX rendering protocol into this project without
 copying the `AcRx`/`AcDb` heap-object graph. CAD entities remain value types, while
@@ -22,8 +23,9 @@ entity value (Line, Arc, Polyline, ...)
        -> GeometrySink records Stroke / Triangle / TessellatedPoint
        -> SubEntityTraits is applied while the draw list is collected
   -> VectorPrimitives draw list
-       -> DrawListCache keyed by revision, render origin, traits version,
-          and chord-tolerance bucket
+  -> DrawListCache keyed by revision, render origin, traits version,
+      and chord-tolerance bucket
+  -> SceneDrawList (mesh batches, infinite-grid command, dynamic overlay)
   -> existing renderer back ends
 ```
 
@@ -139,6 +141,35 @@ Acceptance:
 * CAD stroke, fill, and point ranges retain the same names and ordering.
 * Existing render and picking behavior remains source-compatible.
 
+### P3.3 Full demo submission migration
+
+Add `lib/scene/SceneDrawList.h` as the shared command list for renderer-visible
+demo content:
+
+* `TessellatedEntity` carries strokes, fills, and points collected through
+  `WorldDraw`.
+* `MeshBatchCommand` preserves prototype plus transform instancing for demo,
+  validation, stress, center-cube, and CAD debug meshes.  It never expands a
+  million-instance stress field into CPU triangles.
+* `GridCommand` preserves the infinite-grid shader as a protocol command instead
+  of materializing finite CAD line segments.
+* Dynamic overlays (reference line, tiny-object impostors, focus marker, frustum
+  wireframe, and grid-quad diagnostics) are collected through
+  `entities::worldDraw()` each frame; they do not enter the immutable CAD cache.
+
+`main.cpp` now routes example rendering through `submitMeshBatch()` and
+`submitSceneDrawList()`.  Renderer calls remain only in these submission
+helpers, frame lifecycle management, GPU-pick queues, and the CAD vector
+batcher.  Environment settings such as the mesh headlight are not example
+geometry and remain renderer state.  The former `drawTargetPoint()`,
+`drawCube()`, and `drawMesh()` demo wrappers are removed.
+
+Acceptance:
+
+* Release build succeeds.
+* Camera pan and orthographic-convergence regressions pass.
+* Stress meshes retain instanced submission rather than CPU triangle expansion.
+
 ## Non-goals for this pass
 
 * No `AcRxObject`, registry, RTTI, reactor, overrule, or deep-clone graph.
@@ -157,6 +188,12 @@ cache foundation.
 2. Source migration: `appendVectorPrimitive()` now constructs `ViewportDraw`, sets
    subentity traits once, and calls `entities::worldDraw()`; manual post-tessellation
    trait loops are removed.
-3. `python verify_camera_target.py Release 1` passed.
-4. Remaining optional diagnostics for manual runs use `GRID_PICK_AUDIT=1` and
+3. Full demo migration: static CAD, demo meshes, validation/stress meshes, the
+   center cube, grid, reference line, tiny impostors, focus marker, and frustum
+   diagnostics use the AcGi-lite/SceneDrawList submission path.
+4. `python verify_camera_target.py Release 1` passed.  Its stop condition now
+   waits for the scheduled pan target change instead of mistaking a depth-slab
+   relog for the pan.
+5. `python verify_ortho_convergence.py Release` passed.
+6. Remaining optional diagnostics for manual runs use `GRID_PICK_AUDIT=1` and
    `GRID_CAD_DEMO=0`.

@@ -59,7 +59,12 @@ def main():
             state = parse_camera_state(line)
             if state:
                 states.append(state)
-                if len(states) >= 2:
+                # Depth-slab stabilization can emit a second target log before
+                # the scheduled pan.  Stop only after the pan has actually
+                # moved the target, otherwise the regression compares two
+                # pre-pan states and fails nondeterministically.
+                if (len(states) >= 2 and
+                        states[-1]["target"] != states[0]["target"]):
                     break
     finally:
         if process.poll() is None:
@@ -74,7 +79,7 @@ def main():
         print(f"WINDOW exited with code {process.returncode}", file=sys.stderr)
         raise RuntimeError("camera output did not contain before/after pan states")
 
-    before, after = states[0], states[1]
+    before, after = states[0], states[-1]
     for state in (before, after):
         assert all(math.isfinite(value) for value in state["target"])
         assert math.isfinite(state["near"]) and state["near"] > 0.0
