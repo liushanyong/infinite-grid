@@ -170,6 +170,30 @@ struct MeshInstancesRenderData
     glm::vec4 material = glm::vec4(0.0f, 0.35f, 0.0f, 0.5f);
 };
 
+enum class SurfaceAlgorithm
+{
+    Realistic,
+    Cad,
+    Conceptual,
+    Depth,
+    Grayscale,
+    Shaded,
+    Sketch,
+    Wireframe,
+    XRay
+};
+
+struct SurfaceMaterial
+{
+    SurfaceAlgorithm algorithm = SurfaceAlgorithm::Shaded;
+    glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
+    glm::vec4 accentColor{1.0f, 1.0f, 1.0f, 1.0f};
+    float metallic = 0.0f;
+    float roughness = 0.35f;
+    float transparency = 0.0f;
+    float lineWidth = 1.0f;
+};
+
 struct RealisticLight
 {
     glm::vec3 position{0.0f};
@@ -206,6 +230,7 @@ struct CadAlgorithmDemoRenderData
     float layer = 0.0f;
     glm::vec4 logDepth;
     DoubleSingleVec3 eye;
+    SurfaceMaterial material;
 };
 
 // A one-pixel GPU id pass. The full-camera projection is kept here for
@@ -280,6 +305,7 @@ struct FilledTrianglesRenderData
     bool is3DFace = false;
     float layer = 0.0f;
     glm::vec4 logDepth;
+    SurfaceMaterial material;
 };
 
 struct TargetPointInstance

@@ -146,6 +146,21 @@ static bool realisticMeshEnabled()
   return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
 }
 
+static rendering::SurfaceMaterial toSurfaceMaterial(
+    const scene::AcGiMaterial &material)
+{
+  rendering::SurfaceMaterial result;
+  result.algorithm = static_cast<rendering::SurfaceAlgorithm>(
+      material.algorithm);
+  result.baseColor = material.baseColor;
+  result.accentColor = material.accentColor;
+  result.metallic = material.metallic;
+  result.roughness = material.roughness;
+  result.transparency = material.transparency;
+  result.lineWidth = material.lineWidth;
+  return result;
+}
+
 static rendering::MeshInstance makeMeshInstance(
     float scale, const glm::vec3 &color, float opacity,
     const rendering::DoubleSingleVec3 &position,
@@ -180,17 +195,17 @@ void submitMeshBatch(scene::MeshBatchCommand &command,
         .instanceCount = static_cast<uint32_t>(command.instances.size()),
         .mesh = command.prototype,
         .renderMode = visualStyleManager.mode(),
-        .cameraPos = glm::vec3(0.0f),
+        .cameraPos = eye.high + eye.low,
         .lightDir = glm::vec3(0.4f, 0.8f, 0.55f),
-        .baseColor = glm::vec3(1.0f),
-        .metallic = 0.0f,
-        .roughness = 0.35f,
-        .transparency = 0.5f,
-        .strokeWidth = 1.0f,
+        .metallic = command.acgiMaterial.metallic,
+        .roughness = command.acgiMaterial.roughness,
+        .transparency = command.acgiMaterial.transparency,
+        .strokeWidth = command.acgiMaterial.lineWidth,
         .strokeDensity = 1.0f,
         .layer = envLayer("GRID_MESH_LAYER"),
         .logDepth = logDepth,
         .eye = eye,
+        .material = toSurfaceMaterial(command.acgiMaterial),
     };
     rendererBackend->drawCadAlgorithmDemo(renderData);
     return;
@@ -853,6 +868,7 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
         .vertices = fillVertices.data(),
         .vertexCount = static_cast<uint32_t>(fillVertices.size()),
         .logDepth = logDepth,
+        .material = toSurfaceMaterial(scene::AcGiMaterial{}),
     };
     rendererBackend->drawFilledTriangles(fillData);
   }
@@ -1045,6 +1061,15 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   scene::MeshBatchCommand &batch = drawList.addMeshBatch(
       entity.mesh, color.a >= 1.0f, entity.realistic(), material,
       cadAlgorithm);
+  batch.acgiMaterial.algorithm = entity.realistic()
+      ? scene::AcGiShaderAlgorithm::Realistic
+      : scene::AcGiShaderAlgorithm::Shaded;
+  batch.acgiMaterial.baseColor = color;
+  batch.acgiMaterial.accentColor = entity.entity.material.specularFactor;
+  batch.acgiMaterial.metallic = entity.entity.material.metallicFactor;
+  batch.acgiMaterial.roughness = entity.entity.material.roughnessFactor;
+  batch.acgiMaterial.transparency = 1.0f - color.a;
+  batch.acgiMaterial.lineWidth = float(entity.entity.common.lineWeight);
   batch.instances.push_back(makeMeshInstance(
       entity.size, glm::vec3(color), color.a,
       rendering::encodeDoubleSingle(entity.worldPosition), material));
@@ -1997,6 +2022,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     surfaceFillData.is3DFace = true;
     surfaceFillData.layer = envLayer("GRID_FILL_LAYER");
     surfaceFillData.logDepth = logDepth;
+    surfaceFillData.material = toSurfaceMaterial(scene::AcGiMaterial{});
     rendererBackend->drawFilledTriangles(surfaceFillData);
   }
 
@@ -2008,6 +2034,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     fillData.vertexCount = static_cast<uint32_t>(fillVerts.size());
     fillData.layer = envLayer("GRID_FILL_LAYER");
     fillData.logDepth = logDepth;
+    fillData.material = toSurfaceMaterial(scene::AcGiMaterial{});
     rendererBackend->drawFilledTriangles(fillData);
   }
   if (!polyVerts.empty()) {
@@ -2195,6 +2222,12 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         batch.opaque = group.opacity >= 1.0f;
         batch.realistic = group.realistic;
         batch.material = group.material;
+        batch.acgiMaterial.algorithm = group.realistic
+            ? scene::AcGiShaderAlgorithm::Realistic
+            : scene::AcGiShaderAlgorithm::Shaded;
+        batch.acgiMaterial.metallic = group.material.x;
+        batch.acgiMaterial.roughness = group.material.y;
+        batch.acgiMaterial.transparency = 1.0f - group.opacity;
         batch.instances = std::move(group.instances);
         submitMeshBatch(batch, view, projection, logDepth,
                         rendering::encodeDoubleSingle(orbitCam.Position));

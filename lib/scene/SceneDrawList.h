@@ -14,6 +14,30 @@ namespace scene
 
 class SceneDrawList;
 
+enum class AcGiShaderAlgorithm
+{
+    Realistic,
+    Cad,
+    Conceptual,
+    Depth,
+    Grayscale,
+    Shaded,
+    Sketch,
+    Wireframe,
+    XRay
+};
+
+struct AcGiMaterial
+{
+    AcGiShaderAlgorithm algorithm = AcGiShaderAlgorithm::Shaded;
+    glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
+    glm::vec4 accentColor{1.0f, 1.0f, 1.0f, 1.0f};
+    float metallic = 0.0f;
+    float roughness = 0.35f;
+    float transparency = 0.5f;
+    float lineWidth = 1.0f;
+};
+
 // A submission-ready mesh command preserves instancing.  Large stress fields
 // stay compact on the CPU while the backend retains control of its pipelines.
 struct MeshBatchCommand
@@ -23,6 +47,7 @@ struct MeshBatchCommand
     bool realistic = false;
     bool cadAlgorithm = false;
     glm::vec4 material{0.0f, 0.35f, 0.0f, 0.5f};
+    AcGiMaterial acgiMaterial;
     std::vector<rendering::MeshInstance> instances;
 };
 
@@ -82,6 +107,9 @@ public:
     {
         meshBatches_.push_back(
             {prototype, opaque, realistic, cadAlgorithm, material, {}});
+        meshBatches_.back().acgiMaterial.algorithm =
+            realistic ? AcGiShaderAlgorithm::Realistic
+                      : AcGiShaderAlgorithm::Shaded;
         return meshBatches_.back();
     }
 

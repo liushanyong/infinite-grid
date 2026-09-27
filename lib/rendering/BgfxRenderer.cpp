@@ -1700,6 +1700,31 @@ static float shaderStyleForRenderMode(RenderMode mode)
     return 6.0f;
 }
 
+static float shaderStyleForSurfaceAlgorithm(SurfaceAlgorithm algorithm)
+{
+    switch (algorithm)
+    {
+    case SurfaceAlgorithm::Realistic:
+    case SurfaceAlgorithm::Shaded:
+        return 0.0f;
+    case SurfaceAlgorithm::Conceptual:
+        return 1.0f;
+    case SurfaceAlgorithm::Cad:
+        return 4.0f;
+    case SurfaceAlgorithm::Grayscale:
+        return 3.0f;
+    case SurfaceAlgorithm::Sketch:
+        return 5.0f;
+    case SurfaceAlgorithm::Wireframe:
+        return 6.0f;
+    case SurfaceAlgorithm::Depth:
+        return 7.0f;
+    case SurfaceAlgorithm::XRay:
+        return 8.0f;
+    }
+    return 0.0f;
+}
+
 void BgfxRenderer::drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_cadAlgorithmProgram) ||
@@ -1749,9 +1774,9 @@ void BgfxRenderer::drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data)
     bgfx::setUniform(m_eyeHigh, glm::value_ptr(glm::vec4(data.eye.high, 0.0f)));
     bgfx::setUniform(m_eyeLow, glm::value_ptr(glm::vec4(data.eye.low, 0.0f)));
     bgfx::setUniform(m_cadCameraPos, glm::value_ptr(glm::vec4(data.cameraPos, 1.0f)));
-    bgfx::setUniform(m_cadBaseColor, glm::value_ptr(glm::vec4(data.baseColor, 1.0f)));
+    bgfx::setUniform(m_cadBaseColor, glm::value_ptr(data.material.baseColor));
     bgfx::setUniform(m_cadLightDir, glm::value_ptr(glm::vec4(glm::normalize(data.lightDir), 0.0f)));
-    bgfx::setUniform(m_cadWireframeColor, glm::value_ptr(glm::vec4(0.08f, 0.08f, 0.10f, 1.0f)));
+    bgfx::setUniform(m_cadWireframeColor, glm::value_ptr(data.material.accentColor));
     bgfx::setUniform(m_cadStrokeParams, glm::value_ptr(glm::vec4(data.strokeWidth, data.strokeDensity, 0.0f, 0.0f)));
     // Layer compositing and depth-sorted submission inside the solid channel.
     const glm::vec3 instanceTranslation = glm::vec3(data.instances[0].positionHigh)
@@ -1769,9 +1794,12 @@ void BgfxRenderer::drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data)
     bgfx::setUniform(m_layerOffset, layerOffset);
 
 
-    const float fillStyle = shaderStyleForRenderMode(data.renderMode);
-    const float fillStyleParams[4] = { fillStyle, data.metallic,
-                                       data.roughness, data.transparency };
+    const float fillStyle = data.material.algorithm == SurfaceAlgorithm::Shaded
+        ? shaderStyleForRenderMode(data.renderMode)
+        : shaderStyleForSurfaceAlgorithm(data.material.algorithm);
+    const float fillStyleParams[4] = { fillStyle, data.material.metallic,
+                                       data.material.roughness,
+                                       data.material.transparency };
     const float flatShadeParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     const float edgeOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
@@ -1932,6 +1960,8 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
         bgfx::setUniform(m_projection, glm::value_ptr(proj));
         bgfx::setUniform(m_logDepth, logDepth);
         bgfx::setUniform(m_primParams, fillStyle);
+        bgfx::setUniform(m_realisticMaterial,
+                         glm::value_ptr(data.material.baseColor));
 
         glm::vec3 centroid(0.0f);
         for (uint32_t i = first; i < first + count; ++i)
