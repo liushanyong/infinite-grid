@@ -866,6 +866,9 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     const glm::vec3 direction = rb - ra;
     if (glm::length(direction) < 1.0e-5f)
       return;
+    const float minimumHalfWidth =
+        pixelSizeWorld > 0.0f ? pixelSizeWorld * 0.75f : 0.75f;
+    halfWidth = std::max(halfWidth, minimumHalfWidth);
     const glm::vec3 side = glm::normalize(
         glm::cross(direction, glm::vec3(cameraFront))) * halfWidth;
     polylineVertices.push_back({ra, color, {u0, 0.0f}});
