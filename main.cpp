@@ -754,6 +754,15 @@ void appendSceneLine(scene::SceneDrawList &drawList,
   entities::worldDraw(line, draw);
 }
 
+bool lineDebugEnabled()
+{
+  static const bool enabled = [] {
+    const char *value = std::getenv("GRID_LINE_DEBUG");
+    return value && *value && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
 void appendScenePoint(scene::SceneDrawList &drawList,
                       const glm::dvec3 &location, const glm::vec3 &color,
                       double pointSize)
@@ -869,13 +878,17 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     const float minimumHalfWidth =
         pixelSizeWorld > 0.0f ? pixelSizeWorld * 0.75f : 0.75f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
-    const glm::vec3 side = glm::normalize(
-        glm::cross(direction, glm::vec3(cameraFront))) * halfWidth;
+    glm::vec3 sideAxis = glm::cross(direction, glm::vec3(cameraFront));
+    if (glm::length(sideAxis) < 1.0e-5f)
+        sideAxis = glm::cross(direction, glm::vec3(0.0f, 0.0f, 1.0f));
+    if (glm::length(sideAxis) < 1.0e-5f)
+        sideAxis = glm::cross(direction, glm::vec3(1.0f, 0.0f, 0.0f));
+    const glm::vec3 side = glm::normalize(sideAxis) * halfWidth;
     polylineVertices.push_back({ra, color, {u0, 0.0f}});
-    polylineVertices.push_back({ra, color, {u0, 1.0f}});
-    polylineVertices.push_back({rb, color, {u1, 1.0f}});
+    polylineVertices.push_back({ra + side, color, {u0, 1.0f}});
+    polylineVertices.push_back({rb + side, color, {u1, 1.0f}});
     polylineVertices.push_back({ra, color, {u0, 0.0f}});
-    polylineVertices.push_back({rb, color, {u1, 1.0f}});
+    polylineVertices.push_back({rb + side, color, {u1, 1.0f}});
     polylineVertices.push_back({rb, color, {u1, 0.0f}});
   };
   auto appendLinePatternSegment = [&](const glm::vec3 &ra,
@@ -962,13 +975,32 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
   }
   if (!polylineVertices.empty())
   {
+    if (lineDebugEnabled())
+    {
+      glm::vec2 ndcMin(std::numeric_limits<float>::max());
+      glm::vec2 ndcMax(std::numeric_limits<float>::lowest());
+      for (size_t i = 0; i < polylineVertices.size(); i += 6)
+      {
+        const glm::vec4 projected = overlayProjection * view *
+            glm::vec4(polylineVertices[i].position, 1.0f);
+        const glm::vec2 ndc = glm::vec2(projected) / projected.w;
+        ndcMin = glm::min(ndcMin, ndc);
+        ndcMax = glm::max(ndcMax, ndc);
+      }
+      std::cout << "[LINE_DEBUG] ribbon vertices="
+                << polylineVertices.size()
+                << " ndcMin=(" << ndcMin.x << ", " << ndcMin.y
+                << ") ndcMax=(" << ndcMax.x << ", " << ndcMax.y << ")"
+                << std::endl;
+    }
     const rendering::PolylineRenderData polylineData{
-        .view = glm::mat4(1.0f),
+        .view = view,
         .projection = overlayProjection,
         .vertices = polylineVertices.data(),
         .vertexCount = static_cast<uint32_t>(polylineVertices.size()),
         .logDepth = logDepth,
         .edgeSoftness = edgeSoftness,
+        .layer = envLayer("GRID_LINE_LAYER"),
     };
     rendererBackend->drawPolylines(polylineData);
   }
@@ -1708,7 +1740,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         entities::Line specimen;
         specimen.common.color = lineColors[i];
         specimen.common.lineType = lineTypes[i];
-        specimen.common.lineWeight = 8.0;
+        specimen.common.lineWeight = 24.0;
         specimen.start =
             demoAnchor + glm::dvec3(-1024.0, 1536.0 + i * 256.0, -3072.0);
         specimen.end = specimen.start + glm::dvec3(2048.0, 0.0, 0.0);
@@ -1871,7 +1903,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
 const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 {
-  static constexpr std::uint64_t cadDemoRevision = 3;
+  static constexpr std::uint64_t cadDemoRevision = 4;
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
   const scene::DrawListKey key{
@@ -6087,6 +6119,27 @@ void render()
                       orbitCam.Position, cameraPos, cameraRight, cameraUp,
                       frontVec, logDepth, pixelSize);
 
+  static bool screenshotRequested = false;
+  if (!screenshotRequested && lineDebugEnabled())
+  {
+    if (const char *screenshot = std::getenv("GRID_SCREENSHOT");
+        screenshot && *screenshot)
+    {
+      static uint32_t screenshotDelay = 30;
+      if (screenshotDelay > 0)
+      {
+        --screenshotDelay;
+      }
+      else
+      {
+        rendererBackend->requestDebugScreenShot(screenshot);
+        screenshotRequested = true;
+        std::cout << "[LINE_DEBUG] requested screenshot: " << screenshot
+                  << std::endl;
+      }
+    }
+  }
+
   logCameraStateIfChanged(orbitCam.Target, activeNear, activeFar,
                           useOrthoProjection());
 
@@ -6144,6 +6197,12 @@ int main(int argc, char *argv[])
 
   SDL_Event evt;
   bool running = true;
+  static uint32_t debugExitFrames = 0;
+  if (debugExitFrames == 0)
+  {
+    if (const char *exitFrames = std::getenv("GRID_EXIT_FRAMES"))
+      debugExitFrames = static_cast<uint32_t>(std::max(1, std::atoi(exitFrames)));
+  }
   bool middleMouseDrag = false;
   bool testPanApplied = false;
   bool originOrthoScenarioApplied = false;
@@ -6314,6 +6373,13 @@ int main(int argc, char *argv[])
     }
 
     render();
+
+    if (debugExitFrames > 0)
+    {
+      --debugExitFrames;
+      if (debugExitFrames == 0)
+        running = false;
+    }
 
     rendererBackend->present();
   }

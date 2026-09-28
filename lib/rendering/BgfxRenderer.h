@@ -38,6 +38,7 @@ public:
     RenderModeFlags renderModeFlags() const override;
     void drawPolylines(const PolylineRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+    void requestDebugScreenShot(const std::string &filePath) override;
     void drawCurves(const CurveRenderData &data) override;
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,

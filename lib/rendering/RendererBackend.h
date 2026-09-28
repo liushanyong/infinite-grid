@@ -378,6 +378,7 @@ public:
     virtual void drawPolylines(const PolylineRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
     virtual void drawCurves(const CurveRenderData &data) {}
+    virtual void requestDebugScreenShot(const std::string &) {}
 
     // Optional asynchronous mesh picking. Calls to queueGpuMeshPick are valid
     // only between requestGpuPick() and the next endFrame().

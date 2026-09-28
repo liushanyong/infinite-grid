@@ -10,8 +10,10 @@
 #include <cstring>
 #include <limits>
 #include <iostream>
+#include <fstream>
 #include <utility>
 #include <vector>
+#include <cstdarg>
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -91,6 +93,88 @@ namespace rendering
 {
 namespace
 {
+class BgfxScreenshotCallback final : public bgfx::CallbackI
+{
+public:
+    void fatal(const char* filePath, uint16_t line,
+               bgfx::Fatal::Enum code, const char* str) override
+    {
+        std::cerr << "bgfx fatal: " << filePath << ":" << line
+                  << " code=" << int(code) << " " << str << std::endl;
+        std::abort();
+    }
+
+    void traceVargs(const char* filePath, uint16_t line,
+                    const char* format, va_list argList) override
+    {
+        char text[2048];
+        vsnprintf(text, sizeof(text), format, argList);
+        std::cerr << "bgfx: " << filePath << ":" << line << " " << text
+                  << std::endl;
+    }
+
+    void profilerBegin(const char*, uint32_t, const char*, uint16_t) override {}
+    void profilerBeginLiteral(const char*, uint32_t, const char*, uint16_t) override {}
+    void profilerEnd() override {}
+    uint32_t cacheReadSize(uint64_t) override { return 0; }
+    bool cacheRead(uint64_t, void*, uint32_t) override { return false; }
+    void cacheWrite(uint64_t, const void*, uint32_t) override {}
+
+    void screenShot(const char* filePath, uint32_t width, uint32_t height,
+                    uint32_t pitch, const void* data, uint32_t size,
+                    bool yflip) override
+    {
+        if (!filePath || !data || width == 0 || height == 0)
+            return;
+
+        const size_t rowBytes = width * 4u;
+        std::vector<uint8_t> rows(size);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            const uint32_t sourceY = yflip ? (height - 1u - y) : y;
+            const uint8_t* source = static_cast<const uint8_t*>(data) +
+                sourceY * pitch;
+            std::memcpy(rows.data() + y * rowBytes, source, rowBytes);
+        }
+
+        const uint32_t pixelBytes = static_cast<uint32_t>(rows.size());
+        const uint32_t fileBytes = 14u + 40u + pixelBytes;
+        std::ofstream out(filePath, std::ios::binary);
+        if (!out)
+        {
+            std::cerr << "Failed to create screenshot: " << filePath
+                      << std::endl;
+            return;
+        }
+
+        const uint8_t header[54] = {
+            'B', 'M', uint8_t(fileBytes), uint8_t(fileBytes >> 8),
+            uint8_t(fileBytes >> 16), uint8_t(fileBytes >> 24),
+            0, 0, 0, 0, 54, 0, 0, 0,
+            40, 0, 0, 0,
+            uint8_t(width), uint8_t(width >> 8), uint8_t(width >> 16),
+            uint8_t(width >> 24),
+            uint8_t(height), uint8_t(height >> 8), uint8_t(height >> 16),
+            uint8_t(height >> 24),
+            1, 0, 32, 0, 0, 0, 0, 0,
+            uint8_t(pixelBytes), uint8_t(pixelBytes >> 8),
+            uint8_t(pixelBytes >> 16), uint8_t(pixelBytes >> 24),
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        };
+        out.write(reinterpret_cast<const char*>(header), sizeof(header));
+        out.write(reinterpret_cast<const char*>(rows.data()),
+                  std::streamsize(rows.size()));
+        std::cout << "Saved screenshot: " << filePath << std::endl;
+    }
+
+    void captureBegin(uint32_t, uint32_t, uint32_t,
+                      bgfx::TextureFormat::Enum, bool) override {}
+    void captureEnd() override {}
+    void captureFrame(const void*, uint32_t) override {}
+};
+
+BgfxScreenshotCallback gBgfxScreenshotCallback;
+
 
 // CAD visual styles use ordered passes into one explicit MSAA scene target.
 // Only the background view clears; later passes inherit its depth buffer.
@@ -765,6 +849,7 @@ bool BgfxRenderer::initialize(SDL_Window *window)
     init.resolution.height = m_height;
     init.resolution.reset = BGFX_RESET_VSYNC | BGFX_RESET_MSAA_X4;
     init.debug = std::getenv("GRID_GPU_DEBUG") != nullptr;
+    init.callback = &gBgfxScreenshotCallback;
 
     if (!bgfx::init(init))
     {
@@ -1258,6 +1343,13 @@ void BgfxRenderer::endFrame()
 void BgfxRenderer::present()
 {
     // bgfx::frame() presents in endFrame(); SDL3 remains the window owner.
+}
+
+void BgfxRenderer::requestDebugScreenShot(const std::string &filePath)
+{
+    if (!m_initialized || filePath.empty())
+        return;
+    bgfx::requestScreenShot(BGFX_INVALID_HANDLE, filePath.c_str());
 }
 
 void BgfxRenderer::drawGrid(const GridRenderData &data)
@@ -1876,6 +1968,19 @@ RenderModeFlags BgfxRenderer::renderModeFlags() const
 }
 
 void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
+    static uint32_t logged = 0;
+    if (logged < 10)
+    {
+        ++logged;
+        std::cout << "[POLYLINE_DEBUG] program=" << bgfx::isValid(m_polylineProgram)
+                  << " vertexCount=" << data.vertexCount
+                  << " vertices=" << (data.vertices != nullptr)
+                  << " layer=" << data.layer << std::endl;
+        std::cout << "[POLYLINE_DEBUG] p0=(" << data.vertices[0].position.x
+                  << ", " << data.vertices[0].position.y
+                  << ", " << data.vertices[0].position.z
+                  << std::endl;
+    }
     if (!bgfx::isValid(m_polylineProgram) || data.vertexCount < 2 || !data.vertices) return;
     const uint32_t vertSize = sizeof(PrimVertex);
     const glm::mat4 proj = projectionForDirect3D(data.projection);
@@ -1883,8 +1988,20 @@ void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
     const float depthStyle = depthStyleForRenderMode(m_renderMode.mode());
     float prim[4] = { 0.15f, data.edgeSoftness, depthStyle, 0.0f };
     const float denom = logDepthDenominator(data.logDepth);
-    constexpr uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A
-        | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+    if (logged < 10)
+    {
+        const glm::vec4 view0 = data.view *
+            glm::vec4(data.vertices[0].position, 1.0f);
+        const glm::vec4 clip0 = proj * view0;
+        std::cout << "[POLYLINE_DEBUG] view0=(" << view0.x << ", " << view0.y
+                  << ", " << view0.z << ", " << view0.w
+                  << ") clip0=(" << clip0.x << ", " << clip0.y
+                  << ", " << clip0.z << ", " << clip0.w << ")" << std::endl;
+    }
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A
+        | (data.layer > 0.0f ? BGFX_STATE_DEPTH_TEST_ALWAYS
+                             : BGFX_STATE_DEPTH_TEST_LEQUAL)
+        | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
 
     constexpr uint32_t kMaxChunkVertices = 63000;
     for (uint32_t first = 0; first < data.vertexCount;)
@@ -1898,8 +2015,13 @@ void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
             return;
 
         bgfx::TransientVertexBuffer tvb;
-        bgfx::allocTransientVertexBuffer(&tvb, count, m_polylineLayout);
-        std::memcpy(tvb.data, data.vertices + first, count * vertSize);
+        bgfx::allocTransientVertexBuffer(&tvb, count, m_fillLayout);
+        FillVertex* fillVertices = reinterpret_cast<FillVertex*>(tvb.data);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            fillVertices[i].position = data.vertices[first + i].position;
+            fillVertices[i].color = data.vertices[first + i].color;
+        }
 
         glm::mat4 identity = glm::mat4(1.0f);
         bgfx::setTransform(glm::value_ptr(identity));
@@ -1923,7 +2045,9 @@ void BgfxRenderer::drawPolylines(const PolylineRenderData& data) {
         bgfx::setUniform(m_layerOffset, layerOffset);
 
         bgfx::setState(state);
-        bgfx::submit(kViewWire, m_polylineProgram, sortDepth);
+        const float materialColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        bgfx::setUniform(m_realisticMaterial, materialColor);
+        bgfx::submit(kViewOverlay, m_fillProgram, sortDepth);
         first += count;
     }
 }
