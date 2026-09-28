@@ -1708,10 +1708,10 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         entities::Line specimen;
         specimen.common.color = lineColors[i];
         specimen.common.lineType = lineTypes[i];
-        specimen.common.lineWeight = 2.0;
+        specimen.common.lineWeight = 8.0;
         specimen.start =
-            demoAnchor + glm::dvec3(-1024.0, 768.0 + i * 128.0, -512.0);
-        specimen.end = specimen.start + glm::dvec3(1024.0, 0.0, 0.0);
+            demoAnchor + glm::dvec3(-1024.0, 1536.0 + i * 256.0, -3072.0);
+        specimen.end = specimen.start + glm::dvec3(2048.0, 0.0, 0.0);
         appendVectorPrimitive(
             specimen, (std::string(lineTypes[i]) + "Line").c_str(),
             options, target);
@@ -1871,7 +1871,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
 const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 {
-  static constexpr std::uint64_t cadDemoRevision = 2;
+  static constexpr std::uint64_t cadDemoRevision = 3;
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
   const scene::DrawListKey key{
