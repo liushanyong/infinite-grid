@@ -1457,7 +1457,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     lwpolyline.vertices = {glm::dvec2(-256.0, -384.0),
                            glm::dvec2(0.0, -192.0),
                            glm::dvec2(256.0, -448.0)};
-    lwpolyline.elevation = 0.0;
+    lwpolyline.elevation = cadAnchor.z;
     lwpolyline.closed = true;
     for (glm::dvec2 &vertex : lwpolyline.vertices)
       vertex += glm::dvec2(cadAnchor);
@@ -2469,12 +2469,51 @@ void expandWorldAabb(WorldAabb &bounds, const glm::dvec3 &center,
   bounds.max = glm::max(bounds.max, maximum);
 }
 
+void expandCadTessellationBounds(WorldAabb &bounds,
+                                 const VectorPrimitivesTessellation &tess)
+{
+  for (const CadEntityRange &range : tess.strokeRanges)
+  {
+    if (range.name == "Ray")
+      continue;
+    for (size_t index = range.begin; index < range.begin + range.count; ++index)
+    {
+      const entities::Stroke &stroke = tess.geometry.strokes[index];
+      for (const glm::dvec3 &point : stroke.points)
+        expandWorldAabb(bounds, point, glm::dvec3(0.0));
+    }
+  }
+  for (const entities::Triangle &triangle : tess.geometry.fills)
+  {
+    expandWorldAabb(bounds, triangle.a, glm::dvec3(0.0));
+    expandWorldAabb(bounds, triangle.b, glm::dvec3(0.0));
+    expandWorldAabb(bounds, triangle.c, glm::dvec3(0.0));
+  }
+  for (const entities::TessellatedPoint &point : tess.geometry.points)
+    expandWorldAabb(bounds, point.location, glm::dvec3(0.0));
+  for (const scene::CurveBatchCommand &curve : tess.curves)
+  {
+    if (curve.algorithm == rendering::CurveAlgorithm::Arc)
+    {
+      const double radius = glm::max(curve.radius, 0.0);
+      expandWorldAabb(bounds, curve.center, glm::dvec3(radius));
+      continue;
+    }
+    for (const glm::dvec3 &point : curve.controlPoints)
+      expandWorldAabb(bounds, point, glm::dvec3(0.0));
+  }
+  for (const MeshEntityRecord &mesh : tess.meshes)
+    expandWorldAabb(bounds, mesh.worldPosition,
+                    glm::dvec3(mesh.size * 0.5));
+}
+
 // Immutable scene bounds are computed once; the per-frame pass only converts
 // this one conservative box to camera space before doing exact object culling.
 const WorldAabb &immutableObjectBounds()
 {
   static const WorldAabb bounds = [] {
     WorldAabb result;
+    expandCadTessellationBounds(result, getVectorPrimitivesTessellation());
     for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
     {
       expandWorldAabb(result, object.worldPosition,
@@ -2536,6 +2575,7 @@ void fitCameraToRenderableObjects()
 void fitCameraToStressField()
 {
   WorldAabb bounds;
+  expandCadTessellationBounds(bounds, getVectorPrimitivesTessellation());
   for (const LargeCoordinateObject &object : getStressObjects())
   {
     expandWorldAabb(bounds, object.worldPosition,
