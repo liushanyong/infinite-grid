@@ -39,6 +39,12 @@ public:
     void drawPolylines(const PolylineRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
     void requestDebugScreenShot(const std::string &filePath) override;
+    void setGpuPickDebugVisible(bool visible) override;
+    void setGpuPickSceneDebug(bool visible) override;
+    void setGpuPickScenePassEnabled(bool enabled) override;
+    void setGpuPickIdRange(uint32_t minId, uint32_t maxId) override;
+    void setSelectionOutlineId(uint32_t objectId) override;
+    void setSelectionOutlineAll(bool enabled) override;
     void drawCurves(const CurveRenderData &data) override;
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,
@@ -50,7 +56,8 @@ public:
                               const glm::mat4 &view,
                               const glm::mat4 &projection,
                               const glm::vec4 &logDepth,
-                              uint32_t objectId) override;
+                              uint32_t objectId,
+                              uint8_t occlusionRank = 2) override;
     GpuPickResult pollGpuPick() override;
     uint32_t loadMeshTexture(const std::string &path) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
@@ -68,6 +75,13 @@ private:
                                      uint32_t vertexCount) const;
     void renderGpuPickPass();
     void completeGpuPickReadback();
+    bool createGpuPickDebugResources();
+    void destroyGpuPickDebugResources();
+    void submitGpuPickPrimitives(bgfx::ViewId view,
+                                 const glm::mat4 &projection);
+    void renderGpuPickDebugPass(const glm::mat4 &projection);
+    void completeGpuPickDebugReadback();
+    void renderSelectionOutlinePass();
 
     SDL_Window *m_window = nullptr;
     GraphicsApi m_api = GraphicsApi::Auto;
@@ -179,6 +193,9 @@ private:
     bgfx::VertexBufferHandle m_presentQuadBuffer = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentParams = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_selectionOutlineProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_selectionOutlineParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_selectionOutlineColor = BGFX_INVALID_HANDLE;
 
     bgfx::FrameBufferHandle m_gpuPickFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle m_gpuPickReadback = BGFX_INVALID_HANDLE;
@@ -188,6 +205,10 @@ private:
     bgfx::VertexBufferHandle m_gpuPickSphereBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickConeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickTorusBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickCubeEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickSphereEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickConeEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_gpuPickTorusEdgeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout m_gpuPickLayout;
     GpuPickRequest m_gpuPickRequest;
     struct GpuPickPrimitive
@@ -195,6 +216,7 @@ private:
         enum class Kind
         {
             Mesh,
+            Edge,
             Triangle
         };
 
@@ -203,7 +225,10 @@ private:
         MeshType meshType = MeshType::Cube;
         uint64_t geometryKey = 0;
         glm::mat4 view;
+        glm::mat4 projection;
         uint32_t objectId = 0;
+        // 0: opaque blocker, 1: non-depth-writing mesh/edge, 2: CAD overlay.
+        uint8_t occlusionRank = 2;
         std::vector<FillVertex> transientVertices;
     };
     struct GpuTrianglePickGeometry
@@ -225,6 +250,22 @@ private:
     bool m_gpuPickActive = false;
     bool m_gpuPickReadPending = false;
     uint32_t m_gpuPickReadFrame = 0;
+
+    bgfx::FrameBufferHandle m_gpuPickDebugFrameBuffer = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle m_gpuPickDebugReadback = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle m_gpuPickDebugVisualTexture = BGFX_INVALID_HANDLE;
+    std::vector<uint8_t> m_gpuPickDebugReadbackData;
+    bool m_gpuPickDebugReadPending = false;
+    uint32_t m_gpuPickDebugReadFrame = 0;
+    bool m_gpuPickDebugVisible = false;
+    uint32_t m_gpuPickDebugMinId = 0u;
+    uint32_t m_gpuPickDebugMaxId = 0u;
+    bool m_gpuPickSceneDebug = false;
+    bool m_gpuPickScenePassEnabled = false;
+    bool m_selectionOutlineAll = false;
+    uint32_t m_selectionOutlineId = 0;
+    uint16_t m_gpuPickDebugWidth = 0;
+    uint16_t m_gpuPickDebugHeight = 0;
 
     // FPS overlay bookkeeping (debug text drawn in endFrame).
     float    m_fps = 0.0f;

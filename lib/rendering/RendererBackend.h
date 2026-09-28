@@ -259,6 +259,8 @@ struct GpuPickQueueStats
 {
     size_t meshCapacity = 0;
     size_t triangleCapacity = 0;
+    size_t queuedMeshes = 0;
+    size_t queuedTriangles = 0;
     size_t droppedMeshes = 0;
     size_t droppedTriangles = 0;
 
@@ -379,6 +381,17 @@ public:
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
     virtual void drawCurves(const CurveRenderData &data) {}
     virtual void requestDebugScreenShot(const std::string &) {}
+    virtual void setGpuPickDebugVisible(bool visible) { (void)visible; }
+    virtual void setGpuPickSceneDebug(bool visible) { (void)visible; }
+    virtual void setGpuPickScenePassEnabled(bool enabled) { (void)enabled; }
+    // Full-scene ID debug normalizes against the CPU-assigned id range instead
+    // of forcing an asynchronous full-frame readback every frame.
+    virtual void setSelectionOutlineId(uint32_t objectId) { (void)objectId; }
+    virtual void setSelectionOutlineAll(bool enabled) { (void)enabled; }
+    virtual void setGpuPickIdRange(uint32_t minId, uint32_t maxId)
+    {
+        (void)minId; (void)maxId;
+    }
 
     // Optional asynchronous mesh picking. Calls to queueGpuMeshPick are valid
     // only between requestGpuPick() and the next endFrame().
@@ -399,7 +412,8 @@ public:
                                       const glm::mat4 &view,
                                       const glm::mat4 &projection,
                                       const glm::vec4 &logDepth,
-                                      uint32_t objectId) {}
+                                      uint32_t objectId,
+                                      uint8_t occlusionRank = 2) {}
     virtual GpuPickResult pollGpuPick() { return {}; }
 
     // Zero is a renderer-provided white texture; other ids are allocated by

@@ -779,6 +779,24 @@ void appendScenePoint(scene::SceneDrawList &drawList,
 // Dynamic overlays stay in the AcGi-lite protocol but are never placed in the
 // immutable CAD draw-list cache.  The submitter preserves their cheap
 // view-space line and point pipelines.
+glm::vec3 ribbonSide(const glm::vec3 &direction, const glm::vec3 &front,
+                     float halfWidth)
+{
+  glm::vec3 sideAxis = glm::cross(direction, front);
+  if (glm::length(sideAxis) < 1.0e-5f)
+    sideAxis = glm::cross(direction, glm::vec3(0.0f, 0.0f, 1.0f));
+  if (glm::length(sideAxis) < 1.0e-5f)
+    sideAxis = glm::cross(direction, glm::vec3(1.0f, 0.0f, 0.0f));
+  return glm::normalize(sideAxis) * halfWidth;
+}
+
+float strokeHalfWidth(const entities::Stroke &stroke, float fallback = 2.0f)
+{
+  return stroke.lineWeight > 0.0
+             ? static_cast<float>(stroke.lineWeight) * 0.5f
+             : fallback;
+}
+
 void submitAcGiDrawable(scene::SceneDrawList &drawList,
                          const glm::mat4 &view,
                          const glm::mat4 &projection,
@@ -827,12 +845,12 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
       const double weight = i < curve.weights.size()
                                 ? curve.weights[i] : 1.0;
       curveData.controlPoints[i] = glm::vec4(
-          glm::vec3(curve.controlPoints[i] - rebase), float(weight));
+          glm::vec3(curve.controlPoints[i] - cameraPosition), float(weight));
     }
     if (curve.algorithm == rendering::CurveAlgorithm::Arc)
     {
       curveData.controlPoints[0] = glm::vec4(
-          glm::vec3(curve.center - rebase), 1.0f);
+          glm::vec3(curve.center - cameraPosition), 1.0f);
       curveData.controlPoints[1] = glm::vec4(
           glm::vec3(curve.axisU), 0.0f);
       curveData.controlPoints[2] = glm::vec4(
@@ -876,14 +894,9 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     if (glm::length(direction) < 1.0e-5f)
       return;
     const float minimumHalfWidth =
-        pixelSizeWorld > 0.0f ? pixelSizeWorld * 0.75f : 0.75f;
+        pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
-    glm::vec3 sideAxis = glm::cross(direction, glm::vec3(cameraFront));
-    if (glm::length(sideAxis) < 1.0e-5f)
-        sideAxis = glm::cross(direction, glm::vec3(0.0f, 0.0f, 1.0f));
-    if (glm::length(sideAxis) < 1.0e-5f)
-        sideAxis = glm::cross(direction, glm::vec3(1.0f, 0.0f, 0.0f));
-    const glm::vec3 side = glm::normalize(sideAxis) * halfWidth;
+    const glm::vec3 side = ribbonSide(direction, cameraFront, halfWidth);
     polylineVertices.push_back({ra, color, {u0, 0.0f}});
     polylineVertices.push_back({ra + side, color, {u0, 1.0f}});
     polylineVertices.push_back({rb + side, color, {u1, 1.0f}});
@@ -913,9 +926,7 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
       return;
     }
 
-    const float halfWidth = stroke.lineWeight > 0.0
-                                ? float(stroke.lineWeight) * 0.5f
-                                : 2.0f;
+    const float halfWidth = strokeHalfWidth(stroke);
     const glm::dvec3 start(ra);
     const glm::dvec3 end(rb);
     const double total = glm::length(end - start);
@@ -949,9 +960,7 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
   {
     if (!stroke.common.visible || stroke.points.size() < 2)
       continue;
-    const float halfWidth = stroke.lineWeight > 0.0
-                                ? float(stroke.lineWeight) * 0.5f
-                                : 2.0f;
+    const float halfWidth = strokeHalfWidth(stroke);
     const size_t strokeCount = stroke.points.size();
     const bool patterned = stroke.common.lineType != "ByLayer" &&
                            stroke.common.lineType != "CONTINUOUS";
@@ -1015,11 +1024,11 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
       continue;
     std::vector<rendering::FillVertex> &vertices =
         triangle.is3DFace ? surfaceFillVertices : fillVertices;
-    vertices.push_back({glm::vec3(triangle.a - rebase),
+    vertices.push_back({glm::vec3(triangle.a - cameraPosition),
                         triangle.common.color});
-    vertices.push_back({glm::vec3(triangle.b - rebase),
+    vertices.push_back({glm::vec3(triangle.b - cameraPosition),
                         triangle.common.color});
-    vertices.push_back({glm::vec3(triangle.c - rebase),
+    vertices.push_back({glm::vec3(triangle.c - cameraPosition),
                         triangle.common.color});
   }
   for (const bool is3DFace : {false, true})
@@ -1178,6 +1187,22 @@ struct GpuPickFocusState
 };
 
 GpuPickFocusState gpuPickFocus;
+bool gpuPickSceneDebug = false;
+bool gpuPickSceneDebugQueueActive = false;
+std::optional<GpuPickEntity> outlineEntity;
+bool outlineLockTest = false;
+bool outlineAllTest = false;
+uint32_t lockedOutlineId = 0;
+
+uint32_t findGpuPickObjectIdForEntity(const GpuPickEntity &entity)
+{
+  if (entity.kind == VisibilityKind::CenterCube)
+    return kGpuPickCenterCubeId;
+  for (const auto &[objectId, registered] : gpuPickRegistry())
+    if (registered == entity)
+      return objectId;
+  return 0;
+}
 
 static bool gpuPickFocusWaiting()
 {
@@ -1197,7 +1222,8 @@ bool meshEntityVisible(const MeshEntityRecord &entity)
 static void queueGpuMeshEntity(const MeshEntityRecord &entity,
                                uint32_t objectId)
 {
-  if (!rendererBackend || !gpuPickFocusWaiting() ||
+  if (!rendererBackend ||
+      !(gpuPickFocusWaiting() || gpuPickSceneDebugQueueActive) ||
       !meshEntityVisible(entity) || objectId == 0)
     return;
 
@@ -1914,23 +1940,29 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 }
 
 static uint64_t cadGpuPickGeometryKey(const CadEntityRange *range,
-                                      size_t chunkIndex)
+                                      size_t chunkIndex,
+                                      uint32_t objectId)
 {
   const uint64_t pointer =
       static_cast<uint64_t>(reinterpret_cast<uintptr_t>(range));
-  return pointer * 0x9e3779b97f4a7c15ULL + static_cast<uint64_t>(chunkIndex);
+  return pointer * 0x9e3779b97f4a7c15ULL +
+         (static_cast<uint64_t>(objectId) << 32) +
+         static_cast<uint64_t>(chunkIndex);
 }
 
 // CAD fill tessellation is immutable.  Cache each entity's pick soup in
 // anchor-relative coordinates so repeated GPU pick requests reuse the same
 // renderer-side vertex buffer instead of rebuilding large-coordinate copies.
+// The anchor-relative frame is camera-independent, so the cached buffers stay
+// valid; cadAnchorView supplies the camera-dependent translation.
 static const std::vector<rendering::FillVertex> &
-cadGpuPickFillVertices(const CadEntityRange &range, const glm::vec4 &idColor)
+cadGpuPickFillVertices(const CadEntityRange &range,
+                       const glm::vec4 &idColor, uint32_t objectId)
 {
-  static std::unordered_map<const CadEntityRange *,
-                            std::vector<rendering::FillVertex>>
+  static std::map<std::pair<const CadEntityRange *, uint32_t>,
+                  std::vector<rendering::FillVertex>>
       cache;
-  auto [it, inserted] = cache.try_emplace(&range);
+  auto [it, inserted] = cache.try_emplace({&range, objectId});
   if (!inserted)
     return it->second;
 
@@ -1975,7 +2007,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const VectorPrimitivesTessellation &tessellation =
       getVectorPrimitivesTessellation();
   const glm::mat4 cadAnchorView = view * glm::translate(
-      glm::mat4(1.0f), glm::vec3(tessellation.anchor - rebase));
+      glm::mat4(1.0f), glm::vec3(tessellation.anchor - cameraPos));
   static scene::SceneDrawList cadDrawList;
   cadDrawList.clear();
   static std::vector<bool> strokeVisible;
@@ -1985,7 +2017,12 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const entities::TessellatedEntity &tess = tessellation.geometry;
   static std::vector<rendering::FillVertex> gpuPickVertices;
   const bool gpuPickQueueActive =
-      rendererBackend && gpuPickEnabled() && gpuPickFocus.waitingResult;
+      rendererBackend && gpuPickEnabled() &&
+      (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive);
+  const rendering::RenderModeFlags renderFlags = rendererBackend
+      ? rendererBackend->renderModeFlags()
+      : rendering::RenderModeFlags{};
+  const bool queueSolidFillPicks = renderFlags.show2dSolidFills;
   auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId) {
     if (!gpuPickQueueActive || objectId == 0 || gpuPickVertices.size() < 3)
       return;
@@ -2034,7 +2071,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {VisibilityKind::CadFill, nullptr, &range});
     const glm::vec4 idColor = encodeGpuPickId(objectId);
     const std::vector<rendering::FillVertex> &pickVertices =
-        cadGpuPickFillVertices(range, idColor);
+        cadGpuPickFillVertices(range, idColor, objectId);
+    // CAD surfaces participate in occlusion. Transparent CAD fills behave like
+    // transparent meshes: they are visible through, but still receive picks.
+    const uint8_t fillOcclusionRank =
+        range.count && tess.fills[range.begin].common.color.a >= 0.999f ? 0 : 1;
     constexpr size_t kMaxPickChunkVertices = 3 * 21000;
     for (size_t chunk = 0, first = 0; first < pickVertices.size();
          ++chunk, first += kMaxPickChunkVertices)
@@ -2042,9 +2083,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const size_t count = std::min(kMaxPickChunkVertices,
                                     pickVertices.size() - first);
       rendererBackend->queueGpuTrianglePick(
-          cadGpuPickGeometryKey(&range, chunk),
+          cadGpuPickGeometryKey(&range, chunk, objectId),
           pickVertices.data() + first, uint32_t(count), cadAnchorView,
-          projection, logDepth, objectId);
+          projection, logDepth, objectId, fillOcclusionRank);
     }
   };
   auto queueCadStroke = [&](const VisibilityCandidate &candidate) {
@@ -2062,15 +2103,14 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       if (!stroke.common.visible || count < 2)
         continue;
       const float halfWidth = std::max(
-          stroke.lineWeight > 0.0 ? float(stroke.lineWeight) * 0.5f : 2.0f,
-          pixelSizeWorld * 1.5f);
+          strokeHalfWidth(stroke), pixelSizeWorld * 1.5f);
       const size_t segmentCount =
           stroke.closed ? count : count - 1;
       for (size_t segment = 0; segment < segmentCount; ++segment)
       {
         appendPickRibbon(
-            glm::vec3(stroke.points[segment] - rebase),
-            glm::vec3(stroke.points[(segment + 1) % count] - rebase),
+            glm::vec3(stroke.points[segment] - cameraPos),
+            glm::vec3(stroke.points[(segment + 1) % count] - cameraPos),
             idColor, halfWidth);
       }
     }
@@ -2091,7 +2131,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         continue;
       const float radius = std::max(
           float(point.pointSize) * 0.5f, pixelSizeWorld * 3.0f);
-      appendPickPoint(glm::vec3(point.location - rebase), radius, idColor);
+      appendPickPoint(glm::vec3(point.location - cameraPos), radius, idColor);
     }
     queueGpuSoup(overlayProjection, objectId);
   };
@@ -2105,8 +2145,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const std::vector<glm::dvec3> points = sampleCurveBatch(*candidate.curve);
     for (size_t i = 0; i + 1 < points.size(); ++i)
       appendPickRibbon(
-          glm::vec3(points[i] - rebase),
-          glm::vec3(points[i + 1] - rebase), idColor, 2.0f);
+          glm::vec3(points[i] - cameraPos),
+          glm::vec3(points[i + 1] - cameraPos), idColor, 2.0f);
     queueGpuSoup(overlayProjection, objectId);
   };
   auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
@@ -2117,7 +2157,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {candidate.kind, nullptr, &range});
     const glm::vec4 idColor = encodeGpuPickId(objectId);
     gpuPickVertices.clear();
-    appendPickPoint(glm::vec3(candidate.center - rebase),
+    appendPickPoint(glm::vec3(candidate.center - cameraPos),
                     std::max(candidate.overlayPointSize,
                              pixelSizeWorld > 0.0f
                                  ? 3.0f * pixelSizeWorld
@@ -2198,7 +2238,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   {
     for (const VisibilityCandidate *candidate : visibleCad)
     {
-      if (candidate && candidate->kind == VisibilityKind::CadFill)
+      if (candidate && candidate->kind == VisibilityKind::CadFill &&
+          queueSolidFillPicks)
         queueCadFill(*candidate);
     }
     for (const VisibilityCandidate *candidate : visibleCad)
@@ -2544,17 +2585,20 @@ void expandCadTessellationBounds(WorldAabb &bounds,
 
 // Immutable scene bounds are computed once; the per-frame pass only converts
 // this one conservative box to camera space before doing exact object culling.
+static WorldAabb stressFieldBounds()
+{
+  WorldAabb bounds;
+  expandCadTessellationBounds(bounds, getVectorPrimitivesTessellation());
+  for (const LargeCoordinateObject &object : getStressObjects())
+    expandWorldAabb(bounds, object.worldPosition, glm::dvec3(object.size * 0.5));
+  return bounds;
+}
+
 const WorldAabb &immutableObjectBounds()
 {
   static const WorldAabb bounds = [] {
-    WorldAabb result;
-    expandCadTessellationBounds(result, getVectorPrimitivesTessellation());
+    WorldAabb result = stressFieldBounds();
     for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
-    {
-      expandWorldAabb(result, object.worldPosition,
-                      glm::dvec3(object.size * 0.5));
-    }
-    for (const LargeCoordinateObject &object : getStressObjects())
     {
       expandWorldAabb(result, object.worldPosition,
                       glm::dvec3(object.size * 0.5));
@@ -2563,6 +2607,7 @@ const WorldAabb &immutableObjectBounds()
   }();
   return bounds;
 }
+
 
 const WorldAabb &immutableSceneBounds()
 {
@@ -2581,42 +2626,39 @@ const WorldAabb &immutableSceneBounds()
 // object.  This is a fit-all view, not a request to bypass per-frame culling:
 // all objects are therefore submitted on the first perspective frame, while
 // later views still avoid drawing geometry outside the CAD frustum.
-void fitCameraToRenderableObjects()
+// Shared drawable-aspect helper for camera fit operations.
+static double currentDrawableAspect()
 {
-  const WorldAabb &bounds = immutableObjectBounds();
-  if (!bounds.valid)
-    return;
-
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
   SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
   drawableWidth = std::max(drawableWidth, 1);
   drawableHeight = std::max(drawableHeight, 1);
-  const double aspect = static_cast<double>(drawableWidth) /
-                        static_cast<double>(drawableHeight);
+  return static_cast<double>(drawableWidth) /
+         static_cast<double>(drawableHeight);
+}
 
-  orbitCam.fitToBounds(bounds.min, bounds.max, aspect);
-
-  std::cout << std::fixed << std::setprecision(3)
-            << "Initial fit-all camera: center=(" << orbitCam.Target.x << ", "
+// Shared fit-to-bounds-and-report helper.
+static void fitCameraToBounds(const WorldAabb &bounds, const char *label)
+{
+  orbitCam.fitToBounds(bounds.min, bounds.max, currentDrawableAspect());
+  std::cout << label << " center=(" << orbitCam.Target.x << ", "
             << orbitCam.Target.y << ", " << orbitCam.Target.z
             << ") distance=" << orbitCam.Distance
             << std::endl;
 }
 
-// Pressing L asks for the stress field itself, not the nearby validation
-// cluster.  Fit that field's local bounds so a perspective camera does not
-// inherit an orbit focus that places the requested geometry behind the eye.
+void fitCameraToRenderableObjects()
+{
+  const WorldAabb &bounds = immutableObjectBounds();
+  if (!bounds.valid)
+    return;
+  fitCameraToBounds(bounds, "Initial fit-all camera:");
+}
+
 void fitCameraToStressField()
 {
-  WorldAabb bounds;
-  expandCadTessellationBounds(bounds, getVectorPrimitivesTessellation());
-  for (const LargeCoordinateObject &object : getStressObjects())
-  {
-    expandWorldAabb(bounds, object.worldPosition,
-                    glm::dvec3(object.size * 0.5));
-  }
-
+  const WorldAabb bounds = stressFieldBounds();
   if (!bounds.valid)
   {
     const glm::dvec3 detailCenter =
@@ -2625,23 +2667,8 @@ void fitCameraToStressField()
     orbitCam.fitDepthToBounds(detailCenter, detailCenter);
     return;
   }
-
-  int drawableWidth = SCREEN_WIDTH;
-  int drawableHeight = SCREEN_HEIGHT;
-  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
-  drawableWidth = std::max(drawableWidth, 1);
-  drawableHeight = std::max(drawableHeight, 1);
-  const double aspect = static_cast<double>(drawableWidth) /
-                        static_cast<double>(drawableHeight);
-
-  orbitCam.fitToBounds(bounds.min, bounds.max, aspect);
-
-  std::cout << "Stress-field camera: center=(" << orbitCam.Target.x << ", "
-            << orbitCam.Target.y << ", " << orbitCam.Target.z
-            << ") distance=" << orbitCam.Distance
-            << std::endl;
+  fitCameraToBounds(bounds, "Stress-field camera:");
 }
-
 
 void printLargeCoordinateValidation()
 {
@@ -2893,11 +2920,8 @@ bool aabbIntersectsOrthoViewport(const CameraSpaceAabb &bounds,
          bounds.maxY >= -halfHeight && bounds.minY <= halfHeight;
 }
 
-struct WorldAabb2
-{
-    glm::dvec3 min;
-    glm::dvec3 max;
-};
+// WorldAabb without the valid flag: BVH node bounds are always set.
+using WorldAabb2 = WorldAabb;
 
 CameraSpaceAabb cameraAabbBounds(const WorldAabb2 &worldBounds,
                                  const glm::dvec3 &cameraPosition,
@@ -2911,11 +2935,11 @@ CameraSpaceAabb cameraAabbBounds(const WorldAabb2 &worldBounds,
                             cameraUp, cameraFront);
 }
 
-// Static median-split BVH over the immutable startup scene.  World positions
-// remain double precision; the camera-space conversion happens only for a
-// visited node.  This removes the per-frame O(objects) broad-phase transform
-// pass while preserving exact leaf-side slab/LOD decisions.
-class SceneObjectBvh
+// Generic median-split BVH over immutable scene objects.  Subclasses provide
+// objectBounds()/objectCentroid() so the mesh scene and CAD range picking
+// share one build/traverse implementation.
+template <typename ObjectT>
+class MedianSplitBvh
 {
 public:
     struct Node
@@ -2928,7 +2952,7 @@ public:
         bool leaf = false;
     };
 
-    void build(std::vector<const LargeCoordinateObject *> sceneObjects)
+    void build(std::vector<const ObjectT *> sceneObjects)
     {
         objects = std::move(sceneObjects);
         nodes.clear();
@@ -2941,7 +2965,7 @@ public:
 
     template <typename Visitor>
     void collect(Visitor &&nodeIsVisible,
-                 std::vector<const LargeCoordinateObject *> &output) const
+                 std::vector<const ObjectT *> &output) const
     {
         output.clear();
         if (nodes.empty())
@@ -2968,14 +2992,11 @@ public:
         }
     }
 
-private:
-    static WorldAabb2 objectBounds(const LargeCoordinateObject &object)
-    {
-        const glm::dvec3 halfExtent(object.size * 0.5);
-        return {object.worldPosition - halfExtent,
-                object.worldPosition + halfExtent};
-    }
+protected:
+    virtual WorldAabb2 objectBounds(const ObjectT &object) const = 0;
+    virtual glm::dvec3 objectCentroid(const ObjectT &object) const = 0;
 
+private:
     static WorldAabb2 mergeBounds(const WorldAabb2 &a, const WorldAabb2 &b)
     {
         return {glm::min(a.min, b.min), glm::max(a.max, b.max)};
@@ -2984,14 +3005,8 @@ private:
     uint32_t buildRange(uint32_t begin, uint32_t end)
     {
         WorldAabb2 bounds = objectBounds(*objects[begin]);
-        glm::dvec3 centroidSum = objectBounds(*objects[begin]).min +
-                                 objectBounds(*objects[begin]).max;
         for (uint32_t i = begin + 1; i < end; ++i)
-        {
-            const WorldAabb2 itemBounds = objectBounds(*objects[i]);
-            bounds = mergeBounds(bounds, itemBounds);
-            centroidSum += itemBounds.min + itemBounds.max;
-        }
+            bounds = mergeBounds(bounds, objectBounds(*objects[i]));
 
         const uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
         nodes.push_back({bounds, 0, 0, begin, end, false});
@@ -3012,13 +3027,9 @@ private:
         const uint32_t middle = begin + count / 2;
         std::nth_element(objects.begin() + begin, objects.begin() + middle,
                          objects.begin() + end,
-                         [axis](const LargeCoordinateObject *lhs,
-                                const LargeCoordinateObject *rhs) {
-                             const glm::dvec3 lhsCentroid =
-                                 lhs->worldPosition;
-                             const glm::dvec3 rhsCentroid =
-                                 rhs->worldPosition;
-                             return lhsCentroid[axis] < rhsCentroid[axis];
+                         [this, axis](const ObjectT *lhs, const ObjectT *rhs) {
+                             return objectCentroid(*lhs)[axis] <
+                                    objectCentroid(*rhs)[axis];
                          });
 
         const uint32_t leftChild = buildRange(begin, middle);
@@ -3030,8 +3041,28 @@ private:
         return nodeIndex;
     }
 
-    std::vector<const LargeCoordinateObject *> objects;
+    std::vector<const ObjectT *> objects;
     std::vector<Node> nodes;
+};
+
+// Static median-split BVH over the immutable startup scene.  World positions
+// remain double precision; the camera-space conversion happens only for a
+// visited node.  This removes the per-frame O(objects) broad-phase transform
+// pass while preserving exact leaf-side slab/LOD decisions.
+class SceneObjectBvh final : public MedianSplitBvh<LargeCoordinateObject>
+{
+protected:
+    WorldAabb2 objectBounds(const LargeCoordinateObject &object) const override
+    {
+        const glm::dvec3 halfExtent(object.size * 0.5);
+        return {object.worldPosition - halfExtent,
+                object.worldPosition + halfExtent};
+    }
+
+    glm::dvec3 objectCentroid(const LargeCoordinateObject &object) const override
+    {
+        return object.worldPosition;
+    }
 };
 
 const SceneObjectBvh &getSceneObjectBvh()
@@ -3269,115 +3300,18 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
 // CAD entities are immutable after tessellation, so their world-space bounds
 // can back a static BVH. Exact primitive tests remain outside this class: the
 // BVH answers which ranges the ray can reach, not which surface wins overlaps.
-class CadRangeBvh
+class CadRangeBvh final : public MedianSplitBvh<VisibilityCandidate>
 {
-public:
-    void build(std::vector<const VisibilityCandidate *> ranges)
-    {
-        objects = std::move(ranges);
-        nodes.clear();
-        if (objects.empty())
-            return;
-
-        nodes.reserve(objects.size() * 2);
-        buildRange(0, static_cast<uint32_t>(objects.size()));
-    }
-
-    template <typename Visitor>
-    void collect(Visitor &&rayHitsBounds,
-                 std::vector<const VisibilityCandidate *> &output) const
-    {
-        output.clear();
-        if (nodes.empty())
-            return;
-
-        std::array<uint32_t, 128> stack{};
-        size_t stackTop = 0;
-        stack[stackTop++] = 0;
-        while (stackTop > 0)
-        {
-            const Node &node = nodes[stack[--stackTop]];
-            if (!rayHitsBounds(node.bounds))
-                continue;
-            if (node.leaf)
-            {
-                for (uint32_t i = node.begin; i < node.end; ++i)
-                    output.push_back(objects[i]);
-            }
-            else
-            {
-                stack[stackTop++] = node.rightChild;
-                stack[stackTop++] = node.leftChild;
-            }
-        }
-    }
-
-private:
-    struct Node
-    {
-        WorldAabb2 bounds{};
-        uint32_t leftChild = 0;
-        uint32_t rightChild = 0;
-        uint32_t begin = 0;
-        uint32_t end = 0;
-        bool leaf = false;
-    };
-
-    static WorldAabb2 objectBounds(const VisibilityCandidate &candidate)
+protected:
+    WorldAabb2 objectBounds(const VisibilityCandidate &candidate) const override
     {
         return {candidate.min, candidate.max};
     }
 
-    static WorldAabb2 mergeBounds(const WorldAabb2 &a, const WorldAabb2 &b)
+    glm::dvec3 objectCentroid(const VisibilityCandidate &candidate) const override
     {
-        return {glm::min(a.min, b.min), glm::max(a.max, b.max)};
+        return candidate.center;
     }
-
-    uint32_t buildRange(uint32_t begin, uint32_t end)
-    {
-        WorldAabb2 bounds = objectBounds(*objects[begin]);
-        glm::dvec3 centroidSum = objects[begin]->center;
-        for (uint32_t i = begin + 1; i < end; ++i)
-        {
-            const WorldAabb2 itemBounds = objectBounds(*objects[i]);
-            bounds = mergeBounds(bounds, itemBounds);
-            centroidSum += objects[i]->center;
-        }
-
-        const uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
-        nodes.push_back({bounds, 0, 0, begin, end, false});
-        const uint32_t count = end - begin;
-        if (count <= 4)
-        {
-            nodes[nodeIndex].leaf = true;
-            return nodeIndex;
-        }
-
-        const glm::dvec3 extent = bounds.max - bounds.min;
-        int axis = 0;
-        if (extent.y > extent.x && extent.y >= extent.z)
-            axis = 1;
-        else if (extent.z > extent.x && extent.z > extent.y)
-            axis = 2;
-
-        const uint32_t middle = begin + count / 2;
-        std::nth_element(objects.begin() + begin, objects.begin() + middle,
-                         objects.begin() + end,
-                         [axis](const VisibilityCandidate *lhs,
-                                const VisibilityCandidate *rhs) {
-                             return lhs->center[axis] < rhs->center[axis];
-                         });
-
-        const uint32_t leftChild = buildRange(begin, middle);
-        nodes[nodeIndex].leftChild = leftChild;
-        const uint32_t rightChild = buildRange(middle, end);
-        nodes[nodeIndex].rightChild = rightChild;
-        nodes[nodeIndex].leaf = false;
-        return nodeIndex;
-    }
-
-    std::vector<const VisibilityCandidate *> objects;
-    std::vector<Node> nodes;
 };
 
 const CadRangeBvh &getCadRangeBvh()
@@ -3399,6 +3333,8 @@ const CadRangeBvh &getCadRangeBvh()
     }();
     return bvh;
 }
+
+double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint);
 
 // Closest approach between a normalized picking ray and a finite segment.
 // Keeping every intermediate value in double avoids false hits/misses in the
@@ -3489,6 +3425,46 @@ bool rayIntersectsPoint(const PickRay &ray,
     return true;
 }
 
+bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
+                                   const PickRay &localRay,
+                                   const LargeCoordinateObject &object,
+                                   double directionLength, double scale,
+                                   double &hitDepth)
+{
+    const std::vector<float> &edges =
+        rendering::proceduralMeshFeatureEdges(object.mesh);
+    const glm::dvec3 objectCenter(object.worldPosition);
+    bool hit = false;
+    double best = std::numeric_limits<double>::infinity();
+
+    for (size_t vertex = 0; vertex + 1 < edges.size() / 8; vertex += 2)
+    {
+        auto position = [&](size_t index) {
+            const size_t first = index * 8;
+            return glm::dvec3(edges[first], edges[first + 1],
+                              edges[first + 2]);
+        };
+        const glm::dvec3 a = position(vertex);
+        const glm::dvec3 b = position(vertex + 1);
+        const glm::dvec3 worldPoint =
+            object.worldPosition + ((a + b) * 0.5) * scale;
+        const double tolerance =
+            cadPickTolerance(ray, worldPoint) / scale;
+        double depth = 0.0;
+        if (rayIntersectsSegment(localRay, a, b, tolerance, depth) &&
+            depth > 0.0 && depth < best)
+        {
+            best = depth;
+            hit = true;
+        }
+    }
+
+    if (!hit)
+        return false;
+    hitDepth = best;
+    return true;
+}
+
 // Mesh instances are unrotated and uniformly scaled. Refine the candidate AABB
 // to the same triangle faces submitted to the renderer; an empty corner of a
 // transparent mesh box must not steal focus from a nearby CAD vector.
@@ -3505,29 +3481,54 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     const glm::dvec3 direction = ray.direction / directionLength;
     double best = std::numeric_limits<double>::infinity();
     const PickRay localRay{origin, direction};
-    const std::vector<float> &soup =
-        rendering::proceduralMeshVertices(object.mesh);
-    constexpr size_t kVertexFloats =
-        rendering::kProceduralMeshFloatStride;
 
-    for (size_t vertex = 0; vertex + 2 < soup.size() / kVertexFloats;
-         vertex += 3)
+    const rendering::RenderModeFlags renderFlags = rendererBackend
+        ? rendererBackend->renderModeFlags()
+        : rendering::RenderModeFlags{};
+    const bool pickFeatureEdges = !renderFlags.meshFill && renderFlags.show3dEdges;
+
+    // Wireframe/edge modes draw only feature edges in the GPU ID pass. CPU
+    // refinement must use the same visibility rule; otherwise an invisible
+    // solid face can still satisfy the GPU edge ID and steal a pick.
+    if (!pickFeatureEdges)
     {
-        const auto position = [&](size_t index) {
-            const size_t first = index * kVertexFloats;
-            return glm::dvec3(soup[first], soup[first + 1], soup[first + 2]);
-        };
+        const std::vector<float> &soup =
+            rendering::proceduralMeshVertices(object.mesh);
+        constexpr size_t kVertexFloats =
+            rendering::kProceduralMeshFloatStride;
 
-        double depth = 0.0;
-        if (rayIntersectsTriangle(localRay, position(vertex),
-                                  position(vertex + 1),
-                                  position(vertex + 2), depth) &&
-            depth > 0.0 && depth < best)
+        for (size_t vertex = 0; vertex + 2 < soup.size() / kVertexFloats;
+             vertex += 3)
         {
-            best = depth;
-            if (faceIndex)
-                *faceIndex = vertex / 3;
+            const auto position = [&](size_t index) {
+                const size_t first = index * kVertexFloats;
+                return glm::dvec3(soup[first], soup[first + 1],
+                                  soup[first + 2]);
+            };
+
+            double depth = 0.0;
+            if (rayIntersectsTriangle(localRay, position(vertex),
+                                      position(vertex + 1),
+                                      position(vertex + 2), depth) &&
+                depth > 0.0 && depth < best)
+            {
+                best = depth;
+                if (faceIndex)
+                    *faceIndex = vertex / 3;
+            }
         }
+    }
+
+    double edgeDepth = 0.0;
+    if (pickFeatureEdges &&
+        rayIntersectsMeshFeatureEdges(ray, localRay, object,
+                                      directionLength, scale,
+                                      edgeDepth) &&
+        edgeDepth > 0.0 && edgeDepth < best)
+    {
+        best = edgeDepth;
+        if (faceIndex)
+            *faceIndex = std::numeric_limits<size_t>::max();
     }
 
     if (!std::isfinite(best) || best <= 0.0)
@@ -3554,8 +3555,7 @@ double cadStrokePickTolerance(const PickRay &ray,
                               const entities::Stroke &stroke,
                               const glm::dvec3 &worldPoint)
 {
-    const double renderedHalfWidth =
-        stroke.lineWeight > 0.0 ? stroke.lineWeight * 0.5 : 2.0;
+    const double renderedHalfWidth = strokeHalfWidth(stroke);
     return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
 }
 
@@ -3759,7 +3759,7 @@ struct AutofocusResult
     std::string entityName;
     glm::dvec3 hitPivot;
     double viewDepth = 0.0;
-    size_t faceIndex = 0;
+    std::optional<size_t> faceIndex;
 };
 
 PickResult pickObjectAlongRay(const PickRay &ray,
@@ -3777,6 +3777,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     };
     double nearestDepth = std::numeric_limits<double>::infinity();
     double nearestMeshDepth = std::numeric_limits<double>::infinity();
+    bool nearestMeshOpaque = true;
     double nearestCadDepth = std::numeric_limits<double>::infinity();
     double nearestCadSurfaceDepth = std::numeric_limits<double>::infinity();
     const auto considerHit = [&](double hitDepth, const std::string &name,
@@ -3791,15 +3792,22 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         result.faceIndex = faceIndex;
     };
     const auto considerMeshHit = [&](double hitDepth, const std::string &name,
-                                     size_t faceIndex) {
+                                     size_t faceIndex, bool opaque = true) {
         if (hitDepth < nearestMeshDepth)
         {
             nearestMeshDepth = hitDepth;
+            nearestMeshOpaque = opaque;
             trace.meshHit = true;
             trace.meshDepth = hitDepth;
             trace.meshName = name;
         }
-        considerHit(hitDepth, name, faceIndex);
+
+        // rayIntersectsRenderedMesh uses max(size_t) as its internal edge
+        // marker. Public pick results represent an edge hit by having no face.
+        std::optional<size_t> pickedFace;
+        if (faceIndex != std::numeric_limits<size_t>::max())
+            pickedFace = faceIndex;
+        considerHit(hitDepth, name, pickedFace);
     };
     const auto considerCadHit = [&](double hitDepth, const char *name,
                                     std::optional<size_t> faceIndex = std::nullopt) {
@@ -3867,7 +3875,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             meshObjectState(object) != VisibilityState::Offscreen &&
             rayIntersectsRenderedMesh(ray, *object, hitDepth, &faceIndex))
         {
-            considerMeshHit(hitDepth, object->displayName(), faceIndex);
+            considerMeshHit(hitDepth, object->displayName(), faceIndex,
+                            object->entity.common.color.a >= 0.999f);
         }
     }
 
@@ -3883,7 +3892,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                                       &faceIndex) &&
             hitDepth < nearestDepth)
         {
-            considerMeshHit(hitDepth, centerCube.displayName(), faceIndex);
+            considerMeshHit(hitDepth, centerCube.displayName(), faceIndex,
+                            centerCube.entity.common.color.a >= 0.999f);
         }
     }
 
@@ -3987,8 +3997,15 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             if (cadMeshState(mesh) != VisibilityState::Offscreen &&
                 rayIntersectsRenderedMesh(ray, mesh, hitDepth, &faceIndex))
             {
+                if (hitDepth < nearestMeshDepth)
+                {
+                    nearestMeshDepth = hitDepth;
+                    nearestMeshOpaque = mesh.entity.common.color.a >= 0.999f;
+                }
                 considerCadSurfaceHit(hitDepth, mesh.displayName().c_str(),
                                       faceIndex);
+                // Cad meshes go through the CAD surface path, but remember their
+                // translucency for overlay resolution below.
             }
         }
 
@@ -4040,10 +4057,13 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     {
         const glm::dvec3 overlayPivot =
             ray.origin + ray.direction * trace.cadOverlayDepth;
-        // Overlays follow the same nearest-depth rule as surfaces.  No
-        // transparency or overlay priority may replace a nearer hit.
+        // Overlay priority matches non-depth-writing compositing: choose an
+        // overlay behind a transparent mesh, but never behind an opaque one.
+        const bool nearestMeshTranslucent =
+            std::isfinite(nearestMeshDepth) && !nearestMeshOpaque;
         if (!std::isfinite(nearestCadSurfaceDepth) ||
-            trace.cadOverlayDepth <= nearestCadSurfaceDepth)
+            trace.cadOverlayDepth <= nearestCadSurfaceDepth ||
+            nearestMeshTranslucent)
         {
             result.hit = true;
             result.hitDepth = trace.cadOverlayDepth;
@@ -4132,8 +4152,11 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         const double viewDepth =
             glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
         orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+        std::optional<size_t> pickedFace;
+        if (faceIndex != std::numeric_limits<size_t>::max())
+            pickedFace = faceIndex;
         return AutofocusResult{meshEntity->displayName(), hitPivot,
-                               viewDepth, faceIndex};
+                               viewDepth, pickedFace};
     }
 
     if (pickEntity && pickEntity->kind == VisibilityKind::CadCurve &&
@@ -4283,14 +4306,48 @@ void reportAutofocus(const AutofocusResult &selected)
               << orbitCam.Target.y << ", " << orbitCam.Target.z << ")"
               << " depth=" << selected.viewDepth
               << " distance=" << orbitCam.Distance
-              << " face=" << selected.faceIndex << std::endl;
+              << " face="
+              << (selected.faceIndex ? std::to_string(*selected.faceIndex)
+                                     : std::string("edge"))
+              << std::endl;
+}
+
+const GpuPickEntity *findGpuPickEntityForAutofocusName(
+    const std::string &name)
+{
+  for (const auto &[objectId, registered] : gpuPickRegistry())
+  {
+    if (registered.mesh && registered.mesh->displayName() == name)
+      return &registered;
+    if (registered.cadRange && registered.cadRange->name == name)
+      return &registered;
+    if (registered.curve && registered.curve->name == name)
+      return &registered;
+  }
+  return nullptr;
 }
 
 static void reportGpuPickFallback(double ndcX, double ndcY)
 {
+  if (pickDebugEnabled())
+  {
+    std::printf("[PICK_DEBUG] fallback ndc=(%f,%f)", ndcX, ndcY);
+    std::puts("");
+  }
+
+  outlineEntity.reset();
+  lockedOutlineId = 0;
   if (const std::optional<AutofocusResult> selectedEntity =
           autofocusAtNdc(ndcX, ndcY))
+  {
     reportAutofocus(*selectedEntity);
+    if (const GpuPickEntity *entity =
+            findGpuPickEntityForAutofocusName(selectedEntity->entityName))
+    {
+      outlineEntity = *entity;
+      lockedOutlineId = findGpuPickObjectIdForEntity(*entity);
+    }
+  }
 }
 
 // Deterministic diagnostics for entities that render but lose CPU picking.
@@ -4607,14 +4664,17 @@ bool runCadPickAudit()
   return true;
 }
 
-// Convert SDL window coordinates to NDC [-1, 1].
+// Convert SDL window coordinates to NDC [-1, 1]. Integer event coordinates
+// address a pixel cell; sampling that cell on the GPU uses its center, so add
+// the half-pixel offset here. Without it a one-pixel GPU pick frustum can fall
+// on the neighboring cell for coordinates exactly on the cell boundary.
 double cursorToNdcX(double windowX, int windowWidth)
 {
-    return windowWidth > 0 ? 2.0 * windowX / windowWidth - 1.0 : 0.0;
+    return windowWidth > 0 ? 2.0 * (windowX + 0.5) / windowWidth - 1.0 : 0.0;
 }
 double cursorToNdcY(double windowY, int windowHeight)
 {
-    return windowHeight > 0 ? 1.0 - 2.0 * windowY / windowHeight : 0.0;
+    return windowHeight > 0 ? 1.0 - 2.0 * (windowY + 0.5) / windowHeight : 0.0;
 }
 
 // Move the target to the nearest object AABB along the view ray.  The ray
@@ -5146,10 +5206,17 @@ void render()
     const bool resultMatches = gpuResult.ready &&
         gpuResult.requestToken == gpuPickFocus.requestToken;
     ++gpuPickFocus.pendingFrames;
-    // bgfx readTexture() becomes readable two frames after submission.  Keep
-    // one extra frame for driver latency, then always answer the double click.
-    if (resultMatches || gpuPickFocus.pendingFrames >= 4)
+    // Vulkan readbacks can take several frames to become CPU visible. Keep
+    // a bounded retry window, then fall back to the CPU raycast.
+    if (resultMatches || gpuPickFocus.pendingFrames >= 16)
     {
+      if (pickDebugEnabled() && !resultMatches)
+      {
+        std::printf("[PICK_DEBUG] timeout pendingFrames=%u last=(ready=%d id=%u token=%u)",
+                    gpuPickFocus.pendingFrames, gpuResult.ready ? 1 : 0,
+                    gpuResult.objectId, gpuResult.requestToken);
+        std::puts("");
+      }
       gpuPickFocus.waitingResult = false;
       gpuPickFocus.pendingFrames = 0;
       std::optional<AutofocusResult> selectedEntity;
@@ -5158,14 +5225,56 @@ void render()
         selectedEntity = autofocusGpuPick(gpuResult.objectId,
                                           gpuPickFocus.ndcX,
                                           gpuPickFocus.ndcY);
+        if (pickDebugEnabled())
+        {
+          std::printf("[PICK_DEBUG] result ready id=%u token=%u",
+                      gpuResult.objectId, gpuResult.requestToken);
+          std::puts("");
+        }
+        if (pickDebugEnabled())
+        {
+          const auto &registry = gpuPickRegistry();
+          std::printf("[PICK_DEBUG] registry size=%zu nextId=%u found=%d",
+                      registry.size(), gpuPickNextEntityId,
+                      registry.count(gpuResult.objectId) ? 1 : 0);
+          std::puts("");
+          if (const GpuPickEntity *pickEntity = findGpuPickEntity(gpuResult.objectId))
+          {
+            const char *kindName = "unknown";
+            switch (pickEntity->kind)
+            {
+            case VisibilityKind::CadStroke: kindName = "CadStroke"; break;
+            case VisibilityKind::CadFill: kindName = "CadFill"; break;
+            case VisibilityKind::CadPoint: kindName = "CadPoint"; break;
+            case VisibilityKind::CadCurve: kindName = "CadCurve"; break;
+            case VisibilityKind::MeshObject: kindName = "MeshObject"; break;
+            case VisibilityKind::CadMesh: kindName = "CadMesh"; break;
+            default: break;
+            }
+            std::printf("[PICK_DEBUG] entity kind=%s range=%p count=%zu mesh=%p",
+                        kindName,
+                        static_cast<const void *>(pickEntity->cadRange),
+                        pickEntity->cadRange ? pickEntity->cadRange->count : size_t(0),
+                        static_cast<const void *>(pickEntity->mesh));
+            std::puts("");
+          }
+        }
       }
       if (!selectedEntity)
       {
+        // reportGpuPickFallback() may select a neighboring CPU object when the
+        // one-pixel GPU ID readback misses a thin wireframe/edge. Preserve its
+        // outline target instead of clearing it here.
         reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
       }
       else
       {
         reportAutofocus(*selectedEntity);
+        lockedOutlineId = gpuResult.objectId;
+        if (const GpuPickEntity *entity = findGpuPickEntity(gpuResult.objectId))
+        {
+          outlineEntity = *entity;
+        }
       }
     }
   }
@@ -5590,6 +5699,14 @@ void render()
   logSlabIfChanged(useOrthoProjection(), activeNear, activeFar,
                    overlayNear, overlayFar);
 
+  gpuPickSceneDebugQueueActive = false;
+  bool gpuSceneIdPassRequested = gpuPickSceneDebug;
+  if (outlineEntity.has_value())
+    gpuSceneIdPassRequested = true;
+  if (outlineAllTest)
+    gpuSceneIdPassRequested = true;
+  if (rendererBackend)
+    rendererBackend->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
   if (gpuPickEnabled() && gpuPickFocus.pendingNdc)
   {
     const rendering::GpuPickRequest request{
@@ -5605,6 +5722,12 @@ void render()
     const uint32_t requestToken = rendererBackend->requestGpuPick(request);
     if (requestToken != 0)
     {
+      if (pickDebugEnabled())
+      {
+        std::printf("[PICK_DEBUG] request token=%u ndc=(%f,%f)",
+                    requestToken, gpuPickFocus.ndcX, gpuPickFocus.ndcY);
+        std::puts("");
+      }
       gpuPickRegistry().clear();
       gpuPickNextEntityId = 2;
       gpuPickFocus.requestToken = requestToken;
@@ -5618,6 +5741,25 @@ void render()
       gpuPickFocus.pendingFrames = 0;
       reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
     }
+  }
+
+  if (gpuSceneIdPassRequested && rendererBackend && gpuPickEnabled() &&
+      !gpuPickFocus.pendingNdc && !gpuPickFocus.waitingResult)
+  {
+    const rendering::GpuPickRequest sceneRequest{
+        .view = viewRte,
+        .projection = projection,
+        .eye = rendering::encodeDoubleSingle(orbitCam.Position),
+        .ndcX = 0.0,
+        .ndcY = 0.0,
+        .nearDepth = activeNear,
+        .farDepth = activeFar,
+        .logDepth = logDepth,
+    };
+    gpuPickSceneDebugQueueActive =
+        rendererBackend->requestGpuPick(sceneRequest) != 0;
+    gpuPickRegistry().clear();
+    gpuPickNextEntityId = 2;
   }
 
   const glm::dvec3 cameraRight(orbitCam.Right);
@@ -6081,6 +6223,49 @@ void render()
     appendScenePoint(sceneOverlay, object->worldPosition,
                      glm::vec3(meshEntityColor(*object)), 2.0);
 
+  // Tiny mesh impostors are renderable entities too.  Their full-scene ID
+  // representation is a small camera-facing quad, matching the visible
+  // two-pixel point rather than silently omitting it from the ID pass.
+  if (gpuPickSceneDebugQueueActive && !tinyDraws.empty())
+  {
+    static std::vector<rendering::FillVertex> tinyMeshPickVertices;
+    const glm::vec3 pickRight(orbitCam.Right);
+    const glm::vec3 pickUp(orbitCam.Up);
+    const double referenceDistance =
+        glm::length(orbitCam.Position - orbitCam.Target);
+    for (const LargeCoordinateObject *object : tinyDraws)
+    {
+      if (!object || !meshEntityVisible(*object))
+        continue;
+
+      const glm::dvec3 center = object->worldPosition;
+      const double depth = glm::dot(center - orbitCam.Position, orbitCam.Front);
+      const double objectPixelSize =
+          useOrthoProjection()
+              ? double(pixelSize)
+              : double(pixelSize) * std::max(0.05, depth) /
+                    std::max(0.05, referenceDistance);
+      const float radius = std::max(1.0f, float(1.5 * objectPixelSize));
+      const uint32_t objectId = registerGpuPickEntity(
+          {VisibilityKind::MeshObject, object, nullptr});
+      const glm::vec4 idColor = encodeGpuPickId(objectId);
+      const glm::vec3 relative = glm::vec3(center - orbitCam.Position);
+      const glm::vec3 right = pickRight * radius;
+      const glm::vec3 up = pickUp * radius;
+      tinyMeshPickVertices.clear();
+      tinyMeshPickVertices.push_back({relative - right - up, idColor});
+      tinyMeshPickVertices.push_back({relative + right - up, idColor});
+      tinyMeshPickVertices.push_back({relative + right + up, idColor});
+      tinyMeshPickVertices.push_back({relative - right - up, idColor});
+      tinyMeshPickVertices.push_back({relative + right + up, idColor});
+      tinyMeshPickVertices.push_back({relative - right + up, idColor});
+      rendererBackend->queueGpuTrianglePick(
+          0, tinyMeshPickVertices.data(),
+          uint32_t(tinyMeshPickVertices.size()), viewRte, projection,
+          logDepth, objectId);
+    }
+  }
+
   // Small 5-pixel "sphere" (disc-shaded point) at the orbit target so the
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
@@ -6143,6 +6328,30 @@ void render()
   logCameraStateIfChanged(orbitCam.Target, activeNear, activeFar,
                           useOrthoProjection());
 
+  if (rendererBackend)
+  {
+    uint32_t outlineId = 0;
+    if (outlineLockTest)
+    {
+      outlineId = lockedOutlineId;
+    }
+    else if (outlineEntity)
+    {
+      if (gpuPickSceneDebugQueueActive)
+        outlineId = findGpuPickObjectIdForEntity(*outlineEntity);
+    }
+    (*rendererBackend).setSelectionOutlineId(outlineId);
+  }
+  // Present normalization does not need a full-frame readback; expose the
+  // range assigned while this frame's entities were queued.
+  if (rendererBackend)
+  {
+    const uint32_t maxId = gpuPickNextEntityId > 2
+        ? gpuPickNextEntityId - 1
+        : 2;
+    rendererBackend->setGpuPickIdRange(2, maxId);
+  }
+
   rendererBackend->endFrame();
 }
 
@@ -6204,13 +6413,49 @@ int main(int argc, char *argv[])
       debugExitFrames = static_cast<uint32_t>(std::max(1, std::atoi(exitFrames)));
   }
   bool middleMouseDrag = false;
+  bool gpuPickDebugVisible = false;
   bool testPanApplied = false;
   bool originOrthoScenarioApplied = false;
+  bool testDoubleClickApplied = false;
 
 
   while (running)
   {
     float currentFrame = SDL_GetTicks() / 1000.0f;
+
+    // Automated validation: inject the same SDL event path as a real
+    // left-button double click. Set GRID_CAMERA_TEST_DOUBLE_CLICK_AT_SECONDS.
+    if (!testDoubleClickApplied)
+    {
+      const char *testAtValue = std::getenv(
+          "GRID_CAMERA_TEST_DOUBLE_CLICK_AT_SECONDS");
+      if (testAtValue && currentFrame >= std::atof(testAtValue))
+      {
+        int winW = 0, winH = 0;
+        SDL_GetWindowSize(window, &winW, &winH);
+        const char *testX = std::getenv("GRID_CAMERA_TEST_DOUBLE_CLICK_X");
+        const char *testY = std::getenv("GRID_CAMERA_TEST_DOUBLE_CLICK_Y");
+        const int x = testX ? std::atoi(testX) : winW / 2;
+        const int y = testY ? std::atoi(testY) : winH / 2;
+        SDL_Event synthetic{};
+        synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        synthetic.button.windowID = SDL_GetWindowID(window);
+        synthetic.button.timestamp = SDL_GetTicks();
+        synthetic.button.clicks = 2;
+        synthetic.button.button = SDL_BUTTON_LEFT;
+        synthetic.button.down = true;
+        synthetic.button.x = x;
+        synthetic.button.y = y;
+        const int pushed = SDL_PushEvent(&synthetic);
+        testDoubleClickApplied = true;
+        if (pushed == 0)
+        {
+          std::puts("[PICK_DEBUG] test event push failed");
+        }
+        std::printf("[PICK_DEBUG] test double-click x=%d y=%d", x, y);
+        std::puts("");
+      }
+    }
 
     while (SDL_PollEvent(&evt))
     {
@@ -6227,6 +6472,15 @@ int main(int argc, char *argv[])
         if (evt.key.key == SDLK_P)
         {
           switchProjectionMode();
+        }
+        if (evt.key.key == SDLK_I)
+        {
+          gpuPickDebugVisible = !gpuPickDebugVisible;
+          if (rendererBackend)
+            rendererBackend->setGpuPickDebugVisible(gpuPickDebugVisible);
+          std::cout << "GPU pick debug texture: "
+                    << (gpuPickDebugVisible ? "visible" : "hidden")
+                    << std::endl;
         }
         if (evt.key.key == SDLK_1)
           applyGridPlane(GridPlaneType::XY);
@@ -6247,13 +6501,36 @@ int main(int argc, char *argv[])
         }
         if (evt.key.key == SDLK_K)
         {
-          visualStyleManager.cycle();
+          gpuPickSceneDebug = !gpuPickSceneDebug;
           if (rendererBackend)
-            rendererBackend->setRenderMode(visualStyleManager.mode());
-          std::cout << "Visual style: "
-                    << rendering::renderModeLabel(visualStyleManager.mode())
-                    << " [" << rendering::renderModeCommand(visualStyleManager.mode())
-                    << "]" << std::endl;
+            (*rendererBackend).setGpuPickSceneDebug(gpuPickSceneDebug);
+          if (gpuPickSceneDebug)
+            std::puts("Full-scene GPU ID view: on");
+          else
+            std::puts("Full-scene GPU ID view: off");
+        }
+        if (evt.key.key == SDLK_O)
+        {
+          outlineLockTest = !outlineLockTest;
+          if (outlineLockTest)
+          {
+            std::printf("Outline lock: on (id=%u)", lockedOutlineId);
+            std::puts("");
+          }
+          else
+          {
+            std::puts("Outline lock: off");
+          }
+        }
+        if (evt.key.key == SDLK_U)
+        {
+          outlineAllTest = !outlineAllTest;
+          if (rendererBackend)
+            (*rendererBackend).setSelectionOutlineAll(outlineAllTest);
+          if (outlineAllTest)
+            std::puts("Outline all: on");
+          else
+            std::puts("Outline all: off");
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
         {
@@ -6312,6 +6589,13 @@ int main(int argc, char *argv[])
       {
         int winW = 0, winH = 0;
         SDL_GetWindowSize(window, &winW, &winH);
+        if (pickDebugEnabled())
+        {
+          std::printf("[PICK_DEBUG] double-click x=%d y=%d gpu=%d",
+                      static_cast<int>(evt.button.x), static_cast<int>(evt.button.y),
+                      gpuPickEnabled() ? 1 : 0);
+          std::puts("");
+        }
         const double ndcX = cursorToNdcX(evt.button.x, winW);
         const double ndcY = cursorToNdcY(evt.button.y, winH);
         if (gpuPickEnabled())

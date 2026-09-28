@@ -40,15 +40,9 @@ struct DrawTraits
 
     static DrawTraits from(const entities::EntityCommon &common)
     {
-        DrawTraits traits;
-        traits.handle = common.handle;
-        traits.name = common.name;
-        traits.layer = common.layer;
-        traits.color = common.color;
-        traits.lineType = common.lineType;
-        traits.lineWeight = common.lineWeight;
-        traits.visible = common.visible;
-        return traits;
+        // Field layout matches EntityCommon exactly.
+        return {common.handle, common.name, common.layer, common.color,
+                common.lineType, common.lineWeight, common.visible};
     }
 };
 

@@ -48,10 +48,35 @@ vec3 presentFxaa(vec2 uv)
     return (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
 }
 
+vec3 presentIdDebug(vec2 uv)
+{
+    vec4 bytes = texture2D(s_texColor, uv) * 255.0;
+    bool background = bytes.r > 254.5 && bytes.g > 254.5 &&
+                      bytes.b > 254.5 && bytes.a > 254.5;
+    if (background)
+        return vec3(1.0, 1.0, 1.0);
+
+    float id = bytes.r * 65536.0 + bytes.g * 256.0 +
+               bytes.b + bytes.a * 16777216.0;
+    float minId = uPresentParams.y;
+    float maxId = uPresentParams.z;
+    float normalized = maxId > minId
+        ? clamp((id - minId) / (maxId - minId), 0.0, 1.0)
+        : 0.5;
+
+    // Deliberately simple debug colormap: low ID -> cyan/green,
+    // high ID -> yellow/red.
+    return vec3(0.15 + 0.85 * normalized,
+                0.15 + 0.85 * (1.0 - normalized),
+                0.30 + 0.70 * (1.0 - abs(normalized * 2.0 - 1.0)));
+}
+
 void main()
 {
-    vec3 color = uPresentParams.x > 0.5
-        ? presentFxaa(v_uv)
-        : texture2D(s_texColor, v_uv).rgb;
+    vec3 color = uPresentParams.w > 0.5
+        ? presentIdDebug(v_uv)
+        : (uPresentParams.x > 0.5
+            ? presentFxaa(v_uv)
+            : texture2D(s_texColor, v_uv).rgb);
     gl_FragColor = vec4(color, 1.0);
 }
