@@ -22,17 +22,35 @@ vec3 cad_deCasteljau(vec3 cp[CAD_CURVE_MAX_CP], int degree, float t)
 int cad_findSpan(float knots[CAD_CURVE_MAX_CP], int numCP,
                  int degree, float t)
 {
-    int last = numCP - 1;
-    if (t >= knots[last])
-        return last - degree - 1;
+    // Standard knot-span convention: span s covers [knots[s], knots[s+1])
+    // and uses control points cp[s-degree..s].  Valid spans are therefore
+    // [degree, numCP-1].  A previous edit shrank the range to
+    // [degree, numCP-degree-1], which collapsed multi-span curves (e.g. a
+    // 5-point cubic never reached cp4).
+    int firstSpan = degree;
+    int lastSpan = numCP - 1;
+    firstSpan = clamp(firstSpan, 0, CAD_CURVE_MAX_CP - 1);
+    lastSpan = clamp(lastSpan, firstSpan, CAD_CURVE_MAX_CP - 1);
+
+    // The final knot of a knot vector with numCP control points and
+    // degree p is at index numCP + degree.  The previous numCP - 1 index
+    // landed in the interior for clamped curves and collapsed every
+    // t > 0 sample into the last span.
+    int lastKnotIndex = numCP + degree;
+    if (lastKnotIndex > CAD_CURVE_MAX_CP - 1)
+        lastKnotIndex = CAD_CURVE_MAX_CP - 1;
+    if (lastKnotIndex < 0)
+        lastKnotIndex = 0;
+    if (t >= knots[lastKnotIndex])
+        return lastSpan;
     if (t <= knots[degree])
-        return degree;
-    for (int span = degree; span < last; ++span)
+        return firstSpan;
+    for (int span = firstSpan; span < lastSpan; ++span)
     {
         if (t < knots[span + 1])
             return span;
     }
-    return last - degree - 1;
+    return lastSpan;
 }
 
 void cad_bsplineBasis(float knots[CAD_CURVE_MAX_CP], int degree,
@@ -60,13 +78,24 @@ void cad_bsplineBasis(float knots[CAD_CURVE_MAX_CP], int degree,
 vec3 cad_bspline(vec3 cp[CAD_CURVE_MAX_CP], float knots[CAD_CURVE_MAX_CP],
                  int degree, int numCP, float t)
 {
+    // cad_bsplineBasis() reads knots[span + degree]; keep it inside the
+    // CAD_CURVE_MAX_CP window shared with the CPU sampler.
+    int maxSpan = numCP - 1;
+    int knotLimit = CAD_CURVE_MAX_CP - 1 - degree;
+    if (maxSpan > knotLimit)
+        maxSpan = knotLimit;
+    if (maxSpan < degree)
+        maxSpan = degree;
     int span = clamp(cad_findSpan(knots, numCP, degree, t),
-                     degree, numCP - degree - 1);
+                     degree, maxSpan);
     vec3 result = vec3_splat(0.0);
     float basis[CAD_CURVE_MAX_CP];
     cad_bsplineBasis(knots, degree, span, t, basis);
     for (int i = 0; i <= degree; ++i)
-        result += basis[i] * cp[span + i];
+    {
+        // cad_bsplineBasis() is relative to [span-degree, span].
+        result += basis[i] * cp[span - degree + i];
+    }
     return result;
 }
 
@@ -74,16 +103,25 @@ vec3 cad_nurbs(vec3 cp[CAD_CURVE_MAX_CP], float knots[CAD_CURVE_MAX_CP],
                float weights[CAD_CURVE_MAX_CP], int degree, int numCP,
                float t)
 {
+    // cad_bsplineBasis() reads knots[span + degree]; keep it inside the
+    // CAD_CURVE_MAX_CP window shared with the CPU sampler.
+    int maxSpan = numCP - 1;
+    int knotLimit = CAD_CURVE_MAX_CP - 1 - degree;
+    if (maxSpan > knotLimit)
+        maxSpan = knotLimit;
+    if (maxSpan < degree)
+        maxSpan = degree;
     int span = clamp(cad_findSpan(knots, numCP, degree, t),
-                     degree, numCP - degree - 1);
+                     degree, maxSpan);
     vec3 numerator = vec3_splat(0.0);
     float denominator = 0.0;
     float basis[CAD_CURVE_MAX_CP];
     cad_bsplineBasis(knots, degree, span, t, basis);
     for (int i = 0; i <= degree; ++i)
     {
-        float weight = basis[i] * weights[span + i];
-        numerator += weight * cp[span + i];
+        int cpIndex = span - degree + i;
+        float weight = basis[i] * weights[cpIndex];
+        numerator += weight * cp[cpIndex];
         denominator += weight;
     }
     return denominator > 0.0 ? numerator / denominator : vec3_splat(0.0);

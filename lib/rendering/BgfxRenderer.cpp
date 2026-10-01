@@ -93,11 +93,6 @@ namespace SelectionOutlineShaders
 #include "shaders/selectionOutline/fs_outline_overlay.h"
 } // namespace SelectionOutlineShaders
 
-namespace SelectionOutlineShadersVulkan
-{
-#include "shaders/selectionOutline/fs_outline_overlay_spv.h"
-} // namespace SelectionOutlineShadersVulkan
-
 namespace rendering
 {
 namespace
@@ -206,7 +201,8 @@ bool gpuPickDebugEnabled()
 {
     static const bool enabled = [] {
         const char *value = std::getenv("GRID_GPU_PICK_DEBUG");
-        return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+        return value != nullptr && *value != '\0' &&
+               std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -219,8 +215,12 @@ constexpr float kLayerNormalizedBias = 1.0f / 65536.0f;
 constexpr float kEdgeNormalizedDepthBias = 1.0f / 65536.0f;
 constexpr float kLn2 = 0.6931471805599453f;
 // Full-scene ID debug can expose far more entities than a 1x1 pick.
-constexpr size_t kMaxGpuPickInstances = 4096;
-constexpr size_t kMaxGpuPickTriangleBatches = 4096;
+// The CAD demo scene queues ~4.3k triangle batches (strokes + fills + tiny
+// impostors) in a dense view; the old 4096 cap silently dropped the tail,
+// including the picked entity, so its outline could never render. Size the
+// caps for the shipped demo with headroom instead.
+constexpr size_t kMaxGpuPickInstances = 8192;
+constexpr size_t kMaxGpuPickTriangleBatches = 16384;
 
 float logDepthDenominator(const glm::vec4 &logDepth)
 {
@@ -891,7 +891,8 @@ bool BgfxRenderer::initialize(SDL_Window *window)
     init.resolution.width = m_width;
     init.resolution.height = m_height;
     init.resolution.reset = BGFX_RESET_VSYNC | BGFX_RESET_MSAA_X4;
-    init.debug = std::getenv("GRID_GPU_DEBUG") != nullptr;
+    const char *gpuDebug = std::getenv("GRID_GPU_DEBUG");
+    init.debug = gpuDebug != nullptr;
     init.callback = &gBgfxScreenshotCallback;
 
     if (!bgfx::init(init))
@@ -1434,6 +1435,10 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
                       m_renderMode.flags().wireframe3d
                           ? bgfx::ViewMode::Default
                           : bgfx::ViewMode::Sequential);
+    // Selection outlines are submitted before the CAD overlay that owns the
+    // source stroke/curve.  Sequential compositing guarantees the original
+    // line draws on top instead of being covered by the wider outline.
+    bgfx::setViewMode(kViewOverlay, bgfx::ViewMode::Sequential);
     return true;
 }
 
@@ -2520,10 +2525,13 @@ void BgfxRenderer::drawCurves(const CurveRenderData& data)
     bgfx::setUniform(m_curveParams, glm::value_ptr(data.params));
     bgfx::setUniform(m_curveColor, glm::value_ptr(data.color));
     bgfx::setUniform(m_curveArc, glm::value_ptr(data.arc));
+    // Curves are line-like overlay geometry. They must use the same ordered
+    // overlay pass as their outlines; otherwise the later overlay pass draws
+    // the wider outline on top of the original curve.
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINESTRIP |
                    BGFX_STATE_LINEAA | BGFX_STATE_MSAA);
-    bgfx::submit(kViewWire, m_curveProgram, sortDepth);
+    bgfx::submit(kViewOverlay, m_curveProgram, sortDepth);
 }
 
 void BgfxRenderer::drawAabb(const AabbRenderData &data)
@@ -2731,13 +2739,16 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
         [](const GpuPickPrimitive &primitive) {
             return primitive.kind == GpuPickPrimitive::Kind::Mesh;
         });
-    const bool capacityFull =
-        meshCount >= kMaxGpuPickInstances;
-    if (capacityFull)
+    // The outlined entity must always reach the ID buffer or its
+    // outline silently disappears, so it may exceed the soft cap.
+    const bool meshCapacityFull =
+        meshCount >= kMaxGpuPickInstances &&
+        objectId != m_selectionOutlineId;
+    if (meshCapacityFull)
         ++m_gpuPickQueueStats.droppedMeshes;
 
     if (!m_gpuPickActive || objectId == 0 || objectId == 0xffffffffu ||
-        capacityFull ||
+        meshCapacityFull ||
         (!(m_gpuPickSceneDebug || m_gpuPickScenePassEnabled) && !gpuPickInstanceIsCandidate(instance)))
     {
         return;
@@ -2777,15 +2788,18 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         [](const GpuPickPrimitive &primitive) {
             return primitive.kind == GpuPickPrimitive::Kind::Triangle;
         });
-    const bool capacityFull =
-        triangleCount >= kMaxGpuPickTriangleBatches;
-    if (capacityFull)
+    // The outlined entity must always reach the ID buffer or its
+    // outline silently disappears, so it may exceed the soft cap.
+    const bool triangleCapacityFull =
+        triangleCount >= kMaxGpuPickTriangleBatches &&
+        objectId != m_selectionOutlineId;
+    if (triangleCapacityFull)
         ++m_gpuPickQueueStats.droppedTriangles;
 
     const bool transient = geometryKey == 0;
     if (!m_gpuPickActive || objectId == 0 || objectId == 0xffffffffu ||
         !vertices || vertexCount < 3 || vertexCount > 65535 ||
-        capacityFull)
+        triangleCapacityFull)
     {
         return;
     }
@@ -2865,11 +2879,27 @@ GpuPickResult BgfxRenderer::pollGpuPick()
     return m_gpuPickLastResult;
 }
 
+void BgfxRenderer::cancelGpuPick()
+{
+    m_gpuPickActive = false;
+    m_gpuPickReadPending = false;
+    m_gpuPickPrimitives.clear();
+    m_gpuPickQueueStats = {};
+}
+
 void BgfxRenderer::renderGpuPickPass()
 {
     if (!m_gpuPickActive || !bgfx::isValid(m_gpuPickProgram) ||
         !bgfx::isValid(m_gpuPickFrameBuffer) ||
         !bgfx::isValid(m_gpuPickReadback))
+    {
+        return;
+    }
+
+    // A 1x1 readback is already queued. Submitting the same request again
+    // overwrites m_gpuPickReadFrame every frame, so its completion frame
+    // keeps moving forward and pollGpuPick() times out after 16 frames.
+    if (m_gpuPickReadPending)
     {
         return;
     }
@@ -3055,7 +3085,6 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                   bgfx::isValid(geometryIt->second.buffer);
             if (!validBuffer || !bgfx::isValid(m_fillProgram))
                 continue;
-
             bgfx::VertexBufferHandle persistentBuffer = BGFX_INVALID_HANDLE;
             bgfx::TransientVertexBuffer tvb;
             if (transient)
@@ -3096,8 +3125,15 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                 bgfx::setVertexBuffer(0, &tvb);
             else
                 bgfx::setVertexBuffer(0, persistentBuffer);
-            const glm::mat4 primitiveProjection =
-                projectionForDirect3D(primitive.projection);
+            // The caller already supplies either the full-scene projection or the
+            // 1x1 pick frustum. Triangle primitives may carry a camera-independent
+            // view (for cached CAD fills), but they must never override the
+            // current pick projection: doing so renders the full screen into the
+            // 1x1 target and reads a fixed corner pixel.
+            const glm::mat4 primitiveProjection = projection;
+            // Triangle vertices are expressed in the primitive's view frame.
+            // CAD fills use an anchor-relative view, so using the global pick
+            // view here shifts the ID geometry away from the visible fill.
             bgfx::setUniform(m_view, glm::value_ptr(primitive.view));
             bgfx::setUniform(m_projection,
                              glm::value_ptr(primitiveProjection));
@@ -3423,14 +3459,11 @@ bool BgfxRenderer::createRenderResources()
         presentFragmentBinary.data, presentFragmentBinary.size, "cad_present_fs");
     m_presentProgram = bgfx::createProgram(presentVertex, presentFragment, true);
 
-    ShaderBinary selectionFragmentBinary =
-        bgfx::getRendererType() == bgfx::RendererType::Vulkan
-            ? ShaderBinary{
-                  SelectionOutlineShadersVulkan::fs_outline_overlay_fragment_spv,
-                  sizeof(SelectionOutlineShadersVulkan::fs_outline_overlay_fragment_spv)}
-            : ShaderBinary{
-                  SelectionOutlineShaders::fs_outline_overlay_fragment,
-                  sizeof(SelectionOutlineShaders::fs_outline_overlay_fragment)};
+    // The generated header uses the source filename, not a manual
+    // "_fragment" suffix. selectShaderBinary() already handles Vulkan vs.
+    // the other backends.
+    const auto selectionFragmentBinary =
+        SELECT_SHADER_BINARY(SelectionOutlineShaders, fs_outline_overlay);
     const bgfx::ShaderHandle selectionFragment = createShader(
         selectionFragmentBinary.data, selectionFragmentBinary.size,
         "selection_outline_fs");

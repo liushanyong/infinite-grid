@@ -415,6 +415,9 @@ public:
                                       uint32_t objectId,
                                       uint8_t occlusionRank = 2) {}
     virtual GpuPickResult pollGpuPick() { return {}; }
+    // Abort an in-flight asynchronous pick (e.g. after a readback timeout)
+    // so the renderer stops re-submitting it every frame.
+    virtual void cancelGpuPick() {}
 
     // Zero is a renderer-provided white texture; other ids are allocated by
     // the active backend and remain valid until shutdown().

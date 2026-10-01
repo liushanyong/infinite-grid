@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include "coordinate/WorldRebase.h"
 #include "camera/orbit.h"
@@ -99,6 +100,17 @@ RequestedRenderer resolveRequestedBackend()
 }
 
 std::unique_ptr<rendering::RendererBackend> rendererBackend;
+
+constexpr glm::vec4 kOutlineColor(1.0f, 0.55f, 0.05f, 1.0f);
+
+// Global geometric outline expansion. For centered line ribbons this is the
+// extra half-width added to each side, so the full width grows by two copies.
+constexpr float kOutlineWidthPixels = 3.0f;
+
+static float outlineWidthWorld(float pixelSizeWorld)
+{
+    return kOutlineWidthPixels * pixelSizeWorld;
+}
 
 static rendering::RenderModeManager visualStyleManager;
 
@@ -830,12 +842,22 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
         rendering::CurveAlgorithm::Arc)
       continue;
     rendering::CurveRenderData curveData;
+    const bool isBezier =
+        curve.algorithm == rendering::CurveAlgorithm::Bezier;
     curveData.view = view;
-    curveData.projection = projection;
+    // Curves are line-like overlay content: render them through the overlay
+    // slab (near = kNearDepthFloor) exactly like stroke ribbons and points.
+    // The object slab tightens around solid geometry and keeps its near
+    // plane for up to 20 frames while shrinking, so a curve between the
+    // camera and that near plane used to be hardware-clipped here while the
+    // GPU ID pass (overlayProjection) still showed it.
+    curveData.projection = overlayProjection;
     curveData.logDepth = logDepth;
     curveData.params = glm::vec4(
         float(static_cast<int>(curve.algorithm)), float(curve.degree),
-        float(std::min(curve.controlPoints.size(), size_t(16))), 0.0f);
+        float(isBezier ? curve.controlPoints.size()
+                       : std::min(curve.controlPoints.size(), size_t(16 - 1))),
+        0.0f);
     curveData.arc = glm::vec4(float(curve.radius), float(curve.startAngle),
                               float(curve.sweep), 0.0f);
     curveData.color = curve.acgiMaterial.baseColor;
@@ -858,29 +880,37 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
       rendererBackend->drawCurves(curveData);
       continue;
     }
-    if (!curve.knots.empty())
+    // Keep the visible shader's evaluation inputs identical to the CPU
+    // sampler used by picking/ID generation.  A clamped degree-p curve with
+    // n control points has n+p+1 knots: [0 x (p+1), interior, 1 x (p+1)].
+    // Interior knot i maps to (i - degree) / (inner + 1); the previous
+    // /inner fallback collapsed the interior knots and shifted curves.
+    const int numCP = int(
+        isBezier ? curve.controlPoints.size()
+                 : std::min(curve.controlPoints.size(), size_t(16 - 1)));
+    const int degree = std::clamp(curve.degree, 1, numCP - 1);
+    const int inner = numCP - degree - 1;
+    const size_t expectedKnots =
+        size_t(numCP) + size_t(degree) + 1;
+    const bool knotsUsable =
+        curve.knots.size() >= expectedKnots;
+    for (int i = 0; i < 16; ++i)
     {
-      for (size_t i = 0; i < 16; ++i)
+      float knot;
+      if (knotsUsable)
       {
-        const double knot = i < curve.knots.size() ? curve.knots[i] : 0.0;
-        curveData.knots[i / 4][i % 4] = float(knot);
+        knot = i < curve.knots.size() ? float(curve.knots[i]) : 1.0f;
       }
-    }
-    else
-    {
-      const int numCP = int(std::min(curve.controlPoints.size(), size_t(16)));
-      const int degree = std::clamp(curve.degree, 1, numCP - 1);
-      const int inner = numCP - degree - 1;
-      for (int i = 0; i < 16; ++i)
+      else
       {
-        float knot = 0.0f;
-        if (i > degree && i < numCP)
-          knot = float(std::max(0, std::min(inner, i - degree))) /
-                 float(std::max(1, inner));
+        if (i <= degree)
+          knot = 0.0f;
         else if (i >= numCP)
           knot = 1.0f;
-        curveData.knots[i / 4][i % 4] = knot;
+        else
+          knot = float(std::min(inner, i - degree)) / float(inner + 1);
       }
+      curveData.knots[i / 4][i % 4] = knot;
     }
     rendererBackend->drawCurves(curveData);
   }
@@ -896,13 +926,16 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     const float minimumHalfWidth =
         pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
+    // The polyline fragment shader treats v=[0,1] as symmetric edges, so the
+    // visible opaque core lies at the quad midpoint.  Emit a centered ribbon;
+    // a one-sided quad would shift every rendered line by half its width.
     const glm::vec3 side = ribbonSide(direction, cameraFront, halfWidth);
-    polylineVertices.push_back({ra, color, {u0, 0.0f}});
+    polylineVertices.push_back({ra - side, color, {u0, 0.0f}});
     polylineVertices.push_back({ra + side, color, {u0, 1.0f}});
     polylineVertices.push_back({rb + side, color, {u1, 1.0f}});
-    polylineVertices.push_back({ra, color, {u0, 0.0f}});
+    polylineVertices.push_back({ra - side, color, {u0, 0.0f}});
     polylineVertices.push_back({rb + side, color, {u1, 1.0f}});
-    polylineVertices.push_back({rb, color, {u1, 0.0f}});
+    polylineVertices.push_back({rb - side, color, {u1, 0.0f}});
   };
   auto appendLinePatternSegment = [&](const glm::vec3 &ra,
                                       const glm::vec3 &rb,
@@ -1194,6 +1227,20 @@ bool outlineLockTest = false;
 bool outlineAllTest = false;
 uint32_t lockedOutlineId = 0;
 
+// FNV-1a over raw bytes; used to detect when the full-scene GPU ID
+// buffer must be re-rendered for the selection outline overlay.
+static uint64_t hashGpuPickSceneBytes(uint64_t hash, const void *data,
+                                      size_t size)
+{
+  const unsigned char *bytes = static_cast<const unsigned char *>(data);
+  for (size_t i = 0; i < size; ++i)
+  {
+    hash ^= bytes[i];
+    hash *= 0x100000001b3ull;
+  }
+  return hash;
+}
+
 uint32_t findGpuPickObjectIdForEntity(const GpuPickEntity &entity)
 {
   if (entity.kind == VisibilityKind::CenterCube)
@@ -1393,11 +1440,22 @@ static bool cadEntityDemoEnabled()
   return value == nullptr || (std::strcmp(value, "0") != 0);
 }
 
+enum class CadPickShape
+{
+  // Use the tessellated primitives themselves.
+  Primitives,
+  // Two same-length offset strokes define an area (for example MLine).
+  // Picking only the two boundary ribbons leaves the visible entity's
+  // semantic body zoom-dependent and misses clicks between the edges.
+  PairedStrokeBand
+};
+
 struct CadEntityRange
 {
   std::string name;
   size_t begin = 0;
   size_t count = 0;
+  CadPickShape pickShape = CadPickShape::Primitives;
 };
 
 enum class VisibilityState
@@ -1438,16 +1496,29 @@ struct VectorPrimitivesTessellation
   std::vector<scene::CurveBatchCommand> curves;
 };
 
+enum class CadEntityPickShape
+{
+  Primitives,
+  PairedStrokeBand
+};
+
 template <typename EntityType>
 void appendVectorPrimitive(const EntityType &entity, const char *name,
                            const entities::TesselationOptions &options,
                            VectorPrimitivesTessellation &target,
-                           bool fillIs3DFace = false)
+                           bool fillIs3DFace = false,
+                           CadEntityPickShape pickShape =
+                               CadEntityPickShape::Primitives)
 {
-  auto addRange = [name](std::vector<CadEntityRange> &ranges,
+  auto addRange = [name, pickShape](std::vector<CadEntityRange> &ranges,
                          size_t begin, size_t end) {
     if (end != begin)
-      ranges.push_back({name, begin, end - begin});
+    {
+      ranges.push_back({name, begin, end - begin,
+                        pickShape == CadEntityPickShape::PairedStrokeBand
+                            ? CadPickShape::PairedStrokeBand
+                            : CadPickShape::Primitives});
+    }
   };
   const size_t strokeBegin = target.geometry.strokes.size();
   const size_t fillBegin = target.geometry.fills.size();
@@ -1565,7 +1636,9 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(256.0, -704.0, 0.0),
         cadAnchor + glm::dvec3(768.0, -832.0, 0.0)};
     mline.scale = glm::dvec3(24.0, 1.0, 1.0);
-    appendVectorPrimitive(mline, "MLine", options, target);
+    appendVectorPrimitive(
+        mline, "MLine", options, target, false,
+        CadEntityPickShape::PairedStrokeBand);
 
     entities::Point cadPoint;
     cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
@@ -1929,7 +2002,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
 const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 {
-  static constexpr std::uint64_t cadDemoRevision = 4;
+  static constexpr std::uint64_t cadDemoRevision = 5;
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
   const scene::DrawListKey key{
@@ -1986,6 +2059,18 @@ cadGpuPickFillVertices(const CadEntityRange &range,
 }
 
 std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve);
+int currentDrawableHeight();
+
+struct CadPairedBandPoints
+{
+    const entities::Stroke *left = nullptr;
+    const entities::Stroke *right = nullptr;
+    size_t segmentCount = 0;
+};
+
+bool cadPairedBandPoints(const CadEntityRange &range,
+                         const entities::TessellatedEntity &tess,
+                         CadPairedBandPoints &band);
 
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
@@ -2004,6 +2089,19 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const glm::vec3 camRight = glm::normalize(glm::vec3(cameraRightD));
   const glm::vec3 camUp = glm::normalize(glm::vec3(cameraUpD));
   const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront));
+  // Visible point impostors are exact screen-space discs.  Use the
+  // world-per-pixel value at the point itself so the ID quad has the same
+  // projected pixel radius in perspective views, not merely at the camera
+  // target.
+  auto pointWorldPerPixel = [&](const glm::dvec3 &worldPoint) {
+    if (useOrthoProjection())
+      return 2.0 * orbitCam.orthoSize() / currentDrawableHeight();
+    const double viewDepth = std::max(1.0e-9,
+        glm::dot(worldPoint - cameraPos, cameraFront));
+    return 2.0 * viewDepth * std::tan(glm::radians(45.0) * 0.5) /
+           currentDrawableHeight();
+  };
+
   const VectorPrimitivesTessellation &tessellation =
       getVectorPrimitivesTessellation();
   const glm::mat4 cadAnchorView = view * glm::translate(
@@ -2038,13 +2136,37 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           pickProjection, logDepth, objectId);
     }
   };
+  // Match the centered visible AcGi ribbon and its symmetric edge shader.
+  // A one-sided pick quad would offset the ID buffer from the rendered pixels.
   auto appendPickRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
                               const glm::vec4 &color, float halfWidth) {
     const glm::vec3 direction = rb - ra;
     if (glm::length(direction) < 1.0e-5f)
       return;
-    const glm::vec3 side =
-        glm::normalize(glm::cross(direction, camFront)) * halfWidth;
+    const float minimumHalfWidth =
+        pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
+    halfWidth = std::max(halfWidth, minimumHalfWidth);
+    const glm::vec3 side = ribbonSide(direction, camFront, halfWidth);
+    gpuPickVertices.push_back({ra - side, color});
+    gpuPickVertices.push_back({ra + side, color});
+    gpuPickVertices.push_back({rb + side, color});
+    gpuPickVertices.push_back({ra - side, color});
+    gpuPickVertices.push_back({rb + side, color});
+    gpuPickVertices.push_back({rb - side, color});
+  };
+  // CurveBatchCommand is drawn by a centered 1-pixel line strip, unlike the
+  // one-sided AcGi ribbon above.  Its ID ribbon must therefore also be
+  // centered on the curve, not offset to the rendered line's side.
+  auto appendCenteredPickRibbon = [&](const glm::vec3 &ra,
+                                      const glm::vec3 &rb,
+                                      const glm::vec4 &color) {
+    const glm::vec3 direction = rb - ra;
+    if (glm::length(direction) < 1.0e-5f)
+      return;
+    const glm::dvec3 worldMidpoint =
+        cameraPos + glm::dvec3((ra + rb) * 0.5f);
+    const float halfWidth = float(0.5 * pointWorldPerPixel(worldMidpoint));
+    const glm::vec3 side = ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2096,14 +2218,38 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {VisibilityKind::CadStroke, nullptr, &range});
     const glm::vec4 idColor = encodeGpuPickId(objectId);
     gpuPickVertices.clear();
+    CadPairedBandPoints band;
+    if (cadPairedBandPoints(range, tess, band))
+    {
+      // The GPU ID buffer must represent the same semantic area as CPU
+      // picking.  Otherwise a click between the paired boundary strokes is
+      // zoom-dependent (it can miss the 1x1 ID pixel but hit the CPU band).
+      for (size_t segment = 0; segment < band.segmentCount; ++segment)
+      {
+        const size_t next =
+            (segment + 1) % band.left->points.size();
+        gpuPickVertices.push_back(
+            {glm::vec3(band.left->points[segment] - cameraPos), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(band.right->points[segment] - cameraPos), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(band.right->points[next] - cameraPos), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(band.left->points[segment] - cameraPos), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(band.right->points[next] - cameraPos), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(band.left->points[next] - cameraPos), idColor});
+      }
+    }
+    else
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
       const entities::Stroke &stroke = tess.strokes[i];
       const size_t count = stroke.points.size();
       if (!stroke.common.visible || count < 2)
         continue;
-      const float halfWidth = std::max(
-          strokeHalfWidth(stroke), pixelSizeWorld * 1.5f);
+      const float halfWidth = strokeHalfWidth(stroke);
       const size_t segmentCount =
           stroke.closed ? count : count - 1;
       for (size_t segment = 0; segment < segmentCount; ++segment)
@@ -2130,7 +2276,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       if (!point.common.visible)
         continue;
       const float radius = std::max(
-          float(point.pointSize) * 0.5f, pixelSizeWorld * 3.0f);
+          float(point.pointSize) * float(pointWorldPerPixel(point.location)),
+          float(3.0 * pointWorldPerPixel(point.location)));
       appendPickPoint(glm::vec3(point.location - cameraPos), radius, idColor);
     }
     queueGpuSoup(overlayProjection, objectId);
@@ -2144,9 +2291,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     gpuPickVertices.clear();
     const std::vector<glm::dvec3> points = sampleCurveBatch(*candidate.curve);
     for (size_t i = 0; i + 1 < points.size(); ++i)
-      appendPickRibbon(
+      appendCenteredPickRibbon(
           glm::vec3(points[i] - cameraPos),
-          glm::vec3(points[i + 1] - cameraPos), idColor, 2.0f);
+          glm::vec3(points[i + 1] - cameraPos), idColor);
     queueGpuSoup(overlayProjection, objectId);
   };
   auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
@@ -2157,12 +2304,14 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {candidate.kind, nullptr, &range});
     const glm::vec4 idColor = encodeGpuPickId(objectId);
     gpuPickVertices.clear();
+    const float minimumRadius =
+        float(3.0 * pointWorldPerPixel(candidate.center));
+    const float pointRadius = candidate.overlayPointSize > 0.0f
+        ? candidate.overlayPointSize *
+              float(pointWorldPerPixel(candidate.center))
+        : minimumRadius;
     appendPickPoint(glm::vec3(candidate.center - cameraPos),
-                    std::max(candidate.overlayPointSize,
-                             pixelSizeWorld > 0.0f
-                                 ? 3.0f * pixelSizeWorld
-                                 : 3.0f),
-                    idColor);
+                    std::max(pointRadius, minimumRadius), idColor);
     queueGpuSoup(overlayProjection, objectId);
   };
 
@@ -3136,6 +3285,33 @@ PickRay pickRayFromNdc(double ndcX, double ndcY)
     return ray;
 }
 
+// Ortho slabs intentionally straddle the camera plane (near can be negative);
+// visible and GPU ID passes rasterize that content, so CPU picking must use
+// the same slab.  Perspective keeps the classic ray parameter > 0 rule.
+static double g_pickDepthNear = 0.0;
+static double g_pickDepthFar = std::numeric_limits<double>::infinity();
+
+static bool pickIsOrthoProjection()
+{
+    return useOrthoProjection();
+}
+
+static double pickMinDepth()
+{
+    return pickIsOrthoProjection() ? g_pickDepthNear : 0.0;
+}
+
+static double pickMaxDepth()
+{
+    return pickIsOrthoProjection() ? g_pickDepthFar
+                                   : std::numeric_limits<double>::infinity();
+}
+
+static bool pickDepthInRange(double depth)
+{
+    return depth >= pickMinDepth() && depth <= pickMaxDepth();
+}
+
 // Ray-AABB slab test in double precision.
 bool rayIntersectsAabb(const PickRay &ray,
                        const WorldAabb2 &bounds,
@@ -3157,10 +3333,11 @@ bool rayIntersectsAabb(const PickRay &ray,
     const glm::dvec3 farDeltas  = glm::max(minimum, maximum);
     const double enter = std::max({nearDeltas.x, nearDeltas.y, nearDeltas.z});
     const double exit  = std::min({farDeltas.x,  farDeltas.y,  farDeltas.z});
-    if (exit < std::max(enter, 0.0))
+    const double minDepth = pickMinDepth();
+    if (exit < std::max(enter, minDepth))
         return false;
 
-    hitDepth = std::max(enter, 0.0);
+    hitDepth = std::max(enter, minDepth);
     return true;
 }
 
@@ -3171,19 +3348,31 @@ std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve)
     const int samples = std::clamp(static_cast<int>(curve.sampleCount), 2, 512);
     if (curve.algorithm == rendering::CurveAlgorithm::Arc)
     {
+        // CurveBatchCommand::axisU/axisV are unit directions; the visible
+        // curve shader applies radius.  CPU sampling/ID geometry must apply
+        // the same radius or an analytic Arc collapses to a point-sized ID
+        // trace and disappears from the full-scene ID buffer.
+        const double radius = std::max(0.0, curve.radius);
         result.reserve(samples);
         for (int i = 0; i < samples; ++i)
         {
             const double t = static_cast<double>(i) / (samples - 1);
             const double angle = curve.startAngle + curve.sweep * t;
             result.push_back(curve.center +
-                             curve.axisU * std::cos(angle) +
-                             curve.axisV * std::sin(angle));
+                             curve.axisU * (radius * std::cos(angle)) +
+                             curve.axisV * (radius * std::sin(angle)));
         }
         return result;
     }
 
-    const size_t controlCount = curve.controlPoints.size();
+        // Match the GPU shader's CAD_CURVE_MAX_CP capacity so CPU picking,
+    // ID geometry, and visible rendering evaluate the same curve.  BSpline/
+    // NURBS need one spare slot for the clamped knot vector; Bezier can use
+    // all 16 control-point slots.
+    const size_t controlCount =
+        curve.algorithm == rendering::CurveAlgorithm::Bezier
+            ? curve.controlPoints.size()
+            : std::min(curve.controlPoints.size(), size_t(16 - 1));
     if (controlCount < 2)
         return result;
 
@@ -3233,14 +3422,39 @@ std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve)
             knots.push_back(1.0);
     }
 
-    size_t span = degree;
-    while (span < controlCount - 1 && 1.0 >= knots[span + 1])
-        ++span;
+    auto findSpan = [&](double t) {
+        const size_t firstSpan = static_cast<size_t>(degree);
+        if (controlCount < firstSpan + 1)
+            return firstSpan;
+        // Standard knot-span convention: span s covers
+        // [knots[s], knots[s+1]) and uses cp[s-degree..s]; valid spans
+        // are [degree, controlCount-1].
+        // Match the shader: the final knot is at controlCount + degree,
+        // not controlCount - 1.  The old test collapsed interior samples
+        // into the last span for clamped knot vectors.
+        const size_t lastKnotIndex = std::min(
+            controlCount + static_cast<size_t>(degree), knots.size() - 1);
+        // Keep span + degree inside the 16-entry knot window shared with the
+        // GPU evaluation; mirrors the span clamp in cad_bspline/cad_nurbs.
+        const size_t lastSpan =
+            std::min(controlCount - 1, size_t(std::max(0, 15 - degree)));
+        if (t >= knots[lastKnotIndex])
+            return lastSpan;
+        if (t <= knots[firstSpan])
+            return firstSpan;
+        for (size_t span = firstSpan; span < lastSpan; ++span)
+        {
+            if (t < knots[span + 1])
+                return span;
+        }
+        return lastSpan;
+    };
 
     result.reserve(samples);
     for (int sample = 0; sample < samples; ++sample)
     {
         const double t = static_cast<double>(sample) / (samples - 1);
+        const size_t span = findSpan(t);
         std::vector<glm::dvec4> points(degree + 1);
         for (int i = 0; i <= degree; ++i)
         {
@@ -3343,7 +3557,9 @@ bool rayIntersectsSegment(const PickRay &ray,
                           const glm::dvec3 &start,
                           const glm::dvec3 &end,
                           double tolerance,
-                          double &hitDepth)
+                          double &hitDepth,
+                          double depthNear = pickMinDepth(),
+                          double depthFar = pickMaxDepth())
 {
     const glm::dvec3 segment = end - start;
     const double segmentLength2 = glm::dot(segment, segment);
@@ -3366,7 +3582,11 @@ bool rayIntersectsSegment(const PickRay &ray,
     segmentParameter = glm::clamp(segmentParameter, 0.0, 1.0);
 
     double rayParameter = (uv * segmentParameter - wd) / uu;
-    rayParameter = std::max(rayParameter, 0.0);
+    rayParameter = glm::clamp(rayParameter, depthNear, depthFar);
+    // The closest point on the segment must follow the clamped ray parameter.
+    segmentParameter = denominator > std::max(1.0e-24, vv * 1.0e-14)
+        ? glm::clamp((uv * rayParameter + we) / vv, 0.0, 1.0)
+        : glm::clamp(we / vv, 0.0, 1.0);
     const glm::dvec3 rayPoint = ray.origin + ray.direction * rayParameter;
     const glm::dvec3 segmentPoint = start + segment * segmentParameter;
     const double distance = glm::distance(rayPoint, segmentPoint);
@@ -3381,7 +3601,9 @@ bool rayIntersectsTriangle(const PickRay &ray,
                            const glm::dvec3 &a,
                            const glm::dvec3 &b,
                            const glm::dvec3 &c,
-                           double &hitDepth)
+                           double &hitDepth,
+                           double depthNear = pickMinDepth(),
+                           double depthFar = pickMaxDepth())
 {
     const glm::dvec3 edge1 = b - a;
     const glm::dvec3 edge2 = c - a;
@@ -3402,11 +3624,72 @@ bool rayIntersectsTriangle(const PickRay &ray,
         return false;
 
     const double depth = glm::dot(edge2, qvec) * inverseDeterminant;
-    if (depth <= 0.0)
+    if (depth < depthNear || depth > depthFar)
         return false;
 
     hitDepth = depth;
     return true;
+}
+
+bool cadPairedBandPoints(const CadEntityRange &range,
+                         const entities::TessellatedEntity &tess,
+                         CadPairedBandPoints &band)
+{
+    if (range.pickShape != CadPickShape::PairedStrokeBand ||
+        range.count != 2 || range.begin + 1 >= tess.strokes.size())
+    {
+        return false;
+    }
+
+    band.left = &tess.strokes[range.begin];
+    band.right = &tess.strokes[range.begin + 1];
+    if (!band.left->common.visible || !band.right->common.visible ||
+        band.left->points.size() < 2 ||
+        band.left->points.size() != band.right->points.size())
+    {
+        return false;
+    }
+
+    band.segmentCount = band.left->closed
+        ? band.left->points.size()
+        : band.left->points.size() - 1;
+    return band.segmentCount > 0;
+}
+
+bool rayIntersectsCadPairedBand(const PickRay &ray,
+                                const entities::TessellatedEntity &tess,
+                                const CadEntityRange &range,
+                                double &hitDepth)
+{
+    CadPairedBandPoints band;
+    if (!cadPairedBandPoints(range, tess, band))
+        return false;
+
+    bool hit = false;
+    double best = std::numeric_limits<double>::infinity();
+    auto consider = [&](const glm::dvec3 &a, const glm::dvec3 &b,
+                        const glm::dvec3 &c) {
+        double depth = 0.0;
+        if (rayIntersectsTriangle(ray, a, b, c, depth) && depth < best)
+        {
+            best = depth;
+            hit = true;
+        }
+    };
+
+    for (size_t i = 0; i < band.segmentCount; ++i)
+    {
+        const size_t next = (i + 1) % band.left->points.size();
+        const glm::dvec3 &li = band.left->points[i];
+        const glm::dvec3 &ln = band.left->points[next];
+        const glm::dvec3 &ri = band.right->points[i];
+        const glm::dvec3 &rn = band.right->points[next];
+        consider(li, ri, rn);
+        consider(li, rn, ln);
+    }
+
+    hitDepth = best;
+    return hit;
 }
 
 bool rayIntersectsPoint(const PickRay &ray,
@@ -3415,7 +3698,7 @@ bool rayIntersectsPoint(const PickRay &ray,
                         double &hitDepth)
 {
     const double depth = glm::dot(location - ray.origin, ray.direction);
-    if (depth <= 0.0)
+    if (!pickDepthInRange(depth))
         return false;
     const glm::dvec3 rayPoint = ray.origin + ray.direction * depth;
     if (glm::distance(rayPoint, location) > tolerance)
@@ -3429,6 +3712,7 @@ bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
                                    const PickRay &localRay,
                                    const LargeCoordinateObject &object,
                                    double directionLength, double scale,
+                                   double localDepthNear, double localDepthFar,
                                    double &hitDepth)
 {
     const std::vector<float> &edges =
@@ -3451,8 +3735,9 @@ bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
         const double tolerance =
             cadPickTolerance(ray, worldPoint) / scale;
         double depth = 0.0;
-        if (rayIntersectsSegment(localRay, a, b, tolerance, depth) &&
-            depth > 0.0 && depth < best)
+        if (rayIntersectsSegment(localRay, a, b, tolerance, depth,
+                                 localDepthNear, localDepthFar) &&
+            depth < best)
         {
             best = depth;
             hit = true;
@@ -3477,6 +3762,12 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     if (directionLength < 1.0e-20)
         return false;
 
+    const bool ortho = pickIsOrthoProjection();
+    const double localDepthNear = ortho
+        ? g_pickDepthNear * directionLength / scale : 0.0;
+    const double localDepthFar = ortho
+        ? g_pickDepthFar * directionLength / scale
+        : std::numeric_limits<double>::infinity();
     const glm::dvec3 origin = (ray.origin - object.worldPosition) / scale;
     const glm::dvec3 direction = ray.direction / directionLength;
     double best = std::numeric_limits<double>::infinity();
@@ -3509,8 +3800,9 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
             double depth = 0.0;
             if (rayIntersectsTriangle(localRay, position(vertex),
                                       position(vertex + 1),
-                                      position(vertex + 2), depth) &&
-                depth > 0.0 && depth < best)
+                                      position(vertex + 2), depth,
+                                      localDepthNear, localDepthFar) &&
+                depth < best)
             {
                 best = depth;
                 if (faceIndex)
@@ -3523,15 +3815,17 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     if (pickFeatureEdges &&
         rayIntersectsMeshFeatureEdges(ray, localRay, object,
                                       directionLength, scale,
+                                      localDepthNear, localDepthFar,
                                       edgeDepth) &&
-        edgeDepth > 0.0 && edgeDepth < best)
+        edgeDepth < best)
     {
         best = edgeDepth;
         if (faceIndex)
             *faceIndex = std::numeric_limits<size_t>::max();
     }
 
-    if (!std::isfinite(best) || best <= 0.0)
+    if (!std::isfinite(best) ||
+        best < localDepthNear || best > localDepthFar)
         return false;
     hitDepth = best * scale / directionLength;
     return true;
@@ -3548,7 +3842,15 @@ double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint)
               glm::dot(worldPoint - ray.origin, orbitCam.Front)) *
           std::tan(glm::radians(45.0) * 0.5) /
           currentDrawableHeight();
-    return worldPerPixel * 3.0;
+    return worldPerPixel * 5.0;
+}
+
+double cadCurvePickTolerance(const PickRay &ray,
+                             const glm::dvec3 &worldPoint)
+{
+    // CurveBatchCommand is projected like every other cursor-sized overlay.
+    // A fixed world-space radius is wrong as soon as ortho zoom changes.
+    return cadPickTolerance(ray, worldPoint);
 }
 
 double cadStrokePickTolerance(const PickRay &ray,
@@ -3562,9 +3864,11 @@ double cadStrokePickTolerance(const PickRay &ray,
 double cadPointPickTolerance(const PickRay &ray,
                              const entities::TessellatedPoint &point)
 {
-    return std::max(cadPickTolerance(ray, point.location),
-                    point.pointSize * 0.5);
+    const double baseTolerance = cadPickTolerance(ray, point.location);
+    const double worldPerPixel = baseTolerance / 3.0;
+    return std::max(baseTolerance, point.pointSize * worldPerPixel);
 }
+
 
 bool pickDebugEnabled()
 {
@@ -3937,6 +4241,15 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         {
             const CadEntityRange &range = *candidate->cadRange;
 
+            double bandDepth = 0.0;
+            if (rayIntersectsCadPairedBand(ray, cad.geometry, range,
+                                           bandDepth))
+            {
+                considerCadOverlayHit(bandDepth, range.name.c_str(),
+                                      VisibilityKind::CadStroke);
+                continue;
+            }
+
             for (size_t strokeIndex = range.begin;
                  strokeIndex < range.begin + range.count; ++strokeIndex)
             {
@@ -4019,7 +4332,9 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             {
                 double hitDepth = 0.0;
                 if (rayIntersectsSegment(ray, points[i], points[i + 1],
-                                         3.0, hitDepth))
+                                         cadCurvePickTolerance(ray,
+                                         points[i + 1]),
+                                         hitDepth))
                 {
                     considerCadOverlayHit(
                         hitDepth, candidate->curve->name.c_str(),
@@ -4170,7 +4485,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         {
             double depth = 0.0;
             if (rayIntersectsSegment(ray, points[i], points[i + 1],
-                                     3.0, depth) &&
+                                     cadCurvePickTolerance(ray, points[i + 1]), depth) &&
                 depth < bestDepth)
             {
                 hit = true;
@@ -4211,31 +4526,41 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
     {
         if (range.begin >= cad.geometry.strokes.size())
             return std::nullopt;
-        const size_t end = std::min(cad.geometry.strokes.size(),
-                                    range.begin + range.count);
-        for (size_t strokeIndex = range.begin; strokeIndex < end;
-             ++strokeIndex)
+        double bandDepth = 0.0;
+        if (rayIntersectsCadPairedBand(ray, cad.geometry, range,
+                                       bandDepth))
         {
-            const entities::Stroke &stroke = cad.geometry.strokes[strokeIndex];
-            const size_t pointCount = stroke.points.size();
-            if (!stroke.common.visible || pointCount < 2)
-                continue;
-
-            const size_t segmentCount =
-                stroke.closed ? pointCount : pointCount - 1;
-            for (size_t segment = 0; segment < segmentCount; ++segment)
+            considerPrimitive(bandDepth, range.begin);
+        }
+        else
+        {
+            const size_t end = std::min(cad.geometry.strokes.size(),
+                                        range.begin + range.count);
+            for (size_t strokeIndex = range.begin; strokeIndex < end;
+                 ++strokeIndex)
             {
-                const size_t next = (segment + 1) % pointCount;
-                const glm::dvec3 midpoint =
-                    (stroke.points[segment] + stroke.points[next]) * 0.5;
-                double depth = 0.0;
-                if (rayIntersectsSegment(ray, stroke.points[segment],
-                                         stroke.points[next],
-                                         cadStrokePickTolerance(ray, stroke,
-                                                                midpoint),
-                                         depth))
+                const entities::Stroke &stroke =
+                    cad.geometry.strokes[strokeIndex];
+                const size_t pointCount = stroke.points.size();
+                if (!stroke.common.visible || pointCount < 2)
+                    continue;
+
+                const size_t segmentCount =
+                    stroke.closed ? pointCount : pointCount - 1;
+                for (size_t segment = 0; segment < segmentCount; ++segment)
                 {
-                    considerPrimitive(depth, strokeIndex);
+                    const size_t next = (segment + 1) % pointCount;
+                    const glm::dvec3 midpoint =
+                        (stroke.points[segment] + stroke.points[next]) * 0.5;
+                    double depth = 0.0;
+                    if (rayIntersectsSegment(ray, stroke.points[segment],
+                                             stroke.points[next],
+                                             cadStrokePickTolerance(ray, stroke,
+                                                                    midpoint),
+                                             depth))
+                    {
+                        considerPrimitive(depth, strokeIndex);
+                    }
                 }
             }
         }
@@ -4346,6 +4671,18 @@ static void reportGpuPickFallback(double ndcX, double ndcY)
     {
       outlineEntity = *entity;
       lockedOutlineId = findGpuPickObjectIdForEntity(*entity);
+      if (pickDebugEnabled())
+      {
+        std::printf("[PICK_DEBUG] fallback outline entity=%s id=%u",
+                    selectedEntity->entityName.c_str(), lockedOutlineId);
+        std::puts("");
+      }
+    }
+    else if (pickDebugEnabled())
+    {
+      std::printf("[PICK_DEBUG] fallback outline lookup failed for %s",
+                  selectedEntity->entityName.c_str());
+      std::puts("");
     }
   }
 }
@@ -5174,6 +5511,362 @@ void clipPolygonAgainstDepth(const glm::dvec3 *polygon, int &count,
     std::copy_n(output.begin(), count, clipped);
 }
 
+
+bool outlineIsLineLike(const GpuPickEntity &entity)
+{
+    return entity.kind == VisibilityKind::CadStroke ||
+           entity.kind == VisibilityKind::CadCurve;
+}
+
+bool outlineUsesGeometry(const GpuPickEntity &entity)
+{
+    return outlineIsLineLike(entity) ||
+           entity.kind == VisibilityKind::CadFill ||
+           entity.kind == VisibilityKind::CadPoint;
+}
+
+static void appendOutlineRibbon(std::vector<rendering::PrimVertex> &vertices,
+                                const glm::vec3 &start, const glm::vec3 &end,
+                                const glm::vec3 &front, float halfWidth,
+                                float u0, float u1, bool centered)
+{
+    const glm::vec3 direction = end - start;
+    if (glm::length(direction) < 1.0e-5f)
+        return;
+
+    const glm::vec3 side = ribbonSide(direction, front, halfWidth);
+    if (centered)
+    {
+        vertices.push_back({start - side, kOutlineColor, {u0, 0.0f}});
+        vertices.push_back({start + side, kOutlineColor, {u0, 1.0f}});
+        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
+        vertices.push_back({start - side, kOutlineColor, {u0, 0.0f}});
+        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
+        vertices.push_back({end - side, kOutlineColor, {u1, 0.0f}});
+    }
+    else
+    {
+        vertices.push_back({start, kOutlineColor, {u0, 0.0f}});
+        vertices.push_back({start + side, kOutlineColor, {u0, 1.0f}});
+        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
+        vertices.push_back({start, kOutlineColor, {u0, 0.0f}});
+        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
+        vertices.push_back({end, kOutlineColor, {u1, 0.0f}});
+    }
+}
+
+
+// Draw a solid fill outline from the same tessellated boundary used by the
+// renderer.  Shared triangle edges are skipped, so triangulated hatches and
+// solids get one clean silhouette instead of internal mesh edges.  Each edge
+// is offset away from its triangle interior; the original fill remains inside.
+static void drawSolidFillOutline(const glm::mat4 &view,
+                                 const glm::mat4 &overlayProjection,
+                                 const glm::dvec3 &cameraPos,
+                                 float pixelSizeWorld,
+                                 const glm::vec4 &logDepth)
+{
+    if (!rendererBackend || !outlineEntity ||
+        outlineEntity->kind != VisibilityKind::CadFill ||
+        !outlineEntity->cadRange)
+    {
+        return;
+    }
+
+    const CadEntityRange &range = *outlineEntity->cadRange;
+    const entities::TessellatedEntity &tess =
+        getVectorPrimitivesTessellation().geometry;
+    if (range.begin >= tess.fills.size())
+        return;
+    const size_t last = std::min(range.begin + range.count,
+                                 tess.fills.size());
+
+    struct BoundaryKey
+    {
+        glm::dvec3 a;
+        glm::dvec3 b;
+        bool operator<(const BoundaryKey &other) const
+        {
+            if (a.x != other.a.x) return a.x < other.a.x;
+            if (a.y != other.a.y) return a.y < other.a.y;
+            if (a.z != other.a.z) return a.z < other.a.z;
+            if (b.x != other.b.x) return b.x < other.b.x;
+            if (b.y != other.b.y) return b.y < other.b.y;
+            return b.z < other.b.z;
+        }
+    };
+    struct BoundaryUse
+    {
+        glm::dvec3 start;
+        glm::dvec3 end;
+        glm::dvec3 opposite;
+    };
+
+    std::map<BoundaryKey, std::vector<BoundaryUse>> boundaryUses;
+    auto canonical = [](const glm::dvec3 &p, const glm::dvec3 &q) {
+        return p.x < q.x || (p.x == q.x && (p.y < q.y ||
+            (p.y == q.y && p.z <= q.z)))
+            ? BoundaryKey{p, q} : BoundaryKey{q, p};
+    };
+    auto addTriangle = [&](const entities::Triangle &triangle) {
+        if (!triangle.common.visible)
+            return;
+        const std::pair<glm::dvec3, glm::dvec3> edges[3] = {
+            {triangle.a, triangle.b},
+            {triangle.b, triangle.c},
+            {triangle.c, triangle.a},
+        };
+        for (const auto &edge : edges)
+            boundaryUses[canonical(edge.first, edge.second)].push_back(
+                {edge.first, edge.second, triangle.a + triangle.b +
+                 triangle.c - edge.first - edge.second});
+    };
+    for (size_t i = range.begin; i < last; ++i)
+        addTriangle(tess.fills[i]);
+
+    static std::vector<rendering::PrimVertex> outlineVertices;
+    outlineVertices.clear();
+    // Solid-fill ribbons are offset outward on one side only. Use two copies
+    // of the shared half-width so the total visible width matches line-like
+    // outlines: source width + 2 * kOutlineWidthPixels.
+    const float outlineWidth = 2.0f * outlineWidthWorld(pixelSizeWorld);
+    auto appendOutwardRibbon = [&](const glm::dvec3 &worldStart,
+                                    const glm::dvec3 &worldEnd,
+                                    const glm::dvec3 &worldOpposite) {
+        const glm::dvec3 edge = worldEnd - worldStart;
+        const glm::dvec3 toOpposite = worldOpposite - worldStart;
+        const double edgeLength = glm::length(edge);
+        if (edgeLength < 1.0e-12)
+            return;
+        glm::dvec3 planeNormal = glm::cross(edge, toOpposite);
+        const double planeNormalLength = glm::length(planeNormal);
+        if (planeNormalLength < 1.0e-12)
+            return;
+        planeNormal /= planeNormalLength;
+        glm::dvec3 outward = glm::cross(glm::normalize(edge), planeNormal);
+        if (glm::dot(outward, toOpposite) > 0.0)
+            outward = -outward;
+
+        const glm::vec3 start = glm::vec3(worldStart - cameraPos);
+        const glm::vec3 end = glm::vec3(worldEnd - cameraPos);
+        const glm::vec3 offset = glm::vec3(outward * double(outlineWidth));
+        outlineVertices.push_back({start, kOutlineColor, {0.0f, 0.0f}});
+        outlineVertices.push_back({start + offset, kOutlineColor, {0.0f, 1.0f}});
+        outlineVertices.push_back({end + offset, kOutlineColor, {1.0f, 1.0f}});
+        outlineVertices.push_back({start, kOutlineColor, {0.0f, 0.0f}});
+        outlineVertices.push_back({end + offset, kOutlineColor, {1.0f, 1.0f}});
+        outlineVertices.push_back({end, kOutlineColor, {1.0f, 0.0f}});
+    };
+
+    for (const auto &[key, uses] : boundaryUses)
+    {
+        (void)key;
+        if (uses.size() == 1)
+            appendOutwardRibbon(uses.front().start, uses.front().end,
+                                uses.front().opposite);
+    }
+
+    if (outlineVertices.empty())
+        return;
+
+    const rendering::PolylineRenderData outlineData{
+        .view = view,
+        .projection = overlayProjection,
+        .vertices = outlineVertices.data(),
+        .vertexCount = static_cast<uint32_t>(outlineVertices.size()),
+        .logDepth = logDepth,
+        .edgeSoftness = 0.15f,
+        .layer = 1.0f,
+    };
+    rendererBackend->drawPolylines(outlineData);
+}
+
+// Draw a camera-facing annulus around each CAD point.  The inner radius
+// matches the visible point impostor and the outer radius adds a fixed
+// screen-space outline, so the source point is never covered by the outline.
+static void drawCadPointOutline(const glm::mat4 &view,
+                                const glm::mat4 &overlayProjection,
+                                const glm::dvec3 &cameraPos,
+                                const glm::vec3 &cameraFront,
+                                float pixelSizeWorld,
+                                const glm::vec4 &logDepth)
+{
+    if (!rendererBackend || !outlineEntity ||
+        outlineEntity->kind != VisibilityKind::CadPoint ||
+        !outlineEntity->cadRange)
+    {
+        return;
+    }
+
+    const CadEntityRange &range = *outlineEntity->cadRange;
+    const entities::TessellatedEntity &tess =
+        getVectorPrimitivesTessellation().geometry;
+    if (range.begin >= tess.points.size())
+        return;
+    const size_t last = std::min(range.begin + range.count,
+                                 tess.points.size());
+
+    auto worldPerPixel = [&](const glm::dvec3 &worldPoint) {
+        if (useOrthoProjection())
+            return 2.0 * orbitCam.orthoSize() /
+                   double(currentDrawableHeight());
+        const double viewDepth = std::max(1.0e-9,
+            glm::dot(worldPoint - cameraPos, glm::dvec3(cameraFront)));
+        return 2.0 * viewDepth * std::tan(glm::radians(45.0) * 0.5) /
+               double(currentDrawableHeight());
+    };
+
+    static std::vector<rendering::PrimVertex> outlineVertices;
+    outlineVertices.clear();
+    const glm::vec3 right(orbitCam.Right);
+    const glm::vec3 up(orbitCam.Up);
+    constexpr int kCircleSegments = 32;
+    for (size_t i = range.begin; i < last; ++i)
+    {
+        const entities::TessellatedPoint &point = tess.points[i];
+        if (!point.common.visible)
+            continue;
+
+        const double pixelsPerWorldUnit = 1.0 /
+            std::max(worldPerPixel(point.location), 1.0e-12);
+        // The point impostor shader uses 2 * pointSize as the visible
+        // screen-space radius, so the outline inner edge must match it.
+        const double innerPixels = double(point.pointSize);
+        const double outerPixels = innerPixels + kOutlineWidthPixels;
+        const double innerRadius = innerPixels / pixelsPerWorldUnit;
+        const double outerRadius = outerPixels / pixelsPerWorldUnit;
+        const glm::vec3 center(point.location - cameraPos);
+        for (int segment = 0; segment < kCircleSegments; ++segment)
+        {
+            const double angle0 = glm::two_pi<double>() * double(segment) /
+                                  double(kCircleSegments);
+            const double angle1 = glm::two_pi<double>() * double(segment + 1) /
+                                  double(kCircleSegments);
+            const glm::vec3 inner0 = center +
+                right * float(innerRadius * std::cos(angle0)) +
+                up * float(innerRadius * std::sin(angle0));
+            const glm::vec3 outer0 = center +
+                right * float(outerRadius * std::cos(angle0)) +
+                up * float(outerRadius * std::sin(angle0));
+            const glm::vec3 inner1 = center +
+                right * float(innerRadius * std::cos(angle1)) +
+                up * float(innerRadius * std::sin(angle1));
+            const glm::vec3 outer1 = center +
+                right * float(outerRadius * std::cos(angle1)) +
+                up * float(outerRadius * std::sin(angle1));
+
+            outlineVertices.push_back({inner0, kOutlineColor, {0.5f, 0.5f}});
+            outlineVertices.push_back({outer0, kOutlineColor, {0.5f, 0.5f}});
+            outlineVertices.push_back({outer1, kOutlineColor, {0.5f, 0.5f}});
+            outlineVertices.push_back({inner0, kOutlineColor, {0.5f, 0.5f}});
+            outlineVertices.push_back({outer1, kOutlineColor, {0.5f, 0.5f}});
+            outlineVertices.push_back({inner1, kOutlineColor, {0.5f, 0.5f}});
+        }
+    }
+
+    if (outlineVertices.empty())
+        return;
+
+    const rendering::PolylineRenderData outlineData{
+        .view = view,
+        .projection = overlayProjection,
+        .vertices = outlineVertices.data(),
+        .vertexCount = static_cast<uint32_t>(outlineVertices.size()),
+        .logDepth = logDepth,
+        .edgeSoftness = 0.15f,
+        .layer = 1.0f,
+    };
+    rendererBackend->drawPolylines(outlineData);
+}
+
+static void drawLineLikeOutline(const glm::mat4 &view,
+                                const glm::mat4 &overlayProjection,
+                                const glm::dvec3 &cameraPos,
+                                const glm::vec3 &front,
+                                float pixelSizeWorld,
+                                const glm::vec4 &logDepth)
+{
+    if (!rendererBackend || !outlineEntity ||
+        !outlineIsLineLike(*outlineEntity))
+    {
+        return;
+    }
+
+    static std::vector<rendering::PrimVertex> outlineVertices;
+    outlineVertices.clear();
+
+    if (outlineEntity->kind == VisibilityKind::CadStroke &&
+        outlineEntity->cadRange)
+    {
+        const CadEntityRange &range = *outlineEntity->cadRange;
+        const entities::TessellatedEntity &tess =
+            getVectorPrimitivesTessellation().geometry;
+        for (size_t i = range.begin;
+             i < range.begin + range.count && i < tess.strokes.size(); ++i)
+        {
+            const entities::Stroke &stroke = tess.strokes[i];
+            const size_t pointCount = stroke.points.size();
+            if (!stroke.common.visible || pointCount < 2)
+                continue;
+
+            // Match the visible ribbon's pixel-size floor, then add one shared
+            // outline half-width. The full width grows by two copies of
+            // kOutlineWidthPixels.
+            const float sourceHalfWidth =
+                std::max(strokeHalfWidth(stroke), pixelSizeWorld);
+            const float halfWidth = sourceHalfWidth +
+                outlineWidthWorld(pixelSizeWorld);
+            const size_t segmentCount = stroke.closed ? pointCount : pointCount - 1;
+            for (size_t j = 0; j < segmentCount; ++j)
+            {
+                const size_t next = (j + 1) % pointCount;
+                appendOutlineRibbon(
+                    outlineVertices,
+                    glm::vec3(stroke.points[j] - cameraPos),
+                    glm::vec3(stroke.points[next] - cameraPos),
+                    front, halfWidth,
+                    float(j) / float(std::max<size_t>(segmentCount, 1)),
+                    float(j + 1) / float(std::max<size_t>(segmentCount, 1)),
+                    true);
+            }
+        }
+    }
+    else if (outlineEntity->kind == VisibilityKind::CadCurve &&
+             outlineEntity->curve)
+    {
+        const std::vector<glm::dvec3> points =
+            sampleCurveBatch(*outlineEntity->curve);
+        const size_t segmentCount = points.size() > 1 ? points.size() - 1 : 0;
+        const float halfWidth =
+            std::max(outlineEntity->curve->acgiMaterial.lineWidth * 0.5f,
+                     1.0f) +
+            outlineWidthWorld(pixelSizeWorld);
+        for (size_t i = 0; i < segmentCount; ++i)
+        {
+            appendOutlineRibbon(
+                outlineVertices, glm::vec3(points[i] - cameraPos),
+                glm::vec3(points[i + 1] - cameraPos), front, halfWidth,
+                float(i) / float(std::max<size_t>(segmentCount, 1)),
+                float(i + 1) / float(std::max<size_t>(segmentCount, 1)),
+                true);
+        }
+    }
+
+    if (outlineVertices.empty())
+        return;
+
+    const rendering::PolylineRenderData outlineData{
+        .view = view,
+        .projection = overlayProjection,
+        .vertices = outlineVertices.data(),
+        .vertexCount = static_cast<uint32_t>(outlineVertices.size()),
+        .logDepth = logDepth,
+        .edgeSoftness = 0.15f,
+        .layer = 1.0f,
+    };
+    rendererBackend->drawPolylines(outlineData);
+}
+
 void render()
 {
   if (!rendererBackend)
@@ -5219,6 +5912,12 @@ void render()
       }
       gpuPickFocus.waitingResult = false;
       gpuPickFocus.pendingFrames = 0;
+      if (!resultMatches)
+      {
+        // Stop the renderer from re-submitting the stalled pick every frame;
+        // a stuck Vulkan readback otherwise loops until the next request.
+        rendererBackend->cancelGpuPick();
+      }
       std::optional<AutofocusResult> selectedEntity;
       if (resultMatches)
       {
@@ -5467,6 +6166,8 @@ void render()
     projection = glm::mat4(orthoDouble);
     activeNear = near;
     activeFar  = far;
+    g_pickDepthNear = activeNear;
+    g_pickDepthFar  = activeFar;
 
     // Analytic ortho pixel size (doc section 4.2): the vertical frustum
     // extent 2 * halfH maps onto the drawable viewport height.
@@ -5647,6 +6348,8 @@ void render()
     projection = glm::mat4(perspectiveDouble);
     activeNear = near;
     activeFar  = far;
+    g_pickDepthNear = activeNear;
+    g_pickDepthFar  = activeFar;
 
     const double overlayDepthMagnitude = std::max(
         {kNearDepthFloor, std::abs(overlayMinDepth),
@@ -5700,10 +6403,60 @@ void render()
                    overlayNear, overlayFar);
 
   gpuPickSceneDebugQueueActive = false;
-  bool gpuSceneIdPassRequested = gpuPickSceneDebug;
-  if (outlineEntity.has_value())
-    gpuSceneIdPassRequested = true;
-  if (outlineAllTest)
+
+  // The full-scene ID pass re-renders every visible entity a second time,
+  // so only refresh it when something that can change the ID buffer
+  // changes: view/projection, depth slab, viewport size, the outlined
+  // entity, or the debug view modes. While the camera is idle the outline
+  // keeps sampling the last rendered ID texture and skips the extra pass.
+  static uint64_t lastSceneIdSignature = 0;
+  static bool lastSceneIdSignatureValid = false;
+  static uint32_t cachedOutlineObjectId = 0;
+  uint64_t sceneIdSignature = 0xcbf29ce484222325ull;
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, glm::value_ptr(viewRte), 16 * sizeof(float));
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, glm::value_ptr(projection), 16 * sizeof(float));
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, &activeNear, sizeof(activeNear));
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, &activeFar, sizeof(activeFar));
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, &logDepth, sizeof(logDepth));
+  {
+    const bool ortho = useOrthoProjection();
+    const int viewport[2] = {drawableWidth, drawableHeight};
+    sceneIdSignature = hashGpuPickSceneBytes(
+        sceneIdSignature, &ortho, sizeof(ortho));
+    sceneIdSignature = hashGpuPickSceneBytes(
+        sceneIdSignature, viewport, sizeof(viewport));
+  }
+  {
+    const void *outlineKey = nullptr;
+    if (outlineEntity)
+    {
+      outlineKey = outlineEntity->mesh
+                       ? static_cast<const void *>(outlineEntity->mesh)
+                       : outlineEntity->cadRange
+                             ? static_cast<const void *>(outlineEntity->cadRange)
+                             : static_cast<const void *>(outlineEntity->curve);
+      sceneIdSignature = hashGpuPickSceneBytes(
+          sceneIdSignature, &outlineEntity->kind,
+          sizeof(outlineEntity->kind));
+    }
+    sceneIdSignature = hashGpuPickSceneBytes(
+        sceneIdSignature, &outlineKey, sizeof(outlineKey));
+    sceneIdSignature = hashGpuPickSceneBytes(
+        sceneIdSignature, &outlineAllTest, sizeof(outlineAllTest));
+    sceneIdSignature = hashGpuPickSceneBytes(
+        sceneIdSignature, &gpuPickSceneDebug, sizeof(gpuPickSceneDebug));
+  }
+  const bool sceneIdSignatureChanged =
+      !lastSceneIdSignatureValid || sceneIdSignature != lastSceneIdSignature;
+  lastSceneIdSignature = sceneIdSignature;
+  lastSceneIdSignatureValid = true;
+  bool gpuSceneIdPassRequested = gpuPickSceneDebug || outlineAllTest;
+  if (outlineEntity.has_value() && sceneIdSignatureChanged)
     gpuSceneIdPassRequested = true;
   if (rendererBackend)
     rendererBackend->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
@@ -5711,7 +6464,7 @@ void render()
   {
     const rendering::GpuPickRequest request{
         .view = viewRte,
-        .projection = projection,
+        .projection = overlayProjection,
         .eye = rendering::encodeDoubleSingle(orbitCam.Position),
         .ndcX = gpuPickFocus.ndcX,
         .ndcY = gpuPickFocus.ndcY,
@@ -5748,7 +6501,7 @@ void render()
   {
     const rendering::GpuPickRequest sceneRequest{
         .view = viewRte,
-        .projection = projection,
+        .projection = overlayProjection,
         .eye = rendering::encodeDoubleSingle(orbitCam.Position),
         .ndcX = 0.0,
         .ndcY = 0.0,
@@ -5756,6 +6509,17 @@ void render()
         .farDepth = activeFar,
         .logDepth = logDepth,
     };
+    // Publish the outline id before queueing so the renderer can
+    // prioritize the outlined entity if the queue ever hits capacity.
+    // Ids are stable across frames for the same scene state, and the
+    // post-queue lookup below corrects the value before endFrame.
+    if (outlineEntity)
+      cachedOutlineObjectId =
+          findGpuPickObjectIdForEntity(*outlineEntity);
+    rendererBackend->setSelectionOutlineId(
+        outlineEntity && !outlineUsesGeometry(*outlineEntity)
+            ? cachedOutlineObjectId
+            : 0);
     gpuPickSceneDebugQueueActive =
         rendererBackend->requestGpuPick(sceneRequest) != 0;
     gpuPickRegistry().clear();
@@ -6210,6 +6974,17 @@ void render()
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
   drawLargeCoordinateObjects(viewRte, projection, orbitCam.Position, drawOrder, logDepth);
+
+  // Draw line-like outlines before the original CAD overlays.  The overlay
+  // view is sequential, so the source line strokes/curves composite on top of
+  // their wider outline instead of the outline covering them.
+  drawLineLikeOutline(viewRte, overlayProjection, cameraPos, frontVec,
+                      pixelSize, logDepth);
+  drawSolidFillOutline(viewRte, overlayProjection, cameraPos,
+                       pixelSize, logDepth);
+  drawCadPointOutline(viewRte, overlayProjection, cameraPos, frontVec,
+                      pixelSize, logDepth);
+
   drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
                            orbitCam.Position, logDepth,
                            cameraPos, frontVec, cameraRight, cameraUp,
@@ -6226,7 +7001,11 @@ void render()
   // Tiny mesh impostors are renderable entities too.  Their full-scene ID
   // representation is a small camera-facing quad, matching the visible
   // two-pixel point rather than silently omitting it from the ID pass.
-  if (gpuPickSceneDebugQueueActive && !tinyDraws.empty())
+  // Tiny mesh impostors must also join the one-pixel pick pass: the CPU
+  // fallback raycast can hit a tiny mesh the visible-draw queue skipped, and
+  // the fallback outline lookup can only resolve ids that were registered.
+  if ((gpuPickSceneDebugQueueActive || gpuPickFocusWaiting()) &&
+      !tinyDraws.empty())
   {
     static std::vector<rendering::FillVertex> tinyMeshPickVertices;
     const glm::vec3 pickRight(orbitCam.Right);
@@ -6245,7 +7024,10 @@ void render()
               ? double(pixelSize)
               : double(pixelSize) * std::max(0.05, depth) /
                     std::max(0.05, referenceDistance);
-      const float radius = std::max(1.0f, float(1.5 * objectPixelSize));
+      // The visible impostor is a disc with a 2-pixel radius; the ID quad
+      // must have the same projected radius, while retaining a small
+      // screen-space minimum for extreme zoom-out.
+      const float radius = std::max(1.5f, float(2.0 * objectPixelSize));
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::MeshObject, object, nullptr});
       const glm::vec4 idColor = encodeGpuPickId(objectId);
@@ -6338,9 +7120,23 @@ void render()
     else if (outlineEntity)
     {
       if (gpuPickSceneDebugQueueActive)
-        outlineId = findGpuPickObjectIdForEntity(*outlineEntity);
+        cachedOutlineObjectId =
+            findGpuPickObjectIdForEntity(*outlineEntity);
+      // Reuse the cached id on idle frames; the ID texture is unchanged.
+      outlineId = cachedOutlineObjectId;
     }
-    (*rendererBackend).setSelectionOutlineId(outlineId);
+    (*rendererBackend).setSelectionOutlineId(
+        outlineEntity && !outlineUsesGeometry(*outlineEntity) ? outlineId : 0);
+    if (pickDebugEnabled())
+    {
+      static uint32_t lastLoggedOutlineId = 0xffffffffu;
+      if (outlineId != lastLoggedOutlineId)
+      {
+        lastLoggedOutlineId = outlineId;
+        std::printf("[PICK_DEBUG] outlineId=%u sceneQueueActive=%d\n",
+                    outlineId, gpuPickSceneDebugQueueActive ? 1 : 0);
+      }
+    }
   }
   // Present normalization does not need a full-frame readback; expose the
   // range assigned while this frame's entities were queued.
@@ -6387,6 +7183,19 @@ int main(int argc, char *argv[])
   cubeWorldPosition =
       LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
   fitCameraToStressField();
+
+  // Debug helper: jump the startup camera straight to a world point.
+  // GRID_CAMERA_START_TARGET=x,y,z[,distance]
+  if (const char *startTarget = std::getenv("GRID_CAMERA_START_TARGET"))
+  {
+    double tx = 0.0, ty = 0.0, tz = 0.0, dist = 1500.0;
+    if (std::sscanf(startTarget, "%lf,%lf,%lf,%lf", &tx, &ty, &tz, &dist) >= 3)
+    {
+      orbitCam.setOrbit(glm::dvec3(tx, ty, tz), std::max(1.0, dist));
+      std::cout << "Camera start target: (" << tx << ", " << ty << ", "
+                << tz << ") distance=" << dist << std::endl;
+    }
+  }
   if (runCadPickAudit())
   {
     close();

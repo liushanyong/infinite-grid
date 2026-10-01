@@ -59,6 +59,7 @@ public:
                               uint32_t objectId,
                               uint8_t occlusionRank = 2) override;
     GpuPickResult pollGpuPick() override;
+    void cancelGpuPick() override;
     uint32_t loadMeshTexture(const std::string &path) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
 
