@@ -5558,11 +5558,16 @@ static void appendOutlineRibbon(std::vector<rendering::PrimVertex> &vertices,
 
 // Draw a solid fill outline from the same tessellated boundary used by the
 // renderer.  Shared triangle edges are skipped, so triangulated hatches and
-// solids get one clean silhouette instead of internal mesh edges.  Each edge
-// is offset away from its triangle interior; the original fill remains inside.
+// solids get one clean silhouette instead of internal mesh edges.  The
+// boundary is redrawn as camera-facing ribbons (like the line-like
+// outlines), so the visible outline width stays constant at every viewing
+// angle; an in-plane outward offset would foreshorten to zero when the fill
+// is viewed edge-on.  The fill itself is submitted after this pass in the
+// sequential overlay view and covers the inner half of each ribbon.
 static void drawSolidFillOutline(const glm::mat4 &view,
                                  const glm::mat4 &overlayProjection,
                                  const glm::dvec3 &cameraPos,
+                                 const glm::vec3 &cameraFront,
                                  float pixelSizeWorld,
                                  const glm::vec4 &logDepth)
 {
@@ -5599,7 +5604,6 @@ static void drawSolidFillOutline(const glm::mat4 &view,
     {
         glm::dvec3 start;
         glm::dvec3 end;
-        glm::dvec3 opposite;
     };
 
     std::map<BoundaryKey, std::vector<BoundaryUse>> boundaryUses;
@@ -5618,52 +5622,29 @@ static void drawSolidFillOutline(const glm::mat4 &view,
         };
         for (const auto &edge : edges)
             boundaryUses[canonical(edge.first, edge.second)].push_back(
-                {edge.first, edge.second, triangle.a + triangle.b +
-                 triangle.c - edge.first - edge.second});
+                {edge.first, edge.second});
     };
     for (size_t i = range.begin; i < last; ++i)
         addTriangle(tess.fills[i]);
 
     static std::vector<rendering::PrimVertex> outlineVertices;
     outlineVertices.clear();
-    // Solid-fill ribbons are offset outward on one side only. Use two copies
-    // of the shared half-width so the total visible width matches line-like
-    // outlines: source width + 2 * kOutlineWidthPixels.
+    // The fill covers the ribbon's inner half, so only the outward half is
+    // visible. Use two copies of the shared half-width to keep the visible
+    // border at 2 * kOutlineWidthPixels, matching the previous in-plane
+    // offset thickness.
     const float outlineWidth = 2.0f * outlineWidthWorld(pixelSizeWorld);
-    auto appendOutwardRibbon = [&](const glm::dvec3 &worldStart,
-                                    const glm::dvec3 &worldEnd,
-                                    const glm::dvec3 &worldOpposite) {
-        const glm::dvec3 edge = worldEnd - worldStart;
-        const glm::dvec3 toOpposite = worldOpposite - worldStart;
-        const double edgeLength = glm::length(edge);
-        if (edgeLength < 1.0e-12)
-            return;
-        glm::dvec3 planeNormal = glm::cross(edge, toOpposite);
-        const double planeNormalLength = glm::length(planeNormal);
-        if (planeNormalLength < 1.0e-12)
-            return;
-        planeNormal /= planeNormalLength;
-        glm::dvec3 outward = glm::cross(glm::normalize(edge), planeNormal);
-        if (glm::dot(outward, toOpposite) > 0.0)
-            outward = -outward;
-
-        const glm::vec3 start = glm::vec3(worldStart - cameraPos);
-        const glm::vec3 end = glm::vec3(worldEnd - cameraPos);
-        const glm::vec3 offset = glm::vec3(outward * double(outlineWidth));
-        outlineVertices.push_back({start, kOutlineColor, {0.0f, 0.0f}});
-        outlineVertices.push_back({start + offset, kOutlineColor, {0.0f, 1.0f}});
-        outlineVertices.push_back({end + offset, kOutlineColor, {1.0f, 1.0f}});
-        outlineVertices.push_back({start, kOutlineColor, {0.0f, 0.0f}});
-        outlineVertices.push_back({end + offset, kOutlineColor, {1.0f, 1.0f}});
-        outlineVertices.push_back({end, kOutlineColor, {1.0f, 0.0f}});
-    };
-
     for (const auto &[key, uses] : boundaryUses)
     {
         (void)key;
         if (uses.size() == 1)
-            appendOutwardRibbon(uses.front().start, uses.front().end,
-                                uses.front().opposite);
+        {
+            appendOutlineRibbon(
+                outlineVertices,
+                glm::vec3(uses.front().start - cameraPos),
+                glm::vec3(uses.front().end - cameraPos),
+                cameraFront, outlineWidth, 0.0f, 1.0f, true);
+        }
     }
 
     if (outlineVertices.empty())
@@ -6980,7 +6961,7 @@ void render()
   // their wider outline instead of the outline covering them.
   drawLineLikeOutline(viewRte, overlayProjection, cameraPos, frontVec,
                       pixelSize, logDepth);
-  drawSolidFillOutline(viewRte, overlayProjection, cameraPos,
+  drawSolidFillOutline(viewRte, overlayProjection, cameraPos, frontVec,
                        pixelSize, logDepth);
   drawCadPointOutline(viewRte, overlayProjection, cameraPos, frontVec,
                       pixelSize, logDepth);
