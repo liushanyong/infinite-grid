@@ -154,6 +154,10 @@ struct MeshInstancesRenderData
     float triplanarUv = 0.0f;
     bool realistic = false;
     glm::vec4 material = glm::vec4(0.0f, 0.35f, 0.0f, 0.5f);
+    // CAD feature edges are drawn as screen-space ribbons.  These fields keep
+    // the visible core at least one pixel wide and share the line AA rule.
+    float edgeHalfWidth = 1.0f;
+    float edgeSoftness = 0.15f;
 };
 
 enum class SurfaceAlgorithm
@@ -239,6 +243,9 @@ struct CadAlgorithmDemoRenderData
     glm::vec4 logDepth;
     DoubleSingleVec3 eye;
     SurfaceMaterial material;
+    // Feature edges use screen-space ribbons for reliable line AA.
+    float edgeHalfWidth = 1.0f;
+    float edgeSoftness = 0.15f;
 };
 
 // A one-pixel GPU id pass. The full-camera projection is kept here for
@@ -260,6 +267,7 @@ struct GpuPickQueueStats
     size_t meshCapacity = 0;
     size_t triangleCapacity = 0;
     size_t queuedMeshes = 0;
+    size_t queuedEdges = 0;
     size_t queuedTriangles = 0;
     size_t droppedMeshes = 0;
     size_t droppedTriangles = 0;
@@ -304,6 +312,30 @@ struct PolylineRenderData
     glm::vec4 logDepth;
     float edgeSoftness = 0.15f; // ribbon units faded at the edges
     float layer = 0.0f;
+};
+
+struct LineInstance
+{
+    // Relative to the current rebase origin. w carries the along-line
+    // parameter used by dash patterns.
+    glm::vec4 start;
+    glm::vec4 end;
+    // rgb is stroke color, a is the instance half-width.
+    glm::vec4 color;
+    // x is stroke alpha; yz are reserved.
+    glm::vec4 params;
+};
+
+struct LineInstancesRenderData
+{
+    glm::mat4 view;
+    glm::mat4 projection;
+    const LineInstance *instances = nullptr;
+    uint32_t instanceCount = 0;
+    glm::vec4 logDepth;
+    float edgeSoftness = 0.15f;
+    float layer = 0.0f;
+    float dash = 0.0f;
 };
 
 struct FilledTrianglesRenderData
@@ -378,6 +410,7 @@ public:
     virtual RenderMode renderMode() const = 0;
     virtual RenderModeFlags renderModeFlags() const = 0;
     virtual void drawPolylines(const PolylineRenderData &data) = 0;
+    virtual void drawLineInstances(const LineInstancesRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
     virtual void drawCurves(const CurveRenderData &data) {}
     virtual void requestDebugScreenShot(const std::string &) {}

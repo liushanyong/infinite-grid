@@ -50,6 +50,10 @@ struct Stroke
     std::vector<glm::dvec3> points;
     bool closed = false;
     double lineWeight = 0.0;
+    // The stored endpoint is only a tessellation proxy. Renderers and pickers
+    // must treat the geometry as starting at points[0] and continuing forever
+    // along points[1] - points[0].
+    bool semiInfinite = false;
 };
 
 struct Triangle
@@ -388,8 +392,15 @@ inline void tessellate(const Spline &spline, TessellatedEntity &result,
 inline void tessellate(const Ray &ray, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
-    appendSegment(result, ray.start,
-                  ray.start + glm::normalize(ray.direction) * options.rayLength);
+    const double directionLength = glm::length(ray.direction);
+    if (directionLength <= 1.0e-18)
+        return;
+
+    Stroke &stroke = addStroke(result);
+    stroke.points = {ray.start,
+                     ray.start + ray.direction / directionLength *
+                                      options.rayLength};
+    stroke.semiInfinite = true;
 }
 
 inline void tessellate(const Hatch &hatch, TessellatedEntity &result,

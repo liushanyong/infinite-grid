@@ -200,6 +200,19 @@ public:
         lights_.reset();
     }
 
+    // Frame lists are rebuilt every frame. Keeping vector capacity avoids a
+    // full free/alloc cycle while still releasing the contained commands.
+    void clearKeepCapacity()
+    {
+        geometry_.strokes.clear();
+        geometry_.fills.clear();
+        geometry_.points.clear();
+        meshBatches_.clear();
+        curveBatches_.clear();
+        grid_.reset();
+        lights_.reset();
+    }
+
 private:
     entities::TessellatedEntity geometry_;
     std::vector<MeshBatchCommand> meshBatches_;

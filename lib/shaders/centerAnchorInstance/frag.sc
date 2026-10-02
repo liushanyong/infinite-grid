@@ -46,7 +46,7 @@ void main()
     float alpha = v_color.w;
     if (uEdgeOverride.x > 0.5)
     {
-        color = vec3(0.05, 0.06, 0.08);
+        color = vec3(0.95, 0.94, 0.92);
         alpha = 1.0;
     }
     gl_FragColor = vec4(color, alpha);

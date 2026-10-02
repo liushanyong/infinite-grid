@@ -37,6 +37,7 @@ public:
     RenderMode renderMode() const override;
     RenderModeFlags renderModeFlags() const override;
     void drawPolylines(const PolylineRenderData &data) override;
+    void drawLineInstances(const LineInstancesRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
     void requestDebugScreenShot(const std::string &filePath) override;
     void setGpuPickDebugVisible(bool visible) override;
@@ -83,6 +84,17 @@ private:
     void renderGpuPickDebugPass(const glm::mat4 &projection);
     void completeGpuPickDebugReadback();
     void renderSelectionOutlinePass();
+    void drawEdgeRibbonsForInstances(
+        const glm::mat4 &view,
+        const glm::mat4 &projection,
+        const DoubleSingleVec3 &eye,
+        const MeshInstance *instances,
+        uint32_t instanceCount,
+        MeshType mesh,
+        float layer,
+        const glm::vec4 &logDepth,
+        float edgeHalfWidth,
+        float edgeSoftness);
 
     SDL_Window *m_window = nullptr;
     GraphicsApi m_api = GraphicsApi::Auto;
@@ -143,6 +155,9 @@ private:
     bgfx::UniformHandle m_cadStrokeParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_cadFlatShade = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_polylineProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle m_lineInstanceProgram = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_lineInstanceQuadBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout m_lineInstanceLayout;
     bgfx::ProgramHandle m_fillProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_curveProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_curveCP = BGFX_INVALID_HANDLE;
@@ -201,7 +216,6 @@ private:
     bgfx::FrameBufferHandle m_gpuPickFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle m_gpuPickReadback = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_gpuPickProgram = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle m_gpuPickObjectId = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickCubeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickSphereBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickConeBuffer = BGFX_INVALID_HANDLE;

@@ -39,6 +39,7 @@ public:
     void drawTargetPointInstances(const TargetPointInstancesRenderData &data) override;
     void drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data) override;
     void drawPolylines(const PolylineRenderData &data) override;
+    void drawLineInstances(const LineInstancesRenderData &data) override {}
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
 
     void setRenderMode(RenderMode mode) override;

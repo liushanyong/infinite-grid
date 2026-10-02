@@ -6,3 +6,4 @@ vec4 i_data2 : TEXCOORD5;
 vec4 i_data3 : TEXCOORD4;
 vec4 i_data4 : TEXCOORD3;
 float v_pickDepth : TEXCOORD0;
+vec4 v_objectId : COLOR0;
