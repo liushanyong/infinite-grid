@@ -5,6 +5,10 @@
 // AcGeMatrix3d's entry[0..3][0..3].
 
 #include <glm/glm.hpp>
+#ifndef GLM_ENABLE_EXPERIMENTAL
+#define GLM_ENABLE_EXPERIMENTAL
+#endif
+#include <glm/gtx/transform.hpp>
 
 #include "gepoint.h"
 

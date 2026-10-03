@@ -8,3 +8,8 @@
 #include "gematrix.h"
 #include "gecurve3d.h"
 #include "geutil.h"
+#include "genurbscore.h"
+#include "gebspline.h"
+#include "geintersect.h"
+#include "geproject.h"
+#include "geoctree.h"

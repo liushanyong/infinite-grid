@@ -162,8 +162,8 @@ inline void tessellate(const Arc &arc, TessellatedEntity &result,
         const double t = static_cast<double>(i) / segments;
         const double angle = arc.startAngle + sweep * t;
         stroke.points.push_back(arc.center +
-            u * (arc.radius * std::cos(angle)) +
-            v * (arc.radius * std::sin(angle)));
+            AcGeVector3d(u * (arc.radius * std::cos(angle)) +
+                         v * (arc.radius * std::sin(angle))));
     }
 
     // DWG arcs carry an extrusion thickness: the curve extrudes into wall
@@ -224,8 +224,9 @@ inline void tessellate(const Ellipse &ellipse, TessellatedEntity &result,
         const double t = static_cast<double>(i) / segments;
         const double angle = ellipse.startParameter + sweep * t;
         stroke.points.push_back(ellipse.center +
-            u * (majorLength * std::cos(angle)) +
-            v * (majorLength * ellipse.radiusRatio * std::sin(angle)));
+            AcGeVector3d(u * (majorLength * std::cos(angle)) +
+                         v * (majorLength * ellipse.radiusRatio *
+                              std::sin(angle))));
     }
     if (std::abs(sweep - glm::two_pi<double>()) < 1.0e-12)
         stroke.closed = true;
@@ -684,9 +685,10 @@ inline void tessellate(const Text &text, TessellatedEntity &result,
     Stroke &frame = addStroke(result, true);
     frame.points.reserve(5);
     frame.points.push_back(text.insertion);
-    frame.points.push_back(text.insertion + right * width);
-    frame.points.push_back(text.insertion + right * width + up * text.height);
-    frame.points.push_back(text.insertion + up * text.height);
+    frame.points.push_back(text.insertion + AcGeVector3d(right * width));
+    frame.points.push_back(text.insertion +
+                           AcGeVector3d(right * width + up * text.height));
+    frame.points.push_back(text.insertion + AcGeVector3d(up * text.height));
     frame.points.push_back(text.insertion);
     result.points.push_back({text.insertion});
 }
@@ -729,9 +731,9 @@ inline void tessellate(const MText &text, TessellatedEntity &result,
                                double(std::max(size_t(1), lineBreaks + 1));
     frame.points.reserve(5);
     frame.points.push_back(text.insertion);
-    frame.points.push_back(text.insertion + right * width);
-    frame.points.push_back(text.insertion + right * width + up * frameHeight);
-    frame.points.push_back(text.insertion + up * frameHeight);
+    frame.points.push_back(text.insertion + AcGeVector3d(right * width));
+    frame.points.push_back(text.insertion + AcGeVector3d(right * width + up * frameHeight));
+    frame.points.push_back(text.insertion + AcGeVector3d(up * frameHeight));
     frame.points.push_back(text.insertion);
     result.points.push_back({text.insertion});
 }

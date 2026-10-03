@@ -158,10 +158,10 @@ public:
         entities::Stroke &frame = sink().addStroke(true);
         frame.points.reserve(5);
         frame.points.push_back(apply(position));
-        frame.points.push_back(apply(position + right * width));
+        frame.points.push_back(apply(position + AcGeVector3d(right * width)));
         frame.points.push_back(
-            apply(position + right * width + frameHeight));
-        frame.points.push_back(apply(position + frameHeight));
+            apply(position + AcGeVector3d(right * width + frameHeight)));
+        frame.points.push_back(apply(position + AcGeVector3d(frameHeight)));
         frame.points.push_back(apply(position));
         applyTraits(frame);
         worldPoint(position);

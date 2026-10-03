@@ -7,6 +7,7 @@
 // through implicit conversions for the tessellation bridge.
 
 #include <glm/glm.hpp>
+#include <type_traits>
 
 struct AcGeVector2d
 {
@@ -170,11 +171,27 @@ struct AcGePoint3d
     }
 
     AcGeVector3d asVector() const { return {x, y, z}; }
-    AcGePoint3d operator+(const AcGeVector3d &o) const
+    AcGePoint3d operator*(double s) const
+    {
+        return {x * s, y * s, z * s};
+    }
+    // Component-wise point addition (ObjectARX keeps point+point too).
+    AcGePoint3d operator+(const AcGePoint3d &o) const
     {
         return {x + o.x, y + o.y, z + o.z};
     }
-    AcGePoint3d operator-(const AcGeVector3d &o) const
+    // The vector overloads are templates constrained to AcGeVector3d so a
+    // bare glm::dvec3 operand resolves uniquely to the point overload
+    // (otherwise point + dvec3 would be ambiguous between the two).
+    template <typename T,
+              typename = std::enable_if_t<std::is_same_v<T, AcGeVector3d>>>
+    AcGePoint3d operator+(const T &o) const
+    {
+        return {x + o.x, y + o.y, z + o.z};
+    }
+    template <typename T,
+              typename = std::enable_if_t<std::is_same_v<T, AcGeVector3d>>>
+    AcGePoint3d operator-(const T &o) const
     {
         return {x - o.x, y - o.y, z - o.z};
     }
@@ -182,8 +199,24 @@ struct AcGePoint3d
     {
         return {x - o.x, y - o.y, z - o.z};
     }
-    AcGePoint3d &operator+=(const AcGeVector3d &o) { x += o.x; y += o.y; z += o.z; return *this; }
-    AcGePoint3d &operator-=(const AcGeVector3d &o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
+    template <typename T,
+              typename = std::enable_if_t<std::is_same_v<T, AcGeVector3d>>>
+    AcGePoint3d &operator+=(const T &o)
+    {
+        x += o.x;
+        y += o.y;
+        z += o.z;
+        return *this;
+    }
+    template <typename T,
+              typename = std::enable_if_t<std::is_same_v<T, AcGeVector3d>>>
+    AcGePoint3d &operator-=(const T &o)
+    {
+        x -= o.x;
+        y -= o.y;
+        z -= o.z;
+        return *this;
+    }
     bool operator==(const AcGePoint3d &o) const { return x == o.x && y == o.y && z == o.z; }
     bool operator!=(const AcGePoint3d &o) const { return !(*this == o); }
 };
