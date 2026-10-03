@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "../ge/ge.h"
 #include "entity_common.h"
 
 namespace entities
@@ -13,8 +14,8 @@ namespace entities
 struct Hatch
 {
     EntityCommon common;
-    std::vector<glm::dvec3> outerLoop;
-    std::vector<std::vector<glm::dvec3>> innerLoops;
+    std::vector<AcGePoint3d> outerLoop;
+    std::vector<std::vector<AcGePoint3d>> innerLoops;
     bool solidFill = true;
     std::string patternName = "SOLID";
     double patternScale = 1.0;

@@ -62,6 +62,20 @@ public:
         return geometry_;
     }
 
+    // Low-level primitive emitters for the AcGiWorldDraw callback layer,
+    // which applies traits itself per callback.
+    entities::Stroke &addStroke(bool closed = false)
+    {
+        geometry_.strokes.push_back(entities::Stroke{});
+        geometry_.strokes.back().closed = closed;
+        return geometry_.strokes.back();
+    }
+
+    void appendTriangle(const entities::Triangle &triangle)
+    {
+        geometry_.fills.push_back(triangle);
+    }
+
     struct EntityRanges
     {
         size_t strokeBegin = 0;

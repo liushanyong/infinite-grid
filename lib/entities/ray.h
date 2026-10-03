@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include "../ge/ge.h"
 #include "entity_common.h"
 
 namespace entities
@@ -10,8 +11,8 @@ namespace entities
 struct Ray
 {
     EntityCommon common;
-    glm::dvec3 start{0.0};
-    glm::dvec3 direction{1.0, 0.0, 0.0};
+    AcGePoint3d start{0.0, 0.0, 0.0};
+    AcGeVector3d direction{1.0, 0.0, 0.0};
 };
 
 } // namespace entities

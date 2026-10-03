@@ -174,7 +174,7 @@ inline void tessellate(const Ellipse &ellipse, TessellatedEntity &result,
         !(ellipse.radiusRatio > 0.0) ||
         !std::isfinite(ellipse.radiusRatio))
         return;
-    const glm::dvec3 n = glm::normalize(ellipse.normal);
+    const glm::dvec3 n = glm::normalize(glm::dvec3(ellipse.normal));
     const glm::dvec3 u = major / majorLength;
     const glm::dvec3 v = glm::normalize(glm::cross(n, u));
     double sweep = std::fmod(ellipse.endParameter - ellipse.startParameter,
@@ -234,7 +234,7 @@ inline void tessellatePolyline(const PolylineType &polyline,
     const size_t vertexCount = polyline.vertices.size();
     if (vertexCount < 2)
         return;
-    const glm::dvec3 normal = glm::normalize(polyline.normal);
+    const glm::dvec3 normal = glm::dvec3(polyline.normal.normal());
     Stroke &stroke = addStroke(result, polyline.closed);
     stroke.points.push_back(pointAt(polyline, 0));
     const size_t segmentCount = polyline.closed ? vertexCount : vertexCount - 1;
@@ -414,7 +414,7 @@ inline void tessellate(const Spline &spline, TessellatedEntity &result,
 inline void tessellate(const Ray &ray, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
-    const double directionLength = glm::length(ray.direction);
+    const double directionLength = ray.direction.length();
     if (directionLength <= 1.0e-18)
         return;
 
@@ -432,11 +432,11 @@ inline void tessellate(const Ray &ray, TessellatedEntity &result,
 inline void tessellate(const XLine &xline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
-    const double directionLength = glm::length(xline.direction);
+    const double directionLength = xline.direction.length();
     if (directionLength <= 1.0e-18)
         return;
 
-    const glm::dvec3 offset =
+    const AcGeVector3d offset =
         xline.direction / directionLength * options.rayLength;
     Stroke &forward = addStroke(result);
     forward.points = {xline.point, xline.point + offset};
@@ -475,22 +475,22 @@ inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
     std::vector<std::vector<glm::dvec2>> loops;
     glm::dvec2 low(0.0, 0.0);
     glm::dvec2 high(0.0, 0.0);
-    auto addLoop = [&](const std::vector<glm::dvec3> &loop) {
+    auto addLoop = [&](const std::vector<AcGePoint3d> &loop) {
         if (loop.size() < 3)
             return;
         std::vector<glm::dvec2> flat;
         flat.reserve(loop.size());
         for (const glm::dvec3 &point : loop)
         {
-            flat.emplace_back(glm::dot(point - origin, u),
-                              glm::dot(point - origin, v));
+            const AcGeVector3d delta = point - origin;
+            flat.emplace_back(delta.dotProduct(u), delta.dotProduct(v));
             low = glm::min(low, flat.back());
             high = glm::max(high, flat.back());
         }
         loops.push_back(std::move(flat));
     };
     addLoop(hatch.outerLoop);
-    for (const std::vector<glm::dvec3> &loop : hatch.innerLoops)
+    for (const std::vector<AcGePoint3d> &loop : hatch.innerLoops)
         addLoop(loop);
     if (loops.empty())
         return;
@@ -567,10 +567,10 @@ inline void tessellate(const MLine &mline, TessellatedEntity &result,
     glm::dvec3 normal(0.0, 0.0, 1.0);
     for (size_t i = 0; i + 1 < count; ++i)
     {
-        const glm::dvec3 tangent = mline.vertices[i + 1] - mline.vertices[i];
-        if (glm::length2(tangent) > 1.0e-18)
+        const AcGeVector3d tangent = mline.vertices[i + 1] - mline.vertices[i];
+        if (tangent.lengthSq() > 1.0e-18)
         {
-            normal = glm::normalize(glm::cross(tangent, glm::dvec3(0.0, 0.0, 1.0)));
+            normal = tangent.crossProduct(AcGeVector3d(0.0, 0.0, 1.0)).normal();
             break;
         }
     }
@@ -644,8 +644,8 @@ inline void tessellate(const MText &text, TessellatedEntity &result,
                              ? text.width
                              : std::max(double(longest) * text.height * 0.6,
                                         text.height);
-    const glm::dvec3 right = glm::length(text.direction) > 1.0e-12
-                                 ? glm::normalize(text.direction)
+    const glm::dvec3 right = text.direction.length() > 1.0e-12
+                                 ? glm::dvec3(text.direction.normal())
                                  : glm::dvec3(1.0, 0.0, 0.0);
     const glm::dvec3 up = glm::normalize(glm::cross(
         glm::dvec3(0.0, 0.0, 1.0), right));
@@ -695,11 +695,11 @@ inline void tessellate(const Solid3d &solid, TessellatedEntity &result,
         }
         result.fills.push_back(
             Triangle{{}, positions[a], positions[b], positions[c]});
-        const glm::dvec3 normal = glm::cross(positions[b] - positions[a],
-                                             positions[c] - positions[a]);
-        if (glm::dot(normal, normal) <= 1.0e-24)
+        const AcGeVector3d normal = (positions[b] - positions[a])
+            .crossProduct(positions[c] - positions[a]);
+        if (normal.lengthSq() <= 1.0e-24)
             continue; // a degenerate triangle carries no orientation
-        const glm::dvec3 unit = glm::normalize(normal);
+        const glm::dvec3 unit = glm::dvec3(normal.normal());
         const auto record = [&](uint32_t u, uint32_t v) {
             edgeNormals[{std::min(u, v), std::max(u, v)}].push_back(unit);
         };

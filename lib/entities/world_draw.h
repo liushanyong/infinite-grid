@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include "scene/DrawContext.h"
+#include "../acgi/AcGiWorldDraw.h"
 #include "tessellate.h"
 
 namespace entities
@@ -31,22 +32,38 @@ inline void worldDraw(const EntityType &entity, scene::WorldDraw &draw,
 inline void worldDraw(const Arc &arc, scene::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
-    worldDraw(arc, draw, draw.optionsFor(arc.radius), fillIs3DFace);
+    AcGiWorldDraw graphics(draw);
+    graphics.worldCircle(AcGeCircArc3d(arc.center, arc.normal, arc.radius,
+                                       arc.startAngle, arc.endAngle));
 }
 
 inline void worldDraw(const Circle &circle, scene::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
-    worldDraw(circle, draw, draw.optionsFor(circle.radius), fillIs3DFace);
+    AcGiWorldDraw graphics(draw);
+    graphics.worldCircle(AcGeCircArc3d(circle.center, circle.normal,
+                                       circle.radius));
 }
+
+// Protocol-pattern overloads: these entities draw themselves through the
+// AcGiWorldDraw callback interface instead of tessellating up front, which
+// is how ObjectARX custom entities emit geometry.
 
 inline void worldDraw(const Ellipse &ellipse, scene::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
-    const double majorLength = glm::length(ellipse.majorAxis);
-    const double minorLength = majorLength * ellipse.radiusRatio;
-    const double radius = std::max(majorLength, minorLength);
-    worldDraw(ellipse, draw, draw.optionsFor(radius), fillIs3DFace);
+    AcGiWorldDraw graphics(draw);
+    graphics.worldEllipse(AcGeEllip3d(ellipse.center, ellipse.majorAxis,
+                                      ellipse.normal, ellipse.radiusRatio,
+                                      ellipse.startParameter,
+                                      ellipse.endParameter));
+}
+
+inline void worldDraw(const Line &line, scene::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    graphics.worldLine(line.start, line.end);
 }
 
 // A Solid3d renders its fill with the entity color and its feature-edge

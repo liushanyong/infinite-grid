@@ -1802,7 +1802,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
                            glm::dvec2(256.0, -448.0)};
     lwpolyline.elevation = cadAnchor.z;
     lwpolyline.closed = true;
-    for (glm::dvec2 &vertex : lwpolyline.vertices)
+    for (AcGePoint2d &vertex : lwpolyline.vertices)
       vertex += glm::dvec2(cadAnchor);
     appendVectorPrimitive(lwpolyline, "LwPolyline", options, target);
 
@@ -2021,11 +2021,11 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     appendVectorPrimitive(dashedArrow, "DashedArrow", options, target);
 
     {
-      const glm::dvec3 dir =
-          glm::normalize(dashedArrow.end - dashedArrow.start);
+      const glm::dvec3 dir = glm::dvec3(
+          (dashedArrow.end - dashedArrow.start).normal());
       const glm::dvec3 side =
           glm::normalize(glm::cross(dir, glm::dvec3(0.0, 0.0, 1.0))) * 24.0;
-      const glm::dvec3 base = dashedArrow.end - dir * 48.0;
+      const glm::dvec3 base = dashedArrow.end - AcGeVector3d(dir) * 48.0;
       entities::Solid arrowHead;
       arrowHead.common = dashedArrow.common;
       arrowHead.firstCorner = dashedArrow.end;

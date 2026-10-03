@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "../ge/ge.h"
 #include "entity_common.h"
 
 namespace entities
@@ -12,7 +13,7 @@ namespace entities
 struct Text
 {
     EntityCommon common;
-    glm::dvec3 insertion{0.0};
+    AcGePoint3d insertion{0.0, 0.0, 0.0};
     double height = 1.0;
     double rotation = 0.0;
     std::string text;

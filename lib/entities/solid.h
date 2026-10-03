@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include "../ge/ge.h"
 #include "entity_common.h"
 
 namespace entities
@@ -10,10 +11,10 @@ namespace entities
 struct Solid
 {
     EntityCommon common;
-    glm::dvec3 firstCorner{0.0};
-    glm::dvec3 secondCorner{0.0};
-    glm::dvec3 thirdCorner{0.0};
-    glm::dvec3 fourthCorner{0.0};
+    AcGePoint3d firstCorner{0.0, 0.0, 0.0};
+    AcGePoint3d secondCorner{0.0, 0.0, 0.0};
+    AcGePoint3d thirdCorner{0.0, 0.0, 0.0};
+    AcGePoint3d fourthCorner{0.0, 0.0, 0.0};
 };
 
 } // namespace entities

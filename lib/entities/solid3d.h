@@ -4,6 +4,7 @@
 
 #include <vector>
 
+#include "../ge/ge.h"
 #include "entity_common.h"
 #include "render_class.h"
 
@@ -13,7 +14,7 @@ namespace entities
 struct Solid3d
 {
     EntityCommon common;
-    std::vector<glm::dvec3> vertices;
+    std::vector<AcGePoint3d> vertices;
     std::vector<std::uint32_t> indices;
     RenderClass renderClass = RenderClass::Cad;
 };
