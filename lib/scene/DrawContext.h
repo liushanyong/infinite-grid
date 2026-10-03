@@ -76,6 +76,11 @@ public:
         geometry_.fills.push_back(triangle);
     }
 
+    void appendPoint(const entities::TessellatedPoint &point)
+    {
+        geometry_.points.push_back(point);
+    }
+
     struct EntityRanges
     {
         size_t strokeBegin = 0;

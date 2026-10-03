@@ -11,6 +11,7 @@
 #include "entities/world_draw.h"
 #include "libredwg/include/dwg.h"
 #include "entities/dwg_bridge.h"
+#include "acgi/AcGiLineType.h"
 #include "scene/DrawContext.h"
 #include "scene/SceneDrawList.h"
 #include "rendering/ProceduralMesh.h"
@@ -1032,23 +1033,14 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
                                       const glm::vec3 &rb,
                                       const entities::Stroke &stroke) {
     const std::string &type = stroke.common.lineType;
-    std::vector<std::pair<float, bool>> pattern;
-    if (type == "DASHED")
-      pattern = {{96.0f, true}, {48.0f, false}};
-    else if (type == "HIDDEN")
-      pattern = {{24.0f, true}, {12.0f, false}};
-    else if (type == "CENTER")
-      pattern = {{96.0f, true}, {12.0f, false}, {24.0f, true}, {24.0f, false}};
-    else if (type == "DOT")
-      pattern = {{2.0f, true}, {8.0f, false}};
-    else if (type == "PHANTOM")
-      pattern = {{48.0f, true}, {8.0f, false}, {12.0f, true}, {8.0f, false},
-                 {12.0f, true}, {24.0f, false}};
-    else
+    const AcGiLineType *lineType = acgiFindLineType(type.c_str());
+    if (!lineType)
     {
       appendAcGiRibbon(ra, rb, stroke.common.color, 0.0f, 0.0f, 0.0f);
       return;
     }
+    const std::vector<AcGiLineTypeMark> pattern =
+        acgiLineTypeMarks(*lineType);
 
     const float halfWidth = strokeHalfWidth(stroke);
     const glm::dvec3 start(ra);
@@ -1059,15 +1051,15 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
 
     double patternLength = 0.0;
     for (const auto &mark : pattern)
-      patternLength += std::abs(mark.first);
+      patternLength += mark.length;
     double distance = 0.0;
     size_t markIndex = 0;
     while (distance < total && !pattern.empty())
     {
       const auto &mark = pattern[markIndex % pattern.size()];
-      const double markLength = std::abs(mark.first);
+      const double markLength = mark.length;
       const double next = std::min(distance + markLength, total);
-      if (mark.second && next > distance)
+      if (mark.stroke && next > distance)
       {
         appendAcGiRibbon(
             glm::vec3(start + (end - start) * (distance / total)),

@@ -260,17 +260,18 @@ inline void tessellate(const Ellipse &ellipse, TessellatedEntity &result,
            planeBasisV(normal) * (radius * std::sin(angle));
 }
 
+// The tessellated outline (bulge arcs subdivided) shared by the direct
+// tessellation path and the AcGiWorldDraw callback path.
 template <typename PolylineType>
-inline void tessellatePolyline(const PolylineType &polyline,
-                               TessellatedEntity &result,
-                               const TesselationOptions &options)
+inline std::vector<AcGePoint3d> polylineOutline(
+    const PolylineType &polyline, const TesselationOptions &options)
 {
+    std::vector<AcGePoint3d> outline;
     const size_t vertexCount = polyline.vertices.size();
     if (vertexCount < 2)
-        return;
+        return outline;
     const glm::dvec3 normal = glm::dvec3(polyline.normal.normal());
-    Stroke &stroke = addStroke(result, polyline.closed);
-    stroke.points.push_back(pointAt(polyline, 0));
+    outline.push_back(pointAt(polyline, 0));
     const size_t segmentCount = polyline.closed ? vertexCount : vertexCount - 1;
     for (size_t i = 0; i < segmentCount; ++i)
     {
@@ -283,44 +284,65 @@ inline void tessellatePolyline(const PolylineType &polyline,
         if (std::abs(bulge) < 1.0e-12)
         {
             if (i != 0)
-                stroke.points.push_back(start);
-            stroke.points.push_back(end);
+                outline.push_back(start);
+            outline.push_back(end);
             continue;
         }
 
-        const double chordLength = glm::length(end - start);
-        const double b2 = bulge * bulge;
         const double included = 4.0 * std::atan(std::abs(bulge));
         const int segments = curveSegmentCount(included, options);
         for (int s = 1; s <= segments; ++s)
         {
             const double t = static_cast<double>(s) / segments;
-            stroke.points.push_back(
+            outline.push_back(
                 bulgeArcPoint(start, end, bulge, t, normal));
         }
-        (void)chordLength;
-        (void)b2;
     }
+    return outline;
+}
+
+// Wall quads for non-zero polyline thickness, expressed as triangles so the
+// AcGi callback path can emit them via worldTriangle.
+template <typename PolylineType>
+inline std::vector<Triangle> polylineWallTriangles(
+    const PolylineType &polyline, const std::vector<AcGePoint3d> &outline)
+{
+    std::vector<Triangle> walls;
+    if (std::abs(polyline.thickness) <= 1.0e-12 || outline.size() < 2)
+        return walls;
+    const glm::dvec3 normal = glm::dvec3(polyline.normal.normal());
+    const glm::dvec3 offset = normal * polyline.thickness;
+    const size_t wallCount =
+        polyline.closed ? outline.size() : outline.size() - 1;
+    walls.reserve(wallCount * 2);
+    for (size_t i = 0; i < wallCount; ++i)
+    {
+        const glm::dvec3 &a = outline[i];
+        const glm::dvec3 &b = outline[(i + 1) % outline.size()];
+        walls.push_back(Triangle{{}, a, b, b + offset});
+        walls.push_back(Triangle{{}, a, b + offset, a + offset});
+    }
+    return walls;
+}
+
+template <typename PolylineType>
+inline void tessellatePolyline(const PolylineType &polyline,
+                               TessellatedEntity &result,
+                               const TesselationOptions &options)
+{
+    const std::vector<AcGePoint3d> outline = polylineOutline(polyline, options);
+    if (outline.size() < 2)
+        return;
+    Stroke &stroke = addStroke(result, polyline.closed);
+    for (const AcGePoint3d &point : outline)
+        stroke.points.push_back(point);
 
     // Non-zero thickness extrudes the outline into wall quads along the
     // polyline normal, so the entity reads as a 3D ribbon instead of a
     // flat curve.  Bulge arcs are subdivided first, so curved segments get
     // per-span walls.
-    if (std::abs(polyline.thickness) > 1.0e-12 && stroke.points.size() >= 2)
-    {
-        const glm::dvec3 offset = normal * polyline.thickness;
-        const size_t wallCount = polyline.closed
-                                     ? stroke.points.size()
-                                     : stroke.points.size() - 1;
-        for (size_t i = 0; i < wallCount; ++i)
-        {
-            const glm::dvec3 &a = stroke.points[i];
-            const glm::dvec3 &b =
-                stroke.points[(i + 1) % stroke.points.size()];
-            result.fills.push_back(Triangle{{}, a, b, b + offset});
-            result.fills.push_back(Triangle{{}, a, b + offset, a + offset});
-        }
-    }
+    for (const Triangle &wall : polylineWallTriangles(polyline, outline))
+        result.fills.push_back(wall);
 }
 
 inline glm::dvec3 pointAt(const Polyline &polyline, size_t index)
@@ -480,26 +502,18 @@ inline void tessellate(const XLine &xline, TessellatedEntity &result,
     backward.semiInfinite = true;
 }
 
-inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
-                       const TesselationOptions & = {})
+// Line pattern scanlines in the pattern frame (patternAngle rotates it,
+// patternScale widens the spacing), clipped to the loops with the even-odd
+// rule so inner loops punch real holes in the pattern.  Shared by the
+// tessellation path and the AcGiWorldDraw callback path.
+inline std::vector<std::pair<AcGePoint3d, AcGePoint3d>> hatchPatternSegments(
+    const Hatch &hatch)
 {
+    std::vector<std::pair<AcGePoint3d, AcGePoint3d>> segments;
     if (hatch.outerLoop.size() < 3)
-        return;
+        return segments;
     if (hatch.solidFill || hatch.patternName == "SOLID")
-    {
-        for (size_t i = 1; i + 1 < hatch.outerLoop.size(); ++i)
-        {
-            result.fills.push_back(Triangle{{}, hatch.outerLoop[0],
-                                             hatch.outerLoop[i],
-                                             hatch.outerLoop[i + 1]});
-        }
-        return;
-    }
-
-    // Line patterns are generated as parallel scanlines in the pattern
-    // frame (patternAngle rotates it, patternScale widens the spacing) and
-    // clipped to the loops with the even-odd rule, so inner loops punch
-    // real holes in the pattern instead of being ignored.
+        return segments;
     const glm::dvec3 origin = hatch.outerLoop.front();
     const glm::dvec3 u(std::cos(hatch.patternAngle),
                        std::sin(hatch.patternAngle), 0.0);
@@ -527,7 +541,7 @@ inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
     for (const std::vector<AcGePoint3d> &loop : hatch.innerLoops)
         addLoop(loop);
     if (loops.empty())
-        return;
+        return segments;
 
     const double spacing = std::max(1.0e-3, hatch.patternScale * 16.0);
     for (double y = low.y + spacing * 0.5; y < high.y; y += spacing)
@@ -550,11 +564,33 @@ inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
         {
             if (crossings[i + 1] - crossings[i] <= 1.0e-9)
                 continue;
-            Stroke &stroke = addStroke(result);
-            stroke.points = {
+            segments.emplace_back(
                 origin + u * crossings[i] + v * y,
-                origin + u * crossings[i + 1] + v * y};
+                origin + u * crossings[i + 1] + v * y);
         }
+    }
+    return segments;
+}
+
+inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
+                       const TesselationOptions & = {})
+{
+    if (hatch.outerLoop.size() < 3)
+        return;
+    if (hatch.solidFill || hatch.patternName == "SOLID")
+    {
+        for (size_t i = 1; i + 1 < hatch.outerLoop.size(); ++i)
+        {
+            result.fills.push_back(Triangle{{}, hatch.outerLoop[0],
+                                             hatch.outerLoop[i],
+                                             hatch.outerLoop[i + 1]});
+        }
+        return;
+    }
+    for (const auto &segment : hatchPatternSegments(hatch))
+    {
+        Stroke &stroke = addStroke(result);
+        stroke.points = {segment.first, segment.second};
     }
 }
 

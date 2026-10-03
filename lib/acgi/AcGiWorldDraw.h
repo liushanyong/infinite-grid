@@ -11,6 +11,7 @@
 
 #include "../ge/ge.h"
 #include "../scene/DrawContext.h"
+#include "AcGiTextStyle.h"
 
 class AcGiWorldDraw
 {
@@ -80,6 +81,90 @@ public:
             }
             applyTraits(stroke);
         }
+        return true;
+    }
+
+    bool worldPoint(const AcGePoint3d &position)
+    {
+        const scene::DrawTraits &traits = draw_.subEntityTraits().traits();
+        entities::TessellatedPoint point;
+        point.location = apply(position);
+        point.common = traits.toEntityCommon();
+        point.pointSize =
+            traits.lineWeight > 0.0 ? traits.lineWeight : 7.0;
+        sink().appendPoint(point);
+        return true;
+    }
+
+    // Semi-infinite stroke: the stored endpoint is only a proxy; renderers
+    // and pickers treat the geometry as extending forever along the
+    // direction.  This is an extension beyond classic AcGi, needed because
+    // Ray/XLine overlay semantics live in the sink payload.
+    bool worldInfiniteLine(const AcGePoint3d &start,
+                           const AcGeVector3d &direction)
+    {
+        const AcGeVector3d dir = direction.normal();
+        if (dir.lengthSq() <= 0.0)
+            return false;
+        constexpr double kProxyLength = 1.0e6;
+        entities::Stroke &stroke = sink().addStroke(false);
+        stroke.points = {apply(start),
+                         apply(start + dir * kProxyLength)};
+        stroke.semiInfinite = true;
+        applyTraits(stroke);
+        return true;
+    }
+
+    // Text callback.  Until a glyph engine exists the text renders as its
+    // layout frame plus an insertion impostor — the same output the
+    // tessellation path produces — so protocol consumers are already shaped
+    // like ObjectARX worldDraw code and only the callback implementation
+    // changes when glyphs arrive.
+    bool text(const AcGePoint3d &position, const AcGeVector3d &normal,
+              const AcGeVector3d &direction, const char *message,
+              const AcGiTextStyle &style)
+    {
+        if (!message || !*message)
+            return false;
+        const double height = style.textSize;
+        if (!(height > 0.0) || !std::isfinite(height))
+            return false;
+        size_t lineBreaks = 0;
+        size_t longest = 0;
+        size_t current = 0;
+        for (const char *character = message; *character; ++character)
+        {
+            if (*character == 10) // newline
+            {
+                ++lineBreaks;
+                longest = std::max(longest, current);
+                current = 0;
+            }
+            else
+            {
+                ++current;
+            }
+        }
+        longest = std::max(longest, current);
+        const size_t lineCount = lineBreaks + 1;
+        const double width = std::max(double(longest) * height * 0.6 *
+                                          style.xScale,
+                                      height);
+        const glm::dvec3 right = glm::dvec3(direction.normal());
+        const glm::dvec3 up =
+            glm::normalize(glm::cross(glm::dvec3(normal.normal()), right));
+        const glm::dvec3 frameHeight = up * (height * double(lineCount));
+
+        entities::Stroke &frame = sink().addStroke(true);
+        frame.points.reserve(5);
+        frame.points.push_back(apply(position));
+        frame.points.push_back(apply(position + right * width));
+        frame.points.push_back(
+            apply(position + right * width + frameHeight));
+        frame.points.push_back(apply(position + frameHeight));
+        frame.points.push_back(apply(position));
+        applyTraits(frame);
+        worldPoint(position);
         return true;
     }
 
