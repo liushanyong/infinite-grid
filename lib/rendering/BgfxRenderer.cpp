@@ -3260,6 +3260,18 @@ void BgfxRenderer::renderGpuPickPass()
         renderGpuPickDebugPass(projection);
 }
 
+// GRID_DEBUG_PICK=1: dump the pick payload once per visual-style change so
+// a broken ID pass can be compared across modes (instance matrices, eye
+// rebasing, and the first primitive of each kind).
+static bool gpuPickDumpEnabled()
+{
+    static const bool enabled = [] {
+        const char *value = std::getenv("GRID_DEBUG_PICK");
+        return value != nullptr && std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
 void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                                            const glm::mat4 &projection)
 {
@@ -3338,6 +3350,101 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             return lhs.depth > rhs.depth + kDepthEpsilon;
         });
 
+    if (gpuPickDumpEnabled())
+    {
+        static RenderMode dumpedMode = RenderMode(0xff);
+        if (m_renderMode.mode() != dumpedMode)
+        {
+            dumpedMode = m_renderMode.mode();
+            size_t meshCount = 0, edgeCount = 0, triangleCount = 0;
+            const GpuPickPrimitive *firstMesh = nullptr;
+            const GpuPickPrimitive *firstEdge = nullptr;
+            const GpuPickPrimitive *firstTriangle = nullptr;
+            for (const OrderedPickPrimitive &ordered : orderedPickPrimitives)
+            {
+                const GpuPickPrimitive &candidate = *ordered.primitive;
+                if (candidate.kind == GpuPickPrimitive::Kind::Mesh)
+                {
+                    ++meshCount;
+                    if (!firstMesh) firstMesh = &candidate;
+                }
+                else if (candidate.kind == GpuPickPrimitive::Kind::Edge)
+                {
+                    ++edgeCount;
+                    if (!firstEdge) firstEdge = &candidate;
+                }
+                else
+                {
+                    ++triangleCount;
+                    if (!firstTriangle) firstTriangle = &candidate;
+                }
+            }
+            std::cout << "[PICK_DUMP] style="
+                      << renderModeLabel(m_renderMode.mode())
+                      << " meshes=" << meshCount << " edges=" << edgeCount
+                      << " triangles=" << triangleCount << std::endl;
+            std::cout << "[PICK_DUMP] eyeHigh=("
+                      << m_gpuPickRequest.eye.high.x << ","
+                      << m_gpuPickRequest.eye.high.y << ","
+                      << m_gpuPickRequest.eye.high.z << ") eyeLow=("
+                      << m_gpuPickRequest.eye.low.x << ","
+                      << m_gpuPickRequest.eye.low.y << ","
+                      << m_gpuPickRequest.eye.low.z << ")" << std::endl;
+            auto dumpInstance = [&](const char *label,
+                                    const GpuPickPrimitive &candidate) {
+                const MeshInstance &m = candidate.meshInstance;
+                std::cout << "[PICK_DUMP] " << label
+                          << " objectId=" << candidate.objectId
+                          << " rank=" << unsigned(candidate.occlusionRank)
+                          << std::endl;
+                std::cout << "  col0=(" << m.transformColumn0.x << ","
+                          << m.transformColumn0.y << ","
+                          << m.transformColumn0.z << "|"
+                          << m.transformColumn0.w << ") col1=("
+                          << m.transformColumn1.x << ","
+                          << m.transformColumn1.y << ","
+                          << m.transformColumn1.z << "|"
+                          << m.transformColumn1.w << ") col2=("
+                          << m.transformColumn2.x << ","
+                          << m.transformColumn2.y << ","
+                          << m.transformColumn2.z << "|"
+                          << m.transformColumn2.w << ")" << std::endl;
+                std::cout << "  posHigh=(" << m.positionHigh.x << ","
+                          << m.positionHigh.y << "," << m.positionHigh.z
+                          << "|" << m.positionHigh.w << ") posLow=("
+                          << m.positionLow.x << "," << m.positionLow.y
+                          << "," << m.positionLow.z << "|"
+                          << m.positionLow.w << ")" << std::endl;
+            };
+            if (firstMesh)
+                dumpInstance("firstMesh", *firstMesh);
+            if (firstEdge)
+                dumpInstance("firstEdge", *firstEdge);
+            if (firstTriangle)
+            {
+                if (firstTriangle->geometryKey != 0)
+                {
+                    std::cout << "[PICK_DUMP] firstTriangle cached key="
+                              << firstTriangle->geometryKey << " view3=("
+                              << firstTriangle->view[3][0] << ","
+                              << firstTriangle->view[3][1] << ","
+                              << firstTriangle->view[3][2] << ")" << std::endl;
+                }
+                else if (!firstTriangle->transientVertices.empty())
+                {
+                    const FillVertex &v =
+                        firstTriangle->transientVertices.front();
+                    std::cout << "[PICK_DUMP] firstTriangle transient n="
+                              << firstTriangle->transientVertices.size()
+                              << " v0=(" << v.position.x << ","
+                              << v.position.y << "," << v.position.z
+                              << ") c=(" << v.color.x << "," << v.color.y
+                              << "," << v.color.z << "," << v.color.w
+                              << ")" << std::endl;
+                }
+            }
+        }
+    }
     constexpr uint16_t kStride = sizeof(MeshInstance);
     for (size_t primitiveIndex = 0; primitiveIndex < orderedPickPrimitives.size();)
     {
