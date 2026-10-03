@@ -1603,6 +1603,43 @@ static bool cadEntityDemoEnabled()
   return value == nullptr || (std::strcmp(value, "0") != 0);
 }
 
+// A/B escape hatch for the ParamSurface stress case.  It is enabled by
+// default; set GRID_PARAM_SURFACE=0 to exclude only this entity and its
+// isolines from the cached CAD demo without disabling the other CAD entities.
+static bool paramSurfaceDemoEnabled()
+{
+  const char *value = std::getenv("GRID_PARAM_SURFACE");
+  return value == nullptr || (std::strcmp(value, "0") != 0);
+}
+
+// Lightweight frame-time diagnostics for renderer A/B tests.  Disabled by
+// default; set GRID_FRAME_LOG=1 to print the 60-frame average after present.
+static bool frameLogEnabled()
+{
+  const char *value = std::getenv("GRID_FRAME_LOG");
+  return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+}
+
+// The ParamSurface tessellation density is a tuning knob for the fill/geometry
+// split.  The default preserves the existing 24x24 mesh; zero or malformed
+// values fall back to the default.
+static int paramSurfaceSegmentCount()
+{
+  const char *value = std::getenv("GRID_PARAM_SURFACE_SEGMENTS");
+  if (!value || *value == '\0')
+    return 24;
+  const int segments = std::atoi(value);
+  return segments > 1 ? segments : 24;
+}
+
+// Separates the surface body from its isolines when profiling.  Enabled by
+// default; set GRID_PARAM_SURFACE_ISOLINES=0 to draw only the fill.
+static bool paramSurfaceIsolinesEnabled()
+{
+  const char *value = std::getenv("GRID_PARAM_SURFACE_ISOLINES");
+  return value == nullptr || (std::strcmp(value, "0") != 0);
+}
+
 enum class CadPickShape
 {
   // Use the tessellated primitives themselves.
@@ -1896,8 +1933,9 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       appendVectorPrimitive(arrowHead, "ArrowHead", options, target);
     }
 
+    if (paramSurfaceDemoEnabled())
     {
-      constexpr int surfaceSegs = 24;
+      const int surfaceSegs = paramSurfaceSegmentCount();
       const glm::dvec3 surfaceOrigin =
           demoAnchor + glm::dvec3(512.0, 768.0, -512.0);
       auto surfacePoint = [&](double u, double v) {
@@ -1939,6 +1977,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       // as a 3D face.
       appendVectorPrimitive(surface, "ParamSurface", options, target, false);
 
+      if (paramSurfaceIsolinesEnabled())
       for (int k = 0; k <= surfaceSegs; k += 4)
       {
         entities::Polyline isoU;
@@ -2194,6 +2233,40 @@ static uint64_t cadGpuPickGeometryKey(const CadEntityRange *range,
 // renderer-side vertex buffer instead of rebuilding large-coordinate copies.
 // The anchor-relative frame is camera-independent, so the cached buffers stay
 // valid; cadAnchorView supplies the camera-dependent translation.
+// Visible CAD fills are immutable once tessellated.  Cache the renderer-side
+// camera-relative vertices per entity range so normal drawing does not repeat
+// the per-triangle double-to-float conversion and color contrast pass every
+// frame.  The anchor-relative frame is camera-independent.
+static const std::vector<rendering::FillVertex> &
+cadVisibleFillVertices(const CadEntityRange &range)
+{
+  static std::map<const CadEntityRange *, std::vector<rendering::FillVertex>>
+      cache;
+  auto [it, inserted] = cache.try_emplace(&range);
+  if (!inserted)
+    return it->second;
+
+  const VectorPrimitivesTessellation &tessellation =
+      getVectorPrimitivesTessellation();
+  std::vector<rendering::FillVertex> &vertices = it->second;
+  vertices.reserve(range.count * 3);
+  for (size_t i = range.begin; i < range.begin + range.count; ++i)
+  {
+    const entities::Triangle &triangle = tessellation.geometry.fills[i];
+    if (!triangle.common.visible)
+      continue;
+    const glm::vec4 fillColor =
+        contrastAgainstBackground(triangle.common.color);
+    vertices.push_back(
+        {glm::vec3(triangle.a - tessellation.anchor), fillColor});
+    vertices.push_back(
+        {glm::vec3(triangle.b - tessellation.anchor), fillColor});
+    vertices.push_back(
+        {glm::vec3(triangle.c - tessellation.anchor), fillColor});
+  }
+  return vertices;
+}
+
 static const std::vector<rendering::FillVertex> &
 cadGpuPickFillVertices(const CadEntityRange &range,
                        const glm::vec4 &idColor, uint32_t objectId)
@@ -2531,13 +2604,34 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     if (strokeVisible.empty() || strokeVisible[&stroke - tess.strokes.data()])
       cadDrawList.geometry().strokes.push_back(stroke);
   }
-  for (const entities::Triangle &triangle : tess.fills)
+  // CAD fills bypass the generic SceneDrawList copy.  Visible ranges reuse
+  // their cached anchor-relative renderer vertices and submit as one batch.
+  static std::vector<rendering::FillVertex> visibleFillVertices;
+  visibleFillVertices.clear();
+  for (const VisibilityCandidate *candidate : visibleCad)
   {
-    if (!fillVisible.empty() && !fillVisible[&triangle - tess.fills.data()])
+    if (!candidate || candidate->kind != VisibilityKind::CadFill ||
+        !candidate->cadRange || !candidate->cadRange->count)
       continue;
-    if (!triangle.common.visible)
-      continue;
-    cadDrawList.geometry().fills.push_back(triangle);
+    const std::vector<rendering::FillVertex> &rangeVertices =
+        cadVisibleFillVertices(*candidate->cadRange);
+    visibleFillVertices.insert(visibleFillVertices.end(),
+                               rangeVertices.begin(), rangeVertices.end());
+  }
+  if (!visibleFillVertices.empty())
+  {
+    const rendering::FilledTrianglesRenderData cadFillData{
+        .view = cadAnchorView,
+        .projection = projection,
+        .vertices = visibleFillVertices.data(),
+        .vertexCount =
+            static_cast<uint32_t>(visibleFillVertices.size()),
+        .is3DFace = false,
+        .layer = envLayer("GRID_FILL_LAYER"),
+        .logDepth = logDepth,
+        .material = toSurfaceMaterial(scene::AcGiMaterial{}),
+    };
+    rendererBackend->drawFilledTriangles(cadFillData);
   }
   for (const VisibilityCandidate *candidate : visibleCad)
   {
@@ -2613,7 +2707,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     appendMeshEntityToScene(mesh, meshDrawList);
     for (scene::MeshBatchCommand &batch : meshDrawList.meshBatches())
       submitMeshBatch(batch, view, projection, logDepth,
-                      rendering::encodeDoubleSingle(rebase));
+                      rendering::encodeDoubleSingle(rebase),
+                      pixelSizeWorld);
     queueGpuMeshEntity(&mesh);
   }
 }
@@ -2708,7 +2803,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     }
     submitAcGiDrawable(cadDrawList, view, projection, projection,
                        rebaseOrigin, cameraPos, orbitCam.Right, orbitCam.Up,
-                       cameraFront, logDepth);
+                       cameraFront, logDepth, pixelSizeWorld);
     return;
   }
   // CAD and PBR meshes share the global far-to-near painter order. Depth
@@ -2782,7 +2877,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     }
   submitAcGiDrawable(meshDrawList, view, projection, projection,
                      rebaseOrigin, cameraPos, orbitCam.Right, orbitCam.Up,
-                     cameraFront, logDepth);
+                     cameraFront, logDepth, pixelSizeWorld);
 }
 
 int stressObjectCount()
@@ -7662,6 +7757,9 @@ int main(int argc, char *argv[])
   bool testDoubleClickApplied = false;
 
 
+  const Uint64 frameTimerFrequency = SDL_GetPerformanceFrequency();
+  Uint64 frameTimerStart = SDL_GetPerformanceCounter();
+
   while (running)
   {
     float currentFrame = SDL_GetTicks() / 1000.0f;
@@ -7910,6 +8008,29 @@ int main(int argc, char *argv[])
     }
 
     rendererBackend->present();
+
+    if (frameLogEnabled())
+    {
+      static uint32_t frameLogFrames = 0;
+      static double frameLogMilliseconds = 0.0;
+      const Uint64 frameTimerEnd = SDL_GetPerformanceCounter();
+      frameLogMilliseconds += 1000.0 *
+          double(frameTimerEnd - frameTimerStart) /
+          double(frameTimerFrequency);
+      ++frameLogFrames;
+      if (frameLogFrames >= 60)
+      {
+        const double averageMilliseconds =
+            frameLogMilliseconds / double(frameLogFrames);
+        std::printf("[FRAME_LOG] avg %.2f ms (%.1f fps)\n",
+                    averageMilliseconds,
+                    averageMilliseconds > 0.0 ? 1000.0 / averageMilliseconds
+                                              : 0.0);
+        frameLogFrames = 0;
+        frameLogMilliseconds = 0.0;
+      }
+    }
+    frameTimerStart = SDL_GetPerformanceCounter();
   }
 
   close();

@@ -158,6 +158,8 @@ private:
     bgfx::ProgramHandle m_lineInstanceProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_lineInstanceQuadBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout m_lineInstanceLayout;
+    bgfx::ProgramHandle m_meshEdgeRibbonProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_meshEdgeRibbonParams = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_fillProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_curveProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_curveCP = BGFX_INVALID_HANDLE;
@@ -194,6 +196,10 @@ private:
     bgfx::VertexBufferHandle m_sphereEdgeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_coneEdgeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_torusEdgeBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_cubeEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_sphereEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_coneEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle m_torusEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_aabbBuffer = BGFX_INVALID_HANDLE;
 
     bgfx::UniformHandle m_pointPosition = BGFX_INVALID_HANDLE;

@@ -71,6 +71,11 @@ namespace LineInstanceShaders
 #include "shaders/cadPrimitives/lineInstance/vs_line_instance.h"
 } // namespace LineInstanceShaders
 
+namespace MeshEdgeRibbonShaders
+{
+#include "shaders/meshEdgeRibbon/vs_mesh_edge_ribbon.h"
+} // namespace MeshEdgeRibbonShaders
+
 namespace PrimFilledShaders
 {
 #include "shaders/cadPrimitives/filled/vs_filled.h"
@@ -958,6 +963,9 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_lineInstanceQuadBuffer);
     m_lineInstanceProgram = BGFX_INVALID_HANDLE;
     m_lineInstanceQuadBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_meshEdgeRibbonProgram))
+        bgfx::destroy(m_meshEdgeRibbonProgram);
+    m_meshEdgeRibbonProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_fillProgram))
         bgfx::destroy(m_fillProgram);
     if (bgfx::isValid(m_curveProgram))
@@ -1010,6 +1018,18 @@ void BgfxRenderer::shutdown()
     if (bgfx::isValid(m_torusEdgeBuffer))
         bgfx::destroy(m_torusEdgeBuffer);
     m_torusEdgeBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_cubeEdgeRibbonBuffer))
+        bgfx::destroy(m_cubeEdgeRibbonBuffer);
+    m_cubeEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_sphereEdgeRibbonBuffer))
+        bgfx::destroy(m_sphereEdgeRibbonBuffer);
+    m_sphereEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_coneEdgeRibbonBuffer))
+        bgfx::destroy(m_coneEdgeRibbonBuffer);
+    m_coneEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_torusEdgeRibbonBuffer))
+        bgfx::destroy(m_torusEdgeRibbonBuffer);
+    m_torusEdgeRibbonBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_aabbBuffer))
         bgfx::destroy(m_aabbBuffer);
     m_aabbBuffer = BGFX_INVALID_HANDLE;
@@ -1096,6 +1116,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_cubeOpacity);
     destroyUniform(m_cubeColor);
     destroyUniform(m_meshEdgeOverride);
+    destroyUniform(m_meshEdgeRibbonParams);
     destroyUniform(m_presentSampler);
     destroyUniform(m_selectionOutlineParams);
     destroyUniform(m_selectionOutlineColor);
@@ -1880,6 +1901,44 @@ static std::vector<std::pair<glm::vec3, glm::vec3>> makeEdgeSegments(
     return segments;
 }
 
+// The ribbon vertex buffer is expanded once per mesh type.  Each source edge
+// segment becomes two triangles; every ribbon vertex carries both endpoints
+// plus (along, side), so the GPU can expand it for each mesh instance.
+bgfx::VertexBufferHandle createEdgeRibbonBuffer(
+    const std::vector<std::pair<glm::vec3, glm::vec3>> &segments)
+{
+    if (segments.empty())
+        return BGFX_INVALID_HANDLE;
+
+    constexpr float kQuadIndices[][2] = {
+        {0.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f},
+        {0.0f, -1.0f}, {1.0f,  1.0f}, {0.0f, 1.0f},
+    };
+
+    std::vector<float> vertices;
+    vertices.reserve(segments.size() * 6 * 8);
+    for (const auto &segment : segments)
+    {
+        for (const auto &[along, side] : kQuadIndices)
+        {
+            vertices.insert(vertices.end(), {
+                segment.first.x, segment.first.y, segment.first.z, along,
+                segment.second.x, segment.second.y, segment.second.z, side,
+            });
+        }
+    }
+
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 4, bgfx::AttribType::Float)
+        .end();
+    return bgfx::createVertexBuffer(
+        bgfx::copy(vertices.data(),
+                   static_cast<uint32_t>(vertices.size() * sizeof(float))),
+        layout);
+}
+
 void BgfxRenderer::drawEdgeRibbonsForInstances(
     const glm::mat4 &view,
     const glm::mat4 &projection,
@@ -1892,69 +1951,83 @@ void BgfxRenderer::drawEdgeRibbonsForInstances(
     float edgeHalfWidth,
     float edgeSoftness)
 {
-    if (!m_initialized || !bgfx::isValid(m_lineInstanceProgram) ||
-        !bgfx::isValid(m_lineInstanceQuadBuffer) || !instances ||
-        instanceCount == 0)
+    if (!m_initialized || !bgfx::isValid(m_meshEdgeRibbonProgram) ||
+        !instances || instanceCount == 0)
     {
         return;
     }
 
-    const auto edgeSegments = makeEdgeSegments(mesh);
-    if (edgeSegments.empty())
-        return;
-
-    std::vector<LineInstance> ribbons;
-    ribbons.reserve(size_t(instanceCount) * edgeSegments.size());
-    for (uint32_t i = 0; i < instanceCount; ++i)
+    bgfx::VertexBufferHandle edgeRibbonBuffer = m_cubeEdgeRibbonBuffer;
+    switch (mesh)
     {
-        const MeshInstance &instance = instances[i];
-        const glm::vec3 objectTranslation =
-            (glm::vec3(instance.positionHigh) - eye.high) +
-            (glm::vec3(instance.positionLow) - eye.low);
-        const glm::vec3 column0 = glm::vec3(instance.transformColumn0);
-        const glm::vec3 column1 = glm::vec3(instance.transformColumn1);
-        const glm::vec3 column2 = glm::vec3(instance.transformColumn2);
-        const glm::vec4 edgeColor = glm::vec4(
-            instance.transformColumn0.w,
-            instance.transformColumn1.w,
-            instance.transformColumn2.w,
-            1.0f);
-        const float alpha = std::clamp(instance.positionHigh.w, 0.0f, 1.0f);
-
-        for (const auto &segment : edgeSegments)
-        {
-            const glm::vec3 start =
-                segment.first.x * column0 +
-                segment.first.y * column1 +
-                segment.first.z * column2 +
-                objectTranslation;
-            const glm::vec3 end =
-                segment.second.x * column0 +
-                segment.second.y * column1 +
-                segment.second.z * column2 +
-                objectTranslation;
-            ribbons.push_back({
-                glm::vec4(start, 0.0f),
-                glm::vec4(end, 1.0f),
-                glm::vec4(glm::vec3(edgeColor), edgeHalfWidth),
-                glm::vec4(alpha, 0.0f, 0.0f, 0.0f),
-            });
-        }
+    case MeshType::Sphere:
+        edgeRibbonBuffer = m_sphereEdgeRibbonBuffer;
+        break;
+    case MeshType::Cone:
+        edgeRibbonBuffer = m_coneEdgeRibbonBuffer;
+        break;
+    case MeshType::Torus:
+        edgeRibbonBuffer = m_torusEdgeRibbonBuffer;
+        break;
+    case MeshType::Cube:
+        break;
     }
-
-    if (ribbons.empty())
+    if (!bgfx::isValid(edgeRibbonBuffer))
         return;
-    const LineInstancesRenderData lineData{
-        .view = view,
-        .projection = projection,
-        .instances = ribbons.data(),
-        .instanceCount = static_cast<uint32_t>(ribbons.size()),
-        .logDepth = logDepth,
-        .edgeSoftness = edgeSoftness,
-        .layer = layer,
-    };
-    drawLineInstances(lineData);
+
+    const glm::mat4 proj = projectionForDirect3D(projection);
+    const float prim[4] = {
+        0.0f, edgeSoftness, depthStyleForRenderMode(m_renderMode.mode()), 0.0f};
+    const float edgeParams[4] = {edgeHalfWidth, 0.0f, 0.0f, 0.0f};
+    const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+    const float denom = logDepthDenominator(logDepth);
+
+    // One instance covers every feature-edge segment of one mesh instance.
+    // The 80-byte MeshInstance payload is exactly what the fill pass uses.
+    const glm::vec3 instanceTranslation =
+        glm::vec3(instances[0].positionHigh) +
+        glm::vec3(instances[0].positionLow);
+    const glm::vec3 eyeTranslation = eye.high + eye.low;
+    const glm::vec4 instanceView =
+        view * glm::vec4(instanceTranslation - eyeTranslation, 1.0f);
+    const float instanceDepth = -instanceView.z;
+    const float layerOffsetValue =
+        layerOffsetUnits(layer, instanceDepth, logDepth);
+    const uint32_t sortDepth =
+        normalizedSortDepth(instanceDepth - layerOffsetValue, logDepth, denom);
+    const float layerOffset[4] = {layerOffsetValue, 0.0f, 0.0f, 0.0f};
+
+    bgfx::setUniform(m_view, glm::value_ptr(view));
+    bgfx::setUniform(m_projection, glm::value_ptr(proj));
+    bgfx::setUniform(m_eyeHigh, glm::value_ptr(glm::vec4(eye.high, 0.0f)));
+    bgfx::setUniform(m_eyeLow, glm::value_ptr(glm::vec4(eye.low, 0.0f)));
+    bgfx::setUniform(m_logDepth, glm::value_ptr(logDepth));
+    bgfx::setUniform(m_primParams, prim);
+    bgfx::setUniform(m_meshEdgeRibbonParams, edgeParams);
+    bgfx::setUniform(m_layerOffset, layerOffset);
+
+    constexpr uint16_t kStride = sizeof(MeshInstance);
+    uint32_t first = 0;
+    while (first < instanceCount)
+    {
+        const uint32_t available = bgfx::getAvailInstanceDataBuffer(
+            instanceCount - first, kStride);
+        if (available == 0)
+            break;
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb, available, kStride);
+        std::memcpy(idb.data, instances + first,
+                    size_t(idb.num) * kStride);
+
+        bgfx::setState(state);
+        bgfx::setVertexBuffer(0, edgeRibbonBuffer);
+        bgfx::setInstanceDataBuffer(&idb);
+        bgfx::submit(kViewOverlay, m_meshEdgeRibbonProgram, sortDepth);
+        first += idb.num;
+    }
 }
+
 void BgfxRenderer::drawCube(const CubeRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_cubeProgram))
@@ -2077,20 +2150,16 @@ void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
         return;
 
     bgfx::VertexBufferHandle meshBuffer = m_cubeBuffer;
-    bgfx::VertexBufferHandle edgeBuffer = m_cubeEdgeBuffer;
     switch (data.mesh)
     {
     case rendering::MeshType::Sphere:
         meshBuffer = m_sphereBuffer;
-        edgeBuffer = m_sphereEdgeBuffer;
         break;
     case rendering::MeshType::Cone:
         meshBuffer = m_coneBuffer;
-        edgeBuffer = m_coneEdgeBuffer;
         break;
     case rendering::MeshType::Torus:
         meshBuffer = m_torusBuffer;
-        edgeBuffer = m_torusEdgeBuffer;
         break;
     case rendering::MeshType::Cube:
         break;
@@ -2363,20 +2432,16 @@ void BgfxRenderer::drawCadAlgorithmDemo(const CadAlgorithmDemoRenderData &data)
         return;
 
     bgfx::VertexBufferHandle meshBuffer = m_cadCubeBuffer;
-    bgfx::VertexBufferHandle edgeBuffer = m_cubeEdgeBuffer;
     switch (data.mesh)
     {
     case rendering::MeshType::Sphere:
         meshBuffer = m_cadSphereBuffer;
-        edgeBuffer = m_sphereEdgeBuffer;
         break;
     case rendering::MeshType::Cone:
         meshBuffer = m_cadConeBuffer;
-        edgeBuffer = m_coneEdgeBuffer;
         break;
     case rendering::MeshType::Torus:
         meshBuffer = m_cadTorusBuffer;
-        edgeBuffer = m_torusEdgeBuffer;
         break;
     case rendering::MeshType::Cube:
         break;
@@ -3739,6 +3804,13 @@ bool BgfxRenderer::createRenderResources()
         "line_instance_vs");
     m_lineInstanceProgram = bgfx::createProgram(
         lineInstanceVertex, polylineFragment, true);
+    const auto meshEdgeRibbonVertexBinary =
+        SELECT_SHADER_BINARY(MeshEdgeRibbonShaders, vs_mesh_edge_ribbon);
+    const bgfx::ShaderHandle meshEdgeRibbonVertex = createShader(
+        meshEdgeRibbonVertexBinary.data, meshEdgeRibbonVertexBinary.size,
+        "mesh_edge_ribbon_vs");
+    m_meshEdgeRibbonProgram = bgfx::createProgram(
+        meshEdgeRibbonVertex, polylineFragment, true);
 
     const auto presentVertexBinary =
         SELECT_SHADER_BINARY(PresentShaders, vs_present);
@@ -3817,6 +3889,7 @@ m_curveLayout.begin()
                  bgfx::isValid(m_cadAlgorithmProgram) &&
                  bgfx::isValid(m_polylineProgram) &&
                  bgfx::isValid(m_lineInstanceProgram) &&
+                 bgfx::isValid(m_meshEdgeRibbonProgram) &&
                  bgfx::isValid(m_fillProgram) &&
                  bgfx::isValid(m_curveProgram) &&
                  bgfx::isValid(m_cubeProgram) &&
@@ -3872,6 +3945,7 @@ m_curveLayout.begin()
         m_view = createUniformHandle("uView", bgfx::UniformType::Mat4);
         m_projection = createUniformHandle("projection", bgfx::UniformType::Mat4);
         m_meshEdgeOverride = createUniformHandle("uEdgeOverride", bgfx::UniformType::Vec4);
+        m_meshEdgeRibbonParams = createUniformHandle("uEdgeRibbon", bgfx::UniformType::Vec4);
         m_cubeRelativePosition = createUniformHandle("uModelRelativePosition", bgfx::UniformType::Vec4);
         m_cubeRelativePositionLow = createUniformHandle("uModelRelativePositionLow", bgfx::UniformType::Vec4);
         m_eyeHigh = createUniformHandle("uEyeHigh", bgfx::UniformType::Vec4);
@@ -4018,6 +4092,10 @@ m_curveLayout.begin()
         m_sphereEdgeBuffer = createFeatureEdgeLineBuffer(makeSphereFeatureEdges());
         m_coneEdgeBuffer = createFeatureEdgeLineBuffer(makeConeFeatureEdges());
         m_torusEdgeBuffer = createFeatureEdgeLineBuffer(makeTorusFeatureEdges());
+        m_cubeEdgeRibbonBuffer = createEdgeRibbonBuffer(makeEdgeSegments(rendering::MeshType::Cube));
+        m_sphereEdgeRibbonBuffer = createEdgeRibbonBuffer(makeEdgeSegments(rendering::MeshType::Sphere));
+        m_coneEdgeRibbonBuffer = createEdgeRibbonBuffer(makeEdgeSegments(rendering::MeshType::Cone));
+        m_torusEdgeRibbonBuffer = createEdgeRibbonBuffer(makeEdgeSegments(rendering::MeshType::Torus));
         const std::array<CubeVertex, 24> aabbVertices = makeCubeEdgeVertices();
         m_aabbBuffer = bgfx::createVertexBuffer(
             bgfx::copy(aabbVertices.data(), sizeof(aabbVertices)), cubeLayout);
@@ -4058,6 +4136,10 @@ m_curveLayout.begin()
                 bgfx::isValid(m_sphereEdgeBuffer) &&
                 bgfx::isValid(m_coneEdgeBuffer) &&
                 bgfx::isValid(m_torusEdgeBuffer) &&
+                bgfx::isValid(m_cubeEdgeRibbonBuffer) &&
+                bgfx::isValid(m_sphereEdgeRibbonBuffer) &&
+                bgfx::isValid(m_coneEdgeRibbonBuffer) &&
+                bgfx::isValid(m_torusEdgeRibbonBuffer) &&
                 bgfx::isValid(m_instanceCubeBuffer) &&
                 bgfx::isValid(m_whiteTexture) &&
                 bgfx::isValid(m_aabbBuffer) &&
