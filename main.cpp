@@ -2051,6 +2051,20 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1152.0, -1520.0, 0.0)};
     appendVectorPrimitive(closedFitSpline, "ClosedFitSpline", options, target);
 
+    // Non-planar fit spline: the fit points span all three dimensions, so
+    // the curve bends out of the ground plane (the fit-point demos above
+    // are flat for comparison).
+    entities::Spline spaceSpline;
+    spaceSpline.common.color = glm::vec4(0.30f, 0.65f, 0.95f, 1.0f);
+    spaceSpline.degree = 3;
+    spaceSpline.fitPoints = {
+        cadAnchor + glm::dvec3(1024.0, -1152.0, 192.0),
+        cadAnchor + glm::dvec3(1152.0, -1024.0, -192.0),
+        cadAnchor + glm::dvec3(1280.0, -1216.0, 384.0),
+        cadAnchor + glm::dvec3(1408.0, -1088.0, 0.0),
+        cadAnchor + glm::dvec3(1536.0, -1216.0, 256.0)};
+    appendVectorPrimitive(spaceSpline, "SpaceSpline", options, target);
+
     entities::Point cadPoint;
     cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
     cadPoint.location = cadAnchor + glm::dvec3(512.0, 0.0, 0.0);
