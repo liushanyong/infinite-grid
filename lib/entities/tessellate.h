@@ -83,10 +83,12 @@ struct TessellatedEntity
 
 [[nodiscard]] inline glm::dvec3 planeBasisU(const glm::dvec3 &normal)
 {
+    // AutoCAD arbitrary axis algorithm: the OCS x-axis for DWG planar
+    // entities, so arc/ellipse angle parameters match libredwg data.
     const glm::dvec3 n = glm::normalize(normal);
-    const glm::dvec3 seed = std::abs(n.z) < 0.9 ? glm::dvec3(0.0, 0.0, 1.0)
-                                                : glm::dvec3(1.0, 0.0, 0.0);
-    return glm::normalize(glm::cross(seed, n));
+    if (std::abs(n.x) < 1.0 / 64.0 && std::abs(n.y) < 1.0 / 64.0)
+        return glm::normalize(glm::cross(glm::dvec3(0.0, 1.0, 0.0), n));
+    return glm::normalize(glm::cross(glm::dvec3(0.0, 0.0, 1.0), n));
 }
 
 [[nodiscard]] inline glm::dvec3 planeBasisV(const glm::dvec3 &normal)
@@ -120,7 +122,24 @@ inline void appendSegment(TessellatedEntity &result,
 inline void tessellate(const Line &line, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
-    appendSegment(result, line.start, line.end);
+    // DWG lines are authored in the OCS of their extrusion normal; the
+    // default (0,0,1) extrusion is the identity mapping.
+    const AcGeVector3d identityNormal(0.0, 0.0, 1.0);
+    const bool identityOcs = line.extrusion == identityNormal;
+    const glm::dvec3 start =
+        identityOcs ? glm::dvec3(line.start) : glm::dvec3(transformBy(line.start, setToPlaneToWorld(line.extrusion)));
+    const glm::dvec3 end =
+        identityOcs ? glm::dvec3(line.end) : glm::dvec3(transformBy(line.end, setToPlaneToWorld(line.extrusion)));
+    if (std::abs(line.thickness) <= 1.0e-12)
+    {
+        appendSegment(result, start, end);
+        return;
+    }
+    const glm::dvec3 offset =
+        identityOcs ? glm::dvec3(0.0, 0.0, line.thickness)
+                    : glm::dvec3(line.extrusion.normal()) * line.thickness;
+    result.fills.push_back(Triangle{{}, start, end, end + offset});
+    result.fills.push_back(Triangle{{}, start, end + offset, start + offset});
 }
 
 inline void tessellate(const Arc &arc, TessellatedEntity &result,
@@ -145,6 +164,20 @@ inline void tessellate(const Arc &arc, TessellatedEntity &result,
             u * (arc.radius * std::cos(angle)) +
             v * (arc.radius * std::sin(angle)));
     }
+
+    // DWG arcs carry an extrusion thickness: the curve extrudes into wall
+    // quads along the normal, one per span so curved segments stay smooth.
+    if (std::abs(arc.thickness) > 1.0e-12)
+    {
+        const glm::dvec3 offset = glm::dvec3(arc.normal.normal()) * arc.thickness;
+        for (size_t i = 0; i + 1 < stroke.points.size(); ++i)
+        {
+            const glm::dvec3 &a = stroke.points[i];
+            const glm::dvec3 &b = stroke.points[i + 1];
+            result.fills.push_back(Triangle{{}, a, b, b + offset});
+            result.fills.push_back(Triangle{{}, a, b + offset, a + offset});
+        }
+    }
 }
 
 inline void tessellate(const Circle &circle, TessellatedEntity &result,
@@ -159,6 +192,7 @@ inline void tessellate(const Circle &circle, TessellatedEntity &result,
     arc.startAngle = 0.0;
     arc.endAngle = glm::two_pi<double>();
     arc.normal = circle.normal;
+    arc.thickness = circle.thickness;
     const size_t strokeBefore = result.strokes.size();
     tessellate(arc, result, options);
     if (result.strokes.size() > strokeBefore)

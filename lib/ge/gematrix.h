@@ -98,3 +98,30 @@ struct AcGePlane
         return (point - origin).dotProduct(normal);
     }
 };
+
+// AutoCAD arbitrary axis algorithm: the OCS x-axis derived from an
+// extrusion normal.  Near-world-Z normals (|Nx| and |Ny| below 1/64) seed
+// from the world Y axis; everything else seeds from world Z.  DWG entities
+// store planar geometry in this OCS, so libredwg extrusion fields require
+// exactly this rule for correct angle bases.
+inline AcGeVector3d arbitraryAxis(const AcGeVector3d &normal)
+{
+    const AcGeVector3d n = normal.normal();
+    if (std::abs(n.x) < 1.0 / 64.0 && std::abs(n.y) < 1.0 / 64.0)
+        return AcGeVector3d(0.0, 1.0, 0.0).crossProduct(n).normal();
+    return AcGeVector3d(0.0, 0.0, 1.0).crossProduct(n).normal();
+}
+
+// OCS-to-world transform for an extrusion normal: the basis matrix whose
+// columns are the arbitrary axis, the derived y, and the normal itself.
+inline AcGeMatrix3d setToPlaneToWorld(const AcGeVector3d &normal)
+{
+    const AcGeVector3d n = normal.normal();
+    const AcGeVector3d ax = arbitraryAxis(n);
+    const AcGeVector3d ay = n.crossProduct(ax);
+    AcGeMatrix3d result;
+    result.m = glm::dmat4(
+        glm::dvec4(glm::dvec3(ax), 0.0), glm::dvec4(glm::dvec3(ay), 0.0),
+        glm::dvec4(glm::dvec3(n), 0.0), glm::dvec4(0.0, 0.0, 0.0, 1.0));
+    return result;
+}
