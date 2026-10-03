@@ -2555,6 +2555,12 @@ bool cadPairedBandPoints(const CadEntityRange &range,
                          const entities::TessellatedEntity &tess,
                          CadPairedBandPoints &band);
 
+static void appendOutlineRibbon(
+    std::vector<rendering::PrimVertex> &vertices, const glm::vec3 &start,
+    const glm::vec3 &end, const glm::vec3 &front, float halfWidth, float u0,
+    float u1, bool centered,
+    const glm::vec4 &color = kOutlineColor);
+
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
                                      const glm::mat4 &overlayProjection,
@@ -2875,6 +2881,99 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         .material = toSurfaceMaterial(scene::AcGiMaterial{}),
     };
     rendererBackend->drawFilledTriangles(cadFillData);
+  }
+
+  // Wireframe modes suppress solid fills, which would make fill-only
+  // entities (Solid, Rectangle, Hatch, CircleFill) vanish.  Draw their
+  // per-range boundary edges (edges used by a single triangle, the same
+  // shared-edge rule as the selection outline) as colored ribbons instead.
+  const rendering::RenderModeFlags fillRenderFlags = rendererBackend
+      ? rendererBackend->renderModeFlags()
+      : rendering::RenderModeFlags{};
+  if (!fillRenderFlags.show2dSolidFills && !fillRenderFlags.face3dFill &&
+      !fillRenderFlags.hiddenLine)
+  {
+    struct FillEdgeKey
+    {
+      double v[6];
+      bool operator<(const FillEdgeKey &other) const
+      {
+        for (int i = 0; i < 6; ++i)
+          if (v[i] != other.v[i]) return v[i] < other.v[i];
+        return false;
+      }
+    };
+    static std::vector<rendering::PrimVertex> wireBoundaryVertices;
+    wireBoundaryVertices.clear();
+    for (const VisibilityCandidate *candidate : visibleCad)
+    {
+      if (!candidate || candidate->kind != VisibilityKind::CadFill ||
+          !candidate->cadRange || !candidate->cadRange->count)
+        continue;
+      const CadEntityRange &range = *candidate->cadRange;
+      const size_t last = std::min(range.begin + range.count,
+                                   tess.fills.size());
+      std::map<FillEdgeKey, int> useCounts;
+      std::map<FillEdgeKey, std::pair<glm::dvec3, glm::dvec3>> edgeEnds;
+      glm::vec4 rangeColor(1.0f);
+      bool hasColor = false;
+      for (size_t i = range.begin; i < last; ++i)
+      {
+        const entities::Triangle &triangle = tess.fills[i];
+        if (!triangle.common.visible)
+          continue;
+        if (!hasColor)
+        {
+          rangeColor = contrastAgainstBackground(triangle.common.color);
+          hasColor = true;
+        }
+        const glm::dvec3 corners[3] = {triangle.a, triangle.b, triangle.c};
+        for (int e = 0; e < 3; ++e)
+        {
+          const glm::dvec3 &p = corners[e];
+          const glm::dvec3 &q = corners[(e + 1) % 3];
+          FillEdgeKey key;
+          const glm::dvec3 *first = &p;
+          const glm::dvec3 *second = &q;
+          if (std::tie(q.x, q.y, q.z) < std::tie(p.x, p.y, p.z))
+            std::swap(first, second);
+          key.v[0] = first->x; key.v[1] = first->y; key.v[2] = first->z;
+          key.v[3] = second->x; key.v[4] = second->y; key.v[5] = second->z;
+          ++useCounts[key];
+          edgeEnds[key] = {*first, *second};
+        }
+      }
+      if (!hasColor)
+        continue;
+      const float boundaryHalfWidth =
+          0.5f * outlineWidthWorld(pixelSizeWorld);
+      for (const auto &entry : useCounts)
+      {
+        if (entry.second != 1)
+          continue; // shared edges stay hidden in wireframe
+        const auto &ends = edgeEnds[entry.first];
+        appendOutlineRibbon(
+            wireBoundaryVertices,
+            glm::vec3(ends.first - cameraPos),
+            glm::vec3(ends.second - cameraPos),
+            glm::vec3(cameraFront), boundaryHalfWidth, 0.0f, 1.0f,
+            true, rangeColor);
+      }
+    }
+    if (!wireBoundaryVertices.empty())
+    {
+      const rendering::PolylineRenderData boundaryData{
+          .view = view,
+          .projection = overlayProjection,
+          .vertices = wireBoundaryVertices.data(),
+          .vertexCount =
+              static_cast<uint32_t>(wireBoundaryVertices.size()),
+          .logDepth = logDepth,
+          .edgeSoftness = 0.15f,
+          .layer = envLayer("GRID_LINE_LAYER"),
+      };
+      rendererBackend->drawPolylines(boundaryData);
+    }
   }
   for (const VisibilityCandidate *candidate : visibleCad)
   {
@@ -6274,10 +6373,10 @@ bool outlineUsesGeometry(const GpuPickEntity &entity)
            entity.kind == VisibilityKind::CadPoint;
 }
 
-static void appendOutlineRibbon(std::vector<rendering::PrimVertex> &vertices,
-                                const glm::vec3 &start, const glm::vec3 &end,
-                                const glm::vec3 &front, float halfWidth,
-                                float u0, float u1, bool centered)
+static void appendOutlineRibbon(
+    std::vector<rendering::PrimVertex> &vertices, const glm::vec3 &start,
+    const glm::vec3 &end, const glm::vec3 &front, float halfWidth, float u0,
+    float u1, bool centered, const glm::vec4 &color)
 {
     const glm::vec3 direction = end - start;
     if (glm::length(direction) < 1.0e-5f)
@@ -6286,21 +6385,21 @@ static void appendOutlineRibbon(std::vector<rendering::PrimVertex> &vertices,
     const glm::vec3 side = ribbonSide(direction, front, halfWidth);
     if (centered)
     {
-        vertices.push_back({start - side, kOutlineColor, {u0, 0.0f}});
-        vertices.push_back({start + side, kOutlineColor, {u0, 1.0f}});
-        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
-        vertices.push_back({start - side, kOutlineColor, {u0, 0.0f}});
-        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
-        vertices.push_back({end - side, kOutlineColor, {u1, 0.0f}});
+        vertices.push_back({start - side, color, {u0, 0.0f}});
+        vertices.push_back({start + side, color, {u0, 1.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({start - side, color, {u0, 0.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({end - side, color, {u1, 0.0f}});
     }
     else
     {
-        vertices.push_back({start, kOutlineColor, {u0, 0.0f}});
-        vertices.push_back({start + side, kOutlineColor, {u0, 1.0f}});
-        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
-        vertices.push_back({start, kOutlineColor, {u0, 0.0f}});
-        vertices.push_back({end + side, kOutlineColor, {u1, 1.0f}});
-        vertices.push_back({end, kOutlineColor, {u1, 0.0f}});
+        vertices.push_back({start, color, {u0, 0.0f}});
+        vertices.push_back({start + side, color, {u0, 1.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({start, color, {u0, 0.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({end, color, {u1, 0.0f}});
     }
 }
 
