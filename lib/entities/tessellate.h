@@ -29,6 +29,7 @@
 #include "solid3d.h"
 #include "spline.h"
 #include "text.h"
+#include "xline.h"
 
 namespace entities
 {
@@ -401,6 +402,27 @@ inline void tessellate(const Ray &ray, TessellatedEntity &result,
                      ray.start + ray.direction / directionLength *
                                       options.rayLength};
     stroke.semiInfinite = true;
+}
+
+// An XLine is infinite in both directions.  It tessellates as two opposite
+// semi-infinite strokes sharing the base point, so every consumer that
+// already understands Stroke::semiInfinite (rendering, picking, slab depth)
+// handles it without protocol changes.
+inline void tessellate(const XLine &xline, TessellatedEntity &result,
+                       const TesselationOptions &options = {})
+{
+    const double directionLength = glm::length(xline.direction);
+    if (directionLength <= 1.0e-18)
+        return;
+
+    const glm::dvec3 offset =
+        xline.direction / directionLength * options.rayLength;
+    Stroke &forward = addStroke(result);
+    forward.points = {xline.point, xline.point + offset};
+    forward.semiInfinite = true;
+    Stroke &backward = addStroke(result);
+    backward.points = {xline.point, xline.point - offset};
+    backward.semiInfinite = true;
 }
 
 inline void tessellate(const Hatch &hatch, TessellatedEntity &result,

@@ -1829,6 +1829,12 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     ray.direction = glm::dvec3(1.0, 0.25, 0.0);
     appendVectorPrimitive(ray, "Ray", options, target);
 
+    entities::XLine xline;
+    xline.common.color = glm::vec4(0.65f, 0.35f, 0.95f, 1.0f);
+    xline.point = cadAnchor + glm::dvec3(256.0, -1152.0, 0.0);
+    xline.direction = glm::dvec3(2.0, -1.0, 0.0);
+    appendVectorPrimitive(xline, "XLine", options, target);
+
     entities::MLine mline;
     mline.common.color = glm::vec4(0.85f, 0.35f, 0.35f, 0.95f);
     mline.vertices = {
@@ -2970,11 +2976,13 @@ void expandCadTessellationBounds(WorldAabb &bounds,
 {
   for (const CadEntityRange &range : tess.strokeRanges)
   {
-    if (range.name == "Ray")
-      continue;
     for (size_t index = range.begin; index < range.begin + range.count; ++index)
     {
       const entities::Stroke &stroke = tess.geometry.strokes[index];
+      // Infinite entities (Ray/XLine) carry only a tessellation proxy
+      // endpoint; their unbounded geometry must not inflate scene bounds.
+      if (stroke.semiInfinite)
+        continue;
       for (const glm::dvec3 &point : stroke.points)
         expandWorldAabb(bounds, point, glm::dvec3(0.0));
     }
