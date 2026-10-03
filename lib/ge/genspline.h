@@ -160,7 +160,11 @@ public:
         {
             const AcGePoint3d &a = points[i];
             const AcGePoint3d &b = points[(i + 1) % count];
-            params[i + 1] = params[i] + a.distanceTo(b);
+            // A periodic ring has one more segment than knots: the closing
+            // segment's length is recomputed from geometry in build(), so
+            // it contributes no knot parameter here.
+            if (i + 1 < count)
+                params[i + 1] = params[i] + a.distanceTo(b);
         }
         return AcGeFitSpline3d(params, points, periodic);
     }
