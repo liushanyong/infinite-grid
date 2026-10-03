@@ -6583,6 +6583,25 @@ void render()
     double slabMinDepth = targetDepth - imageRadius;
     double slabMaxDepth = targetDepth + imageRadius;
 
+    // Content-weighted slab center: each frustum-intersecting object votes
+    // with its camera-space depth midpoint, weighted by the area of its
+    // projected ortho footprint.  Centering the slab on what is visible
+    // instead of the camera distance keeps the covered interval identical
+    // while shrinking the radius that log-depth precision has to span.  An
+    // edge-on object contributes zero area and only the reach term.
+    double weightedDepthSum = 0.0;
+    double weightSum = 0.0;
+    size_t contentAabbCount = 0;
+    auto includeContentDepth = [&](const CameraSpaceAabb &bounds) {
+      const double weight =
+          std::max(0.0, bounds.maxX - bounds.minX) *
+          std::max(0.0, bounds.maxY - bounds.minY);
+      weightedDepthSum +=
+          (bounds.minDepth + bounds.maxDepth) * 0.5 * weight;
+      weightSum += weight;
+      ++contentAabbCount;
+    };
+
     auto includeObjectDepth = [&](const LargeCoordinateObject &object) {
       if (!meshEntityVisible(object))
         return;
@@ -6592,6 +6611,7 @@ void render()
           up, front);
       if (aabbIntersectsOrthoViewport(bounds, halfW, halfH))
       {
+        includeContentDepth(bounds);
         slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
         slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
         drawOrder.push_back(&object);
@@ -6615,6 +6635,7 @@ void render()
       else if (candidate.kind == VisibilityKind::CenterCube)
       {
         const CameraSpaceAabb bounds = orthoVisibility.cameraAabb(candidate);
+        includeContentDepth(bounds);
         slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
         slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
         centerCubeInFrame = true;
@@ -6623,6 +6644,7 @@ void render()
                candidate.kind == VisibilityKind::CadFill)
       {
         const CameraSpaceAabb bounds = orthoVisibility.cameraAabb(candidate);
+        includeContentDepth(bounds);
         slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
         slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
         visibleCadDraws.push_back(&candidate);
@@ -6633,20 +6655,29 @@ void render()
       }
     }
 
-    // OpenCADStudio centers the ortho slab on distance, not on a dynamic
-    // content midpoint.  Like its ortho_depth_range(), CAD near/far follow the
-    // model AABB plus a screen-rotation allowance.  The infinite grid and the
-    // demo origin line are intentionally excluded: at grazing angles their
-    // horizon depths are effectively unbounded and destroy depth precision.
+    // The slab center is the projected-area weighted mean depth of the
+    // contributing objects, falling back to the camera distance when no
+    // bounded content is in view (the grid and the demo origin line stay
+    // excluded on purpose: their grazing horizon depths are unbounded and
+    // would destroy depth precision).  The radius is measured from that
+    // center to both ends of the accumulated interval, so it still covers
+    // every contributing object plus the target ± imageRadius seed.
     const double cameraDistance =
         glm::length(orbitCam.Position - orbitCam.Target);
-    const double slabCenterDepth = std::max(0.001, cameraDistance);
-    double visibleDepthRadius =
-        (slabMaxDepth - slabMinDepth) * 0.5;
+    double slabCenterDepth = contentAabbCount && weightSum > 0.0
+        ? weightedDepthSum / weightSum
+        : std::max(0.001, cameraDistance);
     constexpr double kMinDepthSpan = 1024.0;
-    const double frameRadius = std::max(
-        {visibleDepthRadius, imageRadius, kMinDepthSpan * 0.5,
+    const double contentReach = std::max(
+        slabMaxDepth - slabCenterDepth, slabCenterDepth - slabMinDepth);
+    double frameRadius = std::max(
+        {contentReach, imageRadius, kMinDepthSpan * 0.5,
          orbitCam.orthoSize() * 3.0});
+    // A slab centered on content straddling the camera plane could end up
+    // entirely behind depth zero; keep the far plane strictly positive.
+    constexpr double kMinFarDepth = 0.001;
+    if (slabCenterDepth + frameRadius < kMinFarDepth)
+      slabCenterDepth = kMinFarDepth - frameRadius;
 
     // The stored model bounds are a conservative fit-all fallback, not a
     // per-frame visibility request.  A previous scene can leave them millions
