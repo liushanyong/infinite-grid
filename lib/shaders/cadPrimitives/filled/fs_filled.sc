@@ -5,13 +5,16 @@ $input v_color, v_depth
 
 uniform vec4 uPrimParams;
 uniform vec4 u_material;
+uniform vec4 uDepthDisplay;
 
 void main()
 {
     gl_FragDepth = cad_outputDepth(gl_FragCoord.z, v_depth);
     if (uPrimParams.x > 6.5 && uPrimParams.x < 7.5)
     {
-        float depthT = cad_outputDepth(gl_FragCoord.z, v_depth);
+        float depthT = uDepthDisplay.x > 0.5
+            ? gl_FragCoord.z
+            : cad_outputDepth(gl_FragCoord.z, v_depth);
         gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
         return;
     }

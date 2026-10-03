@@ -1,0 +1,25 @@
+---
+Language:      Cpp
+BasedOnStyle:  GNU
+IndentPPDirectives: AfterHash
+SortIncludes:    false
+SortUsingDeclarations: false
+StatementMacros: ['SET_ENT',
+                 'dwg_get_OBJECT',
+                 'DWG_GETALL_ENTITY',
+                 'DWG_GETALL_OBJECT',
+                 'CAST_DWG_OBJECT_TO_ENTITY',
+                 'CAST_DWG_OBJECT_TO_ENTITY_BYNAME',
+                 'CAST_DWG_OBJECT_TO_OBJECT',
+                 'DISABLE_NODSTYLE',
+                 'ENCODE_CTRL_TO_TABLE',
+                 'PRE',
+                 'LATER_VERSIONS',
+                 'SINCE',
+                 'UNTIL',
+                 'VERSION',
+                 'VERSIONS'
+                 ]
+WhitespaceSensitiveMacros: ['STRINGIZE', 'SZ']
+...
+

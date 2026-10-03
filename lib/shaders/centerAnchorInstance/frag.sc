@@ -7,6 +7,7 @@ uniform vec4 uLogDepth;
 uniform vec4 uEdgeOverride;
 uniform vec4 uPrimParams;
 uniform vec4 uMeshSurface;
+uniform vec4 uDepthDisplay;
 
 float outputDepth(float rawDepth, float viewDepth)
 {
@@ -34,6 +35,16 @@ vec2 triplanarUv(vec3 position, vec3 normal)
 void main()
 {
     gl_FragDepth = outputDepth(gl_FragCoord.z, v_viewDepth);
+    // DepthBuffer visual style: grayscale depth.  uDepthDisplay.x switches
+    // between the log-normalized slab mapping and the raw hardware depth.
+    if (uPrimParams.x > 6.5 && uPrimParams.x < 7.5)
+    {
+        float depthT = uDepthDisplay.x > 0.5
+            ? gl_FragCoord.z
+            : outputDepth(gl_FragCoord.z, v_viewDepth);
+        gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
+        return;
+    }
     vec3 normal = normalize(v_normal);
     vec3 lightDirection = normalize(vec3(0.4, 0.8, 0.55));
     float diffuse = max(dot(normal, lightDirection), 0.0);

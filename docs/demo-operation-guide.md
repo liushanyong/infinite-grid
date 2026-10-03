@@ -96,6 +96,7 @@
 | `GRID_MESH_HEADLIGHT=<0..1>` | 头灯强度 |
 | `GRID_MESH_TRIPLANAR=<0..1>` | 三平面映射混合因子 |
 | `GRID_GPU_PICK=0` | 拾取走 CPU 路径（默认 GPU） |
+| `GRID_DEPTH_RAW=1` | Depth Buffer 样式显示原始硬件深度（默认为对数归一化灰度） |
 
 ### 自动化 / 截图
 
