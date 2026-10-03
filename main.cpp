@@ -8317,6 +8317,16 @@ int main(int argc, char *argv[])
           else
             std::puts("Outline all: off");
         }
+        // V -- cycle the visual style through all render modes.
+        if (evt.key.key == SDLK_V)
+        {
+          visualStyleManager.cycle();
+          if (rendererBackend)
+            rendererBackend->setRenderMode(visualStyleManager.mode());
+          std::cout << "Visual style: "
+                    << rendering::renderModeLabel(visualStyleManager.mode())
+                    << std::endl;
+        }
         if (evt.key.scancode == SDL_SCANCODE_L)
         {
           // L key -- move the camera between the origin scene and the
