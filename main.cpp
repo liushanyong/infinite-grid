@@ -6651,15 +6651,23 @@ void render()
       }
       else
       {
+        // Strokes, points, and curves are visible content too.  They draw
+        // with the main ortho projection, so leaving them out of the slab
+        // lets the weighted content center clip them at near/far whenever
+        // zooming tightens the interval around fills and meshes.
+        const CameraSpaceAabb bounds = orthoVisibility.cameraAabb(candidate);
+        includeContentDepth(bounds);
+        slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
+        slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
         visibleCadDraws.push_back(&candidate);
       }
     }
 
     // The slab center is the projected-area weighted mean depth of the
     // contributing objects, falling back to the camera distance when no
-    // bounded content is in view (the grid and the demo origin line stay
-    // excluded on purpose: their grazing horizon depths are unbounded and
-    // would destroy depth precision).  The radius is measured from that
+    // bounded content is in view.  The infinite grid stays excluded on
+    // purpose: at grazing angles its horizon depths are unbounded and
+    // would destroy depth precision.  The radius is measured from that
     // center to both ends of the accumulated interval, so it still covers
     // every contributing object plus the target ± imageRadius seed.
     const double cameraDistance =
