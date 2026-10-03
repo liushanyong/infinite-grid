@@ -41,9 +41,9 @@ void main()
     viewPosition.xy += side * uEdgeRibbon.x * edge;
     viewPosition.z += uLayerOffset.x;
 
-    // Preserve the per-instance edge color and opacity from the fill payload.
-    v_color = vec4(i_data0.w, i_data1.w, i_data2.w,
-                   clamp(i_data3.w, 0.0, 1.0));
+    // Mesh edges are opaque: darken the fill color by 10% instead of
+    // inheriting the instance opacity.
+    v_color = vec4(vec3(i_data0.w, i_data1.w, i_data2.w) * 0.9, 1.0);
     v_edge = edge;
     v_depth = -viewPosition.z;
     v_along = along;

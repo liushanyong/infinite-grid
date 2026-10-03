@@ -1979,8 +1979,10 @@ void BgfxRenderer::drawEdgeRibbonsForInstances(
     const float prim[4] = {
         0.0f, edgeSoftness, depthStyleForRenderMode(m_renderMode.mode()), 0.0f};
     const float edgeParams[4] = {edgeHalfWidth, 0.0f, 0.0f, 0.0f};
+    // Opaque edges: the ribbon shader darkens the fill color by 10% and
+    // writes alpha 1, so no blending is applied.
     const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+        BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_MSAA;
     const float denom = logDepthDenominator(logDepth);
 
     // One instance covers every feature-edge segment of one mesh instance.
