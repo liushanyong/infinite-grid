@@ -5445,6 +5445,12 @@ VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
   return candidate;
 }
 
+// Classification extent for a semi-infinite stroke: the analytic half-line
+// must stay visible no matter how far the camera navigates along it, so the
+// candidate bound reaches far past any scene scale instead of stopping at
+// the tessellation proxy endpoint.
+constexpr double kSemiInfiniteClassificationLength = 1.0e12;
+
 VisibilityCandidate makeCadRangeCandidate(
     const VectorPrimitivesTessellation &tessellation,
     const CadEntityRange &range, VisibilityKind kind)
@@ -5479,6 +5485,22 @@ VisibilityCandidate makeCadRangeCandidate(
       const entities::Stroke &stroke = tessellation.geometry.strokes[i];
       for (const glm::dvec3 &point : stroke.points)
         include(point);
+      if (stroke.semiInfinite && stroke.points.size() >= 2)
+      {
+        // The stored endpoint is only a tessellation proxy; classification
+        // must follow the analytic half-line instead, or the entity is
+        // culled as Offscreen the moment the camera pans past the proxy
+        // end even though the infinite ray still crosses the viewport.
+        // The render and slab paths clip the ray analytically, so this
+        // bound only has to contain the geometry, which it does out to
+        // any navigable distance.
+        const glm::dvec3 direction =
+            stroke.points[1] - stroke.points.front();
+        const double length = glm::length(direction);
+        if (length > 1.0e-18)
+          include(stroke.points.front() + direction / length *
+                      kSemiInfiniteClassificationLength);
+      }
       candidate.overlayColor = contrastAgainstBackground(stroke.common.color);
       candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
     }
