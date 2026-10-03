@@ -706,10 +706,19 @@ std::vector<float> makeGpuPickMeshVertices(MeshType mesh)
     for (size_t face = 0; face < faceCount; ++face)
     {
         const size_t first = face * 3 * kProceduralMeshFloatStride;
-        result.insert(result.end(), source.begin() + first,
-                      source.begin() + first + 3 * kProceduralMeshFloatStride);
+        // The face index must interleave per vertex: the pick layout reads
+        // 9-float records ([pos3][normal3][uv2][face1]), so appending the
+        // indices after the whole face block shifted every vertex after the
+        // first and exploded the instanced surface path of the ID pass.
         for (size_t vertex = 0; vertex < 3; ++vertex)
+        {
+            const size_t vertexFirst =
+                first + vertex * kProceduralMeshFloatStride;
+            result.insert(result.end(), source.begin() + vertexFirst,
+                          source.begin() + vertexFirst +
+                              kProceduralMeshFloatStride);
             result.push_back(static_cast<float>(face));
+        }
     }
     return result;
 }
