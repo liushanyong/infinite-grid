@@ -86,10 +86,13 @@ inline void worldDraw(const Solid &solid, scene::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
+    // DXF SOLID semantics: the corners are authored in zigzag order and
+    // the quad is 1-2-4-3, split along the 2-3 diagonal — matching
+    // tessellate(Solid) exactly, winding included.
     graphics.worldTriangle(solid.firstCorner, solid.secondCorner,
                            solid.thirdCorner, fillIs3DFace);
-    graphics.worldTriangle(solid.firstCorner, solid.thirdCorner,
-                           solid.fourthCorner, fillIs3DFace);
+    graphics.worldTriangle(solid.secondCorner, solid.fourthCorner,
+                           solid.thirdCorner, fillIs3DFace);
 }
 
 // Hatch: the solid variant fans its loop into triangles; line patterns emit
