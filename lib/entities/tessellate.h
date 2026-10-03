@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <map>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -579,6 +580,24 @@ inline void tessellate(const Solid3d &solid, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     const auto &positions = solid.vertices;
+
+    // Feature edges of the solid become visible border strokes, using the
+    // same shared-edge analysis as the solid fill selection outline: an
+    // edge used by a single triangle is a boundary, and an edge whose two
+    // adjacent triangles are not coplanar is a crease.  Coplanar
+    // triangulation diagonals stay hidden, so each flat face keeps one
+    // clean border instead of internal mesh edges.
+    constexpr double kSolid3dCreaseCosine = 0.9397; // cos(20 degrees)
+    struct EdgeKey
+    {
+        uint32_t a;
+        uint32_t b;
+        bool operator<(const EdgeKey &other) const
+        {
+            return a != other.a ? a < other.a : b < other.b;
+        }
+    };
+    std::map<EdgeKey, std::vector<glm::dvec3>> edgeNormals;
     for (size_t i = 0; i + 2 < solid.indices.size(); i += 3)
     {
         const uint32_t a = solid.indices[i];
@@ -591,6 +610,31 @@ inline void tessellate(const Solid3d &solid, TessellatedEntity &result,
         }
         result.fills.push_back(
             Triangle{{}, positions[a], positions[b], positions[c]});
+        const glm::dvec3 normal = glm::cross(positions[b] - positions[a],
+                                             positions[c] - positions[a]);
+        if (glm::dot(normal, normal) <= 1.0e-24)
+            continue; // a degenerate triangle carries no orientation
+        const glm::dvec3 unit = glm::normalize(normal);
+        const auto record = [&](uint32_t u, uint32_t v) {
+            edgeNormals[{std::min(u, v), std::max(u, v)}].push_back(unit);
+        };
+        record(a, b);
+        record(b, c);
+        record(c, a);
+    }
+
+    for (const auto &[edge, normals] : edgeNormals)
+    {
+        const bool visible =
+            normals.size() == 1 || // open boundary
+            normals.size() > 2 ||  // non-manifold fold
+            (normals.size() == 2 &&
+             glm::dot(normals.front(), normals.back()) <
+                 kSolid3dCreaseCosine); // crease between faces
+        if (!visible)
+            continue; // coplanar triangulation split stays hidden
+        Stroke &stroke = addStroke(result);
+        stroke.points = {positions[edge.a], positions[edge.b]};
     }
 }
 
