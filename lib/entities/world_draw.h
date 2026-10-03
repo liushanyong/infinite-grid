@@ -66,6 +66,20 @@ inline void worldDraw(const Line &line, scene::ViewportDraw &draw,
     graphics.worldLine(line.start, line.end);
 }
 
+// Fit-point splines draw through the same chord-length natural cubic
+// interpolation as the tessellation path.
+inline void worldDraw(const Spline &spline, scene::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    const std::vector<AcGePoint3d> points =
+        entities::sampleFitPointSpline(spline, draw.options());
+    if (points.size() < 2)
+        return;
+    AcGiWorldDraw graphics(draw);
+    graphics.worldPolyline(points.data(), static_cast<int>(points.size()),
+                           spline.closed);
+}
+
 inline void worldDraw(const Ray &ray, scene::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {

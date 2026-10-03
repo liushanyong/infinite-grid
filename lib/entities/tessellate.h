@@ -31,6 +31,7 @@
 #include "spline.h"
 #include "text.h"
 #include "xline.h"
+#include "../ge/genspline.h"
 
 namespace entities
 {
@@ -403,6 +404,40 @@ inline void tessellate(const LwPolyline &polyline, TessellatedEntity &result,
     return d[degree];
 }
 
+// Build (or evaluate) the fit-point spline: chord-length parametrized
+// natural cubic interpolation, periodic for closed splines.
+inline AcGeFitSpline3d fitPointSpline(const Spline &spline)
+{
+    const bool periodic = spline.closed && spline.fitPoints.size() >= 3;
+    return AcGeFitSpline3d::fromChordLength(spline.fitPoints, periodic);
+}
+
+inline std::vector<AcGePoint3d> sampleFitPointSpline(
+    const Spline &spline, const TesselationOptions &options)
+{
+    const size_t fitCount = spline.fitPoints.size();
+    if (fitCount < 2)
+        return {};
+    const bool periodic = spline.closed && fitCount >= 3;
+    const AcGeFitSpline3d curve =
+        AcGeFitSpline3d::fromChordLength(spline.fitPoints, periodic);
+    const int segmentsPerSpan = curveSegmentCount(glm::pi<double>(), options);
+    const size_t spanCount = periodic ? fitCount : fitCount - 1;
+    const double span = curve.maxParameter() - curve.minParameter();
+    const double step = span / (double(spanCount) * segmentsPerSpan);
+    std::vector<AcGePoint3d> points;
+    points.reserve(spanCount * size_t(segmentsPerSpan) + 1);
+    const int samples = spanCount * segmentsPerSpan;
+    for (int i = 0; i <= samples; ++i)
+    {
+        // A closed ring re-enters the seam exactly; no duplicated vertex.
+        if (periodic && i == samples)
+            break;
+        points.push_back(curve.pointAt(curve.minParameter() + step * i));
+    }
+    return points;
+}
+
 inline void tessellate(const Spline &spline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
@@ -422,49 +457,19 @@ inline void tessellate(const Spline &spline, TessellatedEntity &result,
         return;
     }
 
-    // Fit-point splines without explicit knots use a stable C1 fallback until
-    // the full NURBS interpolation bridge is introduced.
-    const size_t fitCount = spline.fitPoints.size();
-    if (fitCount < 2)
+    // Fit-point splines interpolate through the points with a natural
+    // cubic spline (C2, Thomas-solved; closed rings use the periodic
+    // variant), matching the AutoCAD fit-spline construction instead of
+    // the earlier C1 Catmull-Rom fallback.
+    const std::vector<AcGePoint3d> fitPoints =
+        sampleFitPointSpline(spline, options);
+    if (fitPoints.size() < 2)
     {
         result.strokes.pop_back();
         return;
     }
-    auto fitPoint = [&](long long index) {
-        if (spline.closed)
-        {
-            index %= static_cast<long long>(fitCount);
-            if (index < 0)
-                index += static_cast<long long>(fitCount);
-        }
-        else
-        {
-            index = std::clamp<long long>(index, 0, static_cast<long long>(fitCount) - 1);
-        }
-        return spline.fitPoints[static_cast<size_t>(index)];
-    };
-    const int segmentsPerSpan = curveSegmentCount(
-        glm::pi<double>() / static_cast<double>(std::max<size_t>(fitCount, 1)),
-        options);
-    const long long spans = spline.closed ? static_cast<long long>(fitCount)
-                                          : static_cast<long long>(fitCount) - 1;
-    for (long long span = 0; span < spans; ++span)
-    {
-        const glm::dvec3 p0 = fitPoint(span - 1);
-        const glm::dvec3 p1 = fitPoint(span);
-        const glm::dvec3 p2 = fitPoint(span + 1);
-        const glm::dvec3 p3 = fitPoint(span + 2);
-        for (int s = span == 0 ? 0 : 1; s <= segmentsPerSpan; ++s)
-        {
-            const double t = static_cast<double>(s) / segmentsPerSpan;
-            const double t2 = t * t;
-            const double t3 = t2 * t;
-            stroke.points.push_back(0.5 * ((2.0 * p1) +
-                (-p0 + p2) * t +
-                (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
-                (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3));
-        }
-    }
+    for (const AcGePoint3d &point : fitPoints)
+        stroke.points.push_back(point);
 }
 
 inline void tessellate(const Ray &ray, TessellatedEntity &result,
