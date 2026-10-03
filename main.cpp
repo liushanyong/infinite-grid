@@ -867,7 +867,7 @@ bool clipSemiInfiniteRayToView(
     const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
     const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
     double nearDepth, double farDepth, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd);
+    glm::dvec3 &clippedEnd, bool flattenToSlabCenter = true);
 
 // Clip one stroke segment to the frustum of the pass that will draw it.
 // Hardware clips at exactly these planes, so the clipped segment renders
@@ -5833,7 +5833,7 @@ bool clipSemiInfiniteRayToView(
     const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
     const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
     double nearPlane, double farPlane, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd)
+    glm::dvec3 &clippedEnd, bool flattenToSlabCenter)
 {
   const CameraSpacePoint start = toCameraSpace(
       startWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
@@ -5905,7 +5905,7 @@ bool clipSemiInfiniteRayToView(
   clippedStart = startWorld + direction * tEnter;
   clippedEnd = startWorld + direction * tExit;
 
-  if (useOrthoProjection())
+  if (flattenToSlabCenter && useOrthoProjection())
   {
     // Moving a point along Front does not move its ortho projection, but it
     // puts the emitted ribbon safely inside the hardware depth range.
@@ -6655,50 +6655,154 @@ void render()
         // with the main ortho projection, so leaving them out of the slab
         // lets the weighted content center clip them at near/far whenever
         // zooming tightens the interval around fills and meshes.
-        const CameraSpaceAabb bounds = orthoVisibility.cameraAabb(candidate);
-        includeContentDepth(bounds);
-        slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
-        slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
+        bool haveBounds = false;
+        CameraSpaceAabb bounds{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        auto unionBounds = [&](const CameraSpaceAabb &part) {
+          if (haveBounds)
+          {
+            bounds.minX = std::min(bounds.minX, part.minX);
+            bounds.maxX = std::max(bounds.maxX, part.maxX);
+            bounds.minY = std::min(bounds.minY, part.minY);
+            bounds.maxY = std::max(bounds.maxY, part.maxY);
+            bounds.minDepth = std::min(bounds.minDepth, part.minDepth);
+            bounds.maxDepth = std::max(bounds.maxDepth, part.maxDepth);
+          }
+          else
+          {
+            bounds = part;
+            haveBounds = true;
+          }
+        };
+
+        bool semiInfiniteRange = false;
+        if (candidate.kind == VisibilityKind::CadStroke &&
+            candidate.cadRange && candidate.rangeCount)
+        {
+          const VectorPrimitivesTessellation &tess =
+              getVectorPrimitivesTessellation();
+          for (size_t i = candidate.rangeBegin;
+               i < candidate.rangeBegin + candidate.rangeCount; ++i)
+          {
+            if (tess.geometry.strokes[i].semiInfinite)
+            {
+              semiInfiniteRange = true;
+              break;
+            }
+          }
+        }
+
+        if (!semiInfiniteRange)
+        {
+          unionBounds(orthoVisibility.cameraAabb(candidate));
+        }
+        else
+        {
+          // A semi-infinite ray's stored endpoint is only a tessellation
+          // proxy (rayLength ahead along the direction), so its candidate
+          // AABB would push a huge fake depth span into the slab.  Clip
+          // the analytic half-line to the ortho viewport sides instead.
+          // The ortho side planes are parallel to the gaze, so a ray that
+          // runs parallel inside the viewport never exits them and
+          // contributes nothing here; it renders flattened onto the slab
+          // center, safely inside any slab.
+          const VectorPrimitivesTessellation &tess =
+              getVectorPrimitivesTessellation();
+          for (size_t i = candidate.rangeBegin;
+               i < candidate.rangeBegin + candidate.rangeCount; ++i)
+          {
+            const entities::Stroke &stroke = tess.geometry.strokes[i];
+            if (stroke.points.size() < 2)
+              continue;
+            if (stroke.semiInfinite)
+            {
+              glm::dvec3 clippedStart, clippedEnd;
+              if (!clipSemiInfiniteRayToView(
+                      stroke.points.front(), stroke.points.back(), cameraPos,
+                      right, up, front, 0.0, 0.0, clippedStart, clippedEnd,
+                      false))
+                continue;
+              const CameraSpacePoint a = toCameraSpace(
+                  clippedStart, cameraPos, right, up, front);
+              const CameraSpacePoint b = toCameraSpace(
+                  clippedEnd, cameraPos, right, up, front);
+              unionBounds({std::min(a.x, b.x), std::max(a.x, b.x),
+                           std::min(a.y, b.y), std::max(a.y, b.y),
+                           std::min(a.depth, b.depth),
+                           std::max(a.depth, b.depth)});
+            }
+            else
+            {
+              for (const glm::dvec3 &point : stroke.points)
+              {
+                const CameraSpacePoint c = toCameraSpace(
+                    point, cameraPos, right, up, front);
+                unionBounds({c.x, c.x, c.y, c.y, c.depth, c.depth});
+              }
+            }
+          }
+        }
+
+        if (haveBounds)
+        {
+          includeContentDepth(bounds);
+          slabMinDepth = std::min(slabMinDepth, bounds.minDepth);
+          slabMaxDepth = std::max(slabMaxDepth, bounds.maxDepth);
+        }
         visibleCadDraws.push_back(&candidate);
       }
     }
 
     // The slab center is the projected-area weighted mean depth of the
-    // contributing objects, falling back to the camera distance when no
-    // bounded content is in view.  The infinite grid stays excluded on
-    // purpose: at grazing angles its horizon depths are unbounded and
-    // would destroy depth precision.  The radius is measured from that
-    // center to both ends of the accumulated interval, so it still covers
-    // every contributing object plus the target ± imageRadius seed.
+    // contributing objects; the infinite grid stays excluded on purpose:
+    // at grazing angles its horizon depths are unbounded and would destroy
+    // depth precision.  The radius is measured from that center to both
+    // ends of the accumulated interval, so it still covers every
+    // contributing object plus the target ± imageRadius seed.
     const double cameraDistance =
         glm::length(orbitCam.Position - orbitCam.Target);
-    double slabCenterDepth = contentAabbCount && weightSum > 0.0
-        ? weightedDepthSum / weightSum
-        : std::max(0.001, cameraDistance);
-    constexpr double kMinDepthSpan = 1024.0;
-    const double contentReach = std::max(
-        slabMaxDepth - slabCenterDepth, slabCenterDepth - slabMinDepth);
-    double frameRadius = std::max(
-        {contentReach, imageRadius, kMinDepthSpan * 0.5,
-         orbitCam.orthoSize() * 3.0});
+    double slabCenterDepth;
+    double slabRadius;
+    if (contentAabbCount)
+    {
+      slabCenterDepth = weightSum > 0.0
+          ? weightedDepthSum / weightSum
+          : std::max(0.001, cameraDistance);
+      constexpr double kMinDepthSpan = 1024.0;
+      const double contentReach = std::max(
+          slabMaxDepth - slabCenterDepth, slabCenterDepth - slabMinDepth);
+      const double frameRadius = std::max(
+          {contentReach, imageRadius, kMinDepthSpan * 0.5,
+           orbitCam.orthoSize() * 3.0});
+      // The stored model bounds are a conservative fit-all fallback, not a
+      // per-frame visibility request.  A previous scene can leave them
+      // millions of units away from the active target; cap that historical
+      // contribution by the currently visible slab so the stabilizer can
+      // actually converge.  Rotation changes still get headroom, and
+      // genuinely large visible content raises frameRadius before this
+      // ceiling is applied.
+      constexpr double kModelDepthRadiusHeadroom = 4.0;
+      const double modelDepthRadiusCeiling =
+          std::max(kMinDepthSpan, frameRadius * kModelDepthRadiusHeadroom);
+      const double modelDepthRadius =
+          std::min(orbitCam.orthoDepthRadius(), modelDepthRadiusCeiling);
+      slabRadius = std::max(frameRadius, modelDepthRadius);
+    }
+    else
+    {
+      // Empty view: the only remaining content is the infinite grid, so
+      // the slab shrinks to the smallest interval that still covers the
+      // visible image around the camera.  The 512 and orthoSize*3 floors
+      // and the fit-all model fallback would thicken an already
+      // content-free slab for no visible benefit.
+      slabCenterDepth = std::max(0.001, cameraDistance);
+      slabRadius = imageRadius;
+    }
     // A slab centered on content straddling the camera plane could end up
     // entirely behind depth zero; keep the far plane strictly positive.
     constexpr double kMinFarDepth = 0.001;
-    if (slabCenterDepth + frameRadius < kMinFarDepth)
-      slabCenterDepth = kMinFarDepth - frameRadius;
+    if (slabCenterDepth + slabRadius < kMinFarDepth)
+      slabCenterDepth = kMinFarDepth - slabRadius;
 
-    // The stored model bounds are a conservative fit-all fallback, not a
-    // per-frame visibility request.  A previous scene can leave them millions
-    // of units away from the active target; cap that historical contribution
-    // by the currently visible slab so the stabilizer can actually converge.
-    // Rotation changes still get headroom, and genuinely large visible content
-    // raises frameRadius before this ceiling is applied.
-    constexpr double kModelDepthRadiusHeadroom = 4.0;
-    const double modelDepthRadiusCeiling =
-        std::max(kMinDepthSpan, frameRadius * kModelDepthRadiusHeadroom);
-    const double modelDepthRadius =
-        std::min(orbitCam.orthoDepthRadius(), modelDepthRadiusCeiling);
-    const double slabRadius = std::max(frameRadius, modelDepthRadius);
     // Hysteresis: expand immediately, shrink only after twenty stable frames.
     double stableOrthoNear = 0.0;
     double stableOrthoFar = 0.0;
