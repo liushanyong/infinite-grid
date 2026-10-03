@@ -3031,6 +3031,37 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
   }
 
+  // GRID_DEBUG_PICK=1: per-second composition of the GPU pick queue.  The
+  // queue branches on the visual style (meshFill modes represent meshes as
+  // surfaces, wireframes as feature edges), so this log verifies what each
+  // style actually submits to the ID pass.
+  static const bool pickDebugEnabled = [] {
+    const char *value = std::getenv("GRID_DEBUG_PICK");
+    return value != nullptr && std::strcmp(value, "0") != 0;
+  }();
+  if (pickDebugEnabled && gpuPickQueueActive)
+  {
+    static auto lastPickStatsLog =
+        std::chrono::steady_clock::now() - std::chrono::seconds(2);
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastPickStatsLog).count() >= 1000)
+    {
+      lastPickStatsLog = now;
+      const rendering::GpuPickQueueStats stats =
+          rendererBackend->gpuPickQueueStats();
+      std::cout << "[PICK_QUEUE] style="
+                << rendering::renderModeLabel(
+                       visualStyleManager.mode())
+                << " meshes=" << stats.queuedMeshes
+                << " edges=" << stats.queuedEdges
+                << " triangles=" << stats.queuedTriangles
+                << " droppedMeshes=" << stats.droppedMeshes
+                << " droppedTriangles=" << stats.droppedTriangles
+                << std::endl;
+    }
+  }
+
   submitAcGiDrawable(cadDrawList, view, projection, overlayProjection,
                      rebase, cameraPos, cameraRightD, cameraUpD, cameraFront,
                      logDepth, pixelSizeWorld, 2.0f, 7.0f);
