@@ -9,6 +9,8 @@
 #include "rendering/RendererBackend.h"
 #include "entities/tessellate.h"
 #include "entities/world_draw.h"
+#include "libredwg/include/dwg.h"
+#include "entities/dwg_bridge.h"
 #include "scene/DrawContext.h"
 #include "scene/SceneDrawList.h"
 #include "rendering/ProceduralMesh.h"
@@ -1732,6 +1734,121 @@ void appendVectorPrimitive(const EntityType &entity, const char *name,
   addRange(target.pointRanges, pointBegin, target.geometry.points.size());
 }
 
+// ACI palette indices 1-7 cover the standard drawing colors; anything else
+// (true color, ByBlock) falls back to white for the demo renderer.
+static glm::vec4 aciColor(int index)
+{
+  switch (index)
+  {
+  case 1: return {1.0f, 0.0f, 0.0f, 1.0f};
+  case 2: return {1.0f, 1.0f, 0.0f, 1.0f};
+  case 3: return {0.0f, 1.0f, 0.0f, 1.0f};
+  case 4: return {0.0f, 1.0f, 1.0f, 1.0f};
+  case 5: return {0.0f, 0.0f, 1.0f, 1.0f};
+  case 6: return {1.0f, 0.0f, 1.0f, 1.0f};
+  default: return {1.0f, 1.0f, 1.0f, 1.0f};
+  }
+}
+
+// GRID_DWG=<path> appends a decoded DWG model next to the authored demo
+// entities: libredwg decodes the file, dwg_bridge.h maps each supported
+// entity struct, and appendVectorPrimitive routes it through the same
+// tessellation/picking pipeline as the authored demo.
+static void appendDwgFile(const char *path,
+                          const entities::TesselationOptions &options,
+                          VectorPrimitivesTessellation &target)
+{
+  Dwg_Data dwg;
+  memset(&dwg, 0, sizeof(dwg));
+  if (dwg_read_file(path, &dwg) != 0)
+  {
+    std::cout << "GRID_DWG: failed to decode " << path << std::endl;
+    return;
+  }
+
+  size_t appended = 0;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+  {
+    const Dwg_Object &object = dwg.object[i];
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || !object.tio.entity)
+      continue;
+    const Dwg_Color &color = object.tio.entity->color;
+    const glm::vec4 entityColor = aciColor(static_cast<int>(color.index));
+
+    switch (object.type)
+    {
+    case DWG_TYPE_LINE:
+    {
+      entities::Line line = entities::toEntity(*object.tio.entity->tio.LINE);
+      line.common.color = entityColor;
+      appendVectorPrimitive(line, "DWG_LINE", options, target);
+      ++appended;
+      break;
+    }
+    case DWG_TYPE_ARC:
+    {
+      entities::Arc arc = entities::toEntity(*object.tio.entity->tio.ARC);
+      arc.common.color = entityColor;
+      appendVectorPrimitive(arc, "DWG_ARC", options, target);
+      ++appended;
+      break;
+    }
+    case DWG_TYPE_CIRCLE:
+    {
+      entities::Circle circle =
+          entities::toEntity(*object.tio.entity->tio.CIRCLE);
+      circle.common.color = entityColor;
+      appendVectorPrimitive(circle, "DWG_CIRCLE", options, target);
+      ++appended;
+      break;
+    }
+    case DWG_TYPE_ELLIPSE:
+    {
+      entities::Ellipse ellipse =
+          entities::toEntity(*object.tio.entity->tio.ELLIPSE);
+      ellipse.common.color = entityColor;
+      appendVectorPrimitive(ellipse, "DWG_ELLIPSE", options, target);
+      ++appended;
+      break;
+    }
+    case DWG_TYPE_POINT:
+    {
+      entities::Point point =
+          entities::toEntity(*object.tio.entity->tio.POINT);
+      point.common.color = entityColor;
+      appendVectorPrimitive(point, "DWG_POINT", options, target);
+      ++appended;
+      break;
+    }
+    case DWG_TYPE_RAY:
+    {
+      entities::Ray ray = entities::toEntity(*object.tio.entity->tio.RAY);
+      ray.common.color = entityColor;
+      appendVectorPrimitive(ray, "DWG_RAY", options, target);
+      ++appended;
+      break;
+    }
+    case DWG_TYPE_XLINE:
+    {
+      entities::XLine xline;
+      const entities::Ray ray =
+          entities::toEntity(*object.tio.entity->tio.RAY);
+      xline.point = ray.start;
+      xline.direction = ray.direction;
+      xline.common.color = entityColor;
+      appendVectorPrimitive(xline, "DWG_XLINE", options, target);
+      ++appended;
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  std::cout << "GRID_DWG: appended " << appended << " entities from "
+            << path << std::endl;
+  dwg_free(&dwg);
+}
+
 // The CAD vector demo is authored as formal entities.  The cached draw list is
 // shared by drawing and CPU picking; dynamic documents replace this builder's
 // revision with a dirty-document notification.
@@ -2276,7 +2393,11 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       // Demo meshes remain formal entities, but stay out of the default CAD
       // scene.  They are available only for explicit rendering/pick debugging.
       if (!demoMeshesEnabled())
-        return target;
+          // Decoded DWG models ride the same pipeline when GRID_DWG names a file.
+  if (const char *dwgPath = std::getenv("GRID_DWG"))
+    appendDwgFile(dwgPath, options, target);
+
+return target;
 
       MeshEntityRecord debugCube;
       debugCube.entity.common.name = "RedDebugCube";

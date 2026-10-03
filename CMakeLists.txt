@@ -129,6 +129,18 @@ target_link_libraries(WINDOW PRIVATE
     bimg
     bimg_decode
 )
+# ---------------------------------------------------------------------------
+# libredwg -- DWG decode library (static, read-only, minimal build)
+# ---------------------------------------------------------------------------
+set(BUILD_SHARED_LIBS OFF)
+set(LIBREDWG_LIBONLY ON)
+set(LIBREDWG_DISABLE_WRITE ON)
+set(LIBREDWG_DISABLE_JSON ON)
+set(ENABLE_LTO OFF)
+add_subdirectory("${CMAKE_SOURCE_DIR}/lib/libredwg"
+                 "${CMAKE_BINARY_DIR}/libredwg")
+
+target_link_libraries(WINDOW PRIVATE libredwg)
 
 # wgpu-native is dynamically loaded so a missing optional runtime still allows
 # every legacy backend to build and run.

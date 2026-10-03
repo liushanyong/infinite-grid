@@ -68,22 +68,14 @@ inline Point toEntity(const Dwg_Entity_POINT &dwg)
     return point;
 }
 
+// DWG stores XLINE as the identical Dwg_Entity_RAY struct, so one overload
+// serves both; callers re-interpret the result as entities::XLine.
 inline Ray toEntity(const Dwg_Entity_RAY &dwg)
 {
     Ray ray;
     ray.start = AcGePoint3d(dwg.point.x, dwg.point.y, dwg.point.z);
     ray.direction = AcGeVector3d(dwg.vector.x, dwg.vector.y, dwg.vector.z);
     return ray;
-}
-
-// DWG stores XLINE as the same struct as RAY (infinite both ways is our
-// entities::XLine; libredwg keeps the RAY layout).
-inline XLine toEntity(const Dwg_Entity_XLINE &dwg)
-{
-    XLine xline;
-    xline.point = AcGePoint3d(dwg.point.x, dwg.point.y, dwg.point.z);
-    xline.direction = AcGeVector3d(dwg.vector.x, dwg.vector.y, dwg.vector.z);
-    return xline;
 }
 
 } // namespace entities
