@@ -49,4 +49,27 @@ inline void worldDraw(const Ellipse &ellipse, scene::ViewportDraw &draw,
     worldDraw(ellipse, draw, draw.optionsFor(radius), fillIs3DFace);
 }
 
+// A Solid3d renders its fill with the entity color and its feature-edge
+// border strokes with the inverted color, so the border reads against the
+// fill no matter which entity color is authored.
+inline void worldDraw(const Solid3d &solid, scene::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    entities::TessellatedEntity fragment;
+    entities::tessellate(solid, fragment, draw.options());
+
+    entities::TessellatedEntity fillsOnly;
+    fillsOnly.fills = std::move(fragment.fills);
+    draw.sink().append(fillsOnly, draw.subEntityTraits().traits(),
+                       fillIs3DFace);
+
+    const glm::vec4 &color = draw.subEntityTraits().traits().color;
+    scene::DrawTraits edgeTraits = draw.subEntityTraits().traits();
+    edgeTraits.color = glm::vec4(1.0f - color.r, 1.0f - color.g,
+                                 1.0f - color.b, color.a);
+    entities::TessellatedEntity strokesOnly;
+    strokesOnly.strokes = std::move(fragment.strokes);
+    draw.sink().append(strokesOnly, edgeTraits, fillIs3DFace);
+}
+
 } // namespace entities

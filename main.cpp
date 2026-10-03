@@ -1867,7 +1867,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     appendVectorPrimitive(mtext, "MText", options, target);
 
     entities::Solid3d solid3d;
-    solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 0.80f);
+    solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
     solid3d.renderClass = entities::RenderClass::Cad;
     const glm::dvec3 boxMin = cadAnchor + glm::dvec3(1536.0, 128.0, 384.0);
     const glm::dvec3 boxMax = boxMin + glm::dvec3(256.0, 256.0, 256.0);
@@ -6116,6 +6116,9 @@ static void drawSolidFillOutline(const glm::mat4 &view,
     {
         glm::dvec3 start;
         glm::dvec3 end;
+        glm::dvec3 normal;
+        glm::dvec3 center;
+        bool is3DFace;
     };
 
     std::map<BoundaryKey, std::vector<BoundaryUse>> boundaryUses;
@@ -6127,6 +6130,14 @@ static void drawSolidFillOutline(const glm::mat4 &view,
     auto addTriangle = [&](const entities::Triangle &triangle) {
         if (!triangle.common.visible)
             return;
+        const glm::dvec3 normal = glm::cross(triangle.b - triangle.a,
+                                             triangle.c - triangle.a);
+        const bool degenerate =
+            glm::dot(normal, normal) <= 1.0e-24;
+        const glm::dvec3 unit =
+            degenerate ? glm::dvec3(0.0) : glm::normalize(normal);
+        const glm::dvec3 center =
+            (triangle.a + triangle.b + triangle.c) / 3.0;
         const std::pair<glm::dvec3, glm::dvec3> edges[3] = {
             {triangle.a, triangle.b},
             {triangle.b, triangle.c},
@@ -6134,7 +6145,7 @@ static void drawSolidFillOutline(const glm::mat4 &view,
         };
         for (const auto &edge : edges)
             boundaryUses[canonical(edge.first, edge.second)].push_back(
-                {edge.first, edge.second});
+                {edge.first, edge.second, unit, center, triangle.is3DFace});
     };
     for (size_t i = range.begin; i < last; ++i)
         addTriangle(tess.fills[i]);
@@ -6146,6 +6157,18 @@ static void drawSolidFillOutline(const glm::mat4 &view,
     // border at 2 * kOutlineWidthPixels, matching the previous in-plane
     // offset thickness.
     const float outlineWidth = 2.0f * outlineWidthWorld(pixelSizeWorld);
+    // A closed 3D solid has no used-once boundary edges; its selection
+    // outline is the view-dependent silhouette instead: edges whose two
+    // adjacent triangles face opposite sides of the camera.  These ribbons
+    // are drawn twice as wide so the solid reads as boldly selected as a
+    // planar fill.
+    const float silhouetteWidth = 2.0f * outlineWidth;
+    const bool ortho = useOrthoProjection();
+    auto facesCamera = [&](const BoundaryUse &use) {
+        if (ortho)
+            return glm::dot(use.normal, glm::dvec3(cameraFront)) < 0.0;
+        return glm::dot(use.normal, use.center - cameraPos) > 0.0;
+    };
     for (const auto &[key, uses] : boundaryUses)
     {
         (void)key;
@@ -6156,6 +6179,19 @@ static void drawSolidFillOutline(const glm::mat4 &view,
                 glm::vec3(uses.front().start - cameraPos),
                 glm::vec3(uses.front().end - cameraPos),
                 cameraFront, outlineWidth, 0.0f, 1.0f, true);
+        }
+        else if (uses.size() == 2 && uses.front().is3DFace &&
+                 uses.back().is3DFace)
+        {
+            const BoundaryUse &first = uses.front();
+            const BoundaryUse &second = uses.back();
+            if (facesCamera(first) == facesCamera(second))
+                continue; // both sides face the same way: interior edge
+            appendOutlineRibbon(
+                outlineVertices,
+                glm::vec3(first.start - cameraPos),
+                glm::vec3(first.end - cameraPos),
+                cameraFront, silhouetteWidth, 0.0f, 1.0f, true);
         }
     }
 
