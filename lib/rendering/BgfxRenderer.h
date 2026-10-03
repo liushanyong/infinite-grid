@@ -168,6 +168,7 @@ private:
     bgfx::UniformHandle m_curveColor = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_curveArc = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_depthDisplayParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_realisticMaterial = BGFX_INVALID_HANDLE;

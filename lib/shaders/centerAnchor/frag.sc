@@ -6,6 +6,7 @@ uniform vec4 uCubeOpacity;
 uniform vec4 uObjectColor;
 uniform vec4 uLogDepth;
 uniform vec4 uPrimParams;
+uniform vec4 uDepthDisplay;
 
 float outputDepth(float rawDepth, float viewDepth)
 {
@@ -25,7 +26,9 @@ void main()
     gl_FragDepth = outputDepth(gl_FragCoord.z, v_viewDepth);
     if (uPrimParams.x > 6.5 && uPrimParams.x < 7.5)
     {
-        float depthT = outputDepth(gl_FragCoord.z, v_viewDepth);
+        float depthT = uDepthDisplay.x > 0.5
+            ? gl_FragCoord.z
+            : outputDepth(gl_FragCoord.z, v_viewDepth);
         gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
         return;
     }

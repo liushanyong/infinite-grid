@@ -1074,6 +1074,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_cadStrokeParams);
     destroyUniform(m_cadFlatShade);
     destroyUniform(m_primParams);
+    destroyUniform(m_depthDisplayParams);
     destroyUniform(m_curveCP);
     destroyUniform(m_curveKnot);
     destroyUniform(m_curveParams);
@@ -1394,6 +1395,18 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
         return false;
 
     ++m_frame;
+
+    // DepthBuffer style normalization switch: GRID_DEPTH_RAW=1 displays the
+    // raw hardware depth instead of the log-normalized slab mapping.
+    // Uniform values persist across submits, so setting it once per frame
+    // reaches every program that declares uDepthDisplay.
+    static const bool depthRawDisplay = [] {
+        const char *value = std::getenv("GRID_DEPTH_RAW");
+        return value != nullptr && std::strcmp(value, "0") != 0;
+    }();
+    const float depthDisplayParams[4] = {
+        depthRawDisplay ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    bgfx::setUniform(m_depthDisplayParams, depthDisplayParams);
 
     int width = 0;
     int height = 0;
@@ -4091,6 +4104,8 @@ m_curveLayout.begin()
         m_selectionOutlineColor = createUniformHandle(
             "u_outline_color", bgfx::UniformType::Vec4);
         m_primParams = createUniformHandle("uPrimParams", bgfx::UniformType::Vec4);
+        m_depthDisplayParams =
+            createUniformHandle("uDepthDisplay", bgfx::UniformType::Vec4);
         m_curveCP = createUniformHandle("uCurveCP", bgfx::UniformType::Vec4, 16);
         m_curveKnot = createUniformHandle("uCurveKnot", bgfx::UniformType::Vec4, 4);
         m_curveParams = createUniformHandle("uCurveParams", bgfx::UniformType::Vec4);

@@ -5,6 +5,7 @@ $input v_color, v_edge, v_depth, v_along
 #include <cadCore/line.sh>
 
 uniform vec4 uPrimParams;
+uniform vec4 uDepthDisplay;
 
 void main()
 {
@@ -16,7 +17,9 @@ void main()
         discard;
     if (uPrimParams.z > 6.5 && uPrimParams.z < 7.5)
     {
-        float depthT = cad_outputDepth(gl_FragCoord.z, v_depth);
+        float depthT = uDepthDisplay.x > 0.5
+            ? gl_FragCoord.z
+            : cad_outputDepth(gl_FragCoord.z, v_depth);
         gl_FragColor = vec4(vec3_splat(1.0 - depthT), alpha);
         return;
     }
