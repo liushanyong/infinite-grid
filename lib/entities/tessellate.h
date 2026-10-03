@@ -267,6 +267,26 @@ inline void tessellatePolyline(const PolylineType &polyline,
         (void)chordLength;
         (void)b2;
     }
+
+    // Non-zero thickness extrudes the outline into wall quads along the
+    // polyline normal, so the entity reads as a 3D ribbon instead of a
+    // flat curve.  Bulge arcs are subdivided first, so curved segments get
+    // per-span walls.
+    if (std::abs(polyline.thickness) > 1.0e-12 && stroke.points.size() >= 2)
+    {
+        const glm::dvec3 offset = normal * polyline.thickness;
+        const size_t wallCount = polyline.closed
+                                     ? stroke.points.size()
+                                     : stroke.points.size() - 1;
+        for (size_t i = 0; i < wallCount; ++i)
+        {
+            const glm::dvec3 &a = stroke.points[i];
+            const glm::dvec3 &b =
+                stroke.points[(i + 1) % stroke.points.size()];
+            result.fills.push_back(Triangle{{}, a, b, b + offset});
+            result.fills.push_back(Triangle{{}, a, b + offset, a + offset});
+        }
+    }
 }
 
 inline glm::dvec3 pointAt(const Polyline &polyline, size_t index)
@@ -431,11 +451,76 @@ inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
 {
     if (hatch.outerLoop.size() < 3)
         return;
-    for (size_t i = 1; i + 1 < hatch.outerLoop.size(); ++i)
+    if (hatch.solidFill || hatch.patternName == "SOLID")
     {
-        result.fills.push_back(Triangle{{}, hatch.outerLoop[0],
-                                         hatch.outerLoop[i],
-                                         hatch.outerLoop[i + 1]});
+        for (size_t i = 1; i + 1 < hatch.outerLoop.size(); ++i)
+        {
+            result.fills.push_back(Triangle{{}, hatch.outerLoop[0],
+                                             hatch.outerLoop[i],
+                                             hatch.outerLoop[i + 1]});
+        }
+        return;
+    }
+
+    // Line patterns are generated as parallel scanlines in the pattern
+    // frame (patternAngle rotates it, patternScale widens the spacing) and
+    // clipped to the loops with the even-odd rule, so inner loops punch
+    // real holes in the pattern instead of being ignored.
+    const glm::dvec3 origin = hatch.outerLoop.front();
+    const glm::dvec3 u(std::cos(hatch.patternAngle),
+                       std::sin(hatch.patternAngle), 0.0);
+    const glm::dvec3 v(-std::sin(hatch.patternAngle),
+                       std::cos(hatch.patternAngle), 0.0);
+
+    std::vector<std::vector<glm::dvec2>> loops;
+    glm::dvec2 low(0.0, 0.0);
+    glm::dvec2 high(0.0, 0.0);
+    auto addLoop = [&](const std::vector<glm::dvec3> &loop) {
+        if (loop.size() < 3)
+            return;
+        std::vector<glm::dvec2> flat;
+        flat.reserve(loop.size());
+        for (const glm::dvec3 &point : loop)
+        {
+            flat.emplace_back(glm::dot(point - origin, u),
+                              glm::dot(point - origin, v));
+            low = glm::min(low, flat.back());
+            high = glm::max(high, flat.back());
+        }
+        loops.push_back(std::move(flat));
+    };
+    addLoop(hatch.outerLoop);
+    for (const std::vector<glm::dvec3> &loop : hatch.innerLoops)
+        addLoop(loop);
+    if (loops.empty())
+        return;
+
+    const double spacing = std::max(1.0e-3, hatch.patternScale * 16.0);
+    for (double y = low.y + spacing * 0.5; y < high.y; y += spacing)
+    {
+        std::vector<double> crossings;
+        for (const std::vector<glm::dvec2> &loop : loops)
+        {
+            for (size_t i = 0; i < loop.size(); ++i)
+            {
+                const glm::dvec2 &a = loop[i];
+                const glm::dvec2 &b = loop[(i + 1) % loop.size()];
+                if ((a.y > y) == (b.y > y))
+                    continue;
+                crossings.push_back(
+                    a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
+            }
+        }
+        std::sort(crossings.begin(), crossings.end());
+        for (size_t i = 0; i + 1 < crossings.size(); i += 2)
+        {
+            if (crossings[i + 1] - crossings[i] <= 1.0e-9)
+                continue;
+            Stroke &stroke = addStroke(result);
+            stroke.points = {
+                origin + u * crossings[i] + v * y,
+                origin + u * crossings[i + 1] + v * y};
+        }
     }
 }
 

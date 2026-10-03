@@ -1774,6 +1774,17 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     ellipse.radiusRatio = 0.55;
     appendVectorPrimitive(ellipse, "Ellipse", options, target);
 
+    // Partial ellipse: the parameter range draws an elliptical arc instead
+    // of the closed curve.
+    entities::Ellipse ellipseArc;
+    ellipseArc.common.color = glm::vec4(0.75f, 0.40f, 0.95f, 1.0f);
+    ellipseArc.center = cadAnchor + glm::dvec3(1536.0, -640.0, 0.0);
+    ellipseArc.majorAxis = glm::dvec3(160.0, 0.0, 0.0);
+    ellipseArc.radiusRatio = 0.55;
+    ellipseArc.startParameter = glm::pi<double>() * 0.25;
+    ellipseArc.endParameter = glm::pi<double>() * 1.75;
+    appendVectorPrimitive(ellipseArc, "EllipseArc", options, target);
+
     entities::Polyline polyline;
     polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     polyline.vertices = {
@@ -1815,6 +1826,40 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1024.0, -128.0, 0.0)};
     appendVectorPrimitive(hatch, "Hatch", options, target);
 
+    // ANSI31 line pattern at unit scale; the inner loop punches a hole via
+    // the even-odd rule.
+    entities::Hatch patternHatch;
+    patternHatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.90f);
+    patternHatch.solidFill = false;
+    patternHatch.patternName = "ANSI31";
+    patternHatch.patternScale = 1.0;
+    patternHatch.patternAngle = 0.0;
+    patternHatch.outerLoop = {
+        cadAnchor + glm::dvec3(1024.0, -768.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -768.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -512.0, 0.0),
+        cadAnchor + glm::dvec3(1024.0, -512.0, 0.0)};
+    patternHatch.innerLoops = {{
+        cadAnchor + glm::dvec3(1152.0, -704.0, 0.0),
+        cadAnchor + glm::dvec3(1280.0, -704.0, 0.0),
+        cadAnchor + glm::dvec3(1280.0, -576.0, 0.0),
+        cadAnchor + glm::dvec3(1152.0, -576.0, 0.0)}};
+    appendVectorPrimitive(patternHatch, "PatternHatch", options, target);
+
+    // Same pattern family rotated 45 degrees and widened by patternScale.
+    entities::Hatch angledHatch;
+    angledHatch.common.color = glm::vec4(0.35f, 0.55f, 0.95f, 0.90f);
+    angledHatch.solidFill = false;
+    angledHatch.patternName = "ANSI31";
+    angledHatch.patternScale = 2.0;
+    angledHatch.patternAngle = glm::pi<double>() * 0.25;
+    angledHatch.outerLoop = {
+        cadAnchor + glm::dvec3(1024.0, -1024.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -1024.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -832.0, 0.0),
+        cadAnchor + glm::dvec3(1024.0, -832.0, 0.0)};
+    appendVectorPrimitive(angledHatch, "AngledHatch", options, target);
+
     entities::Solid solid;
     solid.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 0.85f);
     solid.firstCorner = cadAnchor + glm::dvec3(0.0, -128.0, 256.0);
@@ -1845,6 +1890,57 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     appendVectorPrimitive(
         mline, "MLine", options, target, false,
         CadEntityPickShape::PairedStrokeBand);
+
+    // Closed multi-line: the offset band wraps around and the enclosed
+    // strip is filled between the two boundary strokes.
+    entities::MLine closedMLine;
+    closedMLine.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 0.95f);
+    closedMLine.vertices = {
+        cadAnchor + glm::dvec3(1472.0, -880.0, 0.0),
+        cadAnchor + glm::dvec3(1728.0, -960.0, 0.0),
+        cadAnchor + glm::dvec3(1600.0, -1088.0, 0.0)};
+    closedMLine.scale = glm::dvec3(40.0, 1.0, 1.0);
+    closedMLine.closed = true;
+    appendVectorPrimitive(
+        closedMLine, "ClosedMLine", options, target, false,
+        CadEntityPickShape::PairedStrokeBand);
+
+    // Closed polyline with non-zero thickness: the outline extrudes into
+    // wall quads along the normal.
+    entities::Polyline borderedPolyline;
+    borderedPolyline.common.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f);
+    borderedPolyline.vertices = {
+        cadAnchor + glm::dvec3(1792.0, -576.0, 0.0),
+        cadAnchor + glm::dvec3(1984.0, -576.0, 0.0),
+        cadAnchor + glm::dvec3(1984.0, -736.0, 0.0),
+        cadAnchor + glm::dvec3(1792.0, -736.0, 0.0)};
+    borderedPolyline.closed = true;
+    borderedPolyline.thickness = 48.0;
+    appendVectorPrimitive(
+        borderedPolyline, "BorderedPolyline", options, target);
+
+    // Fit-point splines: the C1 fallback interpolates the fit points, open
+    // and closed forms.
+    entities::Spline fitSpline;
+    fitSpline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    fitSpline.degree = 3;
+    fitSpline.fitPoints = {
+        cadAnchor + glm::dvec3(1024.0, -1152.0, 0.0),
+        cadAnchor + glm::dvec3(1152.0, -1024.0, 0.0),
+        cadAnchor + glm::dvec3(1280.0, -1216.0, 0.0),
+        cadAnchor + glm::dvec3(1408.0, -1088.0, 0.0)};
+    appendVectorPrimitive(fitSpline, "FitSpline", options, target);
+
+    entities::Spline closedFitSpline;
+    closedFitSpline.common.color = glm::vec4(0.55f, 0.85f, 0.25f, 1.0f);
+    closedFitSpline.degree = 3;
+    closedFitSpline.closed = true;
+    closedFitSpline.fitPoints = {
+        cadAnchor + glm::dvec3(1024.0, -1408.0, 0.0),
+        cadAnchor + glm::dvec3(1152.0, -1296.0, 0.0),
+        cadAnchor + glm::dvec3(1312.0, -1424.0, 0.0),
+        cadAnchor + glm::dvec3(1152.0, -1520.0, 0.0)};
+    appendVectorPrimitive(closedFitSpline, "ClosedFitSpline", options, target);
 
     entities::Point cadPoint;
     cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
