@@ -1080,13 +1080,17 @@ void submitAcGiDrawable(scene::SceneDrawList &drawList,
     const size_t strokeCount = stroke.points.size();
     const bool patterned = stroke.common.lineType != "ByLayer" &&
                            stroke.common.lineType != "CONTINUOUS";
-    for (size_t i = 0; i + 1 < strokeCount; ++i)
+    // Closed strokes also emit the wrap segment back to their first point.
+    const size_t strokeSegmentCount =
+        stroke.closed ? strokeCount : strokeCount - 1;
+    for (size_t i = 0; i < strokeSegmentCount; ++i)
     {
       // Frustum-clip in double before emitting the ribbon: infinite
       // strokes (Ray/XLine) contribute only their visible span.
       glm::dvec3 clippedStart, clippedEnd;
       if (!clipStrokeSegmentToView(
-              stroke.points[i], stroke.points[i + 1], cameraPosition,
+              stroke.points[i], stroke.points[(i + 1) % strokeCount],
+              cameraPosition,
               cameraRight, cameraUp, cameraFront,
               g_renderSlabNear, g_renderSlabFar, clippedStart, clippedEnd,
               stroke.semiInfinite))
@@ -2045,11 +2049,19 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     closedFitSpline.degree = 3;
     closedFitSpline.closed = true;
     closedFitSpline.fitPoints = {
-        cadAnchor + glm::dvec3(1024.0, -1408.0, 0.0),
-        cadAnchor + glm::dvec3(1152.0, -1296.0, 0.0),
-        cadAnchor + glm::dvec3(1312.0, -1424.0, 0.0),
-        cadAnchor + glm::dvec3(1152.0, -1520.0, 0.0)};
+        cadAnchor + glm::dvec3(1024.0, -1408.0, 160.0),
+        cadAnchor + glm::dvec3(1152.0, -1296.0, -160.0),
+        cadAnchor + glm::dvec3(1312.0, -1424.0, 288.0),
+        cadAnchor + glm::dvec3(1152.0, -1520.0, -96.0)};
     appendVectorPrimitive(closedFitSpline, "ClosedFitSpline", options, target);
+
+    // The closed ring through the same points: the interpolation visibly
+    // smooths the corners of this reference polygon.
+    entities::Polyline closedFitRing;
+    closedFitRing.common.color = glm::vec4(0.55f, 0.55f, 0.55f, 0.9f);
+    closedFitRing.vertices = closedFitSpline.fitPoints;
+    closedFitRing.closed = true;
+    appendVectorPrimitive(closedFitRing, "ClosedFitRing", options, target);
 
     // Non-planar fit spline: the fit points span all three dimensions, so
     // the curve bends out of the ground plane (the fit-point demos above
@@ -2058,11 +2070,11 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     spaceSpline.common.color = glm::vec4(0.30f, 0.65f, 0.95f, 1.0f);
     spaceSpline.degree = 3;
     spaceSpline.fitPoints = {
-        cadAnchor + glm::dvec3(1024.0, -1152.0, 192.0),
-        cadAnchor + glm::dvec3(1152.0, -1024.0, -192.0),
-        cadAnchor + glm::dvec3(1280.0, -1216.0, 384.0),
-        cadAnchor + glm::dvec3(1408.0, -1088.0, 0.0),
-        cadAnchor + glm::dvec3(1536.0, -1216.0, 256.0)};
+        cadAnchor + glm::dvec3(1024.0, -1152.0, 480.0),
+        cadAnchor + glm::dvec3(1152.0, -1024.0, -480.0),
+        cadAnchor + glm::dvec3(1280.0, -1216.0, 768.0),
+        cadAnchor + glm::dvec3(1408.0, -1088.0, -320.0),
+        cadAnchor + glm::dvec3(1536.0, -1216.0, 640.0)};
     appendVectorPrimitive(spaceSpline, "SpaceSpline", options, target);
 
     entities::Point cadPoint;
