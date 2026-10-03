@@ -659,6 +659,8 @@ bool init()
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
                "custom start axis=yellow)"
             << std::endl;
+  std::cout << "Keys: V=cycle visual style, P=projection, "
+               "L=scene teleport" << std::endl;
 
   return true;
 }
