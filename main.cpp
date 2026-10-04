@@ -12,6 +12,7 @@
 #include "libredwg/include/dwg.h"
 #include "entities/dwg_bridge.h"
 #include "acgi/AcGiTextQueue.h"
+#include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
 #include "scene/DrawContext.h"
@@ -171,10 +172,8 @@ static bool centerCubeForced()
 
 static uint32_t gMeshTextureIndex = 0;
 
-// Loaded font subsystem (SDF TTF + AutoCAD SHX).  Populated by the
-// startup load, consumed by the text rendering pass below.
-static rendering::LoadedFont gSdfFont;
-static rendering::LoadedFont gShxFont;
+// Loaded font subsystem (SDF TTF + AutoCAD SHX), consolidated behind the
+// AcGi text engine (see AcGiTextEngine.h).  Populated at startup.
 static bool gSdfFontReady = false;
 static bool gShxFontReady = false;
 
@@ -682,44 +681,34 @@ bool init()
   // to the bundled NotoSansLatin if the requested files are missing.
   if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
   {
-    rendering::SdfFontConfig sdfConfig;
-    sdfConfig.ttfPath =
-        util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
-    sdfConfig.pixelsPerEm = 96.0f;
-    gSdfFontReady = gSdfFont.loadSdf(sdfConfig);
+    gSdfFontReady = acgi::textEngine().loadSdfFont(
+        util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string());
     std::cout << "SDF font (WenQuanWeiMiHei-1): "
               << (gSdfFontReady ? "loaded" : "failed") << std::endl;
-    if (gSdfFontReady)
-    {
-      // Per-glyph SDF textures upload lazily at first render.
-      acgi::textFrameFallback() = false;
-    }
   }
   else
   {
-    rendering::SdfFontConfig fallback;
-    fallback.ttfPath =
-        util::resourcePath("fonts/NotoSansLatin.ttf").string();
-    fallback.pixelsPerEm = 96.0f;
-    gSdfFontReady = gSdfFont.loadSdf(fallback);
+    gSdfFontReady = acgi::textEngine().loadSdfFont(
+        util::resourcePath("fonts/NotoSansLatin.ttf").string());
     std::cout << "SDF font (NotoSansLatin fallback): "
               << (gSdfFontReady ? "loaded" : "failed") << std::endl;
-    if (gSdfFontReady)
-      acgi::textFrameFallback() = false;
+  }
+  if (gSdfFontReady)
+  {
+    // Glyphs are available: Text/MText entities render through the SDF
+    // queue instead of their baked layout frames.
+    acgi::textFrameFallback() = false;
   }
   if (util::resourceExists("fonts/whgdtxt.shx"))
   {
-    rendering::ShxFontConfig shxConfig;
-    shxConfig.shxPath =
-        util::resourcePath("fonts/whgdtxt.shx").string();
-    gShxFontReady = gShxFont.loadShx(shxConfig);
+    gShxFontReady = acgi::textEngine().loadShxFont(
+        util::resourcePath("fonts/whgdtxt.shx").string());
     std::cout << "SHX font (whgdtxt): "
               << (gShxFontReady ? "loaded" : "failed") << std::endl;
     if (!gShxFontReady && util::resourceExists("fonts/txt.shx"))
     {
-      rendering::ShxFontConfig fallback;
-      fallback.shxPath = util::resourcePath("fonts/txt.shx").string();
-      gShxFontReady = gShxFont.loadShx(fallback);
+      gShxFontReady = acgi::textEngine().loadShxFont(
+          util::resourcePath("fonts/txt.shx").string());
       std::cout << "SHX font (txt fallback): "
                 << (gShxFontReady ? "loaded" : "failed") << std::endl;
     }
@@ -2079,26 +2068,15 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
       entities::Stroke shxStroke;
       shxStroke.common.color = shxColor;
-      double penX = 0.0;
-      for (unsigned char character : shxText)
+      for (const rendering::ShxGlyphStroke &stroke :
+           acgi::textEngine().shxStrokes(shxText))
       {
-        const rendering::ShxGlyphSlot &glyph =
-            gShxFont.shxGlyph(character);
-        if (glyph.valid)
-        {
-          for (const rendering::ShxGlyphStroke &stroke : glyph.strokes)
-          {
-            shxStroke.points.push_back(
-                textOrigin +
-                textRight * (penX + stroke.fromX) * textHeight +
-                textUp * (stroke.fromY * textHeight));
-            shxStroke.points.push_back(
-                textOrigin +
-                textRight * (penX + stroke.toX) * textHeight +
-                textUp * (stroke.toY * textHeight));
-          }
-        }
-        penX += glyph.valid ? glyph.advanceWidth : 0.5;
+        shxStroke.points.push_back(
+            textOrigin + textRight * (stroke.fromX * textHeight) +
+            textUp * (stroke.fromY * textHeight));
+        shxStroke.points.push_back(
+            textOrigin + textRight * (stroke.toX * textHeight) +
+            textUp * (stroke.toY * textHeight));
       }
       if (!shxStroke.points.empty())
       {
@@ -8227,114 +8205,28 @@ void render()
                            cameraPos, frontVec, cameraRight, cameraUp,
                            pixelSize, visibleCadDraws, tinyCadDraws);
 
-  // SDF text pass: one R8 distance-field texture per glyph (uploaded on
-  // first use), one camera-facing quad per glyph.  Sources: the AcGi
-  // text-request queue (Text/MText entities recorded at tessellation
-  // time) plus a standalone demo string near the cluster.
+  // SDF text pass: the AcGi text engine expands each queued request into
+  // per-glyph quads (one R8 distance-field texture per glyph, uploaded on
+  // first use).  Sources: Text/MText entities recorded at tessellation
+  // time plus a standalone demo string beside the cluster.
   if (gSdfFontReady && rendererBackend)
   {
-    static std::map<unsigned int, uint32_t> glyphTextureIds;
-    // Quads are expanded in view space (camera-basis dotted); identity
-    // view lets the renderer's viewProj place them directly.
     constexpr glm::mat4 identityView(1.0f);
-
-    auto appendSdfText = [&](const glm::dvec3 &textOrigin,
-                             const std::string &text, double textHeight,
-                             const glm::vec4 &color) {
-      const glm::dvec3 toCamera = glm::normalize(cameraPos - textOrigin);
-      const glm::dvec3 textUp(0.0, 0.0, 1.0);
-      const glm::dvec3 textRight =
-          glm::normalize(glm::cross(textUp, toCamera));
-      const double emToWorld = textHeight / double(gSdfFont.pixelsPerEm());
-
-      // Multi-line: advance along -up per newline.
-      glm::dvec3 lineOrigin = textOrigin;
-      double penX = 0.0;
-      for (unsigned char character : text)
-      {
-        if (character == 10) // newline
-        {
-          lineOrigin -= textUp * textHeight * 1.35;
-          penX = 0.0;
-          continue;
-        }
-        const rendering::GlyphSdfRaster &glyph =
-            gSdfFont.glyphSdf(character);
-        if (!glyph.valid)
-        {
-          penX += 0.5 * double(gSdfFont.pixelsPerEm());
-          continue;
-        }
-
-        // Lazily upload this glyph's distance field.
-        uint32_t textureId = 0;
-        if (const auto it = glyphTextureIds.find(character);
-            it != glyphTextureIds.end())
-        {
-          textureId = it->second;
-        }
-        else
-        {
-          textureId = rendererBackend->uploadGlyphSdf(
-              glyph.sdf.data(), glyph.width, glyph.height);
-          glyphTextureIds[character] = textureId;
-        }
-
-        if (textureId != 0)
-        {
-          // Quad offsets: pen + left/top metrics in em units.
-          const glm::dvec3 quadLeftEdge =
-              lineOrigin + textRight * ((penX + glyph.left) * emToWorld) +
-              textUp * ((glyph.top - glyph.height) * emToWorld);
-          const glm::dvec3 quadWidth =
-              textRight * (glyph.width * emToWorld);
-          const glm::dvec3 quadHeight = textUp * (glyph.height * emToWorld);
-          auto pushVertex = [&](double cornerU, double cornerV, float u,
-                                float v) {
-            // Transform into VIEW space with the camera basis so the
-            // identity view passed to the renderer places the quad
-            // exactly where the world position appears on screen.
-            const glm::dvec3 relative =
-                quadLeftEdge + quadWidth * cornerU + quadHeight * cornerV -
-                cameraPos;
-            return std::array<float, 9>{
-                float(glm::dot(relative, cameraRight)),
-                float(glm::dot(relative, cameraUp)),
-                float(-glm::dot(relative, frontVec)),
-                u,
-                v,
-                color.r,
-                color.g,
-                color.b,
-                color.a};
-          };
-          const std::array<float, 9> v00 = pushVertex(0, 0, 0.0f, 1.0f);
-          const std::array<float, 9> v10 = pushVertex(1, 0, 1.0f, 1.0f);
-          const std::array<float, 9> v11 = pushVertex(1, 1, 1.0f, 0.0f);
-          const std::array<float, 9> v01 = pushVertex(0, 1, 0.0f, 0.0f);
-          float vertices[54];
-          std::memcpy(vertices + 0, v00.data(), sizeof(v00));
-          std::memcpy(vertices + 9, v10.data(), sizeof(v10));
-          std::memcpy(vertices + 18, v11.data(), sizeof(v11));
-          std::memcpy(vertices + 27, v00.data(), sizeof(v00));
-          std::memcpy(vertices + 36, v11.data(), sizeof(v11));
-          std::memcpy(vertices + 45, v01.data(), sizeof(v01));
-          rendererBackend->drawSdfGlyphQuad(identityView, projection,
-                                            textureId, vertices);
-        }
-        penX += glyph.advanceX;
-      }
-    };
-
-    // 1. Text/MText entities recorded through the AcGi protocol.
     for (const acgi::TextRequest &request : acgi::textRequests())
-      appendSdfText(request.position, request.message, request.height,
-                    request.color);
-    // 2. Standalone demo string beside the CAD cluster.
-    // cadAnchor == vectorPrimitivesAnchor() + (1536, -1280, 0).
-    appendSdfText(vectorPrimitivesAnchor() + glm::dvec3(1792.0, -768.0, 512.0),
-                  "INFINITE-GRID", 72.0,
-                  glm::vec4(0.95f, 0.75f, 0.25f, 1.0f));
+      acgi::textEngine().drawText(*rendererBackend, identityView,
+                                  projection, cameraPos, cameraRight,
+                                  cameraUp, frontVec, request);
+    // Demo string above the cluster, between the locator tips.
+    acgi::TextRequest demo;
+    demo.position = vectorPrimitivesAnchor() + glm::dvec3(256.0, 640.0, 512.0);
+    demo.direction = glm::dvec3(1.0, 0.0, 0.0);
+    demo.normal = glm::dvec3(0.0, 0.0, 1.0);
+    demo.message = "INFINITE-GRID";
+    demo.height = 72.0;
+    demo.color = glm::vec4(0.95f, 0.75f, 0.25f, 1.0f);
+    acgi::textEngine().drawText(*rendererBackend, identityView, projection,
+                                cameraPos, cameraRight, cameraUp, frontVec,
+                                demo);
   }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The

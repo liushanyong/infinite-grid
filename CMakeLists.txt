@@ -106,6 +106,7 @@ set(WINDOW_SOURCES
     lib/rendering/ProceduralMesh.cpp
     lib/text/text_font.cpp
     lib/text/shx_parser.cpp
+    lib/acgi/AcGiTextEngine.cpp
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})
