@@ -2226,6 +2226,22 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     mtext.text = "MTEXT\nDEMO";
     appendVectorPrimitive(mtext, "MText", options, target);
 
+    // Text locators: bright vertical lines pointing at each text insertion
+    // point, so the glyph position can be found from any distance while
+    // debugging the SDF path.
+    entities::Line textLocator;
+    textLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
+    textLocator.common.lineWeight = 3.0;
+    textLocator.start = text.insertion + glm::dvec3(0.0, 0.0, -320.0);
+    textLocator.end = text.insertion;
+    appendVectorPrimitive(textLocator, "TextLocator", options, target);
+    entities::Line mtextLocator;
+    mtextLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
+    mtextLocator.common.lineWeight = 3.0;
+    mtextLocator.start = mtext.insertion + glm::dvec3(0.0, 0.0, -320.0);
+    mtextLocator.end = mtext.insertion;
+    appendVectorPrimitive(mtextLocator, "MTextLocator", options, target);
+
     entities::Solid3d solid3d;
     solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
     solid3d.renderClass = entities::RenderClass::Cad;

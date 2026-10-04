@@ -4329,7 +4329,10 @@ bool BgfxRenderer::loadSdfTextAtlas(const unsigned char *pixels, int width,
         m_textLayout.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+            // CPU pushes 9 floats per vertex (pos3 + uv2 + rgba4); a
+            // Uint8-normalized color here would shrink the stride to 24
+            // bytes and corrupt every vertex after the first.
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
             .end();
     }
     if (!bgfx::isValid(m_textProgram))
