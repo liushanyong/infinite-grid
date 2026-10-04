@@ -4361,8 +4361,12 @@ void BgfxRenderer::drawSdfGlyphQuad(const glm::mat4 &view,
     bgfx::setViewFrameBuffer(kViewText, BGFX_INVALID_HANDLE);
     bgfx::setViewRect(kViewText, 0, 0, m_width, m_height);
     bgfx::setViewClear(kViewText, BGFX_CLEAR_NONE, 0, 1.0f, 0);
+    // D3D-family backends expect NDC depth in [0, 1]; without this remap
+    // the near half of the ortho slab clips at a straight line (text
+    // glyphs vanished below a horizontal screen line).
+    const glm::mat4 textProjection = projectionForDirect3D(projection);
     bgfx::setViewTransform(kViewText, glm::value_ptr(view),
-                           glm::value_ptr(projection));
+                           glm::value_ptr(textProjection));
 
     bgfx::TransientVertexBuffer tvb;
     if (6 != bgfx::getAvailTransientVertexBuffer(6, m_textLayout))
