@@ -726,13 +726,13 @@ bool init()
         acgi::textFrameFallback() = false;
     }
   }
-  if (util::resourceExists("fonts/whgdtxt.shx"))
+  if (util::resourceExists("fonts/txt.shx"))
   {
     rendering::ShxFontConfig shxConfig;
     shxConfig.shxPath =
-        util::resourcePath("fonts/whgdtxt.shx").string();
+        util::resourcePath("fonts/txt.shx").string();
     gShxFontReady = gShxFont.loadShx(shxConfig);
-    std::cout << "SHX font (whgdtxt): "
+    std::cout << "SHX font (txt): "
               << (gShxFontReady ? "loaded" : "failed") << std::endl;
   }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
@@ -8266,10 +8266,15 @@ void render()
         const glm::dvec3 dv = textUp * (glyphHeight * textHeight);
         auto pushVertex = [&](double cornerU, double cornerV, float u,
                               float v) {
-          const glm::dvec3 world = corner00 + du * cornerU + dv * cornerV;
-          textVertices.push_back(float(world.x - cameraPos.x));
-          textVertices.push_back(float(world.y - cameraPos.y));
-          textVertices.push_back(float(world.z - cameraPos.z));
+          // Transform into VIEW space with the camera basis: the quad is
+          // billboarded in world axes, then dotted onto right/up/front so
+          // the identity view + ortho/perspective projection place it
+          // exactly where the world position appears on screen.
+          const glm::dvec3 relative =
+              corner00 + du * cornerU + dv * cornerV - cameraPos;
+          textVertices.push_back(float(glm::dot(relative, cameraRight)));
+          textVertices.push_back(float(glm::dot(relative, cameraUp)));
+          textVertices.push_back(float(-glm::dot(relative, frontVec)));
           textVertices.push_back(u);
           textVertices.push_back(v);
           textVertices.push_back(color.r);

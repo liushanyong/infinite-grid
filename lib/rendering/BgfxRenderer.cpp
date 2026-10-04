@@ -4385,8 +4385,10 @@ void BgfxRenderer::drawSdfGlyphQuads(const glm::mat4 &view,
         std::memcpy(tvb.data, vertices + first * 9,
                     size_t(count) * sizeof(float) * 9);
 
+        // Overlay pass: the backbuffer depth is not the scene depth (the
+        // scene resolves through the MSAA framebuffer), so text draws
+        // without a depth test, after the present view.
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_DEPTH_TEST_LEQUAL |
                        BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
         bgfx::setVertexBuffer(0, &tvb);
         bgfx::setTexture(0, m_textSampler, m_textAtlas);
