@@ -221,22 +221,18 @@ ShxDecodeContext decodeGlyph(const unsigned char *data, int defBytes)
     return state;
 }
 
-float maxPenX(const ShxDecodeContext &state)
-{
-    float maximum = 0.0f;
-    for (const ShxGlyphStroke &stroke : state.strokes)
-        maximum = std::max({maximum, stroke.fromX, stroke.toX});
-    return maximum;
-}
-
 void storeGlyph(LoadedFont &font, std::uint32_t codepoint,
                 const ShxDecodeContext &state, double fontHeight)
 {
     const float emPerUnit = float(1.0 / fontHeight);
     ShxGlyphSlot slot;
     slot.strokes.reserve(state.strokes.size());
+    float minX = 0.0f;
+    float maxX = 0.0f;
     for (const ShxGlyphStroke &stroke : state.strokes)
     {
+        minX = std::min({minX, stroke.fromX, stroke.toX});
+        maxX = std::max({maxX, stroke.fromX, stroke.toX});
         ShxGlyphStroke normalized;
         normalized.fromX = stroke.fromX * emPerUnit;
         // SHX shape space is y-down (baseline at 0, glyph body at -1);
@@ -247,7 +243,11 @@ void storeGlyph(LoadedFont &font, std::uint32_t codepoint,
         normalized.toY = -stroke.toY * emPerUnit;
         slot.strokes.push_back(normalized);
     }
-    slot.advanceWidth = std::max(maxPenX(state) * emPerUnit, 0.4f);
+    // Advance = glyph ink width + inter-letter gap.  txt.shx-style fonts
+    // center glyphs on the pen (x spans ±width/2), so the old fixed 0.4 em
+    // floor made every letter overlap its neighbour.
+    const float inkWidthEm = (maxX - minX) * emPerUnit;
+    slot.advanceWidth = std::max(inkWidthEm, 0.2f) + 0.13f;
     slot.valid = true;
     font.shxSlots_[codepoint] = std::move(slot);
 }
