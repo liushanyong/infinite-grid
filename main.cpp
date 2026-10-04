@@ -699,19 +699,27 @@ bool init()
     // queue instead of their baked layout frames.
     acgi::textFrameFallback() = false;
   }
+  // AutoCAD bigfont pairing: txt.shx provides ASCII glyphs, whgdtxt.shx
+  // provides the double-byte CJK glyphs.
+  bool shxRegularReady = false;
+  if (util::resourceExists("fonts/txt.shx"))
+  {
+    shxRegularReady = acgi::textEngine().loadShxRegularFont(
+        util::resourcePath("fonts/txt.shx").string());
+    std::cout << "SHX regular font (txt): "
+              << (shxRegularReady ? "loaded" : "failed") << std::endl;
+  }
   if (util::resourceExists("fonts/whgdtxt.shx"))
   {
-    gShxFontReady = acgi::textEngine().loadShxFont(
+    const bool bigReady = acgi::textEngine().loadShxBigFont(
         util::resourcePath("fonts/whgdtxt.shx").string());
-    std::cout << "SHX font (whgdtxt): "
-              << (gShxFontReady ? "loaded" : "failed") << std::endl;
-    if (!gShxFontReady && util::resourceExists("fonts/txt.shx"))
-    {
-      gShxFontReady = acgi::textEngine().loadShxFont(
-          util::resourcePath("fonts/txt.shx").string());
-      std::cout << "SHX font (txt fallback): "
-                << (gShxFontReady ? "loaded" : "failed") << std::endl;
-    }
+    std::cout << "SHX big font (whgdtxt): "
+              << (bigReady ? "loaded" : "failed") << std::endl;
+    gShxFontReady = shxRegularReady || bigReady;
+  }
+  else
+  {
+    gShxFontReady = shxRegularReady;
   }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
@@ -8216,13 +8224,14 @@ void render()
       acgi::textEngine().drawText(*rendererBackend, identityView,
                                   projection, cameraPos, cameraRight,
                                   cameraUp, frontVec, request);
-    // Demo string above the cluster, between the locator tips.
+    // Demo string lying flat on the ground plane beside the cluster
+    // (planar CAD text; visible from above).
     acgi::TextRequest demo;
-    demo.position = vectorPrimitivesAnchor() + glm::dvec3(256.0, 640.0, 512.0);
+    demo.position = vectorPrimitivesAnchor() + glm::dvec3(256.0, 256.0, 8.0);
     demo.direction = glm::dvec3(1.0, 0.0, 0.0);
     demo.normal = glm::dvec3(0.0, 0.0, 1.0);
     demo.message = "INFINITE-GRID";
-    demo.height = 72.0;
+    demo.height = 96.0;
     demo.color = glm::vec4(0.95f, 0.75f, 0.25f, 1.0f);
     acgi::textEngine().drawText(*rendererBackend, identityView, projection,
                                 cameraPos, cameraRight, cameraUp, frontVec,

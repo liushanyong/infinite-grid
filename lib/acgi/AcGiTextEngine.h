@@ -31,12 +31,19 @@ class TextEngine
 {
 public:
     // ---- font management (AcGiTextStyle::setFont analogue) ----
+    // AutoCAD bigfont pairing: ASCII glyphs come from the regular font,
+    // double-byte (CJK) glyphs from the big font.
     bool loadSdfFont(const std::string &ttfPath, float pixelsPerEm = 96.0f);
-    bool loadShxFont(const std::string &shxPath);
+    bool loadShxRegularFont(const std::string &shxPath);
+    bool loadShxBigFont(const std::string &shxPath);
     bool sdfReady() const { return sdfFont_.isLoaded() && sdfFont_.hasSdf(); }
-    bool shxReady() const { return shxFont_.isLoaded() && shxFont_.hasShx(); }
+    bool shxReady() const
+    {
+        return shxRegularFont_.isLoaded() || shxBigFont_.isLoaded();
+    }
     rendering::LoadedFont &sdfFont() { return sdfFont_; }
-    rendering::LoadedFont &shxFont() { return shxFont_; }
+    rendering::LoadedFont &shxRegularFont() { return shxRegularFont_; }
+    rendering::LoadedFont &shxBigFont() { return shxBigFont_; }
 
     // ---- drawing (AcGiGeometry::text analogue) ----
     // Draws one text request through the renderer's SDF glyph path.  The
@@ -50,7 +57,9 @@ public:
                  const TextRequest &request);
 
     // SHX stroke geometry for a message, in em units (cap height 1.0);
-    // consumed by the stroke pipeline as ordinary CAD geometry.
+    // ASCII glyphs resolve through the regular font, double-byte codes
+    // through the big font.  Consumed by the stroke pipeline as ordinary
+    // CAD geometry.
     std::vector<rendering::ShxGlyphStroke> shxStrokes(
         const std::string &message) const;
 
@@ -58,8 +67,11 @@ public:
     double shxAdvance(const std::string &message) const;
 
 private:
+    const rendering::LoadedFont &shxFontFor(unsigned char character) const;
+
     rendering::LoadedFont sdfFont_;
-    rendering::LoadedFont shxFont_;
+    rendering::LoadedFont shxRegularFont_;
+    rendering::LoadedFont shxBigFont_;
     std::map<unsigned int, uint32_t> glyphTextureIds_;
 };
 
