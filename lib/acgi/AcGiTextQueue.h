@@ -24,6 +24,10 @@ struct TextRequest
     double height = 1.0;
     double xScale = 1.0;
     glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    // false (default): CAD planar text — the quad lies in the entity's
+    // normal/direction plane.  true: billboard — the quad always faces
+    // the camera (screen-anchored labels, view annotations).
+    bool billboard = false;
 };
 
 // Global request list.  Entities tessellate once into the cached draw

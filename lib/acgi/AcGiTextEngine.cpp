@@ -63,17 +63,29 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
     if (!sdfReady())
         return 0;
 
-    // CAD text is planar: the quad lies in the entity's plane defined by
-    // its direction (baseline) and normal, not billboarded to the camera.
-    glm::dvec3 textRight = request.direction;
-    if (glm::dot(textRight, textRight) < 1.0e-18)
-        textRight = glm::dvec3(1.0, 0.0, 0.0);
-    textRight = glm::normalize(textRight);
-    glm::dvec3 textUp =
-        glm::cross(glm::normalize(request.normal), textRight);
-    if (glm::dot(textUp, textUp) < 1.0e-18)
+    glm::dvec3 textRight;
+    glm::dvec3 textUp;
+    if (request.billboard)
+    {
+        // Billboard mode: the quad always faces the camera (kept as a
+        // separate selectable mode for screen-anchored labels).
         textUp = glm::dvec3(0.0, 0.0, 1.0);
-    textUp = glm::normalize(textUp);
+        textRight = glm::normalize(
+            glm::cross(textUp, glm::normalize(cameraPos - request.position)));
+    }
+    else
+    {
+        // CAD text is planar: the quad lies in the entity's plane defined
+        // by its direction (baseline) and normal.
+        textRight = request.direction;
+        if (glm::dot(textRight, textRight) < 1.0e-18)
+            textRight = glm::dvec3(1.0, 0.0, 0.0);
+        textRight = glm::normalize(textRight);
+        textUp = glm::cross(glm::normalize(request.normal), textRight);
+        if (glm::dot(textUp, textUp) < 1.0e-18)
+            textUp = glm::dvec3(0.0, 0.0, 1.0);
+        textUp = glm::normalize(textUp);
+    }
     const double emToWorld =
         request.height / double(sdfFont_.pixelsPerEm());
 
