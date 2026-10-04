@@ -239,9 +239,12 @@ void storeGlyph(LoadedFont &font, std::uint32_t codepoint,
     {
         ShxGlyphStroke normalized;
         normalized.fromX = stroke.fromX * emPerUnit;
-        normalized.fromY = stroke.fromY * emPerUnit;
+        // SHX shape space is y-down (baseline at 0, glyph body at -1);
+        // normalize to y-up so consumers place glyphs with a plain
+        // positive up vector.
+        normalized.fromY = -stroke.fromY * emPerUnit;
         normalized.toX = stroke.toX * emPerUnit;
-        normalized.toY = stroke.toY * emPerUnit;
+        normalized.toY = -stroke.toY * emPerUnit;
         slot.strokes.push_back(normalized);
     }
     slot.advanceWidth = std::max(maxPenX(state) * emPerUnit, 0.4f);
