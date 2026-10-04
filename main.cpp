@@ -37,6 +37,8 @@
 #include <chrono>
 #include <functional>
 
+#include "text/text_font.h"
+
 namespace
 {
 
@@ -167,6 +169,14 @@ static bool centerCubeForced()
 }
 
 static uint32_t gMeshTextureIndex = 0;
+
+// Loaded font subsystem (SDF TTF + AutoCAD SHX).  Populated by the
+// startup load, consumed by the text rendering pass below.
+static rendering::LoadedFont gSdfFont;
+static rendering::LoadedFont gShxFont;
+static bool gSdfFontReady = false;
+static bool gShxFontReady = false;
+
 static float meshHeadlight()
 {
   const char *value = std::getenv("GRID_MESH_HEADLIGHT");
@@ -664,6 +674,58 @@ bool init()
     gMeshTextureIndex = rendererBackend->loadMeshTexture(meshTexturePath);
     std::cout << "Mesh texture: " << meshTexturePath
               << " (index=" << gMeshTextureIndex << ")" << std::endl;
+  }
+
+  // SDF + SHX font loaders.  WenQuanWeiMiHei-1 is the Chinese SDF source;
+  // whgdtxt is the AutoCAD SHX (vector big-font) companion.  Both fall back
+  // to the bundled NotoSansLatin if the requested files are missing.
+  if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
+  {
+    rendering::SdfFontConfig sdfConfig;
+    sdfConfig.ttfPath =
+        util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
+    sdfConfig.pixelsPerEm = 96.0f;
+    gSdfFontReady = gSdfFont.loadSdf(sdfConfig);
+    std::cout << "SDF font (WenQuanWeiMiHei-1): "
+              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
+    if (gSdfFontReady)
+    {
+      rendering::SdfAtlas atlas;
+      gSdfFont.releaseSdfAtlas(atlas);
+      if (gSdfFontReady = rendererBackend->loadSdfTextAtlas(
+              atlas.pixels.data(), atlas.width, atlas.height);
+          !gSdfFontReady)
+        std::cout << "SDF atlas upload failed" << std::endl;
+      else
+        std::cout << "SDF atlas uploaded: " << atlas.width << "x"
+                  << atlas.height << std::endl;
+    }
+  }
+  else
+  {
+    rendering::SdfFontConfig fallback;
+    fallback.ttfPath =
+        util::resourcePath("fonts/NotoSansLatin.ttf").string();
+    fallback.pixelsPerEm = 96.0f;
+    gSdfFontReady = gSdfFont.loadSdf(fallback);
+    std::cout << "SDF font (NotoSansLatin fallback): "
+              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
+    if (gSdfFontReady)
+    {
+      rendering::SdfAtlas atlas;
+      gSdfFont.releaseSdfAtlas(atlas);
+      gSdfFontReady = rendererBackend->loadSdfTextAtlas(
+          atlas.pixels.data(), atlas.width, atlas.height);
+    }
+  }
+  if (util::resourceExists("fonts/whgdtxt.shx"))
+  {
+    rendering::ShxFontConfig shxConfig;
+    shxConfig.shxPath =
+        util::resourcePath("fonts/whgdtxt.shx").string();
+    gShxFontReady = gShxFont.loadShx(shxConfig);
+    std::cout << "SHX font (whgdtxt): "
+              << (gShxFontReady ? "loaded" : "failed") << std::endl;
   }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
@@ -2004,6 +2066,53 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     xline.point = cadAnchor + glm::dvec3(256.0, -1152.0, 0.0);
     xline.direction = glm::dvec3(2.0, -1.0, 0.0);
     appendVectorPrimitive(xline, "XLine", options, target);
+
+    // SHX vector-font text: each glyph's stroke list becomes ordinary CAD
+    // strokes, so the full pipeline (ribbons, picking, outlines, visual
+    // styles) applies to text exactly like any other entity.  whgdtxt is
+    // an AutoCAD big-font covering ASCII + CJK punctuation.
+    if (gShxFontReady)
+    {
+      const std::string shxText = "INFINITE-GRID 123";
+      const glm::dvec3 textOrigin = cadAnchor + glm::dvec3(256.0, 128.0, 0.0);
+      const double textHeight = 96.0; // world units per em
+      const glm::dvec3 textRight(1.0, 0.0, 0.0);
+      const glm::dvec3 textUp(0.0, 0.0, 1.0);
+      const glm::vec4 shxColor(0.95f, 0.85f, 0.30f, 1.0f);
+
+      entities::Stroke shxStroke;
+      shxStroke.common.color = shxColor;
+      double penX = 0.0;
+      for (unsigned char character : shxText)
+      {
+        const rendering::ShxGlyphSlot &glyph =
+            gShxFont.shxGlyph(character);
+        if (glyph.valid)
+        {
+          for (const rendering::ShxGlyphStroke &stroke : glyph.strokes)
+          {
+            shxStroke.points.push_back(
+                textOrigin +
+                textRight * (penX + stroke.fromX) * textHeight +
+                textUp * (stroke.fromY * textHeight));
+            shxStroke.points.push_back(
+                textOrigin +
+                textRight * (penX + stroke.toX) * textHeight +
+                textUp * (stroke.toY * textHeight));
+          }
+        }
+        penX += glyph.valid ? glyph.advanceWidth : 0.5;
+      }
+      if (!shxStroke.points.empty())
+      {
+        // Strokes are already tessellated geometry: append directly and
+        // register the range so visibility/pick treat it as one entity.
+        const size_t strokeBegin = target.geometry.strokes.size();
+        target.geometry.strokes.push_back(shxStroke);
+        target.strokeRanges.push_back(
+            {"ShxText", strokeBegin, 1, CadPickShape::Primitives});
+      }
+    }
 
     entities::MLine mline;
     mline.common.color = glm::vec4(0.85f, 0.35f, 0.35f, 0.95f);
@@ -8104,6 +8213,80 @@ void render()
                            orbitCam.Position, logDepth,
                            cameraPos, frontVec, cameraRight, cameraUp,
                            pixelSize, visibleCadDraws, tinyCadDraws);
+
+  // SDF text pass: expand glyph quads on the CPU (world-space positions
+  // along the camera plane) and submit them to the dedicated text view.
+  // The demo string sits above the CAD anchor, facing the camera.
+  if (gSdfFontReady && rendererBackend)
+  {
+    const std::string sdfText = "INFINITE-GRID";
+    const glm::dvec3 textOrigin =
+        vectorPrimitivesAnchor() + glm::dvec3(512.0, 256.0, 512.0);
+    const double textHeight = 64.0; // world units per em
+    const glm::dvec3 toCamera = glm::normalize(cameraPos - textOrigin);
+    const glm::dvec3 textUp(0.0, 0.0, 1.0);
+    const glm::dvec3 textRight =
+        glm::normalize(glm::cross(textUp, toCamera));
+    const float colorRgba[4] = {0.95f, 0.75f, 0.25f, 1.0f};
+
+    std::vector<float> textVertices;
+    textVertices.reserve(sdfText.size() * 6 * 9);
+    double penX = 0.0;
+    for (unsigned char character : sdfText)
+    {
+      const rendering::SdfGlyphSlot &glyph = gSdfFont.sdfGlyph(character);
+      if (!glyph.valid)
+      {
+        penX += 0.5;
+        continue;
+      }
+      const double left = penX + glyph.bearingX;
+      const double bottom = glyph.bearingY;
+      const double glyphWidth = glyph.u1 - glyph.u0;
+      const double glyphHeight = glyph.v1 - glyph.v0;
+      // Atlas cell maps 1:1 to em-units (cell was rasterized at
+      // pixelsPerEm), so the cell occupies a full em of world height.
+      const glm::dvec3 corner00 =
+          textOrigin + textRight * (left * textHeight) +
+          textUp * (bottom * textHeight);
+      const glm::dvec3 du = textRight * (glyphWidth * textHeight);
+      const glm::dvec3 dv = textUp * (glyphHeight * textHeight);
+      auto pushVertex = [&](double cornerU, double cornerV, float u,
+                            float v) {
+        const glm::dvec3 world =
+            corner00 + du * cornerU + dv * cornerV;
+        textVertices.push_back(float(world.x - cameraPos.x));
+        textVertices.push_back(float(world.y - cameraPos.y));
+        textVertices.push_back(float(world.z - cameraPos.z));
+        textVertices.push_back(u);
+        textVertices.push_back(v);
+        textVertices.push_back(colorRgba[0]);
+        textVertices.push_back(colorRgba[1]);
+        textVertices.push_back(colorRgba[2]);
+        textVertices.push_back(colorRgba[3]);
+      };
+      // Two triangles, CCW when facing the camera.
+      pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
+      pushVertex(1.0, 0.0, glyph.u1, glyph.v1);
+      pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
+      pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
+      pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
+      pushVertex(0.0, 1.0, glyph.u0, glyph.v0);
+      penX += glyph.advanceWidth;
+    }
+    if (!textVertices.empty())
+    {
+      // World-quad corners were computed camera-relative; the identity
+      // view keeps them camera-facing in view space.
+      constexpr glm::mat4 identityView(1.0f);
+      rendererBackend->drawSdfGlyphQuads(
+          identityView, projection, textVertices.data(),
+          uint32_t(textVertices.size() / 9),
+          1.0f / float(gSdfFont.atlasWidth()),
+          1.0f / float(gSdfFont.atlasHeight()),
+          gSdfFont.sdfPixelRange_);
+    }
+  }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per

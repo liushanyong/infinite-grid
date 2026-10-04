@@ -104,6 +104,8 @@ set(WINDOW_SOURCES
     lib/rendering/BgfxRenderer.cpp
     lib/rendering/WebGpuRenderer.cpp
     lib/rendering/ProceduralMesh.cpp
+    lib/text/text_font.cpp
+    lib/text/shx_parser.cpp
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})
@@ -118,6 +120,7 @@ target_include_directories(WINDOW PRIVATE
     "${CMAKE_SOURCE_DIR}/lib/SDL/include"
     "${CMAKE_SOURCE_DIR}/lib/SDL/include/SDL3"
     "${CMAKE_SOURCE_DIR}/lib"
+    "${CMAKE_SOURCE_DIR}/lib/bgfx/3rdparty"
     "${CMAKE_SOURCE_DIR}/lib/wgpu/include"
 )
 

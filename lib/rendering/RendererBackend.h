@@ -413,6 +413,19 @@ public:
     virtual void drawLineInstances(const LineInstancesRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
     virtual void drawCurves(const CurveRenderData &data) {}
+
+    // SDF text (lib/text subsystem).  loadSdfTextAtlas uploads the CPU
+    // rasterized atlas once; drawSdfGlyphQuads draws CPU-expanded glyph
+    // quads (world-space, 9 floats per vertex: pos3 + uv2 + color4).
+    virtual bool loadSdfTextAtlas(const unsigned char *, int, int)
+    {
+        return false;
+    }
+    virtual void drawSdfGlyphQuads(const glm::mat4 &, const glm::mat4 &,
+                                   const float *, uint32_t, float, float,
+                                   float)
+    {
+    }
     virtual void requestDebugScreenShot(const std::string &) {}
     virtual void setGpuPickDebugVisible(bool visible) { (void)visible; }
     virtual void setGpuPickSceneDebug(bool visible) { (void)visible; }

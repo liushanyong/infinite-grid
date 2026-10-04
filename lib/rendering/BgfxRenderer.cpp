@@ -98,6 +98,12 @@ namespace GpuPickShaders
 #include "shaders/gpuPick/vs_gpu_pick.h"
 #include "shaders/gpuPick/fs_gpu_pick.h"
 } // namespace GpuPickShaders
+
+namespace TextSdfShaders
+{
+#include "text/shaders/vs_text_sdf.h"
+#include "text/shaders/fs_text_sdf.h"
+} // namespace TextSdfShaders
 namespace SelectionOutlineShaders
 {
 #include "shaders/selectionOutline/fs_outline_overlay.h"
@@ -204,6 +210,7 @@ constexpr bgfx::ViewId kViewPresent = 8;
 constexpr bgfx::ViewId kViewGpuPickDebug = 9;
 constexpr bgfx::ViewId kViewGpuPickDebugBlit = 10;
 constexpr bgfx::ViewId kViewGpuPickDebugPresent = 11;
+constexpr bgfx::ViewId kViewText = 12;
 constexpr bgfx::ViewId kViewSelectionOutline = 12;
 constexpr uint32_t kGpuPickDebugSize = 512;
 
@@ -4287,6 +4294,106 @@ m_curveLayout.begin()
     }
 
     return ready;
+}
+
+bool BgfxRenderer::loadSdfTextAtlas(const unsigned char *pixels, int width,
+                                    int height)
+{
+    if (!m_initialized || !pixels || width <= 0 || height <= 0)
+        return false;
+
+    if (!bgfx::isValid(m_textProgram))
+    {
+        const auto vertexBinary =
+            SELECT_SHADER_BINARY(TextSdfShaders, vs_text_sdf);
+        const auto fragmentBinary =
+            SELECT_SHADER_BINARY(TextSdfShaders, fs_text_sdf);
+        auto createTextShader = [](const uint8_t *data, uint32_t size,
+                                   const char *name) {
+            const bgfx::ShaderHandle handle =
+                bgfx::createShader(bgfx::copy(data, size));
+            if (bgfx::isValid(handle))
+                bgfx::setName(handle, name);
+            return handle;
+        };
+        const bgfx::ShaderHandle vertexShader = createTextShader(
+            vertexBinary.data, vertexBinary.size, "text_sdf_vs");
+        const bgfx::ShaderHandle fragmentShader = createTextShader(
+            fragmentBinary.data, fragmentBinary.size, "text_sdf_fs");
+        m_textProgram =
+            bgfx::createProgram(vertexShader, fragmentShader, true);
+        m_textSampler =
+            createUniformHandle("s_atlas", bgfx::UniformType::Sampler);
+        m_textInvAtlas =
+            createUniformHandle("uInvAtlasSize", bgfx::UniformType::Vec4);
+        m_textLayout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+            .end();
+    }
+    if (!bgfx::isValid(m_textProgram))
+        return false;
+
+    if (bgfx::isValid(m_textAtlas))
+        bgfx::destroy(m_textAtlas);
+    // BGRA8 with the SDF value in alpha; clamp sampling — the shader
+    // reconstructs coverage from the distance field.
+    const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    m_textAtlas = bgfx::createTexture2D(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+        bgfx::TextureFormat::BGRA8, flags,
+        bgfx::copy(pixels, static_cast<uint32_t>(width * height * 4)));
+    return bgfx::isValid(m_textAtlas);
+}
+
+void BgfxRenderer::drawSdfGlyphQuads(const glm::mat4 &view,
+                                     const glm::mat4 &projection,
+                                     const float *vertices,
+                                     uint32_t vertexCount, float invAtlasX,
+                                     float invAtlasY, float worldPixelRange)
+{
+    if (!m_initialized || !bgfx::isValid(m_textProgram) ||
+        !bgfx::isValid(m_textAtlas) || !vertices || vertexCount < 3 ||
+        vertexCount % 3 != 0)
+    {
+        return;
+    }
+
+    constexpr uint32_t kMaxChunkVertices = 60000;
+    const float invAtlas[4] = {invAtlasX, invAtlasY, 0.0f, worldPixelRange};
+
+    bgfx::setViewFrameBuffer(kViewText, BGFX_INVALID_HANDLE);
+    bgfx::setViewRect(kViewText, 0, 0, m_width, m_height);
+    bgfx::setViewClear(kViewText, BGFX_CLEAR_NONE, 0, 1.0f, 0);
+    bgfx::setViewTransform(kViewText, glm::value_ptr(view),
+                           glm::value_ptr(projection));
+
+    uint32_t first = 0;
+    while (first < vertexCount)
+    {
+        const uint32_t available = bgfx::getAvailTransientVertexBuffer(
+            vertexCount - first, m_textLayout);
+        uint32_t count =
+            std::min({vertexCount - first, kMaxChunkVertices, available});
+        count -= count % 3;
+        if (count < 3)
+            break;
+
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, count, m_textLayout);
+        std::memcpy(tvb.data, vertices + first * 9,
+                    size_t(count) * sizeof(float) * 9);
+
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_DEPTH_TEST_LEQUAL |
+                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setTexture(0, m_textSampler, m_textAtlas);
+        bgfx::setUniform(m_textInvAtlas, invAtlas);
+        bgfx::submit(kViewText, m_textProgram);
+        first += count;
+    }
 }
 
 } // namespace rendering

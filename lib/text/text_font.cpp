@@ -3,7 +3,15 @@
 // Pure CPU work — the renderer takes the resulting atlas pixels + slot
 // table and uploads them however it likes (bgfx::createTexture2D).
 
-#include "lib/text/text_font.h"
+// stb_truetype is single-header and exposes its entire API (types +
+// functions) only inside the #ifdef STB_TRUETYPE_IMPLEMENTATION block.
+// Define the macro *before* any standard headers in case they transitively
+// pull stb_truetype through PCH, and include it once here so the symbols
+// are visible to the rest of this translation unit.
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb/stb_truetype.h"
+
+#include "text/text_font.h"
 
 #include <algorithm>
 #include <cassert>
@@ -15,8 +23,6 @@
 #include <fstream>
 #include <vector>
 
-#include "stb/stb_truetype.h"
-
 namespace rendering
 {
 
@@ -25,7 +31,7 @@ namespace
 
 std::vector<unsigned char> readWholeFile(const std::string &path)
 {
-    std::ifstream in(path, std::ios::binary | std::ios::ios::ate());
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in)
         return {};
     const std::streamsize size = in.tellg();
@@ -59,8 +65,9 @@ LoadedFont::LoadedFont() = default;
 
 LoadedFont::~LoadedFont()
 {
-    if (ttfData_)
-        stbtt_Free(static_cast<unsigned char *>(ttfData_), nullptr);
+    // The font file buffer is owned by pinnedFontFiles() (process
+    // lifetime); stbtt_fontinfo holds no allocations of its own, so
+    // nothing to free here.
     ttfData_ = nullptr;
     shxState_ = nullptr;
 }
@@ -176,13 +183,14 @@ bool LoadedFont::loadSdf(const SdfFontConfig &config)
         const int cellOriginY = row * cellSize;
 
         SdfGlyphSlot slot;
-        slot.advanceWidth =
-            stbtt_GetCodepointHMetrics(
-                &info, static_cast<stbtt_codepoint_t>(codepoint), nullptr) *
-            scale;
+        int advanceWidthUnits = 0;
+        int leftSideBearing = 0;
+        stbtt_GetCodepointHMetrics(&info, codepoint, &advanceWidthUnits,
+                                   &leftSideBearing);
+        slot.advanceWidth = static_cast<float>(advanceWidthUnits) * scale;
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         stbtt_GetCodepointBitmapBox(
-            &info, static_cast<stbtt_codepoint_t>(codepoint), scale, scale,
+            &info, codepoint, scale, scale,
             &x0, &y0, &x1, &y1);
         const int gw = x1 - x0;
         const int gh = y1 - y0;
@@ -197,7 +205,7 @@ bool LoadedFont::loadSdf(const SdfFontConfig &config)
         {
             stbtt_MakeCodepointBitmap(
                 &info, mask.data(), gw, gh, gw, scale, scale,
-                static_cast<stbtt_codepoint_t>(codepoint));
+                codepoint);
         }
 
         // 8-bit signed distance field: 0 = far outside, 128 = boundary,
@@ -289,14 +297,6 @@ bool LoadedFont::loadSdf(const SdfFontConfig &config)
     ttfData_ = ttfData;
     loaded_ = true;
     return true;
-}
-
-bool LoadedFont::loadShx(const ShxFontConfig &config)
-{
-    // Real implementation lives in shx_parser.cpp.
-    (void)config;
-    shxLoaded_ = false;
-    return false;
 }
 
 void LoadedFont::releaseSdfAtlas(SdfAtlas &outAtlas)

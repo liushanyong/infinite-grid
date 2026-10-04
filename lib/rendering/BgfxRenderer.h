@@ -39,6 +39,15 @@ public:
     void drawPolylines(const PolylineRenderData &data) override;
     void drawLineInstances(const LineInstancesRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+
+    // SDF text (lib/text subsystem): uploads the CPU-side atlas once and
+    // draws CPU-expanded glyph quads (world-space positions, per-vertex
+    // uv + color).
+    bool loadSdfTextAtlas(const unsigned char *pixels, int width, int height);
+    void drawSdfGlyphQuads(const glm::mat4 &view, const glm::mat4 &projection,
+                           const float *vertices, uint32_t vertexCount,
+                           float invAtlasX, float invAtlasY,
+                           float worldPixelRange);
     void requestDebugScreenShot(const std::string &filePath) override;
     void setGpuPickDebugVisible(bool visible) override;
     void setGpuPickSceneDebug(bool visible) override;
@@ -169,6 +178,13 @@ private:
     bgfx::UniformHandle m_curveArc = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_depthDisplayParams = BGFX_INVALID_HANDLE;
+
+    // SDF text pass (lib/text subsystem): program + atlas + uniforms.
+    bgfx::ProgramHandle m_textProgram = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle m_textAtlas = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_textSampler = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_textInvAtlas = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout m_textLayout;
     bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_realisticMaterial = BGFX_INVALID_HANDLE;

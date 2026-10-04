@@ -49,14 +49,21 @@ inline std::filesystem::path resourcePath(const std::string &relative)
         }
     }
 
-    // 5. Fall back to the current working directory.
-    const fs::path cwdCandidate = fs::current_path() / "resources" / relative;
-    if (fs::exists(cwdCandidate))
-        return cwdCandidate;
+    // 5. Fall back to the current working directory and its parents
+    // (build trees commonly run from build*/ or build*/bin/<config>/).
+    const fs::path cwd = fs::current_path();
+    for (const fs::path &base :
+         {cwd, cwd.parent_path(), cwd.parent_path().parent_path()})
+    {
+        const fs::path candidate = base / "resources" / relative;
+        std::error_code ec;
+        if (fs::exists(candidate, ec))
+            return candidate;
+    }
 
     // Return the working-directory candidate even if missing; callers
     // can fs::exists() it for a precise error message.
-    return cwdCandidate;
+    return cwd / "resources" / relative;
 }
 
 // Convenience: returns true when the resolved resource actually exists

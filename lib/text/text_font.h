@@ -80,6 +80,11 @@ public:
     LoadedFont();
     ~LoadedFont();
 
+    // Atlas dimensions after loadSdf() returns true.
+    int atlasWidth() const { return pendingAtlas_.width; }
+    int atlasHeight() const { return pendingAtlas_.height; }
+
+
     LoadedFont(const LoadedFont &) = delete;
     LoadedFont &operator=(const LoadedFont &) = delete;
 
@@ -101,7 +106,8 @@ public:
     const SdfGlyphSlot &sdfGlyph(std::uint32_t codepoint) const;
     const ShxGlyphSlot &shxGlyph(std::uint32_t codepoint) const;
 
-private:
+    // Load-state flags are public: the SHX parser (shx_parser.cpp) fills
+    // them after decoding a font file.
     bool loaded_ = false;
     bool sdfLoaded_ = false;
     bool shxLoaded_ = false;
@@ -116,8 +122,10 @@ private:
     void *ttfData_ = nullptr;
     void *shxState_ = nullptr;
 
+public:
     int firstGlyph_ = 0;
     int lastGlyph_ = 0;
+    float sdfPixelRange_ = 4.0f;
 
     SdfGlyphSlot sdfSlots_[256];
     ShxGlyphSlot shxSlots_[256];

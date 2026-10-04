@@ -22,7 +22,7 @@
 // arc segments are approximated by polyline subdivision since the CAD
 // rendering pipeline doesn't carry a full arc primitive in this module).
 
-#include "lib/text/text_font.h"
+#include "text/text_font.h"
 
 #include <cctype>
 #include <cmath>
