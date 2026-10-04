@@ -7316,6 +7316,22 @@ void render()
       }
     }
 
+    // Text glyph quads draw with the main ortho projection, so their
+    // positions must join the visible-content slab: when the camera
+    // zooms onto a text entity, the slab tightens around meshes and
+    // strokes alone and the near/far planes clip the glyphs.  Expand the
+    // slab with each request's depth ± its own extent.
+    for (const acgi::TextRequest &request : acgi::textRequests())
+    {
+      const CameraSpacePoint center =
+          toCameraSpace(request.position, cameraPos, right, up, front);
+      const double extent =
+          double(request.message.size()) * request.height +
+          request.height * 2.0;
+      slabMinDepth = std::min(slabMinDepth, center.depth - extent);
+      slabMaxDepth = std::max(slabMaxDepth, center.depth + extent);
+    }
+
     // The slab center is the projected-area weighted mean depth of the
     // contributing objects; the infinite grid stays excluded on purpose:
     // at grazing angles its horizon depths are unbounded and would destroy
