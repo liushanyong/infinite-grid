@@ -40,14 +40,13 @@ public:
     void drawLineInstances(const LineInstancesRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
 
-    // SDF text (lib/text subsystem): uploads the CPU-side atlas once and
-    // draws CPU-expanded glyph quads (world-space positions, per-vertex
-    // uv + color).
-    bool loadSdfTextAtlas(const unsigned char *pixels, int width, int height);
-    void drawSdfGlyphQuads(const glm::mat4 &view, const glm::mat4 &projection,
-                           const float *vertices, uint32_t vertexCount,
-                           float invAtlasX, float invAtlasY,
-                           float worldPixelRange);
+    // SDF text (lib/text subsystem).  uploadGlyphSdf registers a glyph's
+    // R8 distance field as a texture and returns its id (0 = invalid);
+    // drawSdfGlyphQuad submits one 6-vertex quad (9 floats per vertex:
+    // view-space pos3 + uv2 + rgba4) with that texture bound.
+    uint32_t uploadGlyphSdf(const unsigned char *sdf, int width, int height);
+    void drawSdfGlyphQuad(const glm::mat4 &view, const glm::mat4 &projection,
+                          uint32_t textureId, const float *vertices);
     void requestDebugScreenShot(const std::string &filePath) override;
     void setGpuPickDebugVisible(bool visible) override;
     void setGpuPickSceneDebug(bool visible) override;
@@ -179,12 +178,13 @@ private:
     bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_depthDisplayParams = BGFX_INVALID_HANDLE;
 
-    // SDF text pass (lib/text subsystem): program + atlas + uniforms.
+    // SDF text pass (lib/text subsystem): program + per-glyph R8
+    // texture cache (index 0 is reserved as invalid).
     bgfx::ProgramHandle m_textProgram = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle m_textAtlas = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_textSampler = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle m_textInvAtlas = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_textParams = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout m_textLayout;
+    std::vector<bgfx::TextureHandle> m_glyphTextures;
     bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_realisticMaterial = BGFX_INVALID_HANDLE;

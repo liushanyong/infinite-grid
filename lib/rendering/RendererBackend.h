@@ -414,16 +414,16 @@ public:
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
     virtual void drawCurves(const CurveRenderData &data) {}
 
-    // SDF text (lib/text subsystem).  loadSdfTextAtlas uploads the CPU
-    // rasterized atlas once; drawSdfGlyphQuads draws CPU-expanded glyph
-    // quads (world-space, 9 floats per vertex: pos3 + uv2 + color4).
-    virtual bool loadSdfTextAtlas(const unsigned char *, int, int)
+    // SDF text (lib/text subsystem).  uploadGlyphSdf registers a glyph's
+    // R8 distance field and returns a texture id (0 = invalid);
+    // drawSdfGlyphQuad submits one 6-vertex quad (view-space, 9 floats
+    // per vertex: pos3 + uv2 + rgba4) with that texture.
+    virtual uint32_t uploadGlyphSdf(const unsigned char *, int, int)
     {
-        return false;
+        return 0;
     }
-    virtual void drawSdfGlyphQuads(const glm::mat4 &, const glm::mat4 &,
-                                   const float *, uint32_t, float, float,
-                                   float)
+    virtual void drawSdfGlyphQuad(const glm::mat4 &, const glm::mat4 &,
+                                  uint32_t, const float *)
     {
     }
     virtual void requestDebugScreenShot(const std::string &) {}

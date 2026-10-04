@@ -4296,11 +4296,11 @@ m_curveLayout.begin()
     return ready;
 }
 
-bool BgfxRenderer::loadSdfTextAtlas(const unsigned char *pixels, int width,
-                                    int height)
+uint32_t BgfxRenderer::uploadGlyphSdf(const unsigned char *sdf, int width,
+                                      int height)
 {
-    if (!m_initialized || !pixels || width <= 0 || height <= 0)
-        return false;
+    if (!m_initialized || !sdf || width <= 0 || height <= 0)
+        return 0;
 
     if (!bgfx::isValid(m_textProgram))
     {
@@ -4323,86 +4323,63 @@ bool BgfxRenderer::loadSdfTextAtlas(const unsigned char *pixels, int width,
         m_textProgram =
             bgfx::createProgram(vertexShader, fragmentShader, true);
         m_textSampler =
-            createUniformHandle("s_atlas", bgfx::UniformType::Sampler);
-        m_textInvAtlas =
-            createUniformHandle("uInvAtlasSize", bgfx::UniformType::Vec4);
+            createUniformHandle("s_texColor", bgfx::UniformType::Sampler);
+        m_textParams =
+            createUniformHandle("u_params0", bgfx::UniformType::Vec4);
         m_textLayout.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-            // CPU pushes 9 floats per vertex (pos3 + uv2 + rgba4); a
-            // Uint8-normalized color here would shrink the stride to 24
-            // bytes and corrupt every vertex after the first.
             .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
             .end();
     }
     if (!bgfx::isValid(m_textProgram))
-        return false;
+        return 0;
 
-    if (bgfx::isValid(m_textAtlas))
-        bgfx::destroy(m_textAtlas);
-    // BGRA8 with the SDF value in alpha; clamp sampling — the shader
-    // reconstructs coverage from the distance field.
-    const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    m_textAtlas = bgfx::createTexture2D(
-        static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-        bgfx::TextureFormat::BGRA8, flags,
-        bgfx::copy(pixels, static_cast<uint32_t>(width * height * 4)));
-    return bgfx::isValid(m_textAtlas);
+    // R8 single-channel distance field, clamp sampling.
+    const bgfx::TextureHandle texture = bgfx::createTexture2D(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height), false,
+        1, bgfx::TextureFormat::R8,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(sdf, static_cast<uint32_t>(width * height)));
+    if (!bgfx::isValid(texture))
+        return 0;
+    m_glyphTextures.push_back(texture);
+    return uint32_t(m_glyphTextures.size()); // 1-based id
 }
 
-void BgfxRenderer::drawSdfGlyphQuads(const glm::mat4 &view,
-                                     const glm::mat4 &projection,
-                                     const float *vertices,
-                                     uint32_t vertexCount, float invAtlasX,
-                                     float invAtlasY, float worldPixelRange)
+void BgfxRenderer::drawSdfGlyphQuad(const glm::mat4 &view,
+                                    const glm::mat4 &projection,
+                                    uint32_t textureId,
+                                    const float *vertices)
 {
     if (!m_initialized || !bgfx::isValid(m_textProgram) ||
-        !bgfx::isValid(m_textAtlas) || !vertices || vertexCount < 3 ||
-        vertexCount % 3 != 0)
+        textureId == 0 || textureId > m_glyphTextures.size() || !vertices)
     {
         return;
     }
-
-    constexpr uint32_t kMaxChunkVertices = 60000;
-    const float invAtlas[4] = {invAtlasX, invAtlasY, 0.0f, worldPixelRange};
 
     bgfx::setViewFrameBuffer(kViewText, BGFX_INVALID_HANDLE);
     bgfx::setViewRect(kViewText, 0, 0, m_width, m_height);
     bgfx::setViewClear(kViewText, BGFX_CLEAR_NONE, 0, 1.0f, 0);
     bgfx::setViewTransform(kViewText, glm::value_ptr(view),
                            glm::value_ptr(projection));
-    // The text shader samples the camera matrices through the shared
-    // uView/projection uniform handles (bgfx binds them by name).
-    bgfx::setUniform(m_view, glm::value_ptr(view));
-    bgfx::setUniform(m_projection, glm::value_ptr(projection));
 
-    uint32_t first = 0;
-    while (first < vertexCount)
-    {
-        const uint32_t available = bgfx::getAvailTransientVertexBuffer(
-            vertexCount - first, m_textLayout);
-        uint32_t count =
-            std::min({vertexCount - first, kMaxChunkVertices, available});
-        count -= count % 3;
-        if (count < 3)
-            break;
+    bgfx::TransientVertexBuffer tvb;
+    if (6 != bgfx::getAvailTransientVertexBuffer(6, m_textLayout))
+        return;
+    bgfx::allocTransientVertexBuffer(&tvb, 6, m_textLayout);
+    std::memcpy(tvb.data, vertices, size_t(6) * sizeof(float) * 9);
 
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::allocTransientVertexBuffer(&tvb, count, m_textLayout);
-        std::memcpy(tvb.data, vertices + first * 9,
-                    size_t(count) * sizeof(float) * 9);
-
-        // Overlay pass: the backbuffer depth is not the scene depth (the
-        // scene resolves through the MSAA framebuffer), so text draws
-        // without a depth test, after the present view.
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setTexture(0, m_textSampler, m_textAtlas);
-        bgfx::setUniform(m_textInvAtlas, invAtlas);
-        bgfx::submit(kViewText, m_textProgram);
-        first += count;
-    }
+    // Overlay pass: backbuffer depth is not the scene depth, so text
+    // draws without a depth test after the present view.
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setTexture(0, m_textSampler,
+                     m_glyphTextures[textureId - 1]);
+    const float params[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // textureLod 0
+    bgfx::setUniform(m_textParams, params);
+    bgfx::submit(kViewText, m_textProgram);
 }
 
 } // namespace rendering

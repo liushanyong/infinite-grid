@@ -1,35 +1,30 @@
-// AutoCAD SHX/SHP big-font parser.  SHX files store per-glyph line/arc
-// segments (a few bytes per glyph, suitable for being embedded in legacy
-// DWG/DXF); SHX is the binary precompiled form, SHP the ASCII source
-// form.  Output is a per-codepoint stroke list in glyph-local coordinates
-// measured in font "em-units" (1 em = design size, typically 1 unit tall).
+// AutoCAD SHX/SHP font parser.  Format knowledge derived from the public
+// AutoCAD shape-file documentation and cross-checked against the
+// CADplatformer reference (MIT); the implementation here is original.
 //
-// References used to derive the format (no code copied):
-//   - AutoCAD SHX/SHP documentation (DXF reference, Autodesk).
-//   - The public description of SHP/SHX file layout.
+// Compiled SHX types (header string at byte offset 11 selects):
+//   unifont — legacy single-byte font: u16 glyph count at [25], shape
+//             definitions at [31] as (code, defbytes, data...) records.
+//   bigfont — multi-byte font: u16 index count at [27], u16 range count
+//             at [29], code ranges at [31..], then a (code, defbytes,
+//             offset) index per glyph.
+//   shapes  — regular font / shape file: u16 count at [28], fixed-size
+//             index at [30], glyph data after the index.
 //
-// Format overview:
-//   SHX header: signature bytes, then a one-byte big-endian per-codepoint
-//   length table, followed by the per-codepoint record stream.  Each
-//   record is a stream of 8-bit commands that draw line segments and arcs
-//   using relative moves.  The pen starts at (0, 0); commands advance the
-//   pen and emit zero or more stroke segments.
-//   SHP header: the line "*1,1,..." defines start/end codes; thereafter
-//   each codepoint is its own line of "1,2,3,..." triples (pen up/down,
-//   dx, dy) plus optional arc triples.
-//
-// Both formats are decoded to a uniform ShxGlyphSlot (line segments only;
-// arc segments are approximated by polyline subdivision since the CAD
-// rendering pipeline doesn't carry a full arc primitive in this module).
+// Glyph definition commands (after the name string):
+//   0 end; 1 pen down; 2 pen up; 3/4 scale divide/multiply;
+//   5/6 position push/pop; 7 subshape; 8 (dx,dy) signed move;
+//   9 repeated moves until (0,0); 0xA octant arc; 0x10..0x1F the classic
+//   length/direction vectors (high nibble length, low nibble direction).
 
 #include "text/text_font.h"
 
-#include <cctype>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
-#include <sstream>
-#include <string>
+#include <stack>
 #include <vector>
 
 namespace rendering
@@ -38,276 +33,369 @@ namespace rendering
 namespace
 {
 
-// Read an entire file as bytes; returns empty on failure.
-std::vector<unsigned char> readWholeFile(const std::string &path)
+constexpr double kPi = 3.14159265358979323846;
+
+enum class ShxKind
 {
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in)
-        return {};
-    const std::streamsize size = in.tellg();
-    in.seekg(0, std::ios::beg);
-    std::vector<unsigned char> buffer(static_cast<size_t>(size));
-    if (!in.read(reinterpret_cast<char *>(buffer.data()), size))
-        return {};
-    return buffer;
+    Unknown,
+    Unifont,
+    Bigfont,
+    Regfont,
+    Shapefile
+};
+
+// Decoding state shared across one glyph definition.
+struct ShxDecodeContext
+{
+    std::vector<ShxGlyphStroke> strokes;
+    float penX = 0.0f;
+    float penY = 0.0f;
+    float scale = 1.0f;
+    bool drawMode = true;
+    std::stack<float> positionStack;
+};
+
+void emitSegment(ShxDecodeContext &state, float toX, float toY)
+{
+    if (!state.drawMode)
+        return;
+    ShxGlyphStroke stroke;
+    stroke.fromX = state.penX;
+    stroke.fromY = state.penY;
+    stroke.toX = toX;
+    stroke.toY = toY;
+    state.strokes.push_back(stroke);
 }
 
-bool loadShxBinary(const std::vector<unsigned char> &file,
-                   LoadedFont &font)
+// Command 8/9: signed (dx,dy) pair; (0,0) terminates command 9 runs.
+bool decodeMovePair(ShxDecodeContext &state, const unsigned char *&data,
+                    int &remaining)
 {
-    // SHX layout: signature, header, then per-codepoint length table
-    // followed by glyph records.
-    if (file.size() < 4)
+    if (remaining < 2)
         return false;
-
-    // The number of codepoint slots is encoded in the file header; the
-    // legacy format uses a 16-bit big-endian count.
-    if (file.size() < 6)
+    const int dx = static_cast<signed char>(data[0]);
+    const int dy = static_cast<signed char>(data[1]);
+    data += 2;
+    remaining -= 2;
+    if (dx == 0 && dy == 0)
         return false;
-    const int firstGlyph = 1;
-    const int lastGlyph = static_cast<int>(
-        (file[4] << 8) | file[5]);
-    if (lastGlyph < firstGlyph || lastGlyph > 256)
-        return false;
-    font.firstGlyph_ = firstGlyph;
-    font.lastGlyph_ = lastGlyph;
-    const int glyphCount = lastGlyph - firstGlyph + 1;
-
-    if (file.size() < static_cast<size_t>(6 + 2 * glyphCount))
-        return false;
-
-    std::vector<std::uint16_t> offsets(glyphCount);
-    for (int i = 0; i < glyphCount; ++i)
-    {
-        offsets[i] = static_cast<std::uint16_t>(
-            (file[6 + 2 * i] << 8) | file[6 + 2 * i + 1]);
-    }
-
-    for (int i = 0; i < glyphCount; ++i)
-    {
-        ShxGlyphSlot slot;
-        if (offsets[i] >= file.size())
-        {
-            font.shxSlots_[firstGlyph + i] = slot;
-            continue;
-        }
-        const std::size_t cursor = offsets[i];
-        // Decoding commands.  Each byte may be a pen move/line command or
-        // a multi-byte sequence prefix; the high nibble is the opcode.
-        float penX = 0.0f;
-        float penY = 0.0f;
-        float baselineY = 0.0f;
-        bool firstCommand = true;
-        std::size_t p = cursor;
-        while (p < file.size())
-        {
-            const unsigned char op = file[p++];
-            const int opcode = (op >> 4) & 0x0F;
-            const int length = op & 0x0F;
-            if (opcode == 0)
-            {
-                // 0: end of glyph record.
-                break;
-            }
-            // Common command lengths for SHX big-fonts:
-            //   1..15: relative move + (length - 1) line segments
-            //     with the first two bytes per command being dx, dy
-            //     (signed 8-bit).  The first move is the baseline.
-            const std::size_t bytesNeeded = static_cast<std::size_t>(2) * length;
-            if (p + bytesNeeded > file.size())
-                break;
-            int dx = static_cast<int>(file[p]) - 0x80;
-            int dy = static_cast<int>(file[p + 1]) - 0x80;
-            p += 2;
-            const float startX = penX;
-            const float startY = penY;
-            penX += static_cast<float>(dx);
-            penY += static_cast<float>(dy);
-            if (firstCommand)
-            {
-                baselineY = startY;
-                firstCommand = false;
-            }
-            if (opcode == 2 || opcode == 8)
-            {
-                // pen-up move / pen-down line; emit segment from previous
-                // endpoint to the new pen position when pen is down.
-                if (opcode == 8)
-                {
-                    ShxGlyphStroke stroke{};
-                    stroke.fromX = startX;
-                    stroke.fromY = startY;
-                    stroke.toX = penX;
-                    stroke.toY = penY;
-                    slot.strokes.push_back(stroke);
-                }
-            }
-            // 8..15: one line segment per extra byte, but AutoCAD SHX big-
-            // fonts use opcode 8 (line) with length bytes carrying more
-            // segments packed; here we capture only the first.  A full
-            // decoder would parse the packed variant — out of scope for
-            // the standard glyph set we currently render.
-        }
-        slot.upperLine = baselineY;
-        slot.lowerLine = penY;
-        slot.advanceWidth = penX; // crude approximation
-        font.shxSlots_[firstGlyph + i] = slot;
-    }
-    font.shxLoaded_ = true;
-    font.loaded_ = true;
+    const float toX = state.penX + state.scale * dx;
+    const float toY = state.penY + state.scale * dy;
+    emitSegment(state, toX, toY);
+    state.penX = toX;
+    state.penY = toY;
     return true;
 }
 
-std::vector<std::string> splitComma(const std::string &line)
+// Command 0xA: octant arc (radius byte, signed octant scheme byte).
+void decodeOctantArc(ShxDecodeContext &state, const unsigned char *&data,
+                     int &remaining)
 {
-    std::vector<std::string> parts;
-    std::stringstream ss(line);
-    std::string item;
-    while (std::getline(ss, item, ','))
+    if (remaining < 2)
     {
-        // Trim whitespace.
-        size_t start = 0;
-        while (start < item.size() &&
-               std::isspace(static_cast<unsigned char>(item[start])))
-            ++start;
-        size_t end = item.size();
-        while (end > start &&
-               std::isspace(static_cast<unsigned char>(item[end - 1])))
-            --end;
-        parts.emplace_back(item.substr(start, end - start));
+        remaining = 0;
+        return;
     }
-    return parts;
+    const int radius = data[0];
+    const signed char scheme = static_cast<signed char>(data[1]);
+    data += 2;
+    remaining -= 2;
+    const int sign = scheme < 0 ? -1 : 1;
+    const int startOctant = (scheme & 0x70) >> 4;
+    const int octantCount = (scheme & 0x07) * sign;
+    const double r = radius * state.scale;
+    const double startAngle = startOctant * kPi / 4.0;
+    const double endAngle = (startOctant + octantCount) * kPi / 4.0;
+    const double centerX = state.penX - r * std::cos(startAngle);
+    const double centerY = state.penY - r * std::sin(startAngle);
+    constexpr int kSegmentsPerOctant = 4;
+    const int segments =
+        std::max(1, std::abs(octantCount) * kSegmentsPerOctant);
+    for (int i = 1; i <= segments; ++i)
+    {
+        const double angle =
+            startAngle + (endAngle - startAngle) * i / segments;
+        const float toX = float(centerX + r * std::cos(angle));
+        const float toY = float(centerY + r * std::sin(angle));
+        emitSegment(state, toX, toY);
+        state.penX = toX;
+        state.penY = toY;
+    }
 }
 
-// SHP (ASCII source) form: "*<n>,<m>,..." line declares glyph count and
-// sizes; subsequent lines start with a non-asterisk codepoint number and
-// carry command triples (pen state, dx, dy).
-bool loadShpText(const std::vector<unsigned char> &file,
-                  LoadedFont &font)
+// Commands 0x10..0x1F: classic length/direction vectors — high nibble
+// length, low nibble one of 16 directions.
+void decodeLengthDirection(ShxDecodeContext &state, unsigned char code)
 {
-    std::string content(file.begin(), file.end());
-    std::istringstream lines(content);
-    std::string line;
-    int firstGlyph = -1;
-    int lastGlyph = -1;
-    float advanceHint = 0.0f;
-    while (std::getline(lines, line))
+    static const float kDirections[16][2] = {
+        {1, 0},     {1, 0.5},   {1, 1},     {0.5, 1},   {0, 1},
+        {-0.5, 1},  {-1, 1},    {-1, 0.5},  {-1, 0},    {-1, -0.5},
+        {-1, -1},   {-0.5, -1}, {0, -1},    {0.5, -1},  {1, -1},
+        {1, -0.5}};
+    const int length = (code & 0xF0) >> 4;
+    const int direction = code & 0x0F;
+    const float toX =
+        state.penX + kDirections[direction][0] * length * state.scale;
+    const float toY =
+        state.penY + kDirections[direction][1] * length * state.scale;
+    emitSegment(state, toX, toY);
+    state.penX = toX;
+    state.penY = toY;
+}
+
+void decodeOneCommand(ShxDecodeContext &state, const unsigned char *&data,
+                      int &remaining)
+{
+    if (remaining <= 0)
+        return;
+    const unsigned char code = data[0];
+    ++data;
+    --remaining;
+    switch (code)
     {
-        if (line.empty())
-            continue;
-        if (line[0] == '*')
+    case 0:
+        remaining = 0; // end of shape definition
+        break;
+    case 1:
+        state.drawMode = true;
+        break;
+    case 2:
+        state.drawMode = false;
+        break;
+    case 3:
+        if (remaining > 0)
         {
-            // Header: "*code_min,code_max,upper_line,lower_line,width..."
-            const auto parts = splitComma(line);
-            if (parts.size() >= 4 && parts[0] == "*")
-            {
-                try
-                {
-                    firstGlyph = std::stoi(parts[1]);
-                    lastGlyph = std::stoi(parts[2]);
-                    advanceHint = std::stof(parts[4]);
-                }
-                catch (...) {}
-            }
-            continue;
+            state.scale /= data[0];
+            ++data;
+            --remaining;
         }
-        if (firstGlyph < 0 || lastGlyph < 0)
-            continue;
-        // Parse "<codepoint>,<up/down>,<dx>,<dy>" up to the next blank.
-        std::istringstream tokens(line);
-        std::string token;
-        int codepoint = 0;
-        std::vector<std::tuple<bool, int, int>> commands;
-        bool firstToken = true;
-        while (tokens >> token)
+        break;
+    case 4:
+        if (remaining > 0)
         {
-            const auto parts = splitComma(token);
-            if (firstToken)
-            {
-                firstToken = false;
-                try
-                {
-                    codepoint = std::stoi(parts[0]);
-                }
-                catch (...)
-                {
-                    break;
-                }
-                continue;
-            }
-            if (parts.size() < 3)
-                continue;
-            try
-            {
-                const bool penDown = std::stoi(parts[0]) != 0;
-                const int dx = std::stoi(parts[1]);
-                const int dy = std::stoi(parts[2]);
-                commands.emplace_back(penDown, dx, dy);
-            }
-            catch (...) {}
+            state.scale *= data[0];
+            ++data;
+            --remaining;
         }
-        if (codepoint < firstGlyph || codepoint > lastGlyph)
-            continue;
-        ShxGlyphSlot slot;
-        float penX = 0.0f;
-        float penY = 0.0f;
-        bool firstCommand = true;
-        float baselineY = 0.0f;
-        for (const auto &[penDown, dx, dy] : commands)
+        break;
+    case 5:
+        state.positionStack.push(state.penX);
+        state.positionStack.push(state.penY);
+        break;
+    case 6:
+        if (state.positionStack.size() >= 2)
         {
-            const float startX = penX;
-            const float startY = penY;
-            penX += static_cast<float>(dx);
-            penY += static_cast<float>(dy);
-            if (firstCommand)
-            {
-                baselineY = startY;
-                firstCommand = false;
-            }
-            if (penDown)
-            {
-                ShxGlyphStroke stroke{};
-                stroke.fromX = startX;
-                stroke.fromY = startY;
-                stroke.toX = penX;
-                stroke.toY = penY;
-                slot.strokes.push_back(stroke);
-            }
+            const float y = state.positionStack.top();
+            state.positionStack.pop();
+            const float x = state.positionStack.top();
+            state.positionStack.pop();
+            emitSegment(state, x, y);
+            state.penX = x;
+            state.penY = y;
         }
-        slot.upperLine = baselineY;
-        slot.lowerLine = penY;
-        slot.advanceWidth = advanceHint > 0.0f ? advanceHint : penX;
-        font.shxSlots_[codepoint] = slot;
+        break;
+    case 8:
+        decodeMovePair(state, data, remaining);
+        break;
+    case 9:
+        while (remaining > 0 && decodeMovePair(state, data, remaining))
+        {
+        }
+        break;
+    case 0x0A:
+        decodeOctantArc(state, data, remaining);
+        break;
+    default:
+        // 0x0B (pie arcs) and 0x0E (odd-even pen toggling) are rare in
+        // stroke fonts; everything else is a length/direction vector.
+        decodeLengthDirection(state, code);
+        break;
     }
-    if (firstGlyph >= 0)
+}
+
+ShxDecodeContext decodeGlyph(const unsigned char *data, int defBytes)
+{
+    ShxDecodeContext state;
+    while (defBytes > 0)
+        decodeOneCommand(state, data, defBytes);
+    return state;
+}
+
+float maxPenX(const ShxDecodeContext &state)
+{
+    float maximum = 0.0f;
+    for (const ShxGlyphStroke &stroke : state.strokes)
+        maximum = std::max({maximum, stroke.fromX, stroke.toX});
+    return maximum;
+}
+
+void storeGlyph(LoadedFont &font, std::uint32_t codepoint,
+                const ShxDecodeContext &state, double fontHeight)
+{
+    const float emPerUnit = float(1.0 / fontHeight);
+    ShxGlyphSlot slot;
+    slot.strokes.reserve(state.strokes.size());
+    for (const ShxGlyphStroke &stroke : state.strokes)
     {
-        font.firstGlyph_ = firstGlyph;
-        font.lastGlyph_ = lastGlyph;
-        font.shxLoaded_ = true;
-        font.loaded_ = true;
-        return true;
+        ShxGlyphStroke normalized;
+        normalized.fromX = stroke.fromX * emPerUnit;
+        normalized.fromY = stroke.fromY * emPerUnit;
+        normalized.toX = stroke.toX * emPerUnit;
+        normalized.toY = stroke.toY * emPerUnit;
+        slot.strokes.push_back(normalized);
     }
-    return false;
+    slot.advanceWidth = std::max(maxPenX(state) * emPerUnit, 0.4f);
+    slot.valid = true;
+    font.shxSlots_[codepoint] = std::move(slot);
+}
+
+bool shxLoadCompiled(const std::vector<unsigned char> &file,
+                     LoadedFont &font)
+{
+    if (file.size() < 36)
+        return false;
+
+    ShxKind kind = ShxKind::Unknown;
+    std::uint16_t glyphCount = 0;
+    double fontHeight = 0.0;
+    const unsigned char *shapeDefs = nullptr;
+    const unsigned char *index = nullptr;
+
+    if (std::memcmp(&file[11], "unifont", 7) == 0)
+    {
+        kind = ShxKind::Unifont;
+        glyphCount = *reinterpret_cast<const std::uint16_t *>(&file[25]);
+        shapeDefs = &file[31];
+        while (shapeDefs < file.data() + file.size() && *shapeDefs != 0)
+            ++shapeDefs;
+        ++shapeDefs;
+        fontHeight = shapeDefs[0];
+        const double descendHeight = shapeDefs[1];
+        if (fontHeight == 0)
+            fontHeight = descendHeight;
+        shapeDefs += 6;
+    }
+    else if (std::memcmp(&file[11], "bigfont", 7) == 0)
+    {
+        kind = ShxKind::Bigfont;
+        glyphCount = *reinterpret_cast<const std::uint16_t *>(&file[27]);
+        const std::uint16_t rangeCount =
+            *reinterpret_cast<const std::uint16_t *>(&file[29]);
+        index = &file[31 + size_t(rangeCount) * 4];
+    }
+    else if (std::memcmp(&file[11], "shapes", 6) == 0)
+    {
+        kind = ShxKind::Regfont;
+        glyphCount = *reinterpret_cast<const std::uint16_t *>(&file[28]);
+        index = &file[30];
+    }
+
+    if (kind == ShxKind::Unknown)
+        return false;
+    if (fontHeight <= 0.0)
+        fontHeight = 1.0;
+
+    if (kind == ShxKind::Unifont)
+    {
+        const unsigned char *entry = shapeDefs;
+        for (std::uint16_t i = 0; i < glyphCount && entry + 4 < file.data() + file.size();
+             ++i)
+        {
+            const std::uint16_t code = entry[0] | (entry[1] << 8);
+            const std::uint16_t defBytes = entry[2] | (entry[3] << 8);
+            entry += 4;
+            // Record: name string (zero terminated), then definition bytes.
+            const unsigned char *nameEnd = entry;
+            while (nameEnd < file.data() + file.size() && *nameEnd != 0)
+                ++nameEnd;
+            ++nameEnd;
+            int remaining = int(defBytes) - int(nameEnd - entry);
+            if (code > 0 && remaining > 0 && nameEnd < file.data() + file.size())
+                storeGlyph(font, code, decodeGlyph(nameEnd, remaining),
+                           fontHeight);
+            entry += defBytes;
+        }
+    }
+    else if (kind == ShxKind::Bigfont)
+    {
+        // Index entries are 4 x u16: code, defBytes, offset lo, offset hi.
+        const std::uint16_t *entry =
+            reinterpret_cast<const std::uint16_t *>(index);
+        for (std::uint16_t i = 0; i < glyphCount; ++i)
+        {
+            const std::uint16_t code = entry[0];
+            const std::uint16_t defBytes = entry[1];
+            const std::uint32_t offset =
+                entry[2] | (std::uint32_t(entry[3]) << 16);
+            if (defBytes > 0 && offset < file.size())
+            {
+                const unsigned char *data = &file[offset];
+                while (data < file.data() + file.size() && *data != 0)
+                    ++data; // skip name string
+                ++data;
+                int remaining = int(defBytes) - 1;
+                if (remaining > 0 && data < file.data() + file.size())
+                    storeGlyph(font, code, decodeGlyph(data, remaining),
+                               fontHeight);
+            }
+            entry += 4;
+        }
+    }
+    else // Regfont / shapefile
+    {
+        const std::uint16_t *entry =
+            reinterpret_cast<const std::uint16_t *>(index);
+        const unsigned char *firstGlyph = index + size_t(glyphCount) * 4;
+        std::uint32_t offset = 0;
+        for (std::uint16_t i = 0; i < glyphCount; ++i)
+        {
+            const std::uint16_t code = entry[0];
+            const std::uint16_t defBytes = entry[1];
+            const unsigned char *data = firstGlyph + offset;
+            offset += defBytes;
+            if (defBytes > 0 && data < file.data() + file.size())
+            {
+                const unsigned char *nameEnd = data;
+                while (nameEnd < file.data() + file.size() && *nameEnd != 0)
+                    ++nameEnd;
+                ++nameEnd;
+                int remaining = int(defBytes) - int(nameEnd - data);
+                if (remaining > 0 && nameEnd < file.data() + file.size())
+                    storeGlyph(font, code, decodeGlyph(nameEnd, remaining),
+                               fontHeight);
+            }
+            entry += 2;
+        }
+    }
+
+    font.shxLoaded_ = !font.shxSlots_.empty();
+    font.loaded_ = font.shxLoaded_;
+    return font.shxLoaded_;
 }
 
 } // namespace
 
 bool LoadedFont::loadShx(const ShxFontConfig &config)
 {
-    auto file = readWholeFile(config.shxPath);
-    if (file.empty())
+    std::ifstream in(config.shxPath, std::ios::binary | std::ios::ate);
+    if (!in)
         return false;
-    shxLoaded_ = false;
-    loaded_ = false;
+    const std::streamsize size = in.tellg();
+    in.seekg(0, std::ios::beg);
+    std::vector<unsigned char> file(static_cast<size_t>(size));
+    if (!in.read(reinterpret_cast<char *>(file.data()), size))
+        return false;
 
-    // Detect SHX vs SHP by inspecting the first non-whitespace byte.
-    std::size_t scan = 0;
-    while (scan < file.size() &&
-           std::isspace(static_cast<unsigned char>(file[scan])))
-        ++scan;
-    if (scan < file.size() && file[scan] == '*')
-        return loadShpText(file, *this);
-    return loadShxBinary(file, *this);
+    shxSlots_.clear();
+    shxLoaded_ = false;
+    loaded_ = sdfLoaded_; // SHX failure must not invalidate a loaded TTF
+
+    // Compiled SHX starts with "AutoCAD-86 "; the ASCII SHP source form
+    // starts with '*' and is not needed for the demo (compiled forms ship
+    // under resources/fonts).
+    if (file.size() > 36 && std::memcmp(&file[0], "AutoCAD", 7) == 0)
+        return shxLoadCompiled(file, *this);
+    return false;
 }
 
 } // namespace rendering

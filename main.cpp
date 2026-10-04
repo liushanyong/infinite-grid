@@ -691,20 +691,8 @@ bool init()
               << (gSdfFontReady ? "loaded" : "failed") << std::endl;
     if (gSdfFontReady)
     {
-      rendering::SdfAtlas atlas;
-      gSdfFont.releaseSdfAtlas(atlas);
-      if (gSdfFontReady = rendererBackend->loadSdfTextAtlas(
-              atlas.pixels.data(), atlas.width, atlas.height);
-          !gSdfFontReady)
-        std::cout << "SDF atlas upload failed" << std::endl;
-      else
-      {
-        std::cout << "SDF atlas uploaded: " << atlas.width << "x"
-                  << atlas.height << std::endl;
-        // Glyphs are available: Text/MText entities render through the
-        // SDF queue instead of their baked layout frames.
-        acgi::textFrameFallback() = false;
-      }
+      // Per-glyph SDF textures upload lazily at first render.
+      acgi::textFrameFallback() = false;
     }
   }
   else
@@ -717,23 +705,24 @@ bool init()
     std::cout << "SDF font (NotoSansLatin fallback): "
               << (gSdfFontReady ? "loaded" : "failed") << std::endl;
     if (gSdfFontReady)
-    {
-      rendering::SdfAtlas atlas;
-      gSdfFont.releaseSdfAtlas(atlas);
-      gSdfFontReady = rendererBackend->loadSdfTextAtlas(
-          atlas.pixels.data(), atlas.width, atlas.height);
-      if (gSdfFontReady)
-        acgi::textFrameFallback() = false;
-    }
+      acgi::textFrameFallback() = false;
   }
-  if (util::resourceExists("fonts/txt.shx"))
+  if (util::resourceExists("fonts/whgdtxt.shx"))
   {
     rendering::ShxFontConfig shxConfig;
     shxConfig.shxPath =
-        util::resourcePath("fonts/txt.shx").string();
+        util::resourcePath("fonts/whgdtxt.shx").string();
     gShxFontReady = gShxFont.loadShx(shxConfig);
-    std::cout << "SHX font (txt): "
+    std::cout << "SHX font (whgdtxt): "
               << (gShxFontReady ? "loaded" : "failed") << std::endl;
+    if (!gShxFontReady && util::resourceExists("fonts/txt.shx"))
+    {
+      rendering::ShxFontConfig fallback;
+      fallback.shxPath = util::resourcePath("fonts/txt.shx").string();
+      gShxFontReady = gShxFont.loadShx(fallback);
+      std::cout << "SHX font (txt fallback): "
+                << (gShxFontReady ? "loaded" : "failed") << std::endl;
+    }
   }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
@@ -8238,106 +8227,114 @@ void render()
                            cameraPos, frontVec, cameraRight, cameraUp,
                            pixelSize, visibleCadDraws, tinyCadDraws);
 
-  // SDF text pass: expand glyph quads on the CPU (world-space positions
-  // billboarded to the camera) and submit them to the dedicated text view.
-  // Sources: the AcGi text-request queue (Text/MText entities recorded at
-  // tessellation time) plus a standalone demo string near the cluster.
+  // SDF text pass: one R8 distance-field texture per glyph (uploaded on
+  // first use), one camera-facing quad per glyph.  Sources: the AcGi
+  // text-request queue (Text/MText entities recorded at tessellation
+  // time) plus a standalone demo string near the cluster.
   if (gSdfFontReady && rendererBackend)
   {
+    static std::map<unsigned int, uint32_t> glyphTextureIds;
+    // Quads are expanded in view space (camera-basis dotted); identity
+    // view lets the renderer's viewProj place them directly.
+    constexpr glm::mat4 identityView(1.0f);
+
     auto appendSdfText = [&](const glm::dvec3 &textOrigin,
                              const std::string &text, double textHeight,
-                             const glm::vec4 &color,
-                             std::vector<float> &textVertices) {
-      const glm::dvec3 toCamera =
-          glm::normalize(cameraPos - textOrigin);
+                             const glm::vec4 &color) {
+      const glm::dvec3 toCamera = glm::normalize(cameraPos - textOrigin);
       const glm::dvec3 textUp(0.0, 0.0, 1.0);
-      glm::dvec3 textRight = glm::normalize(glm::cross(textUp, toCamera));
-      // Multi-line: advance along +up per newline.
+      const glm::dvec3 textRight =
+          glm::normalize(glm::cross(textUp, toCamera));
+      const double emToWorld = textHeight / double(gSdfFont.pixelsPerEm());
+
+      // Multi-line: advance along -up per newline.
       glm::dvec3 lineOrigin = textOrigin;
       double penX = 0.0;
       for (unsigned char character : text)
       {
-        if (character == '\n')
+        if (character == 10) // newline
         {
           lineOrigin -= textUp * textHeight * 1.35;
           penX = 0.0;
           continue;
         }
-        const rendering::SdfGlyphSlot &glyph = gSdfFont.sdfGlyph(character);
+        const rendering::GlyphSdfRaster &glyph =
+            gSdfFont.glyphSdf(character);
         if (!glyph.valid)
         {
-          penX += 0.5;
+          penX += 0.5 * double(gSdfFont.pixelsPerEm());
           continue;
         }
-        const double left = penX + glyph.bearingX;
-        const double bottom = glyph.bearingY;
-        const double glyphWidth = glyph.u1 - glyph.u0;
-        const double glyphHeight = glyph.v1 - glyph.v0;
-        // UV extents are atlas fractions: one atlas unit spans
-        // atlasWidth / pixelsPerEm em, so convert before scaling to the
-        // requested world height.  (Scaling the raw UV fraction by
-        // textHeight alone shrank every quad ~10x into a dot.)
-        const double atlasUnitsToEm =
-            double(gSdfFont.atlasWidth()) / double(gSdfFont.pixelsPerEm());
-        const glm::dvec3 corner00 =
-            lineOrigin + textRight * (left * textHeight) +
-            textUp * (bottom * textHeight);
-        const glm::dvec3 du = textRight *
-            (glyphWidth * atlasUnitsToEm * textHeight);
-        const glm::dvec3 dv = textUp *
-            (glyphHeight * atlasUnitsToEm * textHeight);
-        auto pushVertex = [&](double cornerU, double cornerV, float u,
-                              float v) {
-          // Transform into VIEW space with the camera basis: the quad is
-          // billboarded in world axes, then dotted onto right/up/front so
-          // the identity view + ortho/perspective projection place it
-          // exactly where the world position appears on screen.
-          const glm::dvec3 relative =
-              corner00 + du * cornerU + dv * cornerV - cameraPos;
-          textVertices.push_back(float(glm::dot(relative, cameraRight)));
-          textVertices.push_back(float(glm::dot(relative, cameraUp)));
-          textVertices.push_back(float(-glm::dot(relative, frontVec)));
-          textVertices.push_back(u);
-          textVertices.push_back(v);
-          textVertices.push_back(color.r);
-          textVertices.push_back(color.g);
-          textVertices.push_back(color.b);
-          textVertices.push_back(color.a);
-        };
-        // Two triangles, CCW when facing the camera.
-        pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
-        pushVertex(1.0, 0.0, glyph.u1, glyph.v1);
-        pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
-        pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
-        pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
-        pushVertex(0.0, 1.0, glyph.u0, glyph.v0);
-        penX += glyph.advanceWidth;
+
+        // Lazily upload this glyph's distance field.
+        uint32_t textureId = 0;
+        if (const auto it = glyphTextureIds.find(character);
+            it != glyphTextureIds.end())
+        {
+          textureId = it->second;
+        }
+        else
+        {
+          textureId = rendererBackend->uploadGlyphSdf(
+              glyph.sdf.data(), glyph.width, glyph.height);
+          glyphTextureIds[character] = textureId;
+        }
+
+        if (textureId != 0)
+        {
+          // Quad offsets: pen + left/top metrics in em units.
+          const glm::dvec3 quadLeftEdge =
+              lineOrigin + textRight * ((penX + glyph.left) * emToWorld) +
+              textUp * ((glyph.top - glyph.height) * emToWorld);
+          const glm::dvec3 quadWidth =
+              textRight * (glyph.width * emToWorld);
+          const glm::dvec3 quadHeight = textUp * (glyph.height * emToWorld);
+          auto pushVertex = [&](double cornerU, double cornerV, float u,
+                                float v) {
+            // Transform into VIEW space with the camera basis so the
+            // identity view passed to the renderer places the quad
+            // exactly where the world position appears on screen.
+            const glm::dvec3 relative =
+                quadLeftEdge + quadWidth * cornerU + quadHeight * cornerV -
+                cameraPos;
+            return std::array<float, 9>{
+                float(glm::dot(relative, cameraRight)),
+                float(glm::dot(relative, cameraUp)),
+                float(-glm::dot(relative, frontVec)),
+                u,
+                v,
+                color.r,
+                color.g,
+                color.b,
+                color.a};
+          };
+          const std::array<float, 9> v00 = pushVertex(0, 0, 0.0f, 1.0f);
+          const std::array<float, 9> v10 = pushVertex(1, 0, 1.0f, 1.0f);
+          const std::array<float, 9> v11 = pushVertex(1, 1, 1.0f, 0.0f);
+          const std::array<float, 9> v01 = pushVertex(0, 1, 0.0f, 0.0f);
+          float vertices[54];
+          std::memcpy(vertices + 0, v00.data(), sizeof(v00));
+          std::memcpy(vertices + 9, v10.data(), sizeof(v10));
+          std::memcpy(vertices + 18, v11.data(), sizeof(v11));
+          std::memcpy(vertices + 27, v00.data(), sizeof(v00));
+          std::memcpy(vertices + 36, v11.data(), sizeof(v11));
+          std::memcpy(vertices + 45, v01.data(), sizeof(v01));
+          rendererBackend->drawSdfGlyphQuad(identityView, projection,
+                                            textureId, vertices);
+        }
+        penX += glyph.advanceX;
       }
     };
 
-    std::vector<float> textVertices;
     // 1. Text/MText entities recorded through the AcGi protocol.
     for (const acgi::TextRequest &request : acgi::textRequests())
       appendSdfText(request.position, request.message, request.height,
-                    request.color, textVertices);
+                    request.color);
     // 2. Standalone demo string beside the CAD cluster.
     // cadAnchor == vectorPrimitivesAnchor() + (1536, -1280, 0).
     appendSdfText(vectorPrimitivesAnchor() + glm::dvec3(1792.0, -768.0, 512.0),
                   "INFINITE-GRID", 72.0,
-                  glm::vec4(0.95f, 0.75f, 0.25f, 1.0f), textVertices);
-
-    if (!textVertices.empty())
-    {
-      // World-quad corners were computed camera-relative; the identity
-      // view keeps them camera-facing in view space.
-      constexpr glm::mat4 identityView(1.0f);
-      rendererBackend->drawSdfGlyphQuads(
-          identityView, projection, textVertices.data(),
-          uint32_t(textVertices.size() / 9),
-          1.0f / float(gSdfFont.atlasWidth()),
-          1.0f / float(gSdfFont.atlasHeight()),
-          gSdfFont.sdfPixelRange_);
-    }
+                  glm::vec4(0.95f, 0.75f, 0.25f, 1.0f));
   }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The

@@ -1,52 +1,50 @@
 #pragma once
 
-// Text font subsystem: SDF (TTF/OTF via stb_truetype) + AutoCAD SHX/SHP
-// big-font stroke parsing.  Pure data layer — produces per-codepoint
-// glyph descriptors and a CPU-side SDF atlas.  The renderer (BgfxRenderer)
-// consumes these directly with bgfx APIs; nothing here depends on bgfx,
-// so the same font subsystem can drive a WebGPU renderer later.
+// Text font subsystem: per-glyph SDF rasterization (TTF/OTF via
+// stb_truetype) + AutoCAD SHX/SHP stroke parsing.  Pure data layer — no
+// bgfx dependency; the renderer uploads each glyph's R8 SDF texture and
+// draws camera-facing quads.
 //
-// Style is intentionally minimal: font files are loaded by path; glyphs
-// are rendered either as a Signed Distance Field atlas (SDF, TTF/OTF) or
-// as vector strokes (SHX).  AcGiTextStyle's textSize / xScale / obliqueAngle
-// fields are honored by the renderer when they apply to the chosen path.
+// Architecture follows the CADplatformer reference (MIT): one SDF texture
+// per glyph cached on demand, instead of a shared atlas.  This removes
+// the atlas UV/stride bug class entirely.
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace rendering
 {
 
-// Configuration for the SDF (TTF/OTF) path.  stb_truetype does the heavy
-// lifting; the resulting glyph atlas is a BGRA8 texture with a distance
-// field computed on the CPU.
 struct SdfFontConfig
 {
     std::string ttfPath;
-    float pixelsPerEm = 64.0f;
-    int firstGlyph = 32;   // inclusive (typically ' ')
-    int lastGlyph = 127;  // inclusive (typically '~')
+    float pixelsPerEm = 96.0f;
+    int sdfSpread = 6; // SDF distance range in texels
 };
 
-// Configuration for the SHX/SHP big-font path.
 struct ShxFontConfig
 {
     std::string shxPath;
 };
 
-// Per-glyph descriptor for the SDF path: UV box in the atlas and
-// horizontal metrics in em-units.
-struct SdfGlyphSlot
+// Rasterized glyph SDF (R channel values).  Metrics are in pixels at
+// pixelsPerEm; since pixelsPerEm is also the em size, the numbers read
+// directly as em units.
+struct GlyphSdfRaster
 {
-    float u0 = 0.0f, v0 = 0.0f, u1 = 0.0f, v1 = 0.0f;
-    float advanceWidth = 0.0f;
-    float bearingX = 0.0f;
-    float bearingY = 0.0f;
+    std::vector<std::uint8_t> sdf;
+    int width = 0;
+    int height = 0;
+    int left = 0;          // pen to glyph left edge (pixels)
+    int top = 0;           // pen (baseline) to glyph top edge (pixels)
+    float advanceX = 0.0f; // pen advance (pixels = em)
     bool valid = false;
 };
 
-// Per-glyph descriptor for the SHX path: line segments in em-units.
+// SHX vector glyph: line segments in em units (cap height normalized to
+// 1.0), decoded from the compiled shape commands.
 struct ShxGlyphStroke
 {
     float fromX = 0.0f, fromY = 0.0f;
@@ -56,86 +54,57 @@ struct ShxGlyphStroke
 struct ShxGlyphSlot
 {
     std::vector<ShxGlyphStroke> strokes;
-    float advanceWidth = 0.0f;
-    float upperLine = 0.0f;
-    float lowerLine = 0.0f;
+    float advanceWidth = 0.0f; // em
     bool valid = false;
 };
 
-// SDF atlas: a single BGRA8 image + a per-codepoint slot table.
-// `pixels` holds RGBA bytes, row-major from bottom to top.
-struct SdfAtlas
-{
-    std::vector<std::uint8_t> pixels;
-    int width = 0;
-    int height = 0;
-    float pixelRange = 0.0f;
-};
-
-// Loaded font: holds either the SDF atlas + slots (preferred) or the SHX
-// glyph table.  The AcGi callback chooses which to use.
 class LoadedFont
 {
 public:
     LoadedFont();
     ~LoadedFont();
-
-    // Atlas dimensions after loadSdf() returns true.
-    int atlasWidth() const { return pendingAtlas_.width; }
-    int atlasHeight() const { return pendingAtlas_.height; }
-    float pixelsPerEm() const { return pixelsPerEm_; }
-
-
     LoadedFont(const LoadedFont &) = delete;
     LoadedFont &operator=(const LoadedFont &) = delete;
 
+    // TTF/OTF: initializes stb_truetype; glyphs rasterize on demand.
     bool loadSdf(const SdfFontConfig &config);
+    // SHX/SHP: parses the whole file up front.
     bool loadShx(const ShxFontConfig &config);
 
     bool isLoaded() const { return loaded_; }
     bool hasSdf() const { return sdfLoaded_; }
     bool hasShx() const { return shxLoaded_; }
 
+    float pixelsPerEm() const { return pixelsPerEm_; }
     float ascent() const { return ascent_; }
-    float descent() const { return descent_; }
-    float lineHeight() const { return lineHeight_; }
 
-    // SDF atlas release: caller takes ownership of `pixels` and uploads it
-    // to a bgfx texture, then queries sdfGlyph(...) for layout.
-    void releaseSdfAtlas(SdfAtlas &outAtlas);
+    // Per-glyph SDF raster, computed and cached on first request.
+    const GlyphSdfRaster &glyphSdf(std::uint32_t codepoint);
 
-    const SdfGlyphSlot &sdfGlyph(std::uint32_t codepoint) const;
     const ShxGlyphSlot &shxGlyph(std::uint32_t codepoint) const;
 
-    // Load-state flags are public: the SHX parser (shx_parser.cpp) fills
-    // them after decoding a font file.
+public:
+    // Load-state flags and the SHX slot table are public: the SHX parser
+    // (shx_parser.cpp) fills them after decoding a font file.
     bool loaded_ = false;
     bool sdfLoaded_ = false;
     bool shxLoaded_ = false;
+    std::map<std::uint32_t, ShxGlyphSlot> shxSlots_;
 
-    float ascent_ = 0.0f;
-    float descent_ = 0.0f;
-    float lineHeight_ = 0.0f;
+private:
 
-    // Owned stb_truetype data (opaque pointer to keep stb out of the
-    // public header) and SHX glyph table (opaque pointer to SHX parser
-    // internals).  Released by the destructor.
-    void *ttfData_ = nullptr;
-    void *shxState_ = nullptr;
-
-public:
-    int firstGlyph_ = 0;
-    int lastGlyph_ = 0;
-    float sdfPixelRange_ = 4.0f;
     float pixelsPerEm_ = 96.0f;
+    float ascent_ = 0.0f;
+    float sdfSpread_ = 6.0f;
 
-    SdfGlyphSlot sdfSlots_[256];
-    ShxGlyphSlot shxSlots_[256];
+    // Font file buffer must outlive stbtt_fontinfo.
+    std::vector<unsigned char> fontData_;
+    void *fontInfo_ = nullptr; // stbtt_fontinfo*
 
-    // The most recently rasterized SDF atlas (CPU-side pixels) is kept
-    // around until the renderer calls releaseSdfAtlas().
-    SdfAtlas pendingAtlas_;
-    bool pendingAtlasReady_ = false;
+    std::map<std::uint32_t, GlyphSdfRaster> glyphCache_;
+
+    // SHX parsed state (owned by the parser implementation).
+    void *shxState_ = nullptr;
 };
 
 } // namespace rendering
