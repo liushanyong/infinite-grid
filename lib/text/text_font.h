@@ -83,6 +83,7 @@ public:
     // Atlas dimensions after loadSdf() returns true.
     int atlasWidth() const { return pendingAtlas_.width; }
     int atlasHeight() const { return pendingAtlas_.height; }
+    float pixelsPerEm() const { return pixelsPerEm_; }
 
 
     LoadedFont(const LoadedFont &) = delete;
@@ -126,6 +127,7 @@ public:
     int firstGlyph_ = 0;
     int lastGlyph_ = 0;
     float sdfPixelRange_ = 4.0f;
+    float pixelsPerEm_ = 96.0f;
 
     SdfGlyphSlot sdfSlots_[256];
     ShxGlyphSlot shxSlots_[256];

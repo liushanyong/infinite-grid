@@ -95,6 +95,7 @@ bool LoadedFont::loadSdf(const SdfFontConfig &config)
     descent_ = -descent * scale; // stb reports descent as positive downward
     lineHeight_ = (ascent - descent + lineGap) * scale;
     sdfPixelRange_ = static_cast<float>(kSdfPixelRange);
+    pixelsPerEm_ = static_cast<float>(pixelsPerEm);
 
     const int firstGlyph = std::max(0, config.firstGlyph);
     const int lastGlyph = std::min(255, config.lastGlyph);

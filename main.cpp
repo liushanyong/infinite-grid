@@ -8273,13 +8273,19 @@ void render()
         const double bottom = glyph.bearingY;
         const double glyphWidth = glyph.u1 - glyph.u0;
         const double glyphHeight = glyph.v1 - glyph.v0;
-        // Atlas cell maps 1:1 to em-units (cell was rasterized at
-        // pixelsPerEm), so the cell occupies a full em of world height.
+        // UV extents are atlas fractions: one atlas unit spans
+        // atlasWidth / pixelsPerEm em, so convert before scaling to the
+        // requested world height.  (Scaling the raw UV fraction by
+        // textHeight alone shrank every quad ~10x into a dot.)
+        const double atlasUnitsToEm =
+            double(gSdfFont.atlasWidth()) / double(gSdfFont.pixelsPerEm());
         const glm::dvec3 corner00 =
             lineOrigin + textRight * (left * textHeight) +
             textUp * (bottom * textHeight);
-        const glm::dvec3 du = textRight * (glyphWidth * textHeight);
-        const glm::dvec3 dv = textUp * (glyphHeight * textHeight);
+        const glm::dvec3 du = textRight *
+            (glyphWidth * atlasUnitsToEm * textHeight);
+        const glm::dvec3 dv = textUp *
+            (glyphHeight * atlasUnitsToEm * textHeight);
         auto pushVertex = [&](double cornerU, double cornerV, float u,
                               float v) {
           // Transform into VIEW space with the camera basis: the quad is
