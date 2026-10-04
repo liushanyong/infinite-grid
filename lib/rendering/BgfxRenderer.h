@@ -40,10 +40,13 @@ public:
     void drawLineInstances(const LineInstancesRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
 
-    // Text (lib/text subsystem).  drawTextTriangles submits pre-expanded
-    // view-space triangles (9 floats per vertex: pos3 + uv2 + rgba4).
-    void drawTextTriangles(const glm::mat4 &view, const glm::mat4 &projection,
-                           const float *vertices, uint32_t vertexCount);
+    // SDF text (lib/text subsystem).  uploadGlyphSdf registers a glyph's
+    // R8 distance field as a texture and returns its id (0 = invalid);
+    // drawSdfGlyphQuad submits one 6-vertex quad (9 floats per vertex:
+    // view-space pos3 + uv2 + rgba4) with that texture bound.
+    uint32_t uploadGlyphSdf(const unsigned char *sdf, int width, int height);
+    void drawSdfGlyphQuad(const glm::mat4 &view, const glm::mat4 &projection,
+                          uint32_t textureId, const float *vertices);
     void requestDebugScreenShot(const std::string &filePath) override;
     void setGpuPickDebugVisible(bool visible) override;
     void setGpuPickSceneDebug(bool visible) override;
@@ -175,10 +178,13 @@ private:
     bgfx::UniformHandle m_primParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_depthDisplayParams = BGFX_INVALID_HANDLE;
 
-    // Text pass (lib/text subsystem): flat-color program over
-    // outline-triangulated glyph polygons.
+    // SDF text pass (lib/text subsystem): program + per-glyph R8
+    // texture cache (index 0 is reserved as invalid).
     bgfx::ProgramHandle m_textProgram = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_textSampler = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_textParams = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout m_textLayout;
+    std::vector<bgfx::TextureHandle> m_glyphTextures;
     bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_realisticMaterial = BGFX_INVALID_HANDLE;

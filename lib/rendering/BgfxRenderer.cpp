@@ -4296,13 +4296,64 @@ m_curveLayout.begin()
     return ready;
 }
 
-void BgfxRenderer::drawTextTriangles(const glm::mat4 &view,
-                                     const glm::mat4 &projection,
-                                     const float *vertices,
-                                     uint32_t vertexCount)
+uint32_t BgfxRenderer::uploadGlyphSdf(const unsigned char *sdf, int width,
+                                      int height)
 {
-    if (!m_initialized || !bgfx::isValid(m_textProgram) || !vertices ||
-        vertexCount < 3 || vertexCount % 3 != 0)
+    if (!m_initialized || !sdf || width <= 0 || height <= 0)
+        return 0;
+
+    if (!bgfx::isValid(m_textProgram))
+    {
+        const auto vertexBinary =
+            SELECT_SHADER_BINARY(TextSdfShaders, vs_text_sdf);
+        const auto fragmentBinary =
+            SELECT_SHADER_BINARY(TextSdfShaders, fs_text_sdf);
+        auto createTextShader = [](const uint8_t *data, uint32_t size,
+                                   const char *name) {
+            const bgfx::ShaderHandle handle =
+                bgfx::createShader(bgfx::copy(data, size));
+            if (bgfx::isValid(handle))
+                bgfx::setName(handle, name);
+            return handle;
+        };
+        const bgfx::ShaderHandle vertexShader = createTextShader(
+            vertexBinary.data, vertexBinary.size, "text_sdf_vs");
+        const bgfx::ShaderHandle fragmentShader = createTextShader(
+            fragmentBinary.data, fragmentBinary.size, "text_sdf_fs");
+        m_textProgram =
+            bgfx::createProgram(vertexShader, fragmentShader, true);
+        m_textSampler =
+            createUniformHandle("s_texColor", bgfx::UniformType::Sampler);
+        m_textParams =
+            createUniformHandle("u_params0", bgfx::UniformType::Vec4);
+        m_textLayout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+            .end();
+    }
+    if (!bgfx::isValid(m_textProgram))
+        return 0;
+
+    // R8 single-channel distance field, clamp sampling.
+    const bgfx::TextureHandle texture = bgfx::createTexture2D(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height), false,
+        1, bgfx::TextureFormat::R8,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(sdf, static_cast<uint32_t>(width * height)));
+    if (!bgfx::isValid(texture))
+        return 0;
+    m_glyphTextures.push_back(texture);
+    return uint32_t(m_glyphTextures.size()); // 1-based id
+}
+
+void BgfxRenderer::drawSdfGlyphQuad(const glm::mat4 &view,
+                                    const glm::mat4 &projection,
+                                    uint32_t textureId,
+                                    const float *vertices)
+{
+    if (!m_initialized || !bgfx::isValid(m_textProgram) ||
+        textureId == 0 || textureId > m_glyphTextures.size() || !vertices)
     {
         return;
     }
@@ -4310,35 +4361,29 @@ void BgfxRenderer::drawTextTriangles(const glm::mat4 &view,
     bgfx::setViewFrameBuffer(kViewText, BGFX_INVALID_HANDLE);
     bgfx::setViewRect(kViewText, 0, 0, m_width, m_height);
     bgfx::setViewClear(kViewText, BGFX_CLEAR_NONE, 0, 1.0f, 0);
+    // D3D-family backends expect NDC depth in [0, 1]; without this remap
+    // the near half of the ortho slab clips at a straight line (text
+    // glyphs vanished below a horizontal screen line).
     const glm::mat4 textProjection = projectionForDirect3D(projection);
     bgfx::setViewTransform(kViewText, glm::value_ptr(view),
                            glm::value_ptr(textProjection));
 
-    constexpr uint32_t kMaxChunkVertices = 60000;
-    uint32_t first = 0;
-    while (first < vertexCount)
-    {
-        const uint32_t available = bgfx::getAvailTransientVertexBuffer(
-            vertexCount - first, m_textLayout);
-        uint32_t count =
-            std::min({vertexCount - first, kMaxChunkVertices, available});
-        count -= count % 3;
-        if (count < 3)
-            break;
+    bgfx::TransientVertexBuffer tvb;
+    if (6 != bgfx::getAvailTransientVertexBuffer(6, m_textLayout))
+        return;
+    bgfx::allocTransientVertexBuffer(&tvb, 6, m_textLayout);
+    std::memcpy(tvb.data, vertices, size_t(6) * sizeof(float) * 9);
 
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::allocTransientVertexBuffer(&tvb, count, m_textLayout);
-        std::memcpy(tvb.data, vertices + first * 9,
-                    size_t(count) * sizeof(float) * 9);
-
-        // Overlay pass: backbuffer depth is not the scene depth, so text
-        // draws without a depth test after the present view.
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::submit(kViewText, m_textProgram);
-        first += count;
-    }
+    // Overlay pass: backbuffer depth is not the scene depth, so text
+    // draws without a depth test after the present view.
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setTexture(0, m_textSampler,
+                     m_glyphTextures[textureId - 1]);
+    const float params[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // textureLod 0
+    bgfx::setUniform(m_textParams, params);
+    bgfx::submit(kViewText, m_textProgram);
 }
 
 } // namespace rendering
