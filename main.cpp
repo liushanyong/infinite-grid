@@ -8250,10 +8250,28 @@ void render()
   if (gSdfFontReady && rendererBackend)
   {
     constexpr glm::mat4 identityView(1.0f);
+    // Frustum culling: skip text whose oriented bounding rectangle lies
+    // entirely outside the ortho viewport (perspective keeps drawing —
+    // its frustum test hooks in at the same call when needed).
+    const double orthoHalfHeight = useOrthoProjection()
+                                       ? orbitCam.orthoSize()
+                                       : std::numeric_limits<double>::max();
+    const double orthoHalfWidth =
+        orthoHalfHeight * double(currentDrawableWidth()) /
+        std::max(1, currentDrawableHeight());
     for (const acgi::TextRequest &request : acgi::textRequests())
+    {
+      if (useOrthoProjection() &&
+          !acgi::textEngine().intersectsOrthoViewport(
+              request, cameraPos, cameraRight, cameraUp, frontVec,
+              orthoHalfWidth, orthoHalfHeight))
+      {
+        continue;
+      }
       acgi::textEngine().drawText(*rendererBackend, identityView,
                                   projection, cameraPos, cameraRight,
                                   cameraUp, frontVec, request);
+    }
   }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The

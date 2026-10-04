@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 
 namespace acgi
 {
@@ -173,6 +174,72 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
         penX += glyph.advanceX;
     }
     return glyphsDrawn;
+}
+
+bool TextEngine::intersectsOrthoViewport(
+    const TextRequest &request, const glm::dvec3 &cameraPos,
+    const glm::dvec3 &cameraRight, const glm::dvec3 &cameraUp,
+    const glm::dvec3 &cameraFront, double halfWidth,
+    double halfHeight) const
+{
+    // Oriented text rectangle in the entity plane: baseline direction ×
+    // message width, in-plane up × line count.
+    glm::dvec3 textRight = request.direction;
+    if (glm::dot(textRight, textRight) < 1.0e-18)
+        textRight = glm::dvec3(1.0, 0.0, 0.0);
+    textRight = glm::normalize(textRight);
+    glm::dvec3 textUp = glm::cross(glm::normalize(request.normal), textRight);
+    if (glm::dot(textUp, textUp) < 1.0e-18)
+        textUp = glm::dvec3(0.0, 0.0, 1.0);
+    textUp = glm::normalize(textUp);
+
+    size_t lineCount = 1;
+    double longest = 0.0;
+    size_t current = 0;
+    for (char character : request.message)
+    {
+        if (character == 10)
+        {
+            ++lineCount;
+            longest = std::max(longest, double(current));
+            current = 0;
+        }
+        else
+        {
+            ++current;
+        }
+    }
+    longest = std::max(longest, double(current));
+    const double width = std::max(double(longest) * request.height *
+                                      request.xScale,
+                                  request.height);
+    const double height = request.height * double(lineCount);
+
+    // Camera-space AABB over the rectangle's four corners (plus a small
+    // thickness along the normal so edge-on text still counts).
+    const glm::dvec3 normal = glm::normalize(request.normal);
+    glm::dvec3 minimum(std::numeric_limits<double>::max());
+    glm::dvec3 maximum(std::numeric_limits<double>::lowest());
+    for (int i = 0; i < 4; ++i)
+    {
+        const glm::dvec3 corner =
+            request.position +
+            textRight * (i & 1 ? width : 0.0) +
+            textUp * (i & 2 ? height : 0.0) +
+            normal * (request.height * 0.1);
+        const glm::dvec3 relative = corner - cameraPos;
+        const double cx = glm::dot(relative, cameraRight);
+        const double cy = glm::dot(relative, cameraUp);
+        const double cz = glm::dot(relative, cameraFront);
+        minimum = glm::min(minimum, glm::dvec3(cx, cy, cz));
+        maximum = glm::max(maximum, glm::dvec3(cx, cy, cz));
+    }
+    // Clamp z to a small thickness band so the AABB is not flat in depth.
+    minimum.z -= request.height * 0.1;
+    maximum.z += request.height * 0.1;
+
+    return maximum.x >= -halfWidth && minimum.x <= halfWidth &&
+           maximum.y >= -halfHeight && minimum.y <= halfHeight;
 }
 
 std::vector<rendering::ShxGlyphStroke> TextEngine::shxStrokes(

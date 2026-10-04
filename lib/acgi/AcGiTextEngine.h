@@ -56,6 +56,19 @@ public:
                  const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
                  const TextRequest &request);
 
+    // Frustum culling (ortho): builds the text's oriented bounding
+    // rectangle (baseline direction × line count in the entity plane) and
+    // tests it against the ortho viewport [±halfW]×[±halfH] in camera
+    // space.  Depth is ignored on purpose — text request depths feed the
+    // slab, so they are always inside it.  Returns false only when the
+    // text lies entirely outside the viewport rectangle.
+    bool intersectsOrthoViewport(const TextRequest &request,
+                                 const glm::dvec3 &cameraPos,
+                                 const glm::dvec3 &cameraRight,
+                                 const glm::dvec3 &cameraUp,
+                                 const glm::dvec3 &cameraFront,
+                                 double halfWidth, double halfHeight) const;
+
     // SHX stroke geometry for a message, in em units (cap height 1.0);
     // ASCII glyphs resolve through the regular font, double-byte codes
     // through the big font.  Consumed by the stroke pipeline as ordinary
