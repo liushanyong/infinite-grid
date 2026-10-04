@@ -3504,6 +3504,19 @@ static WorldAabb stressFieldBounds()
   expandCadTessellationBounds(bounds, getVectorPrimitivesTessellation());
   for (const LargeCoordinateObject &object : getStressObjects())
     expandWorldAabb(bounds, object.worldPosition, glm::dvec3(object.size * 0.5));
+
+  // Text entities must join the content bounds: their glyph quads are
+  // drawn with the main ortho projection, so the depth slab has to cover
+  // them or the near/far planes clip the glyphs when the slab tightens
+  // around meshes alone.  Expand conservatively from the insertion point
+  // by the text's own metrics (length for x/y extent, height for z).
+  for (const acgi::TextRequest &request : acgi::textRequests())
+  {
+    const double extent =
+        double(request.message.size()) * request.height + request.height;
+    expandWorldAabb(bounds, request.position,
+                    glm::dvec3(extent, extent, request.height * 2.0));
+  }
   return bounds;
 }
 
@@ -8215,8 +8228,9 @@ void render()
 
   // SDF text pass: the AcGi text engine expands each queued request into
   // per-glyph quads (one R8 distance-field texture per glyph, uploaded on
-  // first use).  Sources: Text/MText entities recorded at tessellation
-  // time plus a standalone demo string beside the cluster.
+  // first use).  Sources: Text/MText entities and the standalone demo
+  // string, both registered in the request queue (which also feeds the
+  // content bounds so the depth slab covers the glyphs).
   if (gSdfFontReady && rendererBackend)
   {
     constexpr glm::mat4 identityView(1.0f);
@@ -8224,18 +8238,6 @@ void render()
       acgi::textEngine().drawText(*rendererBackend, identityView,
                                   projection, cameraPos, cameraRight,
                                   cameraUp, frontVec, request);
-    // Demo string lying flat on the ground plane beside the cluster
-    // (planar CAD text; visible from above).
-    acgi::TextRequest demo;
-    demo.position = vectorPrimitivesAnchor() + glm::dvec3(256.0, 256.0, 8.0);
-    demo.direction = glm::dvec3(1.0, 0.0, 0.0);
-    demo.normal = glm::dvec3(0.0, 0.0, 1.0);
-    demo.message = "INFINITE-GRID";
-    demo.height = 96.0;
-    demo.color = glm::vec4(0.95f, 0.75f, 0.25f, 1.0f);
-    acgi::textEngine().drawText(*rendererBackend, identityView, projection,
-                                cameraPos, cameraRight, cameraUp, frontVec,
-                                demo);
   }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
