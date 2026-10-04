@@ -235,12 +235,13 @@ void storeGlyph(LoadedFont &font, std::uint32_t codepoint,
         maxX = std::max({maxX, stroke.fromX, stroke.toX});
         ShxGlyphStroke normalized;
         normalized.fromX = stroke.fromX * emPerUnit;
-        // SHX shape space is y-down (baseline at 0, glyph body at -1);
-        // normalize to y-up so consumers place glyphs with a plain
-        // positive up vector.
-        normalized.fromY = -stroke.fromY * emPerUnit;
+        // txt.shx-style stroke fonts store the glyph body in negative y
+        // (cap line at 0, baseline at -1) — the glyph hangs below its
+        // anchor.  Keep the sign: consumers render in a y-up frame, where
+        // this reads as an upright letter anchored at its cap line.
+        normalized.fromY = stroke.fromY * emPerUnit;
         normalized.toX = stroke.toX * emPerUnit;
-        normalized.toY = -stroke.toY * emPerUnit;
+        normalized.toY = stroke.toY * emPerUnit;
         slot.strokes.push_back(normalized);
     }
     // Advance = glyph ink width + inter-letter gap.  txt.shx-style fonts

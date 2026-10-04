@@ -2068,7 +2068,10 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     if (gShxFontReady)
     {
       const std::string shxText = "INFINITE-GRID 123";
-      const glm::dvec3 textOrigin = cadAnchor + glm::dvec3(256.0, 128.0, 0.0);
+      // SHX glyphs hang below their anchor (cap line at the anchor,
+      // baseline one em down): raise the anchor one em above the ground.
+      const glm::dvec3 textOrigin =
+          cadAnchor + glm::dvec3(256.0, 128.0, 96.0);
       const double textHeight = 96.0; // world units per em
       const glm::dvec3 textRight(1.0, 0.0, 0.0);
       const glm::dvec3 textUp(0.0, 0.0, 1.0);
