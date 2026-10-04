@@ -7316,22 +7316,6 @@ void render()
       }
     }
 
-    // Text glyph quads draw with the main ortho projection, so their
-    // positions must join the visible-content slab: when the camera
-    // zooms onto a text entity, the slab tightens around meshes and
-    // strokes alone and the near/far planes clip the glyphs.  Expand the
-    // slab with each request's depth ± its own extent.
-    for (const acgi::TextRequest &request : acgi::textRequests())
-    {
-      const CameraSpacePoint center =
-          toCameraSpace(request.position, cameraPos, right, up, front);
-      const double extent =
-          double(request.message.size()) * request.height +
-          request.height * 2.0;
-      slabMinDepth = std::min(slabMinDepth, center.depth - extent);
-      slabMaxDepth = std::max(slabMaxDepth, center.depth + extent);
-    }
-
     // The slab center is the projected-area weighted mean depth of the
     // contributing objects; the infinite grid stays excluded on purpose:
     // at grazing angles its horizon depths are unbounded and would destroy
@@ -7342,12 +7326,14 @@ void render()
         glm::length(orbitCam.Position - orbitCam.Target);
     double slabCenterDepth;
     double slabRadius;
+    // Minimum slab span: keeps extreme zoom from starving the depth
+    // range below the visible geometry's own extent.
+    constexpr double kMinDepthSpan = 1024.0;
     if (contentAabbCount)
     {
       slabCenterDepth = weightSum > 0.0
           ? weightedDepthSum / weightSum
           : std::max(0.001, cameraDistance);
-      constexpr double kMinDepthSpan = 1024.0;
       const double contentReach = std::max(
           slabMaxDepth - slabCenterDepth, slabCenterDepth - slabMinDepth);
       const double frameRadius = std::max(
@@ -7375,8 +7361,30 @@ void render()
       // and the fit-all model fallback would thicken an already
       // content-free slab for no visible benefit.
       slabCenterDepth = std::max(0.001, cameraDistance);
-      slabRadius = imageRadius;
+      // Minimum span floor applies here as well: an unbounded shrink at
+      // extreme zoom left text outside the near/far planes.
+      slabRadius = std::max(imageRadius, kMinDepthSpan * 0.5);
     }
+    // Text glyph quads draw with the main ortho projection, so their
+    // depths must join the final slab in BOTH branches: zooming onto a
+    // text entity tightens the slab around meshes and strokes alone, and
+    // the near/far planes would clip the glyphs.  Expand the centered
+    // interval with each request's depth ± its own extent.
+    for (const acgi::TextRequest &request : acgi::textRequests())
+    {
+      const CameraSpacePoint center =
+          toCameraSpace(request.position, cameraPos, right, up, front);
+      const double extent =
+          double(request.message.size()) * request.height +
+          request.height * 2.0;
+      const double low =
+          std::min(slabCenterDepth - slabRadius, center.depth - extent);
+      const double high =
+          std::max(slabCenterDepth + slabRadius, center.depth + extent);
+      slabCenterDepth = 0.5 * (low + high);
+      slabRadius = 0.5 * (high - low);
+    }
+
     // A slab centered on content straddling the camera plane could end up
     // entirely behind depth zero; keep the far plane strictly positive.
     constexpr double kMinFarDepth = 0.001;
