@@ -4371,6 +4371,10 @@ void BgfxRenderer::drawSdfGlyphQuads(const glm::mat4 &view,
     bgfx::setViewClear(kViewText, BGFX_CLEAR_NONE, 0, 1.0f, 0);
     bgfx::setViewTransform(kViewText, glm::value_ptr(view),
                            glm::value_ptr(projection));
+    // The text shader samples the camera matrices through the shared
+    // uView/projection uniform handles (bgfx binds them by name).
+    bgfx::setUniform(m_view, glm::value_ptr(view));
+    bgfx::setUniform(m_projection, glm::value_ptr(projection));
 
     uint32_t first = 0;
     while (first < vertexCount)
