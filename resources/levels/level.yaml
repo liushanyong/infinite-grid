@@ -1,0 +1,1505 @@
+entities:
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_0
+    NameComponent:
+      name: sphere_0_0
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_1
+    NameComponent:
+      name: sphere_0_1
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_2
+    NameComponent:
+      name: sphere_0_2
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_3
+    NameComponent:
+      name: sphere_0_3
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_4
+    NameComponent:
+      name: sphere_0_4
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_5
+    NameComponent:
+      name: sphere_0_5
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_6
+    NameComponent:
+      name: sphere_0_6
+  - TransformComponent:
+      translation:
+        x: -10.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_0_7
+    NameComponent:
+      name: sphere_0_7
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_0
+    NameComponent:
+      name: sphere_1_0
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_1
+    NameComponent:
+      name: sphere_1_10
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_2
+    NameComponent:
+      name: sphere_1_21
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_3
+    NameComponent:
+      name: sphere_1_32
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_4
+    NameComponent:
+      name: sphere_1_43
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_5
+    NameComponent:
+      name: sphere_1_54
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_6
+    NameComponent:
+      name: sphere_1_65
+  - TransformComponent:
+      translation:
+        x: -7.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_1_7
+    NameComponent:
+      name: sphere_1_76
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_0
+    NameComponent:
+      name: sphere_2_07
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_1
+    NameComponent:
+      name: sphere_2_18
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_2
+    NameComponent:
+      name: sphere_2_29
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_3
+    NameComponent:
+      name: sphere_2_30
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_4
+    NameComponent:
+      name: sphere_2_41
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_5
+    NameComponent:
+      name: sphere_2_52
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_6
+    NameComponent:
+      name: sphere_2_63
+  - TransformComponent:
+      translation:
+        x: -4.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_2_7
+    NameComponent:
+      name: sphere_2_74
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_0
+    NameComponent:
+      name: sphere_3_05
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_1
+    NameComponent:
+      name: sphere_3_16
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_2
+    NameComponent:
+      name: sphere_3_27
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_3
+    NameComponent:
+      name: sphere_3_38
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_4
+    NameComponent:
+      name: sphere_3_49
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_5
+    NameComponent:
+      name: sphere_3_50
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_6
+    NameComponent:
+      name: sphere_3_61
+  - TransformComponent:
+      translation:
+        x: -1.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_3_7
+    NameComponent:
+      name: sphere_3_72
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_0
+    NameComponent:
+      name: sphere_4_03
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_1
+    NameComponent:
+      name: sphere_4_14
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_2
+    NameComponent:
+      name: sphere_4_25
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_3
+    NameComponent:
+      name: sphere_4_36
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_4
+    NameComponent:
+      name: sphere_4_47
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_5
+    NameComponent:
+      name: sphere_4_58
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_6
+    NameComponent:
+      name: sphere_4_69
+  - TransformComponent:
+      translation:
+        x: 1.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_4_7
+    NameComponent:
+      name: sphere_4_70
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_0
+    NameComponent:
+      name: sphere_5_01
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_1
+    NameComponent:
+      name: sphere_5_12
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_2
+    NameComponent:
+      name: sphere_5_23
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_3
+    NameComponent:
+      name: sphere_5_34
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_4
+    NameComponent:
+      name: sphere_5_45
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_5
+    NameComponent:
+      name: sphere_5_56
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_6
+    NameComponent:
+      name: sphere_5_67
+  - TransformComponent:
+      translation:
+        x: 4.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_5_7
+    NameComponent:
+      name: sphere_5_78
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_0
+    NameComponent:
+      name: sphere_6_09
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_1
+    NameComponent:
+      name: sphere_6_10
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_2
+    NameComponent:
+      name: sphere_6_21
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_3
+    NameComponent:
+      name: sphere_6_32
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_4
+    NameComponent:
+      name: sphere_6_43
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_5
+    NameComponent:
+      name: sphere_6_54
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_6
+    NameComponent:
+      name: sphere_6_65
+  - TransformComponent:
+      translation:
+        x: 7.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_6_7
+    NameComponent:
+      name: sphere_6_76
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: -10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_0
+    NameComponent:
+      name: sphere_7_07
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: -7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_1
+    NameComponent:
+      name: sphere_7_18
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: -4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_2
+    NameComponent:
+      name: sphere_7_29
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: -1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_3
+    NameComponent:
+      name: sphere_7_30
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: 1.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_4
+    NameComponent:
+      name: sphere_7_41
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: 4.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_5
+    NameComponent:
+      name: sphere_7_52
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: 7.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_6
+    NameComponent:
+      name: sphere_7_63
+  - TransformComponent:
+      translation:
+        x: 10.5
+        y: 0
+        z: 10.5
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: sphere.glb
+    MaterialComponent:
+      material: sphere/sphere_7_7
+    NameComponent:
+      name: sphere_7_74
+  - TransformComponent:
+      translation:
+        x: 2
+        y: 5
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: blockout.glb
+    MaterialComponent:
+      material: grass
+    NameComponent:
+      name: grass-cube5
+  - TransformComponent:
+      translation:
+        x: -2
+        y: 5
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: blockout.glb
+    MaterialComponent:
+      material: parallax
+    NameComponent:
+      name: parallax-cube6
+  - TransformComponent:
+      translation:
+        x: 4
+        y: 4.4
+        z: 0
+      rotation:
+        x: 0
+        y: 0.707
+        z: 0
+        w: -0.707
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: duck.glb
+    MaterialComponent:
+      material: sphere/sphere_0_0
+    NameComponent:
+      name: duck7
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 5.8
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 3
+        y: 3
+        z: 3
+    ModelComponent:
+      path: flight_helmet.glb
+    MaterialComponent:
+      material: flight_helmet
+    NameComponent:
+      name: flight_helmet8
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 5.8
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 3
+        y: 3
+        z: 3
+    ModelComponent:
+      path: flight_helmet_1.glb
+    MaterialComponent:
+      material: flight_helmet_1
+    NameComponent:
+      name: flight_helmet_19
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 5.8
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 3
+        y: 3
+        z: 3
+    ModelComponent:
+      path: flight_helmet_2.glb
+    MaterialComponent:
+      material: flight_helmet_2
+    NameComponent:
+      name: flight_helmet_20
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 5.8
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 3
+        y: 3
+        z: 3
+    ModelComponent:
+      path: flight_helmet_3.glb
+    MaterialComponent:
+      material: flight_helmet_3
+    NameComponent:
+      name: flight_helmet_31
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 5.8
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 3
+        y: 3
+        z: 3
+    ModelComponent:
+      path: flight_helmet_4.glb
+    MaterialComponent:
+      material: flight_helmet_4
+    NameComponent:
+      name: flight_helmet_42
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 10
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 0.1
+        y: 0.1
+        z: 0.1
+    LightComponent:
+      color:
+        x: 150
+        y: 150
+        z: 150
+    ModelComponent:
+      path: sphere.glb
+    NameComponent:
+      name: LIGHT3
+  - TransformComponent:
+      translation:
+        x: 6
+        y: 5.4
+        z: 0
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 0
+      scale:
+        x: 1
+        y: 1
+        z: 1
+    ModelComponent:
+      path: damaged_helmet.glb
+    MaterialComponent:
+      material: damaged_helmet
+    NameComponent:
+      name: damaged_helmet4
+  - TransformComponent:
+      translation:
+        x: 0
+        y: 0
+        z: -3.9
+      rotation:
+        x: 0
+        y: 0
+        z: 0
+        w: 1
+      scale:
+        x: 1000
+        y: 1000
+        z: 1
+    ModelComponent:
+      path: blockout.glb
+    MaterialComponent:
+      material: blockout_gray
+    NameComponent:
+      name: wall_15
+    BlockoutComponent: {}

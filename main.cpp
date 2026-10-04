@@ -11,6 +11,7 @@
 #include "entities/world_draw.h"
 #include "libredwg/include/dwg.h"
 #include "entities/dwg_bridge.h"
+#include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
 #include "scene/DrawContext.h"
 #include "scene/SceneDrawList.h"
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
@@ -647,13 +649,21 @@ bool init()
               << std::endl;
     }
   }
+  std::string meshTexturePath;
   if (const char *textureEnv = std::getenv("GRID_MESH_TEXTURE"))
   {
     if (textureEnv[0] != '\0')
-    {
-      gMeshTextureIndex = rendererBackend->loadMeshTexture(textureEnv);
-      std::cout << "Mesh texture index: " << gMeshTextureIndex << std::endl;
-    }
+      meshTexturePath = textureEnv;
+  }
+  if (meshTexturePath.empty() && util::resourceExists("textures/grid-uv.png"))
+  {
+    meshTexturePath = util::resourcePath("textures/grid-uv.png").string();
+  }
+  if (!meshTexturePath.empty())
+  {
+    gMeshTextureIndex = rendererBackend->loadMeshTexture(meshTexturePath);
+    std::cout << "Mesh texture: " << meshTexturePath
+              << " (index=" << gMeshTextureIndex << ")" << std::endl;
   }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
