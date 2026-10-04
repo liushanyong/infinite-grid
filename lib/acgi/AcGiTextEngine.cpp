@@ -63,33 +63,17 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
     if (!sdfReady())
         return 0;
 
-    glm::dvec3 textRight;
-    glm::dvec3 textUp;
-    if (request.billboard)
-    {
-        // Billboard mode: the quad always faces the camera (kept as a
-        // separate selectable mode for screen-anchored labels).
+    glm::dvec3 textRight = request.direction;
+    if (glm::dot(textRight, textRight) < 1.0e-18)
+        textRight = glm::dvec3(1.0, 0.0, 0.0);
+    textRight = glm::normalize(textRight);
+    glm::dvec3 textUp = glm::cross(glm::normalize(request.normal), textRight);
+    if (glm::dot(textUp, textUp) < 1.0e-18)
         textUp = glm::dvec3(0.0, 0.0, 1.0);
-        textRight = glm::normalize(
-            glm::cross(textUp, glm::normalize(cameraPos - request.position)));
-    }
-    else
-    {
-        // CAD text is planar: the quad lies in the entity's plane defined
-        // by its direction (baseline) and normal.
-        textRight = request.direction;
-        if (glm::dot(textRight, textRight) < 1.0e-18)
-            textRight = glm::dvec3(1.0, 0.0, 0.0);
-        textRight = glm::normalize(textRight);
-        textUp = glm::cross(glm::normalize(request.normal), textRight);
-        if (glm::dot(textUp, textUp) < 1.0e-18)
-            textUp = glm::dvec3(0.0, 0.0, 1.0);
-        textUp = glm::normalize(textUp);
-    }
+    textUp = glm::normalize(textUp);
     const double emToWorld =
         request.height / double(sdfFont_.pixelsPerEm());
 
-    // Multi-line: advance along -up per newline.
     glm::dvec3 lineOrigin = request.position;
     double penX = 0.0;
     int glyphsDrawn = 0;
@@ -103,74 +87,57 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
             continue;
         }
 
-        const rendering::GlyphSdfRaster &glyph =
-            sdfFont_.glyphSdf(character);
-        if (!glyph.valid)
+        const std::vector<rendering::GlyphFillTriangle> &triangles =
+            sdfFont_.glyphFillTriangles(character);
+        if (triangles.empty())
         {
             penX += 0.5 * double(sdfFont_.pixelsPerEm());
             continue;
         }
 
-        // Lazily upload this glyph's distance field.
-        uint32_t textureId = 0;
-        if (const auto it = glyphTextureIds_.find(character);
-            it != glyphTextureIds_.end())
+        // Expand every fill triangle into view-space vertices.  The quad
+        // basis (textRight/textUp) places the glyph plane in the world;
+        // the camera-basis dot products produce view-space coordinates so
+        // the identity view + projection place it exactly on screen.
+        std::vector<float> vertices;
+        vertices.reserve(triangles.size() * 3 * 9);
+        for (const rendering::GlyphFillTriangle &triangle : triangles)
         {
-            textureId = it->second;
+            const glm::dvec2 corners[3] = {
+                {triangle.ax + float(penX * sdfFont_.pixelsPerEm()),
+                 triangle.ay},
+                {triangle.bx + float(penX * sdfFont_.pixelsPerEm()),
+                 triangle.by},
+                {triangle.cx + float(penX * sdfFont_.pixelsPerEm()),
+                 triangle.cy}};
+            for (int i = 0; i < 3; ++i)
+            {
+                const glm::dvec3 world =
+                    lineOrigin +
+                    textRight * (corners[i].x * emToWorld) +
+                    textUp * (corners[i].y * emToWorld);
+                const glm::dvec3 relative = world - cameraPos;
+                vertices.push_back(float(glm::dot(relative, cameraRight)));
+                vertices.push_back(float(glm::dot(relative, cameraUp)));
+                vertices.push_back(
+                    float(-glm::dot(relative, cameraFront)));
+                vertices.push_back(0.0f);
+                vertices.push_back(0.0f);
+                vertices.push_back(request.color.r);
+                vertices.push_back(request.color.g);
+                vertices.push_back(request.color.b);
+                vertices.push_back(request.color.a);
+            }
         }
-        else
-        {
-            textureId = backend.uploadGlyphSdf(glyph.sdf.data(), glyph.width,
-                                               glyph.height);
-            glyphTextureIds_[character] = textureId;
-        }
-
-        if (textureId != 0)
-        {
-            const glm::dvec3 quadLeftEdge =
-                lineOrigin +
-                textRight * ((penX + glyph.left) * emToWorld) +
-                textUp * ((glyph.top - glyph.height) * emToWorld);
-            const glm::dvec3 quadWidth =
-                textRight * (glyph.width * emToWorld);
-            const glm::dvec3 quadHeight =
-                textUp * (glyph.height * emToWorld);
-            auto pushVertex = [&](double cornerU, double cornerV, float u,
-                                  float v) {
-                // Transform into VIEW space with the camera basis so the
-                // identity view passed to the renderer places the quad
-                // exactly where the world position appears on screen.
-                const glm::dvec3 relative =
-                    quadLeftEdge + quadWidth * cornerU +
-                    quadHeight * cornerV - cameraPos;
-                return std::array<float, 9>{
-                    float(glm::dot(relative, cameraRight)),
-                    float(glm::dot(relative, cameraUp)),
-                    float(-glm::dot(relative, cameraFront)),
-                    u,
-                    v,
-                    request.color.r,
-                    request.color.g,
-                    request.color.b,
-                    request.color.a};
-            };
-            const std::array<float, 9> v00 = pushVertex(0, 0, 0.0f, 1.0f);
-            const std::array<float, 9> v10 = pushVertex(1, 0, 1.0f, 1.0f);
-            const std::array<float, 9> v11 = pushVertex(1, 1, 1.0f, 0.0f);
-            const std::array<float, 9> v01 = pushVertex(0, 1, 0.0f, 0.0f);
-            float vertices[54];
-            std::memcpy(vertices + 0, v00.data(), sizeof(v00));
-            std::memcpy(vertices + 9, v10.data(), sizeof(v10));
-            std::memcpy(vertices + 18, v11.data(), sizeof(v11));
-            std::memcpy(vertices + 27, v00.data(), sizeof(v00));
-            std::memcpy(vertices + 36, v11.data(), sizeof(v11));
-            std::memcpy(vertices + 45, v01.data(), sizeof(v01));
-            constexpr glm::mat4 identityView(1.0f);
-            backend.drawSdfGlyphQuad(identityView, projection, textureId,
-                                     vertices);
-            ++glyphsDrawn;
-        }
-        penX += glyph.advanceX;
+        constexpr glm::mat4 identityView(1.0f);
+        backend.drawTextTriangles(identityView, projection, vertices.data(),
+                                  uint32_t(vertices.size() / 9));
+        ++glyphsDrawn;
+        // Advance from the glyph metrics: max triangle X (em px units).
+        float maxX = 0.0f;
+        for (const rendering::GlyphFillTriangle &triangle : triangles)
+            maxX = std::max({maxX, triangle.ax, triangle.bx, triangle.cx});
+        penX += maxX;
     }
     return glyphsDrawn;
 }
