@@ -2077,26 +2077,30 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       const glm::dvec3 textUp(0.0, 0.0, 1.0);
       const glm::vec4 shxColor(0.95f, 0.85f, 0.30f, 1.0f);
 
-      entities::Stroke shxStroke;
-      shxStroke.common.color = shxColor;
-      for (const rendering::ShxGlyphStroke &stroke :
+      // One entities::Stroke PER glyph stroke segment: a single stroke
+      // with all points would connect consecutive segments into spurious
+      // pen-up lines ("连笔") across and within glyphs.
+      const size_t strokeBegin = target.geometry.strokes.size();
+      for (const rendering::ShxGlyphStroke &glyphStroke :
            acgi::textEngine().shxStrokes(shxText))
       {
-        shxStroke.points.push_back(
-            textOrigin + textRight * (stroke.fromX * textHeight) +
-            textUp * (stroke.fromY * textHeight));
-        shxStroke.points.push_back(
-            textOrigin + textRight * (stroke.toX * textHeight) +
-            textUp * (stroke.toY * textHeight));
+        entities::Stroke segment;
+        segment.common.color = shxColor;
+        segment.points = {
+            textOrigin + textRight * (glyphStroke.fromX * textHeight) +
+                textUp * (glyphStroke.fromY * textHeight),
+            textOrigin + textRight * (glyphStroke.toX * textHeight) +
+                textUp * (glyphStroke.toY * textHeight)};
+        target.geometry.strokes.push_back(std::move(segment));
       }
-      if (!shxStroke.points.empty())
+      if (target.geometry.strokes.size() > strokeBegin)
       {
-        // Strokes are already tessellated geometry: append directly and
-        // register the range so visibility/pick treat it as one entity.
-        const size_t strokeBegin = target.geometry.strokes.size();
-        target.geometry.strokes.push_back(shxStroke);
+        // Register the range so visibility/pick treat the text as one
+        // entity.
         target.strokeRanges.push_back(
-            {"ShxText", strokeBegin, 1, CadPickShape::Primitives});
+            {"ShxText", strokeBegin,
+             target.geometry.strokes.size() - strokeBegin,
+             CadPickShape::Primitives});
       }
     }
 
