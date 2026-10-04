@@ -11,6 +11,7 @@
 #include "entities/world_draw.h"
 #include "libredwg/include/dwg.h"
 #include "entities/dwg_bridge.h"
+#include "acgi/AcGiTextQueue.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
 #include "scene/DrawContext.h"
@@ -697,8 +698,13 @@ bool init()
           !gSdfFontReady)
         std::cout << "SDF atlas upload failed" << std::endl;
       else
+      {
         std::cout << "SDF atlas uploaded: " << atlas.width << "x"
                   << atlas.height << std::endl;
+        // Glyphs are available: Text/MText entities render through the
+        // SDF queue instead of their baked layout frames.
+        acgi::textFrameFallback() = false;
+      }
     }
   }
   else
@@ -716,6 +722,8 @@ bool init()
       gSdfFont.releaseSdfAtlas(atlas);
       gSdfFontReady = rendererBackend->loadSdfTextAtlas(
           atlas.pixels.data(), atlas.width, atlas.height);
+      if (gSdfFontReady)
+        acgi::textFrameFallback() = false;
     }
   }
   if (util::resourceExists("fonts/whgdtxt.shx"))
@@ -8215,65 +8223,82 @@ void render()
                            pixelSize, visibleCadDraws, tinyCadDraws);
 
   // SDF text pass: expand glyph quads on the CPU (world-space positions
-  // along the camera plane) and submit them to the dedicated text view.
-  // The demo string sits above the CAD anchor, facing the camera.
+  // billboarded to the camera) and submit them to the dedicated text view.
+  // Sources: the AcGi text-request queue (Text/MText entities recorded at
+  // tessellation time) plus a standalone demo string near the cluster.
   if (gSdfFontReady && rendererBackend)
   {
-    const std::string sdfText = "INFINITE-GRID";
-    const glm::dvec3 textOrigin =
-        vectorPrimitivesAnchor() + glm::dvec3(512.0, 256.0, 512.0);
-    const double textHeight = 64.0; // world units per em
-    const glm::dvec3 toCamera = glm::normalize(cameraPos - textOrigin);
-    const glm::dvec3 textUp(0.0, 0.0, 1.0);
-    const glm::dvec3 textRight =
-        glm::normalize(glm::cross(textUp, toCamera));
-    const float colorRgba[4] = {0.95f, 0.75f, 0.25f, 1.0f};
+    auto appendSdfText = [&](const glm::dvec3 &textOrigin,
+                             const std::string &text, double textHeight,
+                             const glm::vec4 &color,
+                             std::vector<float> &textVertices) {
+      const glm::dvec3 toCamera =
+          glm::normalize(cameraPos - textOrigin);
+      const glm::dvec3 textUp(0.0, 0.0, 1.0);
+      glm::dvec3 textRight = glm::normalize(glm::cross(textUp, toCamera));
+      // Multi-line: advance along +up per newline.
+      glm::dvec3 lineOrigin = textOrigin;
+      double penX = 0.0;
+      for (unsigned char character : text)
+      {
+        if (character == '\n')
+        {
+          lineOrigin -= textUp * textHeight * 1.35;
+          penX = 0.0;
+          continue;
+        }
+        const rendering::SdfGlyphSlot &glyph = gSdfFont.sdfGlyph(character);
+        if (!glyph.valid)
+        {
+          penX += 0.5;
+          continue;
+        }
+        const double left = penX + glyph.bearingX;
+        const double bottom = glyph.bearingY;
+        const double glyphWidth = glyph.u1 - glyph.u0;
+        const double glyphHeight = glyph.v1 - glyph.v0;
+        // Atlas cell maps 1:1 to em-units (cell was rasterized at
+        // pixelsPerEm), so the cell occupies a full em of world height.
+        const glm::dvec3 corner00 =
+            lineOrigin + textRight * (left * textHeight) +
+            textUp * (bottom * textHeight);
+        const glm::dvec3 du = textRight * (glyphWidth * textHeight);
+        const glm::dvec3 dv = textUp * (glyphHeight * textHeight);
+        auto pushVertex = [&](double cornerU, double cornerV, float u,
+                              float v) {
+          const glm::dvec3 world = corner00 + du * cornerU + dv * cornerV;
+          textVertices.push_back(float(world.x - cameraPos.x));
+          textVertices.push_back(float(world.y - cameraPos.y));
+          textVertices.push_back(float(world.z - cameraPos.z));
+          textVertices.push_back(u);
+          textVertices.push_back(v);
+          textVertices.push_back(color.r);
+          textVertices.push_back(color.g);
+          textVertices.push_back(color.b);
+          textVertices.push_back(color.a);
+        };
+        // Two triangles, CCW when facing the camera.
+        pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
+        pushVertex(1.0, 0.0, glyph.u1, glyph.v1);
+        pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
+        pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
+        pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
+        pushVertex(0.0, 1.0, glyph.u0, glyph.v0);
+        penX += glyph.advanceWidth;
+      }
+    };
 
     std::vector<float> textVertices;
-    textVertices.reserve(sdfText.size() * 6 * 9);
-    double penX = 0.0;
-    for (unsigned char character : sdfText)
-    {
-      const rendering::SdfGlyphSlot &glyph = gSdfFont.sdfGlyph(character);
-      if (!glyph.valid)
-      {
-        penX += 0.5;
-        continue;
-      }
-      const double left = penX + glyph.bearingX;
-      const double bottom = glyph.bearingY;
-      const double glyphWidth = glyph.u1 - glyph.u0;
-      const double glyphHeight = glyph.v1 - glyph.v0;
-      // Atlas cell maps 1:1 to em-units (cell was rasterized at
-      // pixelsPerEm), so the cell occupies a full em of world height.
-      const glm::dvec3 corner00 =
-          textOrigin + textRight * (left * textHeight) +
-          textUp * (bottom * textHeight);
-      const glm::dvec3 du = textRight * (glyphWidth * textHeight);
-      const glm::dvec3 dv = textUp * (glyphHeight * textHeight);
-      auto pushVertex = [&](double cornerU, double cornerV, float u,
-                            float v) {
-        const glm::dvec3 world =
-            corner00 + du * cornerU + dv * cornerV;
-        textVertices.push_back(float(world.x - cameraPos.x));
-        textVertices.push_back(float(world.y - cameraPos.y));
-        textVertices.push_back(float(world.z - cameraPos.z));
-        textVertices.push_back(u);
-        textVertices.push_back(v);
-        textVertices.push_back(colorRgba[0]);
-        textVertices.push_back(colorRgba[1]);
-        textVertices.push_back(colorRgba[2]);
-        textVertices.push_back(colorRgba[3]);
-      };
-      // Two triangles, CCW when facing the camera.
-      pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
-      pushVertex(1.0, 0.0, glyph.u1, glyph.v1);
-      pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
-      pushVertex(0.0, 0.0, glyph.u0, glyph.v1);
-      pushVertex(1.0, 1.0, glyph.u1, glyph.v0);
-      pushVertex(0.0, 1.0, glyph.u0, glyph.v0);
-      penX += glyph.advanceWidth;
-    }
+    // 1. Text/MText entities recorded through the AcGi protocol.
+    for (const acgi::TextRequest &request : acgi::textRequests())
+      appendSdfText(request.position, request.message, request.height,
+                    request.color, textVertices);
+    // 2. Standalone demo string beside the CAD cluster.
+    // cadAnchor == vectorPrimitivesAnchor() + (1536, -1280, 0).
+    appendSdfText(vectorPrimitivesAnchor() + glm::dvec3(1792.0, -768.0, 512.0),
+                  "INFINITE-GRID", 72.0,
+                  glm::vec4(0.95f, 0.75f, 0.25f, 1.0f), textVertices);
+
     if (!textVertices.empty())
     {
       // World-quad corners were computed camera-relative; the identity

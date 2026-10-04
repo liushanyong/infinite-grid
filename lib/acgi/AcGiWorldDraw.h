@@ -12,6 +12,7 @@
 #include "../ge/ge.h"
 #include "../scene/DrawContext.h"
 #include "AcGiTextStyle.h"
+#include "AcGiTextQueue.h"
 
 class AcGiWorldDraw
 {
@@ -129,6 +130,23 @@ public:
         const double height = style.textSize;
         if (!(height > 0.0) || !std::isfinite(height))
             return false;
+
+        // Record the request for the host's glyph renderer (SDF/SHX).
+        acgi::TextRequest request;
+        request.position = glm::dvec3(apply(position));
+        request.normal = glm::dvec3(normal.normal());
+        request.direction = glm::dvec3(direction.normal());
+        request.message = message;
+        request.height = height;
+        request.xScale = style.xScale;
+        request.color = draw_.subEntityTraits().traits().color;
+        acgi::textRequests().push_back(std::move(request));
+
+        // Layout-frame fallback: without a glyph backend the entity stays
+        // visible as its bounding box.
+        if (!acgi::textFrameFallback())
+            return true;
+
         size_t lineBreaks = 0;
         size_t longest = 0;
         size_t current = 0;
