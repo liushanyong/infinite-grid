@@ -19,6 +19,7 @@
 #include "acgi/AcGiLineType.h"
 #include "acgs/model/DrawContext.h"
 #include "acgs/model/AcGsModel.h"
+#include "acgs/model/AcGsDocumentReplayer.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
@@ -728,13 +729,12 @@ enum class VisibilityKind
   CadCurve
 };
 
-struct CadEntityRange;
 
 struct GpuPickEntity
 {
   VisibilityKind kind = VisibilityKind::MeshObject;
   const MeshEntityRecord *mesh = nullptr;
-  const CadEntityRange *cadRange = nullptr;
+  const acgs::AcGsEntityRange *cadRange = nullptr;
   const acgs::CurveBatchCommand *curve = nullptr;
 
   bool operator==(const GpuPickEntity &other) const
@@ -778,7 +778,7 @@ static const GpuPickEntity *findGpuPickEntity(uint32_t id)
   converted.kind = VisibilityKind(found->kind);
   converted.mesh = static_cast<const MeshEntityRecord *>(found->mesh);
   converted.cadRange =
-      static_cast<const CadEntityRange *>(found->range);
+      static_cast<const acgs::AcGsEntityRange *>(found->range);
   converted.curve =
       static_cast<const acgs::CurveBatchCommand *>(found->curve);
   return &converted;
@@ -1069,23 +1069,7 @@ static bool paramSurfaceIsolinesEnabled()
   return value == nullptr || (std::strcmp(value, "0") != 0);
 }
 
-enum class CadPickShape
-{
-  // Use the tessellated primitives themselves.
-  Primitives,
-  // Two same-length offset strokes define an area (for example MLine).
-  // Picking only the two boundary ribbons leaves the visible entity's
-  // semantic body zoom-dependent and misses clicks between the edges.
-  PairedStrokeBand
-};
 
-struct CadEntityRange
-{
-  std::string name;
-  size_t begin = 0;
-  size_t count = 0;
-  CadPickShape pickShape = CadPickShape::Primitives;
-};
 
 enum class VisibilityState
 {
@@ -1101,7 +1085,7 @@ struct VisibilityCandidate
 {
   VisibilityKind kind = VisibilityKind::MeshObject;
   size_t entityIndex = 0;
-  const CadEntityRange *cadRange = nullptr;
+  const acgs::AcGsEntityRange *cadRange = nullptr;
   size_t rangeBegin = 0;
   size_t rangeCount = 0;
   const MeshEntityRecord *mesh = nullptr;
@@ -1114,22 +1098,14 @@ struct VisibilityCandidate
   float overlayPointSize = 2.0f;
 };
 
-struct VectorPrimitivesTessellation
+// The scene metafile cache: acgs replays the document into an
+// AcGsMetafile; the mesh-instance demo records ride alongside.
+struct VectorPrimitivesTessellation : acgs::AcGsMetafile
 {
-  acdb::TessellatedEntity geometry;
-  glm::dvec3 anchor{0.0};
   std::vector<MeshEntityRecord> meshes;
-  std::vector<CadEntityRange> strokeRanges;
-  std::vector<CadEntityRange> fillRanges;
-  std::vector<CadEntityRange> pointRanges;
-  std::vector<acgs::CurveBatchCommand> curves;
 };
 
-enum class CadEntityPickShape
-{
-  Primitives,
-  PairedStrokeBand
-};
+
 
 // The drawing document backing the demo (AcDbDatabase); every authored
 // entity and every imported DWG entity is resident here.
@@ -1139,190 +1115,7 @@ static acdb::AcDbDatabase &acdbDocument()
   return document;
 }
 
-template <typename EntityType>
-void appendVectorPrimitive(const EntityType &entity, const char *name,
-                           const acdb::TesselationOptions &options,
-                           VectorPrimitivesTessellation &target,
-                           bool fillIs3DFace = false,
-                           CadEntityPickShape pickShape =
-                               CadEntityPickShape::Primitives)
-{
-  auto addRange = [name, pickShape](std::vector<CadEntityRange> &ranges,
-                         size_t begin, size_t end) {
-    if (end != begin)
-    {
-      ranges.push_back({name, begin, end - begin,
-                        pickShape == CadEntityPickShape::PairedStrokeBand
-                            ? CadPickShape::PairedStrokeBand
-                            : CadPickShape::Primitives});
-    }
-  };
-  const size_t strokeBegin = target.geometry.strokes.size();
-  const size_t fillBegin = target.geometry.fills.size();
-  const size_t pointBegin = target.geometry.points.size();
-  acgs::ViewportDraw draw(target.geometry, options);
-  draw.subEntityTraits().setFrom(entity.common);
-  acdb::worldDraw(entity, draw, fillIs3DFace);
-  addRange(target.strokeRanges, strokeBegin,
-           target.geometry.strokes.size());
-  addRange(target.fillRanges, fillBegin, target.geometry.fills.size());
-  addRange(target.pointRanges, pointBegin, target.geometry.points.size());
-}
 
-// ACI palette indices 1-7 cover the standard drawing colors; anything else
-// (true color, ByBlock) falls back to white for the demo renderer.
-static glm::vec4 aciColor(int index)
-{
-  switch (index)
-  {
-  case 1: return {1.0f, 0.0f, 0.0f, 1.0f};
-  case 2: return {1.0f, 1.0f, 0.0f, 1.0f};
-  case 3: return {0.0f, 1.0f, 0.0f, 1.0f};
-  case 4: return {0.0f, 1.0f, 1.0f, 1.0f};
-  case 5: return {0.0f, 0.0f, 1.0f, 1.0f};
-  case 6: return {1.0f, 0.0f, 1.0f, 1.0f};
-  default: return {1.0f, 1.0f, 1.0f, 1.0f};
-  }
-}
-
-// GRID_DWG=<path> appends a decoded DWG model next to the authored demo
-// entities: libredwg decodes the file, dwg_bridge.h maps each supported
-// entity struct, and appendVectorPrimitive routes it through the same
-// tessellation/picking pipeline as the authored demo.
-static void appendDwgFile(const char *path,
-                          const acdb::TesselationOptions &options,
-                          VectorPrimitivesTessellation &target)
-{
-  Dwg_Data dwg;
-  memset(&dwg, 0, sizeof(dwg));
-  if (dwg_read_file(path, &dwg) != 0)
-  {
-    std::cout << "GRID_DWG: failed to decode " << path << std::endl;
-    return;
-  }
-
-  // ObjectARX readDwg shape: the parser fills the database directly; the
-  // renderer then walks the document's model space.
-  const std::size_t inserted = acdb::addDwgEntities(acdbDocument(), dwg);
-  std::cout << "GRID_DWG: inserted " << inserted << " entities from "
-            << path << std::endl;
-  dwg_free(&dwg);
-
-  size_t appended = 0;
-  for (const acdb::AcDbHandle handle :
-       acdbDocument().modelSpace().entityHandles())
-  {
-    const acdb::AcDbEntityVariant *payload = acdbDocument().getEntity(handle);
-    if (payload == nullptr)
-      continue;
-    std::visit(
-        [&](const auto &entity) {
-          appendVectorPrimitive(entity, entity.common.name.c_str(), options,
-                                target);
-          ++appended;
-        },
-        *payload);
-  }
-  std::cout << "GRID_DWG: appended " << appended << " entities from "
-            << path << std::endl;
-}
-
-#if false
-static void appendDwgFileLegacy(const char *path,
-                                const acdb::TesselationOptions &options,
-                                VectorPrimitivesTessellation &target)
-{
-  Dwg_Data dwg;
-  memset(&dwg, 0, sizeof(dwg));
-  if (dwg_read_file(path, &dwg) != 0)
-  {
-    std::cout << "GRID_DWG: failed to decode " << path << std::endl;
-    return;
-  }
-
-  size_t appended = 0;
-  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
-  {
-    const Dwg_Object &object = dwg.object[i];
-    if (object.supertype != DWG_SUPERTYPE_ENTITY || !object.tio.entity)
-      continue;
-    const Dwg_Color &color = object.tio.entity->color;
-    const glm::vec4 entityColor = aciColor(static_cast<int>(color.index));
-
-    switch (object.type)
-    {
-    case DWG_TYPE_LINE:
-    {
-      acdb::AcDbLine line = acdb::toEntity(*object.tio.entity->tio.LINE);
-      line.common.color = entityColor;
-      appendVectorPrimitive(line, "DWG_LINE", options, target);
-      ++appended;
-      break;
-    }
-    case DWG_TYPE_ARC:
-    {
-      acdb::AcDbArc arc = acdb::toEntity(*object.tio.entity->tio.ARC);
-      arc.common.color = entityColor;
-      appendVectorPrimitive(arc, "DWG_ARC", options, target);
-      ++appended;
-      break;
-    }
-    case DWG_TYPE_CIRCLE:
-    {
-      acdb::AcDbCircle circle =
-          acdb::toEntity(*object.tio.entity->tio.CIRCLE);
-      circle.common.color = entityColor;
-      appendVectorPrimitive(circle, "DWG_CIRCLE", options, target);
-      ++appended;
-      break;
-    }
-    case DWG_TYPE_ELLIPSE:
-    {
-      acdb::AcDbEllipse ellipse =
-          acdb::toEntity(*object.tio.entity->tio.ELLIPSE);
-      ellipse.common.color = entityColor;
-      appendVectorPrimitive(ellipse, "DWG_ELLIPSE", options, target);
-      ++appended;
-      break;
-    }
-    case DWG_TYPE_POINT:
-    {
-      acdb::AcDbPoint point =
-          acdb::toEntity(*object.tio.entity->tio.POINT);
-      point.common.color = entityColor;
-      appendVectorPrimitive(point, "DWG_POINT", options, target);
-      ++appended;
-      break;
-    }
-    case DWG_TYPE_RAY:
-    {
-      acdb::AcDbRay ray = acdb::toEntity(*object.tio.entity->tio.RAY);
-      ray.common.color = entityColor;
-      appendVectorPrimitive(ray, "DWG_RAY", options, target);
-      ++appended;
-      break;
-    }
-    case DWG_TYPE_XLINE:
-    {
-      acdb::AcDbXline xline;
-      const acdb::AcDbRay ray =
-          acdb::toEntity(*object.tio.entity->tio.RAY);
-      xline.point = ray.start;
-      xline.direction = ray.direction;
-      xline.common.color = entityColor;
-      appendVectorPrimitive(xline, "DWG_XLINE", options, target);
-      ++appended;
-      break;
-    }
-    default:
-      break;
-    }
-  }
-  std::cout << "GRID_DWG: appended " << appended << " entities from "
-            << path << std::endl;
-  dwg_free(&dwg);
-}
-#endif
 
 // Renders one block record's model-space instances through the shared
 // tessellation: the nested walk composes each member's world transform,
@@ -1330,50 +1123,6 @@ static void appendDwgFileLegacy(const char *path,
 // feeds appendVectorPrimitive like any authored entity.  Rotations and
 // non-uniform scales of curved geometry degrade through translation-only
 // placement for now.
-static void appendBlockInstances(const char *recordName,
-                                 const acdb::TesselationOptions &options,
-                                 VectorPrimitivesTessellation &target)
-{
-  acdb::AcDbDatabase &document = acdbDocument();
-  // Every model-space INSERT of the record renders one instance.
-  for (const acdb::AcDbHandle insertHandle :
-       document.modelSpace().entityHandles())
-  {
-    const acdb::AcDbEntityVariant *topPayload =
-        document.getEntity(insertHandle);
-    if (topPayload == nullptr)
-      continue;
-    const auto *topReference =
-        std::get_if<acdb::AcDbBlockReference>(topPayload);
-    if (topReference == nullptr ||
-        topReference->blockTableRecordName != recordName)
-      continue;
-    const glm::dmat4 topWorld =
-        document.referenceTransform(*topReference);
-
-    document.walkInsertInstances(
-        recordName, topWorld,
-      [&](const glm::dmat4 &world, acdb::AcDbHandle memberHandle,
-          const acdb::AcDbEntityVariant &payload) {
-        if (std::holds_alternative<acdb::AcDbBlockReference>(payload))
-          return;
-        const glm::dvec3 origin =
-            glm::dvec3(world * glm::dvec4(0.0, 0.0, 0.0, 1.0));
-        acdb::AcDbEntityVariant instance = payload;
-        acdb::transformBy(instance, origin);
-        acdb::common(instance).name = std::string(recordName) + "/" +
-                                      acdb::common(payload).name;
-        std::visit(
-            [&](const auto &entity) {
-              appendVectorPrimitive(entity,
-                                    acdb::common(instance).name.c_str(),
-                                    options, target);
-            },
-            instance);
-        (void)memberHandle;
-      });
-  }
-}
 
 // Demo block: a two-stroke bracket block inserted at three positions
 // (GRID_BLOCKS=1).  Exercises createBlockDefinition / addBlockReference /
@@ -1417,17 +1166,9 @@ static void appendDemoBlocks()
 // revision with a dirty-document notification.
 // ---- demo document (AcDb): the drawing is the single source of truth --
 
-struct DemoEntityHints
-{
-  bool fillIs3DFace = false;
-  CadEntityPickShape pickShape = CadEntityPickShape::Primitives;
-};
 
-static std::map<std::string, DemoEntityHints> &demoHints()
-{
-  static std::map<std::string, DemoEntityHints> hints;
-  return hints;
-}
+
+
 
 static glm::dvec3 demoAnchorPoint()
 {
@@ -1440,52 +1181,22 @@ static glm::dvec3 demoCadAnchor()
 }
 
 // Authors one demo entity into the document under a stable label; the
-// label doubles as the CadEntityRange key for picking and selection.
+// label doubles as the acgs::AcGsEntityRange key for picking and selection.
 template <typename EntityType>
 static void addDemo(EntityType entity, const std::string &name,
                     bool fillIs3DFace = false,
-                    CadEntityPickShape pickShape =
-                        CadEntityPickShape::Primitives)
+                    acgs::AcGsPickShape pickShape =
+                        acgs::AcGsPickShape::Primitives)
 {
   entity.common.name = name;
-  DemoEntityHints hints;
+  acgs::AcGsReplayHints hints;
   hints.fillIs3DFace = fillIs3DFace;
   hints.pickShape = pickShape;
-  demoHints()[name] = hints;
+  acgs::replayHints()[name] = hints;
   acdbDocument().addEntity(std::move(entity));
 }
 
-// SHX-styled text renders through the stroke-font engine: each glyph
-// stroke becomes an ordinary CAD stroke, so picking/outlines/styles
-// treat text like any other entity.
-static void appendShxTextEntity(const acdb::AcDbText &text,
-                                VectorPrimitivesTessellation &target)
-{
-  const glm::dvec3 textOrigin(text.insertion);
-  const double textHeight = text.height;
-  const glm::dvec3 textRight(1.0, 0.0, 0.0);
-  const glm::dvec3 textUp(0.0, 0.0, 1.0);
-  const size_t strokeBegin = target.geometry.strokes.size();
-  for (const rendering::ShxGlyphStroke &glyphStroke :
-       acgi::textEngine().shxStrokes(text.text))
-  {
-    acdb::Stroke segment;
-    segment.common.color = text.common.color;
-    segment.points = {
-        textOrigin + textRight * (glyphStroke.fromX * textHeight) +
-            textUp * (glyphStroke.fromY * textHeight),
-        textOrigin + textRight * (glyphStroke.toX * textHeight) +
-            textUp * (glyphStroke.toY * textHeight)};
-    target.geometry.strokes.push_back(std::move(segment));
-  }
-  if (target.geometry.strokes.size() > strokeBegin)
-  {
-    target.strokeRanges.push_back(
-        {text.common.name.c_str(), strokeBegin,
-         target.geometry.strokes.size() - strokeBegin,
-         CadPickShape::Primitives});
-  }
-}
+
 
 // Authors the demo content once per process: guard entities, DWG
 // import, and block definitions all land in the document here.
@@ -1654,7 +1365,7 @@ static void buildDemoDocument()
         cadAnchor + glm::dvec3(256.0, -704.0, 0.0),
         cadAnchor + glm::dvec3(768.0, -832.0, 0.0)};
     mline.scale = glm::dvec3(24.0, 1.0, 1.0);
-    addDemo(mline, "MLine", false, CadEntityPickShape::PairedStrokeBand);
+    addDemo(mline, "MLine", false, acgs::AcGsPickShape::PairedStrokeBand);
 
     // Closed multi-line: the offset band wraps around and the enclosed
     // strip is filled between the two boundary strokes.
@@ -1666,7 +1377,7 @@ static void buildDemoDocument()
         cadAnchor + glm::dvec3(1600.0, -1088.0, 0.0)};
     closedMLine.scale = glm::dvec3(40.0, 1.0, 1.0);
     closedMLine.closed = true;
-    addDemo(closedMLine, "ClosedMLine", false, CadEntityPickShape::PairedStrokeBand);
+    addDemo(closedMLine, "ClosedMLine", false, acgs::AcGsPickShape::PairedStrokeBand);
 
     // Closed polyline with non-zero thickness: the outline extrudes into
     // wall quads along the normal.
@@ -2051,31 +1762,11 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   const glm::dvec3 demoAnchor = demoAnchorPoint();
   const acdb::TesselationOptions options;
 
-  // Render the document model space: every resident entity goes
-  // through the same tessellation path as before.
-  for (const acdb::AcDbHandle handle :
-       document.modelSpace().entityHandles())
-  {
-    const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
-    if (payload == nullptr)
-      continue;
-    if (const auto *text = std::get_if<acdb::AcDbText>(payload);
-        text != nullptr && text->styleName == "SHX")
-    {
-      appendShxTextEntity(*text, target);
-      continue;
-    }
-    const std::string &name = acdb::common(*payload).name;
-    const DemoEntityHints hints = demoHints().count(name)
-                                      ? demoHints()[name]
-                                      : DemoEntityHints{};
-    std::visit(
-        [&](const auto &entity) {
-          appendVectorPrimitive(entity, name.c_str(), options, target,
-                                hints.fillIs3DFace, hints.pickShape);
-        },
-        *payload);
-  }
+  // The Gs replay: the document model space records into the
+  // metafile (entities, SHX-styled text, block instances).
+  acgs::AcGsDocumentReplayer replayer;
+  replayer.shxFontReady = gShxFontReady;
+  replayer.record(document, options, target);
 
     auto addCurveDemo = [&target](rendering::CurveAlgorithm algorithm,
                                    const char *name,
@@ -2134,7 +1825,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   // nested-instance walk.
   if (const char *blocks = std::getenv("GRID_BLOCKS");
       blocks && *blocks && std::strcmp(blocks, "0") != 0)
-    appendBlockInstances("DEMO_BRACKET", options, target);
+    replayer.appendBlockInstances("DEMO_BRACKET", document, options,
+                                  target);
 
   if (!demoMeshesEnabled())
     return target;
@@ -2181,7 +1873,7 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
   return cache.get(key, buildVectorPrimitivesTessellation);
 }
 
-static uint64_t cadGpuPickGeometryKey(const CadEntityRange *range,
+static uint64_t cadGpuPickGeometryKey(const acgs::AcGsEntityRange *range,
                                       size_t chunkIndex,
                                       uint32_t objectId)
 {
@@ -2202,9 +1894,9 @@ static uint64_t cadGpuPickGeometryKey(const CadEntityRange *range,
 // the per-triangle double-to-float conversion and color contrast pass every
 // frame.  The anchor-relative frame is camera-independent.
 static const std::vector<rendering::FillVertex> &
-cadVisibleFillVertices(const CadEntityRange &range)
+cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
 {
-  static std::map<const CadEntityRange *, std::vector<rendering::FillVertex>>
+  static std::map<const acgs::AcGsEntityRange *, std::vector<rendering::FillVertex>>
       cache;
   auto [it, inserted] = cache.try_emplace(&range);
   if (!inserted)
@@ -2232,10 +1924,10 @@ cadVisibleFillVertices(const CadEntityRange &range)
 }
 
 static const std::vector<rendering::FillVertex> &
-cadGpuPickFillVertices(const CadEntityRange &range,
+cadGpuPickFillVertices(const acgs::AcGsEntityRange &range,
                        const glm::vec4 &idColor, uint32_t objectId)
 {
-  static std::map<std::pair<const CadEntityRange *, uint32_t>,
+  static std::map<std::pair<const acgs::AcGsEntityRange *, uint32_t>,
                   std::vector<rendering::FillVertex>>
       cache;
   auto [it, inserted] = cache.try_emplace({&range, objectId});
@@ -2271,7 +1963,7 @@ struct CadPairedBandPoints
     size_t segmentCount = 0;
 };
 
-bool cadPairedBandPoints(const CadEntityRange &range,
+bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
                          const acdb::TessellatedEntity &tess,
                          CadPairedBandPoints &band);
 
@@ -2385,7 +2077,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   auto queueCadFill = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
       return;
-    const CadEntityRange &range = *candidate.cadRange;
+    const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
@@ -2410,7 +2102,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   auto queueCadStroke = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
       return;
-    const CadEntityRange &range = *candidate.cadRange;
+    const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadStroke, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
@@ -2470,7 +2162,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   auto queueCadPoint = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
       return;
-    const CadEntityRange &range = *candidate.cadRange;
+    const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadPoint, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
@@ -2504,7 +2196,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
       return;
-    const CadEntityRange &range = *candidate.cadRange;
+    const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {candidate.kind, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
@@ -2601,7 +2293,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       if (!candidate || candidate->kind != VisibilityKind::CadFill ||
           !candidate->cadRange || !candidate->cadRange->count)
         continue;
-      const CadEntityRange &range = *candidate->cadRange;
+      const acgs::AcGsEntityRange &range = *candidate->cadRange;
       const size_t last = std::min(range.begin + range.count,
                                    tess.fills.size());
       glm::vec4 rangeColor(1.0f);
@@ -2984,7 +2676,7 @@ void expandWorldAabb(WorldAabb &bounds, const glm::dvec3 &center,
 void expandCadTessellationBounds(WorldAabb &bounds,
                                  const VectorPrimitivesTessellation &tess)
 {
-  for (const CadEntityRange &range : tess.strokeRanges)
+  for (const acgs::AcGsEntityRange &range : tess.strokeRanges)
   {
     for (size_t index = range.begin; index < range.begin + range.count; ++index)
     {
@@ -3840,11 +3532,11 @@ bool rayIntersectsTriangle(const PickRay &ray,
     return true;
 }
 
-bool cadPairedBandPoints(const CadEntityRange &range,
+bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
                          const acdb::TessellatedEntity &tess,
                          CadPairedBandPoints &band)
 {
-    if (range.pickShape != CadPickShape::PairedStrokeBand ||
+    if (range.pickShape != acgs::AcGsPickShape::PairedStrokeBand ||
         range.count != 2 || range.begin + 1 >= tess.strokes.size())
     {
         return false;
@@ -3867,7 +3559,7 @@ bool cadPairedBandPoints(const CadEntityRange &range,
 
 bool rayIntersectsCadPairedBand(const PickRay &ray,
                                 const acdb::TessellatedEntity &tess,
-                                const CadEntityRange &range,
+                                const acgs::AcGsEntityRange &range,
                                 double &hitDepth)
 {
     CadPairedBandPoints band;
@@ -4189,7 +3881,7 @@ VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
 
 VisibilityCandidate makeCadRangeCandidate(
     const VectorPrimitivesTessellation &tessellation,
-    const CadEntityRange &range, VisibilityKind kind);
+    const acgs::AcGsEntityRange &range, VisibilityKind kind);
 
 const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
 
@@ -4448,7 +4140,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         }
         for (const VisibilityCandidate *candidate : cadCandidates[0])
         {
-            const CadEntityRange &range = *candidate->cadRange;
+            const acgs::AcGsEntityRange &range = *candidate->cadRange;
 
             double bandDepth = 0.0;
             if (rayIntersectsCadPairedBand(ray, cad.geometry, range,
@@ -4494,7 +4186,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
 
         for (const VisibilityCandidate *candidate : cadCandidates[1])
         {
-            const CadEntityRange &range = *candidate->cadRange;
+            const acgs::AcGsEntityRange &range = *candidate->cadRange;
 
             for (size_t fillIndex = range.begin;
                  fillIndex < range.begin + range.count; ++fillIndex)
@@ -4556,7 +4248,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
 
         for (const VisibilityCandidate *candidate : cadCandidates[3])
         {
-            const CadEntityRange &range = *candidate->cadRange;
+            const acgs::AcGsEntityRange &range = *candidate->cadRange;
 
             for (size_t pointIndex = range.begin;
                  pointIndex < range.begin + range.count; ++pointIndex)
@@ -4738,7 +4430,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
 
     const VectorPrimitivesTessellation &cad =
         getVectorPrimitivesTessellation();
-    const CadEntityRange &range = *pickEntity->cadRange;
+    const acgs::AcGsEntityRange &range = *pickEntity->cadRange;
     if (!range.count)
         return std::nullopt;
 
@@ -4895,13 +4587,13 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
           result = &converted;
         }
         else if (registered.range &&
-                 static_cast<const CadEntityRange *>(registered.range)
+                 static_cast<const acgs::AcGsEntityRange *>(registered.range)
                      ->name == name)
         {
           converted.kind = VisibilityKind(registered.kind);
           converted.mesh = nullptr;
           converted.cadRange =
-              static_cast<const CadEntityRange *>(registered.range);
+              static_cast<const acgs::AcGsEntityRange *>(registered.range);
           converted.curve = nullptr;
           result = &converted;
         }
@@ -4996,7 +4688,7 @@ bool runCadPickAudit()
                   cad.pointRanges.size() + cad.fillRanges.size() +
                   cad.meshes.size() + 4);
 
-  for (const CadEntityRange &range : cad.strokeRanges)
+  for (const acgs::AcGsEntityRange &range : cad.strokeRanges)
   {
     if (!range.count)
       continue;
@@ -5014,7 +4706,7 @@ bool runCadPickAudit()
         cad, range, VisibilityKind::CadStroke);
     samples.push_back(std::move(sample));
   }
-  for (const CadEntityRange &range : cad.fillRanges)
+  for (const acgs::AcGsEntityRange &range : cad.fillRanges)
   {
     if (!range.count)
       continue;
@@ -5039,7 +4731,7 @@ bool runCadPickAudit()
     samples.push_back(std::move(sample));
     samples.push_back(std::move(interiorSample));
   }
-  for (const CadEntityRange &range : cad.pointRanges)
+  for (const acgs::AcGsEntityRange &range : cad.pointRanges)
   {
     if (!range.count)
       continue;
@@ -5352,7 +5044,7 @@ constexpr double kSemiInfiniteClassificationLength = 1.0e12;
 
 VisibilityCandidate makeCadRangeCandidate(
     const VectorPrimitivesTessellation &tessellation,
-    const CadEntityRange &range, VisibilityKind kind)
+    const acgs::AcGsEntityRange &range, VisibilityKind kind)
 {
   VisibilityCandidate candidate;
   candidate.kind = kind;
@@ -5449,19 +5141,19 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
     std::vector<VisibilityCandidate> result;
     result.reserve(cad.strokeRanges.size() + cad.fillRanges.size() +
                    cad.pointRanges.size() + cad.curves.size());
-    for (const CadEntityRange &range : cad.strokeRanges)
+    for (const acgs::AcGsEntityRange &range : cad.strokeRanges)
     {
       if (range.count)
         result.push_back(makeCadRangeCandidate(
             cad, range, VisibilityKind::CadStroke));
     }
-    for (const CadEntityRange &range : cad.fillRanges)
+    for (const acgs::AcGsEntityRange &range : cad.fillRanges)
     {
       if (range.count)
         result.push_back(makeCadRangeCandidate(
             cad, range, VisibilityKind::CadFill));
     }
-    for (const CadEntityRange &range : cad.pointRanges)
+    for (const acgs::AcGsEntityRange &range : cad.pointRanges)
     {
       if (range.count)
         result.push_back(makeCadRangeCandidate(
