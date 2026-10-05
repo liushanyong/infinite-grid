@@ -25,7 +25,7 @@ namespace acgs
 {
 
 rendering::SurfaceMaterial toSurfaceMaterial(
-    const scene::AcGiMaterial &material)
+    const acgs::AcGiMaterial &material)
 {
     rendering::SurfaceMaterial result;
     result.algorithm =
@@ -306,7 +306,7 @@ bool clipSemiInfiniteRayToView(const ViewFrameContext &frame,
 // standard de Boor recursion, clamped to the shader's CAD_CURVE_MAX_CP
 // window so CPU and GPU evaluate identical geometry.
 std::vector<glm::dvec3> AcGsView::sampleCurveBatch(
-    const scene::CurveBatchCommand &curve)
+    const acgs::CurveBatchCommand &curve)
 {
     std::vector<glm::dvec3> result;
     const int samples =
@@ -697,7 +697,7 @@ bool AcGsView::clipSegmentToPerspective(
                                              clippedEnd);
 }
 
-void AcGsView::submitMeshBatch(scene::MeshBatchCommand &command,
+void AcGsView::submitMeshBatch(acgs::MeshBatchCommand &command,
                                const rendering::DoubleSingleVec3 &eye,
                                const SubmitOptions &options)
 {
@@ -764,7 +764,7 @@ void AcGsView::submitMeshBatch(scene::MeshBatchCommand &command,
     backend_->drawMeshInstances(renderData);
 }
 
-void AcGsView::submit(scene::SceneDrawList &drawList,
+void AcGsView::submit(acgs::AcGsModel &drawList,
                       const SubmitOptions &options)
 {
     if (!backend_)
@@ -793,7 +793,7 @@ void AcGsView::submit(scene::SceneDrawList &drawList,
         rendering::encodeDoubleSingle(ctx.cameraPos);
     const rendering::DoubleSingleVec3 &eye =
         options.eye ? *options.eye : ownEye;
-    for (scene::MeshBatchCommand &batch : drawList.meshBatches())
+    for (acgs::MeshBatchCommand &batch : drawList.meshBatches())
         submitMeshBatch(batch, eye, options);
 
     static std::vector<rendering::PrimVertex> polylineVertices;
@@ -844,7 +844,7 @@ void AcGsView::submit(scene::SceneDrawList &drawList,
     // reliable line AA on D3D11.  Sample on CPU using the same evaluator
     // as picking/ID, frustum-clip each segment, and reuse the screen-space
     // ribbon pipeline.
-    for (const scene::CurveBatchCommand &curve : drawList.curveBatches())
+    for (const acgs::CurveBatchCommand &curve : drawList.curveBatches())
     {
         if (curve.controlPoints.empty() &&
             curve.algorithm != rendering::CurveAlgorithm::Arc)
@@ -1055,7 +1055,7 @@ void AcGsView::submit(scene::SceneDrawList &drawList,
             .is3DFace = is3DFace,
             .layer = envLayer("GRID_FILL_LAYER"),
             .logDepth = ctx.logDepth,
-            .material = toSurfaceMaterial(scene::AcGiMaterial{}),
+            .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
         };
         backend_->drawFilledTriangles(fillData);
     }
@@ -1187,7 +1187,7 @@ void AcGsView::drawFillTriangles(
         .is3DFace = is3DFace,
         .layer = layer,
         .logDepth = frame_.logDepth,
-        .material = toSurfaceMaterial(scene::AcGiMaterial{}),
+        .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
     };
     backend_->drawFilledTriangles(data);
 }

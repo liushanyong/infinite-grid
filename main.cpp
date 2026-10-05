@@ -16,8 +16,8 @@
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
-#include "scene/DrawContext.h"
-#include "scene/SceneDrawList.h"
+#include "acgs/model/DrawContext.h"
+#include "acgs/model/AcGsModel.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
@@ -653,12 +653,12 @@ void logSlabIfChanged(bool isOrtho, double nearPlane, double farPlane,
     initialized[slot] = true;
 }
 
-void appendSceneLine(scene::SceneDrawList &drawList,
+void appendSceneLine(acgs::AcGsModel &drawList,
                      const glm::dvec3 &start, const glm::dvec3 &end,
                      const glm::vec3 &color, float opacity,
                      double lineWeight = 2.0)
 {
-  scene::WorldDraw draw(drawList.geometry());
+  acgs::WorldDraw draw(drawList.geometry());
   draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, opacity)));
   draw.subEntityTraits().setLineWeight(lineWeight);
 
@@ -677,11 +677,11 @@ bool lineDebugEnabled()
   return enabled;
 }
 
-void appendScenePoint(scene::SceneDrawList &drawList,
+void appendScenePoint(acgs::AcGsModel &drawList,
                       const glm::dvec3 &location, const glm::vec3 &color,
                       double pointSize)
 {
-  scene::WorldDraw draw(drawList.geometry());
+  acgs::WorldDraw draw(drawList.geometry());
   draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, 1.0f)));
   draw.subEntityTraits().setLineWeight(pointSize);
 
@@ -734,7 +734,7 @@ struct GpuPickEntity
   VisibilityKind kind = VisibilityKind::MeshObject;
   const MeshEntityRecord *mesh = nullptr;
   const CadEntityRange *cadRange = nullptr;
-  const scene::CurveBatchCommand *curve = nullptr;
+  const acgs::CurveBatchCommand *curve = nullptr;
 
   bool operator==(const GpuPickEntity &other) const
   {
@@ -779,7 +779,7 @@ static const GpuPickEntity *findGpuPickEntity(uint32_t id)
   converted.cadRange =
       static_cast<const CadEntityRange *>(found->range);
   converted.curve =
-      static_cast<const scene::CurveBatchCommand *>(found->curve);
+      static_cast<const acgs::CurveBatchCommand *>(found->curve);
   return &converted;
 }
 
@@ -886,7 +886,7 @@ static void queueGpuMeshEntity(const MeshEntityRecord *entity)
 glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity);
 
 void appendMeshEntityToScene(const MeshEntityRecord &entity,
-                             scene::SceneDrawList &drawList,
+                             acgs::AcGsModel &drawList,
                              bool cadAlgorithm = false)
 {
   if (!meshEntityVisible(entity))
@@ -894,12 +894,12 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
 
   const glm::vec4 color = meshEntityColor(entity);
   const glm::vec4 material = meshEntityRenderMaterial(entity);
-  scene::MeshBatchCommand &batch = drawList.addMeshBatch(
+  acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
       entity.mesh, color.a >= 1.0f, entity.realistic(), material,
       cadAlgorithm);
   batch.acgiMaterial.algorithm = entity.realistic()
-      ? scene::AcGiShaderAlgorithm::Realistic
-      : scene::AcGiShaderAlgorithm::Shaded;
+      ? acgs::AcGiShaderAlgorithm::Realistic
+      : acgs::AcGiShaderAlgorithm::Shaded;
   batch.acgiMaterial.baseColor = color;
   batch.acgiMaterial.accentColor = entity.entity.material.specularFactor;
   batch.acgiMaterial.metallic = entity.entity.material.metallicFactor;
@@ -1104,7 +1104,7 @@ struct VisibilityCandidate
   size_t rangeBegin = 0;
   size_t rangeCount = 0;
   const MeshEntityRecord *mesh = nullptr;
-  const scene::CurveBatchCommand *curve = nullptr;
+  const acgs::CurveBatchCommand *curve = nullptr;
   glm::dvec3 min{0.0};
   glm::dvec3 max{0.0};
   glm::dvec3 center{0.0};
@@ -1121,7 +1121,7 @@ struct VectorPrimitivesTessellation
   std::vector<CadEntityRange> strokeRanges;
   std::vector<CadEntityRange> fillRanges;
   std::vector<CadEntityRange> pointRanges;
-  std::vector<scene::CurveBatchCommand> curves;
+  std::vector<acgs::CurveBatchCommand> curves;
 };
 
 enum class CadEntityPickShape
@@ -1151,7 +1151,7 @@ void appendVectorPrimitive(const EntityType &entity, const char *name,
   const size_t strokeBegin = target.geometry.strokes.size();
   const size_t fillBegin = target.geometry.fills.size();
   const size_t pointBegin = target.geometry.points.size();
-  scene::ViewportDraw draw(target.geometry, options);
+  acgs::ViewportDraw draw(target.geometry, options);
   draw.subEntityTraits().setFrom(entity.common);
   entities::worldDraw(entity, draw, fillIs3DFace);
   addRange(target.strokeRanges, strokeBegin,
@@ -1850,14 +1850,14 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
                                    std::vector<glm::dvec3> controlPoints,
                                    int degree = 3,
                                    std::vector<double> weights = {}) {
-      scene::CurveBatchCommand &curve = target.curves.emplace_back();
+      acgs::CurveBatchCommand &curve = target.curves.emplace_back();
       curve.algorithm = algorithm;
       curve.name = name;
       curve.degree = degree;
       curve.sampleCount = 192;
       curve.controlPoints = std::move(controlPoints);
       curve.weights = std::move(weights);
-      curve.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+      curve.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
       curve.acgiMaterial.baseColor = color;
     };
 
@@ -1883,7 +1883,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
                   curveCenter + glm::dvec3(280.0, -260.0, 0.0)},
                  3, {1.0, 2.0, 2.0, 1.0});
 
-    scene::CurveBatchCommand &curveArc = target.curves.emplace_back();
+    acgs::CurveBatchCommand &curveArc = target.curves.emplace_back();
     curveArc.algorithm = rendering::CurveAlgorithm::Arc;
     curveArc.name = "CurveArc";
     curveArc.sampleCount = 192;
@@ -1893,7 +1893,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     curveArc.radius = 360.0;
     curveArc.startAngle = -0.35;
     curveArc.sweep = 1.60;
-    curveArc.acgiMaterial.algorithm = scene::AcGiShaderAlgorithm::Shaded;
+    curveArc.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
     curveArc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
 
     {
@@ -1940,10 +1940,10 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
   static constexpr std::uint64_t cadDemoRevision = 5;
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
-  const scene::DrawListKey key{
+  const acgs::DrawListKey key{
       cadDemoRevision, cadDemoTraitsVersion,
       vectorPrimitivesAnchor(), cadDemoToleranceBucket};
-  static scene::DrawListCache cache;
+  static acgs::DrawListCache cache;
   return cache.get(key, buildVectorPrimitivesTessellation);
 }
 
@@ -2075,7 +2075,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       getVectorPrimitivesTessellation();
   const glm::mat4 cadAnchorView = view * glm::translate(
       glm::mat4(1.0f), glm::vec3(tessellation.anchor - cameraPos));
-  static scene::SceneDrawList cadDrawList;
+  static acgs::AcGsModel cadDrawList;
   cadDrawList.clear();
   static std::vector<bool> strokeVisible;
   static std::vector<bool> fillVisible;
@@ -2320,7 +2320,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     if (strokeVisible.empty() || strokeVisible[&stroke - tess.strokes.data()])
       cadDrawList.geometry().strokes.push_back(stroke);
   }
-  // CAD fills bypass the generic SceneDrawList copy.  Visible ranges reuse
+  // CAD fills bypass the generic AcGsModel copy.  Visible ranges reuse
   // their cached anchor-relative renderer vertices and submit as one batch.
   static std::vector<rendering::FillVertex> visibleFillVertices;
   visibleFillVertices.clear();
@@ -2345,7 +2345,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         .is3DFace = false,
         .layer = acgs::envLayer("GRID_FILL_LAYER"),
         .logDepth = logDepth,
-        .material = acgs::toSurfaceMaterial(scene::AcGiMaterial{}),
+        .material = acgs::toSurfaceMaterial(acgs::AcGiMaterial{}),
     };
     acgsView.drawFillTriangles(visibleFillVertices, cadAnchorView,
                                projection, false,
@@ -2489,7 +2489,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         tessellation.meshes[candidate->entityIndex];
     if (!meshEntityVisible(mesh))
       continue;
-    scene::SceneDrawList meshDrawList;
+    acgs::AcGsModel meshDrawList;
     appendMeshEntityToScene(mesh, meshDrawList);
     const rendering::DoubleSingleVec3 meshEye =
         rendering::encodeDoubleSingle(rebase);
@@ -2555,7 +2555,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   realisticLights.pointLightCount = 2;
   if (cadAlgorithmDemoEnabled())
   {
-    static scene::SceneDrawList cadDrawList;
+    static acgs::AcGsModel cadDrawList;
     cadDrawList.clearKeepCapacity();
     cadDrawList.setLights(realisticLights);
     constexpr size_t kCadMeshCount = 4;
@@ -2581,7 +2581,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       auto &instances = cadGroups[meshIndex];
       if (instances.empty())
         continue;
-      scene::MeshBatchCommand batch;
+      acgs::MeshBatchCommand batch;
       batch.prototype = cadMeshTypes[meshIndex];
       batch.cadAlgorithm = true;
       batch.instances = std::move(instances);
@@ -2605,7 +2605,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   static std::array<std::vector<InstanceGroup>, kDepthBucketCount> buckets;
   for (auto &bucket : buckets)
     bucket.clear();
-  static scene::SceneDrawList meshDrawList;
+  static acgs::AcGsModel meshDrawList;
   meshDrawList.clearKeepCapacity();
   meshDrawList.setLights(realisticLights);
 
@@ -2645,14 +2645,14 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     {
       if (group.instances.empty())
         continue;
-        scene::MeshBatchCommand batch;
+        acgs::MeshBatchCommand batch;
         batch.prototype = group.mesh;
         batch.opaque = group.opacity >= 1.0f;
         batch.realistic = group.realistic;
         batch.material = group.material;
         batch.acgiMaterial.algorithm = group.realistic
-            ? scene::AcGiShaderAlgorithm::Realistic
-            : scene::AcGiShaderAlgorithm::Shaded;
+            ? acgs::AcGiShaderAlgorithm::Realistic
+            : acgs::AcGiShaderAlgorithm::Shaded;
         batch.acgiMaterial.metallic = group.material.x;
         batch.acgiMaterial.roughness = group.material.y;
         batch.acgiMaterial.transparency = 1.0f - group.opacity;
@@ -2771,7 +2771,7 @@ void expandCadTessellationBounds(WorldAabb &bounds,
   }
   for (const entities::TessellatedPoint &point : tess.geometry.points)
     expandWorldAabb(bounds, point.location, glm::dvec3(0.0));
-  for (const scene::CurveBatchCommand &curve : tess.curves)
+  for (const acgs::CurveBatchCommand &curve : tess.curves)
   {
     if (curve.algorithm == rendering::CurveAlgorithm::Arc)
     {
@@ -3400,7 +3400,7 @@ bool rayIntersectsAabb(const PickRay &ray,
 }
 
 
-VisibilityCandidate makeCurveCandidate(const scene::CurveBatchCommand &curve)
+VisibilityCandidate makeCurveCandidate(const acgs::CurveBatchCommand &curve)
 {
     VisibilityCandidate candidate;
     candidate.kind = VisibilityKind::CadCurve;
@@ -4672,7 +4672,7 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
           result = &converted;
         }
         else if (registered.curve &&
-                 static_cast<const scene::CurveBatchCommand *>(
+                 static_cast<const acgs::CurveBatchCommand *>(
                      registered.curve)
                      ->name == name)
         {
@@ -4680,7 +4680,7 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
           converted.mesh = nullptr;
           converted.cadRange = nullptr;
           converted.curve =
-              static_cast<const scene::CurveBatchCommand *>(
+              static_cast<const acgs::CurveBatchCommand *>(
                   registered.curve);
           result = &converted;
         }
@@ -5233,7 +5233,7 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
         result.push_back(makeCadRangeCandidate(
             cad, range, VisibilityKind::CadPoint));
     }
-    for (const scene::CurveBatchCommand &curve : cad.curves)
+    for (const acgs::CurveBatchCommand &curve : cad.curves)
       result.push_back(makeCurveCandidate(curve));
     return result;
   }();
@@ -6747,7 +6747,7 @@ void render()
       .gridOpacity = 0.6f,
       .logDepth = logDepth,
   };
-  static scene::SceneDrawList sceneOverlay;
+  static acgs::AcGsModel sceneOverlay;
   sceneOverlay.clear();
   if (gridPlaneVisible)
     sceneOverlay.setGrid(gridRenderData);

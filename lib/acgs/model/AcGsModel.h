@@ -7,12 +7,12 @@
 
 #include "entities/tessellate.h"
 #include "rendering/RendererBackend.h"
-#include "scene/DrawContext.h"
+#include "acgs/model/DrawContext.h"
 
-namespace scene
+namespace acgs
 {
 
-class SceneDrawList;
+class AcGsModel;
 
 enum class AcGiShaderAlgorithm
 {
@@ -94,13 +94,13 @@ class AcGiDrawable
 public:
     virtual ~AcGiDrawable() = default;
 
-    virtual void collect(SceneDrawList &drawList) const = 0;
+    virtual void collect(AcGsModel &drawList) const = 0;
 };
 
 // Frame-local and static draw lists share one command vocabulary.  Geometry
 // carries strokes/fills/points through the existing WorldDraw sink; mesh and
 // grid commands cover renderer-accelerated paths that must not be flattened.
-class SceneDrawList final : public AcGiDrawable
+class AcGsModel final : public AcGiDrawable
 {
 public:
     [[nodiscard]] entities::TessellatedEntity &geometry() { return geometry_; }
@@ -163,7 +163,7 @@ public:
         return meshBatches_.back();
     }
 
-    void merge(const SceneDrawList &other)
+    void merge(const AcGsModel &other)
     {
         geometry_.strokes.insert(geometry_.strokes.end(),
                                  other.geometry_.strokes.begin(),
@@ -186,7 +186,7 @@ public:
             lights_ = *other.lights_;
     }
 
-    void collect(SceneDrawList &drawList) const override
+    void collect(AcGsModel &drawList) const override
     {
         drawList.merge(*this);
     }
@@ -221,4 +221,4 @@ private:
     std::optional<LightCommand> lights_;
 };
 
-} // namespace scene
+} // namespace acgs

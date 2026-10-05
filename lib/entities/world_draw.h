@@ -2,7 +2,7 @@
 
 #include <glm/glm.hpp>
 
-#include "scene/DrawContext.h"
+#include "acgs/model/DrawContext.h"
 #include "../acgi/AcGiWorldDraw.h"
 #include "tessellate.h"
 
@@ -13,7 +13,7 @@ namespace entities
 // AcGi-lite draw protocol.  The entity-local fragment keeps generated geometry
 // isolated until GeometrySink applies the current traits.
 template <typename EntityType>
-inline void worldDraw(const EntityType &entity, scene::WorldDraw &draw,
+inline void worldDraw(const EntityType &entity, acgs::WorldDraw &draw,
                       const TesselationOptions &options, bool fillIs3DFace = false)
 {
     TessellatedEntity fragment;
@@ -22,14 +22,14 @@ inline void worldDraw(const EntityType &entity, scene::WorldDraw &draw,
 }
 
 template <typename EntityType>
-inline void worldDraw(const EntityType &entity, scene::WorldDraw &draw,
+inline void worldDraw(const EntityType &entity, acgs::WorldDraw &draw,
                       bool fillIs3DFace = false)
 {
     worldDraw(entity, draw, draw.options(), fillIs3DFace);
 }
 
 // Viewport-aware curves choose their chord angle from ViewportDraw::deviation.
-inline void worldDraw(const Arc &arc, scene::ViewportDraw &draw,
+inline void worldDraw(const Arc &arc, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -37,7 +37,7 @@ inline void worldDraw(const Arc &arc, scene::ViewportDraw &draw,
                                        arc.startAngle, arc.endAngle));
 }
 
-inline void worldDraw(const Circle &circle, scene::ViewportDraw &draw,
+inline void worldDraw(const Circle &circle, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -49,7 +49,7 @@ inline void worldDraw(const Circle &circle, scene::ViewportDraw &draw,
 // AcGiWorldDraw callback interface instead of tessellating up front, which
 // is how ObjectARX custom entities emit geometry.
 
-inline void worldDraw(const Ellipse &ellipse, scene::ViewportDraw &draw,
+inline void worldDraw(const Ellipse &ellipse, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -59,7 +59,7 @@ inline void worldDraw(const Ellipse &ellipse, scene::ViewportDraw &draw,
                                       ellipse.endParameter));
 }
 
-inline void worldDraw(const Line &line, scene::ViewportDraw &draw,
+inline void worldDraw(const Line &line, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -68,7 +68,7 @@ inline void worldDraw(const Line &line, scene::ViewportDraw &draw,
 
 // Fit-point splines draw through the same chord-length natural cubic
 // interpolation as the tessellation path.
-inline void worldDraw(const Spline &spline, scene::ViewportDraw &draw,
+inline void worldDraw(const Spline &spline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     const std::vector<AcGePoint3d> points =
@@ -80,7 +80,7 @@ inline void worldDraw(const Spline &spline, scene::ViewportDraw &draw,
                            spline.closed);
 }
 
-inline void worldDraw(const Ray &ray, scene::ViewportDraw &draw,
+inline void worldDraw(const Ray &ray, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -88,7 +88,7 @@ inline void worldDraw(const Ray &ray, scene::ViewportDraw &draw,
 }
 
 // XLine draws as two opposite semi-infinite strokes sharing the point.
-inline void worldDraw(const XLine &xline, scene::ViewportDraw &draw,
+inline void worldDraw(const XLine &xline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -96,7 +96,7 @@ inline void worldDraw(const XLine &xline, scene::ViewportDraw &draw,
     graphics.worldInfiniteLine(xline.point, -xline.direction);
 }
 
-inline void worldDraw(const Solid &solid, scene::ViewportDraw &draw,
+inline void worldDraw(const Solid &solid, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -111,7 +111,7 @@ inline void worldDraw(const Solid &solid, scene::ViewportDraw &draw,
 
 // Hatch: the solid variant fans its loop into triangles; line patterns emit
 // one worldLine per clipped scanline segment.
-inline void worldDraw(const Hatch &hatch, scene::ViewportDraw &draw,
+inline void worldDraw(const Hatch &hatch, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -145,14 +145,14 @@ inline void drawPolylineCallbacks(AcGiWorldDraw &graphics,
         graphics.worldTriangle(wall.a, wall.b, wall.c, false);
 }
 
-inline void worldDraw(const Polyline &polyline, scene::ViewportDraw &draw,
+inline void worldDraw(const Polyline &polyline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
     drawPolylineCallbacks(graphics, polyline, draw.options());
 }
 
-inline void worldDraw(const LwPolyline &polyline, scene::ViewportDraw &draw,
+inline void worldDraw(const LwPolyline &polyline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -161,7 +161,7 @@ inline void worldDraw(const LwPolyline &polyline, scene::ViewportDraw &draw,
 
 // Text entities draw through the worldText callback; the style carries the
 // entity height so the layout frame matches the tessellation path.
-inline void worldDraw(const Text &text, scene::ViewportDraw &draw,
+inline void worldDraw(const Text &text, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -173,7 +173,7 @@ inline void worldDraw(const Text &text, scene::ViewportDraw &draw,
                   text.text.c_str(), style);
 }
 
-inline void worldDraw(const MText &text, scene::ViewportDraw &draw,
+inline void worldDraw(const MText &text, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -186,7 +186,7 @@ inline void worldDraw(const MText &text, scene::ViewportDraw &draw,
 // A Solid3d renders its fill with the entity color and its feature-edge
 // border strokes with the inverted color, so the border reads against the
 // fill no matter which entity color is authored.
-inline void worldDraw(const Solid3d &solid, scene::ViewportDraw &draw,
+inline void worldDraw(const Solid3d &solid, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     entities::TessellatedEntity fragment;
@@ -198,7 +198,7 @@ inline void worldDraw(const Solid3d &solid, scene::ViewportDraw &draw,
                        fillIs3DFace);
 
     const glm::vec4 &color = draw.subEntityTraits().traits().color;
-    scene::DrawTraits edgeTraits = draw.subEntityTraits().traits();
+    acgs::DrawTraits edgeTraits = draw.subEntityTraits().traits();
     edgeTraits.color = glm::vec4(1.0f - color.r, 1.0f - color.g,
                                  1.0f - color.b, color.a);
     entities::TessellatedEntity strokesOnly;

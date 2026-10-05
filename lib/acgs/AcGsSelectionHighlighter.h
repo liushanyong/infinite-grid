@@ -19,7 +19,7 @@
 
 #include <cstddef>
 
-#include "scene/SceneDrawList.h"
+#include "acgs/model/AcGsModel.h"
 
 namespace acgs
 {
@@ -52,7 +52,7 @@ public:
     void drawStrokeOutline(const entities::TessellatedEntity &tess,
                            size_t begin, size_t count, float pixelSizeWorld);
 
-    void drawCurveOutline(const scene::CurveBatchCommand &curve,
+    void drawCurveOutline(const acgs::CurveBatchCommand &curve,
                           float pixelSizeWorld);
 
 private:

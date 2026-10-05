@@ -269,7 +269,7 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
 }
 
 void AcGsSelectionHighlighter::drawCurveOutline(
-    const scene::CurveBatchCommand &curve, float pixelSizeWorld)
+    const acgs::CurveBatchCommand &curve, float pixelSizeWorld)
 {
     const std::vector<glm::dvec3> points =
         AcGsView::sampleCurveBatch(curve);

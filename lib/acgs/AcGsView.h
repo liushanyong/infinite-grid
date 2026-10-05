@@ -3,7 +3,7 @@
 // AcGsView — the single app-facing render gateway, modeled on ObjectARX's
 // AcGsView + AcGiDefaultContext.  Everything the application draws goes
 // through here:
-//   * scene::SceneDrawList submissions (AcGiDrawable::collect output) are
+//   * acgs::AcGsModel submissions (AcGiDrawable::collect output) are
 //     expanded into the renderer's line-instance / ribbon / fill / point /
 //     mesh-instance channels,
 //   * queued acgi::TextRequest records are flushed through the text engine,
@@ -22,7 +22,7 @@
 
 #include "acgs/AcGsOrbitCamera.h"
 #include "rendering/RenderMode.h"
-#include "scene/SceneDrawList.h"
+#include "acgs/model/AcGsModel.h"
 
 namespace entities
 {
@@ -65,7 +65,7 @@ CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
 
 // AcGiMaterial -> renderer surface-material translation.
 rendering::SurfaceMaterial toSurfaceMaterial(
-    const scene::AcGiMaterial &material);
+    const acgs::AcGiMaterial &material);
 
 // Per-frame viewport state (ObjectARX: AcGsView + AcGsViewportData).
 struct ViewFrameContext
@@ -175,7 +175,7 @@ public:
     };
 
     // Expand a collected draw list into the renderer's channels.
-    void submit(scene::SceneDrawList &drawList,
+    void submit(acgs::AcGsModel &drawList,
                 const SubmitOptions &options = {});
 
     // Flush the queued text requests as SDF glyph quads; returns the number
@@ -217,7 +217,7 @@ public:
     // CPU sampling of a curve batch command (de Casteljau / de Boor),
     // matching the GPU evaluator's clamped 16-slot windows.
     static std::vector<glm::dvec3> sampleCurveBatch(
-        const scene::CurveBatchCommand &curve);
+        const acgs::CurveBatchCommand &curve);
 
     // ---- shared primitives (selection highlighter, transient overlays) ----
 
@@ -269,7 +269,7 @@ private:
     {
     }
 
-    void submitMeshBatch(scene::MeshBatchCommand &command,
+    void submitMeshBatch(acgs::MeshBatchCommand &command,
                          const rendering::DoubleSingleVec3 &eye,
                          const SubmitOptions &options);
 

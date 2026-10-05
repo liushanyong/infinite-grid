@@ -17,7 +17,7 @@
 #include "entities/entity_common.h"
 #include "entities/tessellate.h"
 
-namespace scene
+namespace acgs
 {
 
 // The renderer-visible subset of EntityCommon.  Keeping this separate from the
@@ -301,4 +301,4 @@ private:
     std::map<DrawListKey, Entry> entries_;
 };
 
-} // namespace scene
+} // namespace acgs

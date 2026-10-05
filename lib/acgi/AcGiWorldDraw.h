@@ -10,16 +10,16 @@
 #include <vector>
 
 #include "../ge/ge.h"
-#include "../scene/DrawContext.h"
+#include "../acgs/model/DrawContext.h"
 #include "AcGiTextStyle.h"
 #include "AcGiTextQueue.h"
 
 class AcGiWorldDraw
 {
 public:
-    explicit AcGiWorldDraw(scene::ViewportDraw &draw) : draw_(draw) {}
+    explicit AcGiWorldDraw(acgs::ViewportDraw &draw) : draw_(draw) {}
 
-    scene::SubEntityTraits &subEntityTraits() { return draw_.subEntityTraits(); }
+    acgs::SubEntityTraits &subEntityTraits() { return draw_.subEntityTraits(); }
 
     bool worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
     {
@@ -87,7 +87,7 @@ public:
 
     bool worldPoint(const AcGePoint3d &position)
     {
-        const scene::DrawTraits &traits = draw_.subEntityTraits().traits();
+        const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
         entities::TessellatedPoint point;
         point.location = apply(position);
         point.common = traits.toEntityCommon();
@@ -239,22 +239,22 @@ private:
         return transformBy(point, currentTransform());
     }
 
-    scene::GeometrySink &sink() { return draw_.sink(); }
+    acgs::GeometrySink &sink() { return draw_.sink(); }
 
     void applyTraits(entities::Stroke &stroke) const
     {
-        const scene::DrawTraits &traits = draw_.subEntityTraits().traits();
+        const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
         stroke.common = traits.toEntityCommon();
         stroke.lineWeight = traits.lineWeight;
     }
 
     void applyTraits(entities::Triangle &triangle, bool fillIs3DFace) const
     {
-        const scene::DrawTraits &traits = draw_.subEntityTraits().traits();
+        const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
         triangle.common = traits.toEntityCommon();
         triangle.is3DFace = fillIs3DFace;
     }
 
-    scene::ViewportDraw &draw_;
+    acgs::ViewportDraw &draw_;
     std::vector<AcGeMatrix3d> transformStack_;
 };
