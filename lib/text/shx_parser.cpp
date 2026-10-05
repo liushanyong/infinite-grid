@@ -357,8 +357,20 @@ bool shxLoadCompiled(const std::vector<unsigned char> &file,
                 ++data;
                 int remaining = int(defBytes) - 1;
                 if (remaining > 0 && data < file.data() + file.size())
-                    storeGlyph(font, code, decodeGlyph(data, remaining),
-                               fontHeight);
+                {
+                    ShxDecodeContext decoded =
+                        decodeGlyph(data, remaining);
+                    // Big-font glyphs stand on their baseline (y up from
+                    // 0); the regular font hangs below its cap line (y
+                    // down from 0).  Shift CJK strokes one font height
+                    // down so both share the baseline at -1 em.
+                    for (ShxGlyphStroke &stroke : decoded.strokes)
+                    {
+                        stroke.fromY -= float(fontHeight);
+                        stroke.toY -= float(fontHeight);
+                    }
+                    storeGlyph(font, code, decoded, fontHeight);
+                }
             }
             entry += 4;
         }
