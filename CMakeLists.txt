@@ -109,6 +109,7 @@ set(WINDOW_SOURCES
     lib/acgi/AcGiTextEngine.cpp
     lib/acgi/AcGiView.cpp
     lib/acgi/AcGiSelectionHighlighter.cpp
+    lib/acgi/AcGiSelectionManager.cpp
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})

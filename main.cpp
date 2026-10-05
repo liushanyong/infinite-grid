@@ -14,6 +14,7 @@
 #include "acgi/AcGiTextQueue.h"
 #include "acgi/AcGiView.h"
 #include "acgi/AcGiSelectionHighlighter.h"
+#include "acgi/AcGiSelectionManager.h"
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -846,80 +847,51 @@ struct GpuPickEntity
   }
 };
 
-std::unordered_map<uint32_t, GpuPickEntity> &gpuPickRegistry()
+static acgi::AcGiSelectionManager &gpuPickManager()
 {
-  static std::unordered_map<uint32_t, GpuPickEntity> registry;
-  return registry;
+  return acgi::AcGiSelectionManager::instance();
 }
 
-uint32_t gpuPickNextEntityId = 2;
+// The demo entity type bridges to the type-erased pick record: the
+// manager stores a kind tag plus opaque pointers and never sees the
+// demo-level scene types.
+static acgi::AcGiPickEntity toPickEntity(const GpuPickEntity &entity)
+{
+  return {uint32_t(entity.kind), entity.mesh, entity.cadRange,
+          entity.curve};
+}
 
 static bool gpuPickEnabled()
 {
-  // GPU rough-picking is the default; GRID_GPU_PICK=0 selects the CPU path.
-  const char *value = std::getenv("GRID_GPU_PICK");
-  return value == nullptr || std::strcmp(value, "0") != 0;
+  return acgi::AcGiSelectionManager::pickEnabled();
 }
 
-uint32_t registerGpuPickEntity(GpuPickEntity entity)
+static uint32_t registerGpuPickEntity(GpuPickEntity entity)
 {
-  auto &registry = gpuPickRegistry();
-  for (uint32_t count = 0; count < 0xfffffffcu; ++count)
-  {
-    const uint32_t id = gpuPickNextEntityId;
-    gpuPickNextEntityId = gpuPickNextEntityId >= 0xfffffffeu
-                              ? 2
-                              : gpuPickNextEntityId + 1;
-    if (id == 0 || id == 0xffffffffu || id == 1)
-      continue;
-
-    auto [existing, inserted] = registry.emplace(id, entity);
-    if (inserted || existing->second == entity)
-      return id;
-  }
-  return 0;
+  return gpuPickManager().registerEntity(toPickEntity(entity));
 }
 
-glm::vec4 encodeGpuPickId(uint32_t id)
+static const GpuPickEntity *findGpuPickEntity(uint32_t id)
 {
-  return {
-      float((id >> 16) & 0xff) / 255.0f,
-      float((id >> 8) & 0xff) / 255.0f,
-      float(id & 0xff) / 255.0f,
-      float((id >> 24) & 0xff) / 255.0f};
-}
-
-const GpuPickEntity *findGpuPickEntity(uint32_t id)
-{
-  auto &registry = gpuPickRegistry();
-  const auto found = registry.find(id);
-  return found != registry.end() ? &found->second : nullptr;
+  thread_local GpuPickEntity converted;
+  const acgi::AcGiPickEntity *found = gpuPickManager().find(id);
+  if (!found)
+    return nullptr;
+  converted.kind = VisibilityKind(found->kind);
+  converted.mesh = static_cast<const MeshEntityRecord *>(found->mesh);
+  converted.cadRange =
+      static_cast<const CadEntityRange *>(found->range);
+  converted.curve =
+      static_cast<const scene::CurveBatchCommand *>(found->curve);
+  return &converted;
 }
 
 constexpr uint32_t kGpuPickCenterCubeId = 1;
 
-struct GpuPickCameraBasis
-{
-  glm::dvec3 position;
-  glm::dvec3 front;
-  glm::dvec3 right;
-  glm::dvec3 up;
-  bool ortho = false;
-  double orthoHalfHeight = 0.0;
-};
+using GpuPickCameraBasis = acgi::AcGiSelectionManager::CameraBasis;
+using GpuPickFocusState = acgi::AcGiSelectionManager::FocusState;
 
-struct GpuPickFocusState
-{
-  std::optional<GpuPickCameraBasis> camera;
-  double ndcX = 0.0;
-  double ndcY = 0.0;
-  uint32_t requestToken = 0;
-  uint32_t pendingFrames = 0;
-  bool pendingNdc = false;
-  bool waitingResult = false;
-};
-
-GpuPickFocusState gpuPickFocus;
+GpuPickFocusState &gpuPickFocus = gpuPickManager().focus();
 bool gpuPickSceneDebug = false;
 bool gpuPickSceneDebugQueueActive = false;
 std::optional<GpuPickEntity> outlineEntity;
@@ -927,28 +899,17 @@ bool outlineLockTest = false;
 bool outlineAllTest = false;
 uint32_t lockedOutlineId = 0;
 
-// FNV-1a over raw bytes; used to detect when the full-scene GPU ID
-// buffer must be re-rendered for the selection outline overlay.
 static uint64_t hashGpuPickSceneBytes(uint64_t hash, const void *data,
                                       size_t size)
 {
-  const unsigned char *bytes = static_cast<const unsigned char *>(data);
-  for (size_t i = 0; i < size; ++i)
-  {
-    hash ^= bytes[i];
-    hash *= 0x100000001b3ull;
-  }
-  return hash;
+  return acgi::AcGiSelectionManager::hashSceneBytes(hash, data, size);
 }
 
 uint32_t findGpuPickObjectIdForEntity(const GpuPickEntity &entity)
 {
   if (entity.kind == VisibilityKind::CenterCube)
     return kGpuPickCenterCubeId;
-  for (const auto &[objectId, registered] : gpuPickRegistry())
-    if (registered == entity)
-      return objectId;
-  return 0;
+  return gpuPickManager().findIdFor(toPickEntity(entity));
 }
 
 static bool gpuPickFocusWaiting()
@@ -2233,19 +2194,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       : rendering::RenderModeFlags{};
   const bool queueSolidFillPicks = renderFlags.show2dSolidFills;
   auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId) {
-    if (!gpuPickQueueActive || objectId == 0 || gpuPickVertices.size() < 3)
-      return;
-
-    constexpr size_t kMaxPickChunkVertices = 3 * 21000;
-    for (size_t first = 0; first < gpuPickVertices.size();
-         first += kMaxPickChunkVertices)
-    {
-      const size_t count = std::min(kMaxPickChunkVertices,
-                                    gpuPickVertices.size() - first);
-      rendererBackend->queueGpuTrianglePick(
-          0, gpuPickVertices.data() + first, uint32_t(count), view,
-          pickProjection, logDepth, objectId);
-    }
+    gpuPickManager().queueSoupChunks(*rendererBackend, gpuPickVertices,
+                                     view, pickProjection, logDepth,
+                                     objectId, gpuPickQueueActive);
   };
   // Match the centered visible AcGi ribbon and its symmetric edge shader.
   // A one-sided pick quad would offset the ID buffer from the rendered pixels.
@@ -2306,7 +2257,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
-    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
     const std::vector<rendering::FillVertex> &pickVertices =
         cadGpuPickFillVertices(range, idColor, objectId);
     // CAD surfaces participate in occlusion. Transparent CAD fills behave like
@@ -2331,7 +2282,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadStroke, nullptr, &range});
-    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     CadPairedBandPoints band;
     if (cadPairedBandPoints(range, tess, band))
@@ -2391,7 +2342,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadPoint, nullptr, &range});
-    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
@@ -2410,7 +2361,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       return;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadCurve, nullptr, nullptr, candidate.curve});
-    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     const std::vector<glm::dvec3> points = acgi::AcGiView::sampleCurveBatch(*candidate.curve);
     for (size_t i = 0; i + 1 < points.size(); ++i)
@@ -2425,7 +2376,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {candidate.kind, nullptr, &range});
-    const glm::vec4 idColor = encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     const float minimumRadius =
         float(3.0 * pointWorldPerPixel(candidate.center));
@@ -4796,16 +4747,49 @@ void reportAutofocus(const AutofocusResult &selected)
 const GpuPickEntity *findGpuPickEntityForAutofocusName(
     const std::string &name)
 {
-  for (const auto &[objectId, registered] : gpuPickRegistry())
-  {
-    if (registered.mesh && registered.mesh->displayName() == name)
-      return &registered;
-    if (registered.cadRange && registered.cadRange->name == name)
-      return &registered;
-    if (registered.curve && registered.curve->name == name)
-      return &registered;
-  }
-  return nullptr;
+  thread_local GpuPickEntity converted;
+  const GpuPickEntity *result = nullptr;
+  gpuPickManager().forEach(
+      [&](std::uint32_t, const acgi::AcGiPickEntity &registered) {
+        if (result)
+          return;
+        if (registered.mesh &&
+            static_cast<const MeshEntityRecord *>(registered.mesh)
+                ->displayName() == name)
+        {
+          converted.kind = VisibilityKind(registered.kind);
+          converted.mesh =
+              static_cast<const MeshEntityRecord *>(registered.mesh);
+          converted.cadRange = nullptr;
+          converted.curve = nullptr;
+          result = &converted;
+        }
+        else if (registered.range &&
+                 static_cast<const CadEntityRange *>(registered.range)
+                     ->name == name)
+        {
+          converted.kind = VisibilityKind(registered.kind);
+          converted.mesh = nullptr;
+          converted.cadRange =
+              static_cast<const CadEntityRange *>(registered.range);
+          converted.curve = nullptr;
+          result = &converted;
+        }
+        else if (registered.curve &&
+                 static_cast<const scene::CurveBatchCommand *>(
+                     registered.curve)
+                     ->name == name)
+        {
+          converted.kind = VisibilityKind(registered.kind);
+          converted.mesh = nullptr;
+          converted.cadRange = nullptr;
+          converted.curve =
+              static_cast<const scene::CurveBatchCommand *>(
+                  registered.curve);
+          result = &converted;
+        }
+      });
+  return result;
 }
 
 static void reportGpuPickFallback(double ndcX, double ndcY)
@@ -5672,10 +5656,10 @@ void render()
         }
         if (pickDebugEnabled())
         {
-          const auto &registry = gpuPickRegistry();
           std::printf("[PICK_DEBUG] registry size=%zu nextId=%u found=%d",
-                      registry.size(), gpuPickNextEntityId,
-                      registry.count(gpuResult.objectId) ? 1 : 0);
+                      gpuPickManager().registrySize(),
+                      gpuPickManager().nextIdCounter(),
+                      gpuPickManager().find(gpuResult.objectId) ? 1 : 0);
           std::puts("");
           if (const GpuPickEntity *pickEntity = findGpuPickEntity(gpuResult.objectId))
           {
@@ -6409,8 +6393,7 @@ void render()
                     requestToken, gpuPickFocus.ndcX, gpuPickFocus.ndcY);
         std::puts("");
       }
-      gpuPickRegistry().clear();
-      gpuPickNextEntityId = 2;
+      gpuPickManager().clearRegistry();
       gpuPickFocus.requestToken = requestToken;
       gpuPickFocus.pendingFrames = 0;
       gpuPickFocus.pendingNdc = false;
@@ -6450,8 +6433,7 @@ void render()
             : 0);
     gpuPickSceneDebugQueueActive =
         rendererBackend->requestGpuPick(sceneRequest) != 0;
-    gpuPickRegistry().clear();
-    gpuPickNextEntityId = 2;
+    gpuPickManager().clearRegistry();
   }
 
   const glm::dvec3 cameraRight(orbitCam.Right);
@@ -7021,7 +7003,7 @@ void render()
       const float radius = std::max(1.5f, float(2.0 * objectPixelSize));
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::MeshObject, object, nullptr});
-      const glm::vec4 idColor = encodeGpuPickId(objectId);
+      const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
       const glm::vec3 relative = glm::vec3(center - orbitCam.Position);
       const glm::vec3 right = pickRight * radius;
       const glm::vec3 up = pickUp * radius;
@@ -7131,8 +7113,8 @@ void render()
   // range assigned while this frame's entities were queued.
   if (rendererBackend)
   {
-    const uint32_t maxId = gpuPickNextEntityId > 2
-        ? gpuPickNextEntityId - 1
+    const uint32_t nextId = gpuPickManager().nextIdCounter();
+    const uint32_t maxId = nextId > 2 ? nextId - 1
         : 2;
     rendererBackend->setGpuPickIdRange(2, maxId);
   }
