@@ -90,13 +90,38 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
     const double emToWorld =
         request.height / double(sdfFont_.pixelsPerEm());
 
-    // Multi-line: advance along -up per newline.
+    // Multi-line: advance along -up per newline.  The message is UTF-8:
+    // decode to codepoints so CJK text resolves through the font's cmap.
     glm::dvec3 lineOrigin = request.position;
     double penX = 0.0;
     int glyphsDrawn = 0;
 
-    for (unsigned char character : request.message)
+    auto nextCodepoint = [](const std::string &text, size_t &i) -> uint32_t {
+        const unsigned char lead = text[i];
+        const size_t extra = lead >= 0xF0 ? 3 : lead >= 0xE0 ? 2
+                           : lead >= 0xC0 ? 1
+                                          : 0;
+        if (extra == 0)
+        {
+            ++i;
+            return lead;
+        }
+        if (i + extra >= text.size())
+        {
+            // Truncated sequence: consume the lead byte as Latin-1.
+            ++i;
+            return lead;
+        }
+        uint32_t codepoint = lead & uint32_t(0x3F >> extra);
+        for (size_t k = 1; k <= extra; ++k)
+            codepoint = (codepoint << 6) | uint32_t(text[i + k] & 0x3F);
+        i += extra + 1;
+        return codepoint;
+    };
+
+    for (size_t position = 0; position < request.message.size();)
     {
+        const uint32_t character = nextCodepoint(request.message, position);
         if (character == 10) // newline
         {
             lineOrigin -= textUp * request.height * 1.35;
