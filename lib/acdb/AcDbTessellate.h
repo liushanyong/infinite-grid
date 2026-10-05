@@ -13,6 +13,7 @@
 #include <glm/gtx/norm.hpp>
 
 #include "acdb/AcDbArc.h"
+#include "acdb/AcDbBlockReference.h"
 #include "acdb/AcDbCircle.h"
 #include "acdb/AcDbEllipse.h"
 #include "acdb/AcDbCore.h"
@@ -24,7 +25,7 @@
 #include "acdb/AcDbPolyFaceMesh.h"
 #include "acdb/AcDbMline.h"
 #include "acdb/AcDbPoint.h"
-#include "acdb/AcDb2dPolyline.h"
+#include "acdb/AcDb3dPolyline.h"
 #include "acdb/AcDbRay.h"
 #include "acdb/AcDbSolid.h"
 #include "acdb/AcDb3dSolid.h"
@@ -347,7 +348,7 @@ inline void tessellatePolyline(const PolylineType &polyline,
         result.fills.push_back(wall);
 }
 
-inline glm::dvec3 pointAt(const AcDb2dPolyline &polyline, size_t index)
+inline glm::dvec3 pointAt(const AcDb3dPolyline &polyline, size_t index)
 {
     return polyline.vertices.at(index);
 }
@@ -358,7 +359,7 @@ inline glm::dvec3 pointAt(const AcDbPolyline &polyline, size_t index)
     return glm::dvec3(value, polyline.elevation);
 }
 
-inline void tessellate(const AcDb2dPolyline &polyline, TessellatedEntity &result,
+inline void tessellate(const AcDb3dPolyline &polyline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     tessellatePolyline(polyline, result, options);
@@ -632,6 +633,14 @@ inline void tessellate(const AcDbPoint &point, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     result.points.push_back({point.location});
+}
+
+// An AcDbBlockReference carries no geometry of its own: its members are
+// rendered through the nested-instance walk (walkInsertInstances), and
+// the reference itself contributes an empty fragment.
+inline void tessellate(const AcDbBlockReference &, TessellatedEntity &,
+                       const TesselationOptions &)
+{
 }
 
 inline void tessellate(const AcDbMline &mline, TessellatedEntity &result,

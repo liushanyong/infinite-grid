@@ -145,7 +145,7 @@ inline void drawPolylineCallbacks(AcGiWorldDraw &graphics,
         graphics.worldTriangle(wall.a, wall.b, wall.c, false);
 }
 
-inline void worldDraw(const AcDb2dPolyline &polyline, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDb3dPolyline &polyline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);

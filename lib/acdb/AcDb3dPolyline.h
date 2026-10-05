@@ -10,7 +10,7 @@
 namespace acdb
 {
 
-struct AcDb2dPolyline
+struct AcDb3dPolyline
 {
     AcDbEntity common;
     std::vector<AcGePoint3d> vertices;

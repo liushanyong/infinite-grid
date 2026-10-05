@@ -7,7 +7,7 @@
 
 #include <variant>
 
-#include "acdb/AcDb2dPolyline.h"
+#include "acdb/AcDb3dPolyline.h"
 #include "acdb/AcDb3dSolid.h"
 #include "acdb/AcDbArc.h"
 #include "acdb/AcDbBlockReference.h"
@@ -32,7 +32,7 @@ namespace acdb
 
 using AcDbEntityVariant = std::variant<
     AcDbLine, AcDbArc, AcDbCircle, AcDbEllipse, AcDbPoint, AcDbRay,
-    AcDbXline, AcDbSolid, AcDbHatch, AcDb2dPolyline, AcDbPolyline,
+    AcDbXline, AcDbSolid, AcDbHatch, AcDb3dPolyline, AcDbPolyline,
     AcDbSpline, AcDbText, AcDbMText, AcDbMline, AcDbPolyFaceMesh,
     AcDb3dSolid, AcDbLight, AcDbBlockReference>;
 

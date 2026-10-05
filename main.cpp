@@ -9,6 +9,7 @@
 #include "acdb/AcDbEntityWorldDraw.h"
 #include "libredwg/include/dwg.h"
 #include "acdb/AcDbDwgBridge.h"
+#include "acdb/AcDbTransform.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionHighlighter.h"
@@ -1130,6 +1131,14 @@ enum class CadEntityPickShape
   PairedStrokeBand
 };
 
+// The drawing document backing the demo (AcDbDatabase); every authored
+// entity and every imported DWG entity is resident here.
+static acdb::AcDbDatabase &acdbDocument()
+{
+  static acdb::AcDbDatabase document;
+  return document;
+}
+
 template <typename EntityType>
 void appendVectorPrimitive(const EntityType &entity, const char *name,
                            const acdb::TesselationOptions &options,
@@ -1151,6 +1160,13 @@ void appendVectorPrimitive(const EntityType &entity, const char *name,
   const size_t strokeBegin = target.geometry.strokes.size();
   const size_t fillBegin = target.geometry.fills.size();
   const size_t pointBegin = target.geometry.points.size();
+
+  // AcDb residency: the demo entity joins the document under its label.
+  {
+    EntityType resident = entity;
+    resident.common.name = name;
+    acdbDocument().addEntity(std::move(resident));
+  }
   acgs::ViewportDraw draw(target.geometry, options);
   draw.subEntityTraits().setFrom(entity.common);
   acdb::worldDraw(entity, draw, fillIs3DFace);
@@ -1183,6 +1199,45 @@ static glm::vec4 aciColor(int index)
 static void appendDwgFile(const char *path,
                           const acdb::TesselationOptions &options,
                           VectorPrimitivesTessellation &target)
+{
+  Dwg_Data dwg;
+  memset(&dwg, 0, sizeof(dwg));
+  if (dwg_read_file(path, &dwg) != 0)
+  {
+    std::cout << "GRID_DWG: failed to decode " << path << std::endl;
+    return;
+  }
+
+  // ObjectARX readDwg shape: the parser fills the database directly; the
+  // renderer then walks the document's model space.
+  const std::size_t inserted = acdb::addDwgEntities(acdbDocument(), dwg);
+  std::cout << "GRID_DWG: inserted " << inserted << " entities from "
+            << path << std::endl;
+  dwg_free(&dwg);
+
+  size_t appended = 0;
+  for (const acdb::AcDbHandle handle :
+       acdbDocument().modelSpace().entityHandles())
+  {
+    const acdb::AcDbEntityVariant *payload = acdbDocument().getEntity(handle);
+    if (payload == nullptr)
+      continue;
+    std::visit(
+        [&](const auto &entity) {
+          appendVectorPrimitive(entity, entity.common.name.c_str(), options,
+                                target);
+          ++appended;
+        },
+        *payload);
+  }
+  std::cout << "GRID_DWG: appended " << appended << " entities from "
+            << path << std::endl;
+}
+
+#if false
+static void appendDwgFileLegacy(const char *path,
+                                const acdb::TesselationOptions &options,
+                                VectorPrimitivesTessellation &target)
 {
   Dwg_Data dwg;
   memset(&dwg, 0, sizeof(dwg));
@@ -1274,6 +1329,106 @@ static void appendDwgFile(const char *path,
             << path << std::endl;
   dwg_free(&dwg);
 }
+#endif
+
+// Renders one block record's model-space instances through the shared
+// tessellation: the nested walk composes each member's world transform,
+// the payload copy is translated (ObjectARX transformBy), and the result
+// feeds appendVectorPrimitive like any authored entity.  Rotations and
+// non-uniform scales of curved geometry degrade through translation-only
+// placement for now.
+static void appendBlockInstances(const char *recordName,
+                                 const acdb::TesselationOptions &options,
+                                 VectorPrimitivesTessellation &target)
+{
+  acdb::AcDbDatabase &document = acdbDocument();
+  const acdb::AcDbHandle topInsert =
+      [&]() -> acdb::AcDbHandle {
+        for (const acdb::AcDbHandle handle :
+             document.modelSpace().entityHandles())
+        {
+          if (const acdb::AcDbEntityVariant *payload =
+                  document.getEntity(handle))
+          {
+            if (const auto *reference =
+                    std::get_if<acdb::AcDbBlockReference>(payload))
+            {
+              if (reference->blockTableRecordName == recordName)
+                return handle;
+            }
+          }
+        }
+        return acdb::kNullHandle;
+      }();
+  if (!topInsert.isValid())
+    return;
+
+  const acdb::AcDbEntityVariant *topPayload =
+      document.getEntity(topInsert);
+  const glm::dmat4 topWorld = document.referenceTransform(
+      std::get<acdb::AcDbBlockReference>(*topPayload));
+
+  document.walkInsertInstances(
+      recordName, topWorld,
+      [&](const glm::dmat4 &world, acdb::AcDbHandle memberHandle,
+          const acdb::AcDbEntityVariant &payload) {
+        if (std::holds_alternative<acdb::AcDbBlockReference>(payload))
+          return;
+        const glm::dvec3 origin =
+            glm::dvec3(world * glm::dvec4(0.0, 0.0, 0.0, 1.0));
+        acdb::AcDbEntityVariant instance = payload;
+        acdb::transformBy(instance, origin);
+        acdb::common(instance).name = std::string(recordName) + "/" +
+                                      acdb::common(payload).name;
+        std::visit(
+            [&](const auto &entity) {
+              appendVectorPrimitive(entity,
+                                    acdb::common(instance).name.c_str(),
+                                    options, target);
+            },
+            instance);
+        (void)memberHandle;
+      });
+}
+
+// Demo block: a two-stroke bracket block inserted at three positions
+// (GRID_BLOCKS=1).  Exercises createBlockDefinition / addBlockReference /
+// nested-instance rendering end to end.
+static void appendDemoBlocks(const acdb::TesselationOptions &options,
+                             VectorPrimitivesTessellation &target)
+{
+  acdb::AcDbDatabase &document = acdbDocument();
+  if (document.blockTable().contains("DEMO_BRACKET"))
+    return; // builder cache may rerun; keep the definition unique
+
+  const glm::dvec3 blockAnchor = vectorPrimitivesAnchor();
+  const double base = 240.0;
+  acdb::AcDbLine left;
+  left.common.color = glm::vec4(0.30f, 0.85f, 0.55f, 1.0f);
+  left.start = blockAnchor;
+  left.end = blockAnchor + glm::dvec3(0.0, base, 0.0);
+  acdb::AcDbLine bottom;
+  bottom.common.color = glm::vec4(0.30f, 0.85f, 0.55f, 1.0f);
+  bottom.start = blockAnchor;
+  bottom.end = blockAnchor + glm::dvec3(base, 0.0, 0.0);
+  const acdb::AcDbHandle leftHandle = document.addEntity(left);
+  const acdb::AcDbHandle bottomHandle = document.addEntity(bottom);
+
+  const acdb::AcDbHandle record = document.createBlockDefinition(
+      "DEMO_BRACKET", blockAnchor, {leftHandle, bottomHandle});
+  if (!record.isValid())
+    return;
+  // The members left model space with the definition; put the two
+  // instances where the demo can see them.
+  for (const glm::dvec3 position :
+       {blockAnchor + glm::dvec3(512.0, 96.0, 0.0),
+        blockAnchor + glm::dvec3(512.0, 416.0, 0.0),
+        blockAnchor + glm::dvec3(512.0, 736.0, 0.0)})
+  {
+    document.addBlockReference("DEMO_BRACKET", position);
+  }
+  appendBlockInstances("DEMO_BRACKET", options, target);
+}
 
 // The CAD vector demo is authored as formal entities.  The cached draw list is
 // shared by drawing and CPU picking; dynamic documents replace this builder's
@@ -1328,7 +1483,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     ellipseArc.endParameter = glm::pi<double>() * 1.75;
     appendVectorPrimitive(ellipseArc, "EllipseArc", options, target);
 
-    acdb::AcDb2dPolyline polyline;
+    acdb::AcDb3dPolyline polyline;
     polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     polyline.vertices = {
         cadAnchor + glm::dvec3(-384.0, 128.0, 0.0),
@@ -1493,7 +1648,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // Closed polyline with non-zero thickness: the outline extrudes into
     // wall quads along the normal.
-    acdb::AcDb2dPolyline borderedPolyline;
+    acdb::AcDb3dPolyline borderedPolyline;
     borderedPolyline.common.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f);
     borderedPolyline.vertices = {
         cadAnchor + glm::dvec3(1792.0, -576.0, 0.0),
@@ -1530,7 +1685,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // The closed ring through the same points: the interpolation visibly
     // smooths the corners of this reference polygon.
-    acdb::AcDb2dPolyline closedFitRing;
+    acdb::AcDb3dPolyline closedFitRing;
     closedFitRing.common.color = glm::vec4(0.55f, 0.55f, 0.55f, 0.9f);
     closedFitRing.vertices = closedFitSpline.fitPoints;
     closedFitRing.closed = true;
@@ -1706,8 +1861,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       if (paramSurfaceIsolinesEnabled())
       for (int k = 0; k <= surfaceSegs; k += 4)
       {
-        acdb::AcDb2dPolyline isoU;
-        acdb::AcDb2dPolyline isoV;
+        acdb::AcDb3dPolyline isoU;
+        acdb::AcDb3dPolyline isoV;
         isoU.common.color = glm::vec4(0.05f, 0.10f, 0.25f, 0.85f);
         isoU.common.lineWeight = 2.0;
         isoV = isoU;
@@ -1780,7 +1935,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       }
     }
 
-    acdb::AcDb2dPolyline demoPolyline;
+    acdb::AcDb3dPolyline demoPolyline;
     demoPolyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     demoPolyline.common.lineWeight = 4.0;
     const glm::dvec3 polylineBase =
@@ -1903,6 +2058,12 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
           // Decoded DWG models ride the same pipeline when GRID_DWG names a file.
   if (const char *dwgPath = std::getenv("GRID_DWG"))
     appendDwgFile(dwgPath, options, target);
+
+  // Block references (GRID_BLOCKS=1): definition + three inserts rendered
+  // through the nested-instance walk.
+  if (const char *blocks = std::getenv("GRID_BLOCKS");
+      blocks && *blocks && std::strcmp(blocks, "0") != 0)
+    appendDemoBlocks(options, target);
 
 return target;
 
