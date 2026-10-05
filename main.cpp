@@ -20,6 +20,7 @@
 #include "acgs/model/DrawContext.h"
 #include "acgs/model/AcGsModel.h"
 #include "acgs/model/AcGsDocumentReplayer.h"
+#include "ge/gebvh.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
@@ -3077,8 +3078,39 @@ public:
         if (objects.empty())
             return;
 
-        nodes.reserve(objects.size() * 2);
-        buildRange(0, static_cast<uint32_t>(objects.size()));
+        // Binned-SAH construction (ge::AcGeBoundBvh, Embree-style): the
+        // partition permutes the primitive order, so the objects array is
+        // permuted to match and the nodes are copied 1:1.
+        std::vector<ge::AcGeBoundBox3d> bounds;
+        bounds.reserve(objects.size());
+        for (const ObjectT *object : objects)
+        {
+            const WorldAabb2 b = objectBounds(*object);
+            bounds.push_back({AcGePoint3d(b.min.x, b.min.y, b.min.z),
+                              AcGePoint3d(b.max.x, b.max.y, b.max.z)});
+        }
+
+        ge::AcGeBvhBuildResult plan =
+            ge::AcGeBoundBvh::partition(bounds);
+
+        std::vector<const ObjectT *> ordered;
+        ordered.reserve(objects.size());
+        for (std::uint32_t index : plan.order)
+            ordered.push_back(objects[index]);
+        objects = std::move(ordered);
+
+        nodes.reserve(plan.nodes.size());
+        for (const ge::AcGeBvhNode &node : plan.nodes)
+        {
+            nodes.push_back({WorldAabb2{glm::dvec3(node.bounds.min.x,
+                                                    node.bounds.min.y,
+                                                    node.bounds.min.z),
+                                        glm::dvec3(node.bounds.max.x,
+                                                   node.bounds.max.y,
+                                                   node.bounds.max.z)},
+                             node.leftChild, node.rightChild, node.begin,
+                             node.end, node.leaf});
+        }
     }
 
     template <typename Visitor>
@@ -3120,44 +3152,7 @@ private:
         return {glm::min(a.min, b.min), glm::max(a.max, b.max)};
     }
 
-    uint32_t buildRange(uint32_t begin, uint32_t end)
-    {
-        WorldAabb2 bounds = objectBounds(*objects[begin]);
-        for (uint32_t i = begin + 1; i < end; ++i)
-            bounds = mergeBounds(bounds, objectBounds(*objects[i]));
 
-        const uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());
-        nodes.push_back({bounds, 0, 0, begin, end, false});
-        const uint32_t count = end - begin;
-        if (count <= 4)
-        {
-            nodes[nodeIndex].leaf = true;
-            return nodeIndex;
-        }
-
-        const glm::dvec3 extent = bounds.max - bounds.min;
-        int axis = 0;
-        if (extent.y > extent.x && extent.y >= extent.z)
-            axis = 1;
-        else if (extent.z > extent.x && extent.z > extent.y)
-            axis = 2;
-
-        const uint32_t middle = begin + count / 2;
-        std::nth_element(objects.begin() + begin, objects.begin() + middle,
-                         objects.begin() + end,
-                         [this, axis](const ObjectT *lhs, const ObjectT *rhs) {
-                             return objectCentroid(*lhs)[axis] <
-                                    objectCentroid(*rhs)[axis];
-                         });
-
-        const uint32_t leftChild = buildRange(begin, middle);
-        // buildRange can reallocate nodes, so refresh the parent reference.
-        nodes[nodeIndex].leftChild = leftChild;
-        const uint32_t rightChild = buildRange(middle, end);
-        nodes[nodeIndex].rightChild = rightChild;
-        nodes[nodeIndex].leaf = false;
-        return nodeIndex;
-    }
 
     std::vector<const ObjectT *> objects;
     std::vector<Node> nodes;
