@@ -13,11 +13,13 @@
 // keeps the same double bookkeeping — flat store + block handle lists —
 // so erasure never rescans block members).
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <unordered_map>
 
 #include "acdb/AcDbCore.h"
+#include "acdb/AcDbTransaction.h"
 
 namespace acdb
 {
@@ -150,6 +152,10 @@ public:
             }, stored);
         if (entities_.count(inserted) != 0)
             return kNullHandle; // honored-but-colliding import handle
+        // Change primitives record their own before-image while a
+        // transaction is active (OpenCADStudio UndoRecording); for an
+        // insertion that image is "absent".
+        captureBefore(inserted);
         entities_.emplace(inserted, std::move(stored));
         modelSpace().appendEntityHandle(inserted);
         return inserted;
@@ -170,6 +176,11 @@ public:
     void uneraseEntity(AcDbHandle handle);
     bool isErased(AcDbHandle handle) const;
 
+    // True removal: drops the payload from the store and the handle from
+    // model-space membership.  Auto-captures the before-image inside an
+    // active transaction, so undo restores both.
+    bool removeEntity(AcDbHandle handle);
+
     // ---- active draw settings (ObjectARX database defaults) ----
     const std::string &activeLayerName() const { return activeLayer_; }
     bool setActiveLayerName(const std::string &name);
@@ -186,6 +197,108 @@ public:
     double activeLineWeight() const { return activeLineWeight_; }
     void setActiveLineWeight(double weight) { activeLineWeight_ = weight; }
 
+    // ---- blocks (AcDbBlockTableRecord / AcDbBlockReference) ----
+
+    // Defines a block record from model-space-resident entities: the
+    // members move out of model-space membership into the record
+    // (OpenCADStudio create_block_from_entities); the payloads stay in
+    // the flat store with ownerHandle pointing at the record.
+    AcDbHandle createBlockDefinition(const std::string &name,
+                                     const glm::dvec3 &basePoint,
+                                     const std::vector<AcDbHandle> &members);
+
+    // Adds an INSERT of |recordName| at |position| to model space.
+    // Returns kNullHandle when the record does not exist.
+    AcDbHandle addBlockReference(const std::string &recordName,
+                                 const glm::dvec3 &position,
+                                 double rotation = 0.0,
+                                 const glm::dvec3 &scale = glm::dvec3(1.0));
+
+    // Resolves one block reference's placement matrix against its
+    // record's base point; kIdentity when the record is missing.
+    glm::dmat4 referenceTransform(const AcDbBlockReference &reference) const;
+
+    // Depth-first expansion of a block record into leaf-entity instances
+    // (ObjectARX: the Gs replay of block contents).  |fn| receives the
+    // composed world transform, the member handle, and its payload for
+    // every non-INSERT member.  Nesting is bounded (32 deep, OpenCADStudio
+    // parity) and cycle-guarded by the record-name stack, so a block that
+    // references itself terminates.
+    template <typename Fn>
+    void walkInsertInstances(const std::string &recordName,
+                             const glm::dmat4 &parentTransform,
+                             Fn &&fn) const
+    {
+        std::vector<std::string> nameStack;
+        std::vector<AcDbHandle> insertPath;
+        walkInsertInstances(recordName, parentTransform, nameStack,
+                            insertPath, fn);
+    }
+
+private:
+    template <typename Fn>
+    void walkInsertInstances(const std::string &recordName,
+                             const glm::dmat4 &parentTransform,
+                             std::vector<std::string> &nameStack,
+                             std::vector<AcDbHandle> &insertPath,
+                             Fn &&fn) const
+    {
+        if (nameStack.size() >= kMaxInsertDepth)
+            return;
+        if (std::find(nameStack.begin(), nameStack.end(), recordName) !=
+            nameStack.end())
+            return; // circular block reference
+        const AcDbBlockTableRecord *record = blockTable_.get(recordName);
+        if (record == nullptr)
+            return;
+        nameStack.push_back(recordName);
+        for (const AcDbHandle memberHandle : record->entityHandles())
+        {
+            const AcDbEntityVariant *payload = getEntity(memberHandle);
+            if (payload == nullptr)
+                continue;
+            if (const auto *reference =
+                    std::get_if<AcDbBlockReference>(payload))
+            {
+                insertPath.push_back(memberHandle);
+                walkInsertInstances(reference->blockTableRecordName,
+                                    parentTransform *
+                                        referenceTransform(*reference),
+                                    nameStack, insertPath, fn);
+                insertPath.pop_back();
+            }
+            else
+            {
+                fn(parentTransform, memberHandle, *payload);
+            }
+        }
+        nameStack.pop_back();
+    }
+
+public:
+    // ---- transactions / undo ----
+
+    // Single active transaction (AcDbDatabase::startTransaction in ARX
+    // hosts one per document scope); begin while one is active reuses it.
+    void beginTransaction();
+    // Captures the payload's before-image (first capture wins).
+    void captureBefore(AcDbHandle handle);
+    // Pairs before-images with after-images and returns the delta; the
+    // transaction closes.  An empty transaction returns an empty delta.
+    AcDbUndoDelta commitTransaction();
+    bool transactionActive() const { return transaction_.isActive(); }
+
+    // Applies one side of |delta| to the store and model-space
+    // membership (undo takes before, redo takes after).  Returns the
+    // number of entries applied.
+    std::size_t applyUndoDelta(const AcDbUndoDelta &delta, bool forward);
+
+private:
+    void storeEntityState(AcDbHandle handle,
+                          std::optional<AcDbEntityVariant> &slot) const;
+
+public:
+
 private:
     void createDefaults();
 
@@ -198,6 +311,9 @@ private:
 
     std::unordered_map<AcDbHandle, AcDbEntityVariant> entities_;
     std::unordered_map<AcDbHandle, bool> erased_;
+    AcDbTransaction transaction_;
+
+    static constexpr std::size_t kMaxInsertDepth = 32;
 
     std::string activeLayer_ = "0";
     glm::vec4 activeColor_{1.0f, 1.0f, 1.0f, 1.0f};

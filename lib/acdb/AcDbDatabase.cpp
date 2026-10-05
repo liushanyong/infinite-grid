@@ -213,4 +213,175 @@ bool AcDbDatabase::setActiveLineType(const std::string &name)
     return true;
 }
 
+// ---- blocks ----
+
+AcDbHandle AcDbDatabase::createBlockDefinition(
+    const std::string &name, const glm::dvec3 &basePoint,
+    const std::vector<AcDbHandle> &members)
+{
+    if (blockTable_.contains(name))
+        return kNullHandle;
+    const AcDbHandle recordHandle = allocateHandle();
+    AcDbBlockTableRecord &record = blockTable_.add(name, recordHandle);
+    record.setBasePoint(basePoint);
+
+    // Move membership: out of model space, into the record; the payloads
+    // stay resident with ownerHandle = record (OpenCADStudio's
+    // create_block_from_entities bookkeeping).
+    AcDbBlockTableRecord &space = modelSpace();
+    std::vector<AcDbHandle> remaining;
+    remaining.reserve(space.entityHandles().size());
+    for (const AcDbHandle handle : space.entityHandles())
+    {
+        const bool isMember =
+            std::find(members.begin(), members.end(), handle) !=
+            members.end();
+        if (isMember)
+        {
+            record.appendEntityHandle(handle);
+        }
+        else
+        {
+            remaining.push_back(handle);
+        }
+    }
+    space.entityHandles() = std::move(remaining);
+    return recordHandle;
+}
+
+AcDbHandle AcDbDatabase::addBlockReference(
+    const std::string &recordName, const glm::dvec3 &position,
+    double rotation, const glm::dvec3 &scale)
+{
+    if (!blockTable_.contains(recordName))
+        return kNullHandle;
+    AcDbBlockReference reference;
+    reference.blockTableRecordName = recordName;
+    reference.position = position;
+    reference.rotation = rotation;
+    reference.scale = scale;
+    return addEntity(std::move(reference));
+}
+
+glm::dmat4 AcDbDatabase::referenceTransform(
+    const AcDbBlockReference &reference) const
+{
+    const AcDbBlockTableRecord *record =
+        blockTable_.get(reference.blockTableRecordName);
+    return reference.toMatrix(record != nullptr
+                                  ? record->basePoint()
+                                  : glm::dvec3(0.0));
+}
+
+// ---- transactions ----
+
+void AcDbDatabase::storeEntityState(
+    AcDbHandle handle, std::optional<AcDbEntityVariant> &slot) const
+{
+    const AcDbEntityVariant *payload = getEntity(handle);
+    if (payload != nullptr)
+        slot = *payload;
+    else
+        slot = std::nullopt;
+}
+
+void AcDbDatabase::beginTransaction()
+{
+    if (transaction_.isActive())
+        return;
+    transaction_.active_ = true;
+    transaction_.captureOrder_.clear();
+    transaction_.before_.clear();
+}
+
+void AcDbDatabase::captureBefore(AcDbHandle handle)
+{
+    if (!transaction_.isActive())
+        return;
+    if (transaction_.before_.count(handle) != 0)
+        return; // first capture wins (OpenCADStudio UndoRecording)
+    transaction_.captureOrder_.push_back(handle);
+    storeEntityState(handle, transaction_.before_[handle]);
+}
+
+AcDbUndoDelta AcDbDatabase::commitTransaction()
+{
+    AcDbUndoDelta delta;
+    if (!transaction_.isActive())
+        return delta;
+    delta.reserve(transaction_.captureOrder_.size());
+    for (const AcDbHandle handle : transaction_.captureOrder_)
+    {
+        AcDbUndoEntry entry;
+        entry.handle = handle;
+        entry.before = transaction_.before_[handle];
+        storeEntityState(handle, entry.after);
+        delta.push_back(std::move(entry));
+    }
+    transaction_.active_ = false;
+    transaction_.captureOrder_.clear();
+    transaction_.before_.clear();
+    return delta;
+}
+
+std::size_t AcDbDatabase::applyUndoDelta(const AcDbUndoDelta &delta,
+                                         bool forward)
+{
+    std::size_t applied = 0;
+    for (const AcDbUndoEntry &entry : delta)
+    {
+        const std::optional<AcDbEntityVariant> &target =
+            forward ? entry.after : entry.before;
+        if (target.has_value())
+        {
+            AcDbEntityVariant payload = *target;
+            // Keep the delta's original handle (OpenCADStudio
+            // restore_entity_arc reinserts with the original handle).
+            auto stored = entities_.find(entry.handle);
+            if (stored != entities_.end())
+            {
+                stored->second = std::move(payload);
+            }
+            else
+            {
+                entities_.emplace(entry.handle, std::move(payload));
+                // Restore the membership the state implies: an entity not
+                // member of any block record lives in model space (block
+                // membership itself is out of delta scope).
+                bool blockMember = false;
+                blockTable_.forEach([&](const std::string &,
+                                        const AcDbBlockTableRecord &record) {
+                    const std::vector<AcDbHandle> &handles =
+                        record.entityHandles();
+                    blockMember = blockMember ||
+                        std::find(handles.begin(), handles.end(),
+                                  entry.handle) != handles.end();
+                });
+                if (!blockMember)
+                    modelSpace().appendEntityHandle(entry.handle);
+            }
+            erased_.erase(entry.handle);
+        }
+        else
+        {
+            removeEntity(entry.handle);
+        }
+        ++applied;
+    }
+    return applied;
+}
+
+bool AcDbDatabase::removeEntity(AcDbHandle handle)
+{
+    captureBefore(handle);
+    if (entities_.erase(handle) == 0)
+        return false;
+    erased_.erase(handle);
+    AcDbBlockTableRecord &space = modelSpace();
+    std::vector<AcDbHandle> &handles = space.entityHandles();
+    handles.erase(std::remove(handles.begin(), handles.end(), handle),
+                  handles.end());
+    return true;
+}
+
 } // namespace acdb

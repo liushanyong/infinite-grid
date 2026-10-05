@@ -23,6 +23,7 @@
 
 #include <glm/glm.hpp>
 
+#include "acdb/AcDbBlockReference.h"
 #include "entities/arc.h"
 #include "entities/circle.h"
 #include "entities/ellipse.h"
@@ -188,6 +189,7 @@ public:
     {
         return entityHandles_;
     }
+    std::vector<AcDbHandle> &entityHandles() { return entityHandles_; }
 
     void appendEntityHandle(AcDbHandle handle)
     {
@@ -206,7 +208,8 @@ using AcDbEntityVariant = std::variant<
     entities::Point, entities::Ray, entities::XLine, entities::Solid,
     entities::Hatch, entities::Polyline, entities::LwPolyline,
     entities::Spline, entities::Text, entities::MText, entities::MLine,
-    entities::Mesh, entities::Solid3d, entities::Light>;
+    entities::Mesh, entities::Solid3d, entities::Light,
+    AcDbBlockReference>;
 
 // Read-write access to the common-properties member shared by every
 // payload type (all of them embed entities::EntityCommon as `common`).
