@@ -286,6 +286,24 @@ bool shxLoadCompiled(const std::vector<unsigned char> &file,
         const std::uint16_t rangeCount =
             *reinterpret_cast<const std::uint16_t *>(&file[29]);
         index = &file[31 + size_t(rangeCount) * 4];
+        // The font header is index entry 0 (code 0); its ascender lives in
+        // the record's last four bytes.  Without it every glyph is stored
+        // in raw vector units and CJK glyphs render far larger than the
+        // regular-font ASCII (whose unifont branch reads this header).
+        const std::uint16_t *headerEntry =
+            reinterpret_cast<const std::uint16_t *>(index);
+        const std::uint16_t headerBytes = headerEntry[1];
+        const std::uint32_t headerOffset =
+            headerEntry[2] | (std::uint32_t(headerEntry[3]) << 16);
+        if (headerBytes >= 4 &&
+            size_t(headerOffset) + size_t(headerBytes) <= file.size())
+        {
+            const size_t ahPos =
+                size_t(headerOffset) + size_t(headerBytes) - 4;
+            fontHeight = double(file[ahPos]);
+            if (fontHeight == 0.0)
+                fontHeight = double(file[ahPos + 1]);
+        }
     }
     else if (std::memcmp(&file[11], "shapes", 6) == 0)
     {
