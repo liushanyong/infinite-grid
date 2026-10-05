@@ -4,14 +4,14 @@
 
 #include <vector>
 
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct LwPolyline
+struct AcDbPolyline
 {
-    EntityCommon common;
+    AcDbEntity common;
     std::vector<AcGePoint2d> vertices;
     std::vector<double> bulges;
     double elevation = 0.0;
@@ -20,4 +20,4 @@ struct LwPolyline
     AcGeVector3d normal{0.0, 0.0, 1.0};
 };
 
-} // namespace entities
+} // namespace acdb

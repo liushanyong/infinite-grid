@@ -12,28 +12,28 @@
 #endif
 #include <glm/gtx/norm.hpp>
 
-#include "arc.h"
-#include "circle.h"
-#include "ellipse.h"
-#include "entity_common.h"
-#include "hatch.h"
-#include "light.h"
-#include "line.h"
-#include "lwpolyline.h"
-#include "mtext.h"
-#include "mesh.h"
-#include "mline.h"
-#include "point.h"
-#include "polyline.h"
-#include "ray.h"
-#include "solid.h"
-#include "solid3d.h"
-#include "spline.h"
-#include "text.h"
-#include "xline.h"
+#include "acdb/AcDbArc.h"
+#include "acdb/AcDbCircle.h"
+#include "acdb/AcDbEllipse.h"
+#include "acdb/AcDbCore.h"
+#include "acdb/AcDbHatch.h"
+#include "acdb/AcDbLight.h"
+#include "acdb/AcDbLine.h"
+#include "acdb/AcDbPolyline.h"
+#include "acdb/AcDbMText.h"
+#include "acdb/AcDbPolyFaceMesh.h"
+#include "acdb/AcDbMline.h"
+#include "acdb/AcDbPoint.h"
+#include "acdb/AcDb2dPolyline.h"
+#include "acdb/AcDbRay.h"
+#include "acdb/AcDbSolid.h"
+#include "acdb/AcDb3dSolid.h"
+#include "acdb/AcDbSpline.h"
+#include "acdb/AcDbText.h"
+#include "acdb/AcDbXline.h"
 #include "../ge/genspline.h"
 
-namespace entities
+namespace acdb
 {
 
 struct TesselationOptions
@@ -49,7 +49,7 @@ struct TesselationOptions
 
 struct Stroke
 {
-    EntityCommon common;
+    AcDbEntity common;
     std::vector<glm::dvec3> points;
     bool closed = false;
     double lineWeight = 0.0;
@@ -61,7 +61,7 @@ struct Stroke
 
 struct Triangle
 {
-    EntityCommon common;
+    AcDbEntity common;
     glm::dvec3 a;
     glm::dvec3 b;
     glm::dvec3 c;
@@ -71,7 +71,7 @@ struct Triangle
 struct TessellatedPoint
 {
     glm::dvec3 location{0.0};
-    EntityCommon common;
+    AcDbEntity common;
     double pointSize = 7.0;
 };
 
@@ -120,7 +120,7 @@ inline void appendSegment(TessellatedEntity &result,
         addStroke(result).points = {start, end};
 }
 
-inline void tessellate(const Line &line, TessellatedEntity &result,
+inline void tessellate(const AcDbLine &line, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     // DWG lines are authored in the OCS of their extrusion normal; the
@@ -143,7 +143,7 @@ inline void tessellate(const Line &line, TessellatedEntity &result,
     result.fills.push_back(Triangle{{}, start, end + offset, start + offset});
 }
 
-inline void tessellate(const Arc &arc, TessellatedEntity &result,
+inline void tessellate(const AcDbArc &arc, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     if (!(arc.radius > 0.0) || !std::isfinite(arc.radius))
@@ -181,13 +181,13 @@ inline void tessellate(const Arc &arc, TessellatedEntity &result,
     }
 }
 
-inline void tessellate(const Circle &circle, TessellatedEntity &result,
+inline void tessellate(const AcDbCircle &circle, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     if (!(circle.radius > 0.0) || !std::isfinite(circle.radius))
         return;
 
-    Arc arc;
+    AcDbArc arc;
     arc.center = circle.center;
     arc.radius = circle.radius;
     arc.startAngle = 0.0;
@@ -200,7 +200,7 @@ inline void tessellate(const Circle &circle, TessellatedEntity &result,
         result.strokes.back().closed = true;
 }
 
-inline void tessellate(const Ellipse &ellipse, TessellatedEntity &result,
+inline void tessellate(const AcDbEllipse &ellipse, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     const glm::dvec3 major = ellipse.majorAxis;
@@ -347,30 +347,30 @@ inline void tessellatePolyline(const PolylineType &polyline,
         result.fills.push_back(wall);
 }
 
-inline glm::dvec3 pointAt(const Polyline &polyline, size_t index)
+inline glm::dvec3 pointAt(const AcDb2dPolyline &polyline, size_t index)
 {
     return polyline.vertices.at(index);
 }
 
-inline glm::dvec3 pointAt(const LwPolyline &polyline, size_t index)
+inline glm::dvec3 pointAt(const AcDbPolyline &polyline, size_t index)
 {
     const glm::dvec2 value = polyline.vertices.at(index);
     return glm::dvec3(value, polyline.elevation);
 }
 
-inline void tessellate(const Polyline &polyline, TessellatedEntity &result,
+inline void tessellate(const AcDb2dPolyline &polyline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     tessellatePolyline(polyline, result, options);
 }
 
-inline void tessellate(const LwPolyline &polyline, TessellatedEntity &result,
+inline void tessellate(const AcDbPolyline &polyline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     tessellatePolyline(polyline, result, options);
 }
 
-[[nodiscard]] inline glm::dvec3 bsplinePoint(const Spline &spline, double u)
+[[nodiscard]] inline glm::dvec3 bsplinePoint(const AcDbSpline &spline, double u)
 {
     const int degree = std::clamp(spline.degree, 1, 3);
     const size_t controlCount = spline.controlPoints.size();
@@ -407,14 +407,14 @@ inline void tessellate(const LwPolyline &polyline, TessellatedEntity &result,
 
 // Build (or evaluate) the fit-point spline: chord-length parametrized
 // natural cubic interpolation, periodic for closed splines.
-inline AcGeFitSpline3d fitPointSpline(const Spline &spline)
+inline AcGeFitSpline3d fitPointSpline(const AcDbSpline &spline)
 {
     const bool periodic = spline.closed && spline.fitPoints.size() >= 3;
     return AcGeFitSpline3d::fromChordLength(spline.fitPoints, periodic);
 }
 
 inline std::vector<AcGePoint3d> sampleFitPointSpline(
-    const Spline &spline, const TesselationOptions &options)
+    const AcDbSpline &spline, const TesselationOptions &options)
 {
     const size_t fitCount = spline.fitPoints.size();
     if (fitCount < 2)
@@ -439,7 +439,7 @@ inline std::vector<AcGePoint3d> sampleFitPointSpline(
     return points;
 }
 
-inline void tessellate(const Spline &spline, TessellatedEntity &result,
+inline void tessellate(const AcDbSpline &spline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     Stroke &stroke = addStroke(result, spline.closed);
@@ -473,7 +473,7 @@ inline void tessellate(const Spline &spline, TessellatedEntity &result,
         stroke.points.push_back(point);
 }
 
-inline void tessellate(const Ray &ray, TessellatedEntity &result,
+inline void tessellate(const AcDbRay &ray, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     const double directionLength = ray.direction.length();
@@ -487,11 +487,11 @@ inline void tessellate(const Ray &ray, TessellatedEntity &result,
     stroke.semiInfinite = true;
 }
 
-// An XLine is infinite in both directions.  It tessellates as two opposite
+// An AcDbXline is infinite in both directions.  It tessellates as two opposite
 // semi-infinite strokes sharing the base point, so every consumer that
 // already understands Stroke::semiInfinite (rendering, picking, slab depth)
 // handles it without protocol changes.
-inline void tessellate(const XLine &xline, TessellatedEntity &result,
+inline void tessellate(const AcDbXline &xline, TessellatedEntity &result,
                        const TesselationOptions &options = {})
 {
     const double directionLength = xline.direction.length();
@@ -508,12 +508,12 @@ inline void tessellate(const XLine &xline, TessellatedEntity &result,
     backward.semiInfinite = true;
 }
 
-// Line pattern scanlines in the pattern frame (patternAngle rotates it,
+// AcDbLine pattern scanlines in the pattern frame (patternAngle rotates it,
 // patternScale widens the spacing), clipped to the loops with the even-odd
 // rule so inner loops punch real holes in the pattern.  Shared by the
 // tessellation path and the AcGiWorldDraw callback path.
 inline std::vector<std::pair<AcGePoint3d, AcGePoint3d>> hatchPatternSegments(
-    const Hatch &hatch)
+    const AcDbHatch &hatch)
 {
     std::vector<std::pair<AcGePoint3d, AcGePoint3d>> segments;
     if (hatch.outerLoop.size() < 3)
@@ -578,7 +578,7 @@ inline std::vector<std::pair<AcGePoint3d, AcGePoint3d>> hatchPatternSegments(
     return segments;
 }
 
-inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
+inline void tessellate(const AcDbHatch &hatch, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     if (hatch.outerLoop.size() < 3)
@@ -600,7 +600,7 @@ inline void tessellate(const Hatch &hatch, TessellatedEntity &result,
     }
 }
 
-inline void tessellate(const Solid &solid, TessellatedEntity &result,
+inline void tessellate(const AcDbSolid &solid, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     result.fills.push_back(
@@ -609,7 +609,7 @@ inline void tessellate(const Solid &solid, TessellatedEntity &result,
         Triangle{{}, solid.secondCorner, solid.fourthCorner, solid.thirdCorner});
 }
 
-inline void tessellate(const Mesh &mesh, TessellatedEntity &result,
+inline void tessellate(const AcDbPolyFaceMesh &mesh, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     const auto &positions = mesh.geometry.positions;
@@ -628,13 +628,13 @@ inline void tessellate(const Mesh &mesh, TessellatedEntity &result,
     }
 }
 
-inline void tessellate(const Point &point, TessellatedEntity &result,
+inline void tessellate(const AcDbPoint &point, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     result.points.push_back({point.location});
 }
 
-inline void tessellate(const MLine &mline, TessellatedEntity &result,
+inline void tessellate(const AcDbMline &mline, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     const size_t count = mline.vertices.size();
@@ -672,7 +672,7 @@ inline void tessellate(const MLine &mline, TessellatedEntity &result,
     }
 }
 
-inline void tessellate(const Text &text, TessellatedEntity &result,
+inline void tessellate(const AcDbText &text, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     const double width = std::max(double(text.text.size()) *
@@ -693,7 +693,7 @@ inline void tessellate(const Text &text, TessellatedEntity &result,
     result.points.push_back({text.insertion});
 }
 
-inline void tessellate(const MText &text, TessellatedEntity &result,
+inline void tessellate(const AcDbMText &text, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     if (!(text.height > 0.0) || !std::isfinite(text.height))
@@ -738,7 +738,7 @@ inline void tessellate(const MText &text, TessellatedEntity &result,
     result.points.push_back({text.insertion});
 }
 
-inline void tessellate(const Solid3d &solid, TessellatedEntity &result,
+inline void tessellate(const AcDb3dSolid &solid, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     const auto &positions = solid.vertices;
@@ -800,11 +800,11 @@ inline void tessellate(const Solid3d &solid, TessellatedEntity &result,
     }
 }
 
-inline void tessellate(const Light &light, TessellatedEntity &result,
+inline void tessellate(const AcDbLight &light, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
     appendSegment(result, light.position, light.target);
     result.points.push_back({light.position});
 }
 
-} // namespace entities
+} // namespace acdb

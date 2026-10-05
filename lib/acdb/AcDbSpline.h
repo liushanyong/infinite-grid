@@ -5,14 +5,14 @@
 #include <vector>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Spline
+struct AcDbSpline
 {
-    EntityCommon common;
+    AcDbEntity common;
     int degree = 3;
     bool closed = false;
     std::vector<AcGePoint3d> controlPoints;
@@ -20,4 +20,4 @@ struct Spline
     std::vector<double> knots;
 };
 
-} // namespace entities
+} // namespace acdb

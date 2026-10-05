@@ -3,18 +3,18 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
 // The construction line extends without bound from the point in both
 // directions.
-struct XLine
+struct AcDbXline
 {
-    EntityCommon common;
+    AcDbEntity common;
     AcGePoint3d point{0.0, 0.0, 0.0};
     AcGeVector3d direction{1.0, 0.0, 0.0};
 };
 
-} // namespace entities
+} // namespace acdb

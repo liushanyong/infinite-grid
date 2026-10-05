@@ -18,7 +18,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "acdb/AcDbCore.h"
+#include "acdb/AcDbEntities.h"
 #include "acdb/AcDbTransaction.h"
 
 namespace acdb
@@ -139,17 +139,14 @@ public:
     template <typename EntityType>
     AcDbHandle addEntity(EntityType payload)
     {
-        AcDbHandle handle{payload.common.handle};
+        AcDbHandle handle = payload.common.handle;
         if (!handle.isValid())
         {
             handle = allocateHandle();
-            payload.common.handle = static_cast<std::uint32_t>(handle.value);
+            payload.common.handle = handle;
         }
         AcDbEntityVariant stored = std::move(payload);
-        const AcDbHandle inserted =
-            std::visit([](auto &entity) {
-                return AcDbHandle{entity.common.handle};
-            }, stored);
+        const AcDbHandle inserted = common(stored).handle;
         if (entities_.count(inserted) != 0)
             return kNullHandle; // honored-but-colliding import handle
         // Change primitives record their own before-image while a

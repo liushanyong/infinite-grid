@@ -3,15 +3,15 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Point
+struct AcDbPoint
 {
-    EntityCommon common;
+    AcDbEntity common;
     AcGePoint3d location{0.0, 0.0, 0.0};
 };
 
-} // namespace entities
+} // namespace acdb

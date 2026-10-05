@@ -5,18 +5,18 @@
 #include <vector>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
-#include "render_class.h"
+#include "acdb/AcDbCore.h"
+#include "acdb/AcDbRenderClass.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Solid3d
+struct AcDb3dSolid
 {
-    EntityCommon common;
+    AcDbEntity common;
     std::vector<AcGePoint3d> vertices;
     std::vector<std::uint32_t> indices;
     RenderClass renderClass = RenderClass::Cad;
 };
 
-} // namespace entities
+} // namespace acdb

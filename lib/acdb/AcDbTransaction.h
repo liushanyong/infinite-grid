@@ -17,7 +17,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "acdb/AcDbCore.h"
+#include "acdb/AcDbEntities.h"
 
 namespace acdb
 {

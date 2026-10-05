@@ -3,14 +3,14 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Ellipse
+struct AcDbEllipse
 {
-    EntityCommon common;
+    AcDbEntity common;
     AcGePoint3d center{0.0, 0.0, 0.0};
     AcGeVector3d majorAxis{0.0, 0.0, 0.0};
     double radiusRatio = 1.0;
@@ -19,4 +19,4 @@ struct Ellipse
     AcGeVector3d normal{0.0, 0.0, 1.0};
 };
 
-} // namespace entities
+} // namespace acdb

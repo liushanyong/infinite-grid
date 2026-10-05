@@ -3,18 +3,18 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Solid
+struct AcDbSolid
 {
-    EntityCommon common;
+    AcDbEntity common;
     AcGePoint3d firstCorner{0.0, 0.0, 0.0};
     AcGePoint3d secondCorner{0.0, 0.0, 0.0};
     AcGePoint3d thirdCorner{0.0, 0.0, 0.0};
     AcGePoint3d fourthCorner{0.0, 0.0, 0.0};
 };
 
-} // namespace entities
+} // namespace acdb

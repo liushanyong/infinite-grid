@@ -5,17 +5,17 @@
 #include <vector>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct MLine
+struct AcDbMline
 {
-    EntityCommon common;
+    AcDbEntity common;
     std::vector<AcGePoint3d> vertices;
     AcGeVector3d scale{1.0, 1.0, 1.0};
     bool closed = false;
 };
 
-} // namespace entities
+} // namespace acdb

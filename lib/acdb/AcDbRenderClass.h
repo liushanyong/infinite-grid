@@ -1,6 +1,6 @@
 #pragma once
 
-namespace entities
+namespace acdb
 {
 
 enum class RenderClass
@@ -15,4 +15,4 @@ enum class MeshStyle
     Realistic,
 };
 
-} // namespace entities
+} // namespace acdb

@@ -14,13 +14,13 @@
 #include <utility>
 #include <vector>
 
-#include "entities/entity_common.h"
-#include "entities/tessellate.h"
+#include "acdb/AcDbCore.h"
+#include "acdb/AcDbTessellate.h"
 
 namespace acgs
 {
 
-// The renderer-visible subset of EntityCommon.  Keeping this separate from the
+// The renderer-visible subset of AcDbEntity.  Keeping this separate from the
 // authoring struct makes the draw-list contract explicit and gives layer/color
 // table changes a cache invalidation version without changing entity values.
 struct DrawTraits
@@ -33,16 +33,32 @@ struct DrawTraits
     double lineWeight = 0.0;
     bool visible = true;
 
-    [[nodiscard]] entities::EntityCommon toEntityCommon() const
+    [[nodiscard]] acdb::AcDbEntity toEntityCommon() const
     {
-        return {handle, name, layer, color, lineType, lineWeight, visible};
+        // AcDbEntity carries a base class (AcDbObject), so aggregate
+        // initialization no longer applies: assign field by field.
+        acdb::AcDbEntity entity;
+        entity.handle = handle;
+        entity.name = name;
+        entity.layer = layer;
+        entity.color = color;
+        entity.lineType = lineType;
+        entity.lineWeight = lineWeight;
+        entity.visible = visible;
+        return entity;
     }
 
-    static DrawTraits from(const entities::EntityCommon &common)
+    static DrawTraits from(const acdb::AcDbEntity &common)
     {
-        // Field layout matches EntityCommon exactly.
-        return {common.handle, common.name, common.layer, common.color,
-                common.lineType, common.lineWeight, common.visible};
+        DrawTraits traits;
+        traits.handle = static_cast<std::uint32_t>(common.handle.value);
+        traits.name = common.name;
+        traits.layer = common.layer;
+        traits.color = common.color;
+        traits.lineType = common.lineType;
+        traits.lineWeight = common.lineWeight;
+        traits.visible = common.visible;
+        return traits;
     }
 };
 
@@ -51,32 +67,32 @@ struct DrawTraits
 class GeometrySink
 {
 public:
-    explicit GeometrySink(entities::TessellatedEntity &geometry)
+    explicit GeometrySink(acdb::TessellatedEntity &geometry)
         : geometry_(geometry)
     {
     }
 
-    [[nodiscard]] entities::TessellatedEntity &geometry() { return geometry_; }
-    [[nodiscard]] const entities::TessellatedEntity &geometry() const
+    [[nodiscard]] acdb::TessellatedEntity &geometry() { return geometry_; }
+    [[nodiscard]] const acdb::TessellatedEntity &geometry() const
     {
         return geometry_;
     }
 
     // Low-level primitive emitters for the AcGiWorldDraw callback layer,
     // which applies traits itself per callback.
-    entities::Stroke &addStroke(bool closed = false)
+    acdb::Stroke &addStroke(bool closed = false)
     {
-        geometry_.strokes.push_back(entities::Stroke{});
+        geometry_.strokes.push_back(acdb::Stroke{});
         geometry_.strokes.back().closed = closed;
         return geometry_.strokes.back();
     }
 
-    void appendTriangle(const entities::Triangle &triangle)
+    void appendTriangle(const acdb::Triangle &triangle)
     {
         geometry_.fills.push_back(triangle);
     }
 
-    void appendPoint(const entities::TessellatedPoint &point)
+    void appendPoint(const acdb::TessellatedPoint &point)
     {
         geometry_.points.push_back(point);
     }
@@ -91,7 +107,7 @@ public:
         size_t pointCount = 0;
     };
 
-    EntityRanges append(const entities::TessellatedEntity &fragment,
+    EntityRanges append(const acdb::TessellatedEntity &fragment,
                         const DrawTraits &traits, bool fillIs3DFace = false)
     {
         EntityRanges ranges;
@@ -109,19 +125,19 @@ public:
 
         for (size_t i = ranges.strokeBegin; i < geometry_.strokes.size(); ++i)
         {
-            entities::Stroke &stroke = geometry_.strokes[i];
+            acdb::Stroke &stroke = geometry_.strokes[i];
             stroke.common = traits.toEntityCommon();
             stroke.lineWeight = traits.lineWeight;
         }
         for (size_t i = ranges.fillBegin; i < geometry_.fills.size(); ++i)
         {
-            entities::Triangle &fill = geometry_.fills[i];
+            acdb::Triangle &fill = geometry_.fills[i];
             fill.common = traits.toEntityCommon();
             fill.is3DFace = fillIs3DFace;
         }
         for (size_t i = ranges.pointBegin; i < geometry_.points.size(); ++i)
         {
-            entities::TessellatedPoint &point = geometry_.points[i];
+            acdb::TessellatedPoint &point = geometry_.points[i];
             point.common = traits.toEntityCommon();
             point.pointSize = traits.lineWeight > 0.0 ? traits.lineWeight : 7.0;
         }
@@ -133,7 +149,7 @@ public:
     }
 
 private:
-    entities::TessellatedEntity &geometry_;
+    acdb::TessellatedEntity &geometry_;
 };
 
 // Modeled on AcGiSubEntityTraits: state set by an entity while its worldDraw
@@ -141,7 +157,7 @@ private:
 class SubEntityTraits
 {
 public:
-    void setFrom(const entities::EntityCommon &common)
+    void setFrom(const acdb::AcDbEntity &common)
     {
         traits_ = DrawTraits::from(common);
     }
@@ -162,8 +178,8 @@ private:
 class WorldDraw
 {
 public:
-    WorldDraw(entities::TessellatedEntity &geometry,
-              const entities::TesselationOptions &options = {})
+    WorldDraw(acdb::TessellatedEntity &geometry,
+              const acdb::TesselationOptions &options = {})
         : sink_(geometry), options_(options)
     {
     }
@@ -172,14 +188,14 @@ public:
     [[nodiscard]] const GeometrySink &sink() const { return sink_; }
     [[nodiscard]] SubEntityTraits &subEntityTraits() { return traits_; }
     [[nodiscard]] const SubEntityTraits &subEntityTraits() const { return traits_; }
-    [[nodiscard]] const entities::TesselationOptions &options() const
+    [[nodiscard]] const acdb::TesselationOptions &options() const
     {
         return options_;
     }
 
 private:
     GeometrySink sink_;
-    entities::TesselationOptions options_;
+    acdb::TesselationOptions options_;
     SubEntityTraits traits_;
 };
 
@@ -189,8 +205,8 @@ private:
 class ViewportDraw final : public WorldDraw
 {
 public:
-    ViewportDraw(entities::TessellatedEntity &geometry,
-                 const entities::TesselationOptions &options = {},
+    ViewportDraw(acdb::TessellatedEntity &geometry,
+                 const acdb::TesselationOptions &options = {},
                  double pixelsPerUnit = 0.0, double chordToleranceFactor = 0.25)
         : WorldDraw(geometry, options),
           pixelsPerUnit_(pixelsPerUnit),
@@ -224,10 +240,10 @@ public:
         return std::clamp(desired, curveRadius * 1.0e-5, curveRadius * 0.15);
     }
 
-    [[nodiscard]] entities::TesselationOptions optionsFor(
+    [[nodiscard]] acdb::TesselationOptions optionsFor(
         double curveRadius) const
     {
-        entities::TesselationOptions options = WorldDraw::options();
+        acdb::TesselationOptions options = WorldDraw::options();
         const double tolerance = deviation(curveRadius);
         if (!(tolerance > 0.0) || !(curveRadius > tolerance))
             return options;

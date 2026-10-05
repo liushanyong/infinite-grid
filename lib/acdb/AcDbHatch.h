@@ -6,14 +6,14 @@
 #include <vector>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Hatch
+struct AcDbHatch
 {
-    EntityCommon common;
+    AcDbEntity common;
     std::vector<AcGePoint3d> outerLoop;
     std::vector<std::vector<AcGePoint3d>> innerLoops;
     bool solidFill = true;
@@ -22,4 +22,4 @@ struct Hatch
     double patternAngle = 0.0;
 };
 
-} // namespace entities
+} // namespace acdb

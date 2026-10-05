@@ -3,16 +3,16 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Ray
+struct AcDbRay
 {
-    EntityCommon common;
+    AcDbEntity common;
     AcGePoint3d start{0.0, 0.0, 0.0};
     AcGeVector3d direction{1.0, 0.0, 0.0};
 };
 
-} // namespace entities
+} // namespace acdb

@@ -5,14 +5,14 @@
 #include <vector>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Polyline
+struct AcDb2dPolyline
 {
-    EntityCommon common;
+    AcDbEntity common;
     std::vector<AcGePoint3d> vertices;
     std::vector<double> bulges;
     bool closed = false;
@@ -20,4 +20,4 @@ struct Polyline
     double thickness = 0.0;
 };
 
-} // namespace entities
+} // namespace acdb

@@ -9,32 +9,18 @@ namespace acdb
 
 // ---- common(payload) accessors ----
 
-entities::EntityCommon &common(AcDbEntityVariant &payload)
+AcDbEntity &common(AcDbEntityVariant &payload)
 {
-    return std::visit([](auto &entity) -> entities::EntityCommon & {
+    return std::visit([](auto &entity) -> AcDbEntity & {
         return entity.common;
     }, payload);
 }
 
-const entities::EntityCommon &common(const AcDbEntityVariant &payload)
+const AcDbEntity &common(const AcDbEntityVariant &payload)
 {
-    return std::visit([](const auto &entity)
-                          -> const entities::EntityCommon & {
+    return std::visit([](const auto &entity) -> const AcDbEntity & {
         return entity.common;
     }, payload);
-}
-
-AcDbEntity toAcDbEntity(const entities::EntityCommon &payloadCommon)
-{
-    AcDbEntity entity;
-    entity.setHandle(AcDbHandle{payloadCommon.handle});
-    entity.setName(payloadCommon.name);
-    entity.setLayerName(payloadCommon.layer);
-    entity.setColor(payloadCommon.color);
-    entity.setLineType(payloadCommon.lineType);
-    entity.setLineWeight(payloadCommon.lineWeight);
-    entity.setVisibility(payloadCommon.visible);
-    return entity;
 }
 
 // ---- AcDbEntity::setDatabaseDefaults ----
@@ -71,7 +57,7 @@ AcDbLayerTableRecord &AcDbLayerTable::add(const std::string &name,
 {
     AcDbLayerTableRecord &record = records_[name];
     record.setRecordName(name);
-    record.setHandle(handle);
+    record.handle = handle;
     return record;
 }
 
@@ -89,7 +75,7 @@ void AcDbLinetypeTable::add(const std::string &name, AcDbHandle handle,
 {
     AcDbLinetypeTableRecord &record = records_[name];
     record.setRecordName(name);
-    record.setHandle(handle);
+    record.handle = handle;
     record.description = description;
 }
 
@@ -107,7 +93,7 @@ AcDbTextStyleTableRecord &AcDbTextStyleTable::add(const std::string &name,
 {
     AcDbTextStyleTableRecord &record = records_[name];
     record.setRecordName(name);
-    record.setHandle(handle);
+    record.handle = handle;
     return record;
 }
 
@@ -131,7 +117,7 @@ AcDbBlockTableRecord &AcDbBlockTable::add(const std::string &name,
 {
     AcDbBlockTableRecord &record = records_[name];
     record.setRecordName(name);
-    record.setHandle(handle);
+    record.handle = handle;
     return record;
 }
 

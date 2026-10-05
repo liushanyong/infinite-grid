@@ -4,13 +4,13 @@
 
 #include <vector>
 
-#include "entity_common.h"
-#include "material.h"
+#include "acdb/AcDbCore.h"
+#include "acdb/AcDbMaterial.h"
 
-namespace entities
+namespace acdb
 {
 
-struct MeshGeometry
+struct AcDbPolyFaceMeshGeometry
 {
     // CPU authoring geometry remains double precision so tessellated CAD
     // picking and large-coordinate fills use the same world positions.
@@ -20,12 +20,12 @@ struct MeshGeometry
     std::vector<std::uint32_t> indices;
 };
 
-struct Mesh
+struct AcDbPolyFaceMesh
 {
-    EntityCommon common;
-    MeshGeometry geometry;
+    AcDbEntity common;
+    AcDbPolyFaceMeshGeometry geometry;
     MeshStyle style = MeshStyle::Cad;
-    PbrMaterial material;
+    AcDbMaterial material;
 };
 
-} // namespace entities
+} // namespace acdb

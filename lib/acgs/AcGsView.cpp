@@ -605,7 +605,7 @@ glm::vec3 AcGsView::ribbonSide(const glm::vec3 &direction,
     return glm::normalize(sideAxis) * halfWidth;
 }
 
-float AcGsView::strokeHalfWidth(const entities::Stroke &stroke,
+float AcGsView::strokeHalfWidth(const acdb::Stroke &stroke,
                                 float fallback) const
 {
     return stroke.lineWeight > 0.0
@@ -873,7 +873,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
     }
     auto appendLinePatternSegment = [&](const glm::vec3 &ra,
                                         const glm::vec3 &rb,
-                                        const entities::Stroke &stroke) {
+                                        const acdb::Stroke &stroke) {
         const std::string &type = stroke.common.lineType;
         const AcGiLineType *lineType = acgiFindLineType(type.c_str());
         if (!lineType)
@@ -916,7 +916,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
 
     size_t debugClipRejected = 0;
     size_t debugClipAccepted = 0;
-    for (const entities::Stroke &stroke : drawList.geometry().strokes)
+    for (const acdb::Stroke &stroke : drawList.geometry().strokes)
     {
         if (!stroke.common.visible || stroke.points.size() < 2)
             continue;
@@ -1026,7 +1026,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
     static std::vector<rendering::FillVertex> surfaceFillVertices;
     fillVertices.clear();
     surfaceFillVertices.clear();
-    for (const entities::Triangle &triangle : drawList.geometry().fills)
+    for (const acdb::Triangle &triangle : drawList.geometry().fills)
     {
         if (!triangle.common.visible)
             continue;
@@ -1062,7 +1062,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
 
     static std::vector<rendering::TargetPointInstance> points;
     points.clear();
-    for (const entities::TessellatedPoint &point :
+    for (const acdb::TessellatedPoint &point :
          drawList.geometry().points)
     {
         if (!point.common.visible)
@@ -1192,7 +1192,7 @@ void AcGsView::drawFillTriangles(
     backend_->drawFilledTriangles(data);
 }
 
-void AcGsView::drawFillBoundary(const entities::TessellatedEntity &tess,
+void AcGsView::drawFillBoundary(const acdb::TessellatedEntity &tess,
                                 size_t begin, size_t count, float halfWidth,
                                 const glm::vec4 &color) const
 {
@@ -1213,7 +1213,7 @@ void AcGsView::drawFillBoundary(const entities::TessellatedEntity &tess,
     const size_t last = std::min(begin + count, tess.fills.size());
     for (size_t i = begin; i < last; ++i)
     {
-        const entities::Triangle &triangle = tess.fills[i];
+        const acdb::Triangle &triangle = tess.fills[i];
         if (!triangle.common.visible)
             continue;
         const glm::dvec3 corners[3] = {triangle.a, triangle.b, triangle.c};

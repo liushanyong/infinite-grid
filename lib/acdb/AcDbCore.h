@@ -23,26 +23,6 @@
 
 #include <glm/glm.hpp>
 
-#include "acdb/AcDbBlockReference.h"
-#include "entities/arc.h"
-#include "entities/circle.h"
-#include "entities/ellipse.h"
-#include "entities/hatch.h"
-#include "entities/light.h"
-#include "entities/line.h"
-#include "entities/lwpolyline.h"
-#include "entities/mesh.h"
-#include "entities/mline.h"
-#include "entities/mtext.h"
-#include "entities/point.h"
-#include "entities/polyline.h"
-#include "entities/ray.h"
-#include "entities/solid.h"
-#include "entities/solid3d.h"
-#include "entities/spline.h"
-#include "entities/text.h"
-#include "entities/xline.h"
-
 namespace acdb
 {
 
@@ -51,6 +31,12 @@ namespace acdb
 struct AcDbHandle
 {
     std::uint64_t value = 0;
+
+    // Implicit conversions so payload field reads/writes
+    // (entity.common.handle = 0xCAFE) keep compiling against u64 handles.
+    AcDbHandle() = default;
+    constexpr AcDbHandle(std::uint64_t v) : value(v) {}
+    operator std::uint64_t() const { return value; }
 
     bool isValid() const { return value != 0; }
     bool operator==(const AcDbHandle &other) const = default;
@@ -76,27 +62,17 @@ namespace acdb
 class AcDbObject
 {
 public:
-    AcDbHandle handle() const { return handle_; }
-    void setHandle(AcDbHandle handle) { handle_ = handle; }
-
-    AcDbHandle ownerHandle() const { return ownerHandle_; }
-    void setOwnerHandle(AcDbHandle owner) { ownerHandle_ = owner; }
-
-    // Erase semantics (ObjectARX: erasure is a flag until the database
-    // is compacted; undo can unerase with the original handle).
-    void erase() { erased_ = true; }
-    void unerase() { erased_ = false; }
-    bool isErased() const { return erased_; }
-
-private:
-    AcDbHandle handle_;
-    AcDbHandle ownerHandle_;
-    bool erased_ = false;
+    // Public fields: the entity payloads embed these by value and the
+    // render pipeline reads them directly (ObjectARX's open/close protocol
+    // is out of scope for the value-type layer).
+    AcDbHandle handle;
+    AcDbHandle ownerHandle;
+    bool erased = false;
 };
 
 // ---- AcDbEntity: common entity properties ----
 //
-// Field names intentionally mirror entities::EntityCommon (the demo
+// Field names intentionally mirror acdb::AcDbEntity (the demo
 // payload reads them directly); the accessors carry the ObjectARX
 // spellings (setLayerName/getLineWeight/...).  setDatabaseDefaults
 // applies the database's active settings exactly like
@@ -133,7 +109,7 @@ public:
     // (ByLayer-style fields inherit; values already set stay).
     void setDatabaseDefaults(const class AcDbDatabase &database);
 
-    // Payload fields (shared shape with entities::EntityCommon).
+    // Payload fields (shared shape with acdb::AcDbEntity).
     std::string name;
     std::string layer = "0";
     glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
@@ -201,23 +177,5 @@ private:
     std::vector<AcDbHandle> entityHandles_;
 };
 
-// Concrete entity payload set.  Each member is a lib/entities value type;
-// geometry stays untouched while acdb owns identity and membership.
-using AcDbEntityVariant = std::variant<
-    entities::Line, entities::Arc, entities::Circle, entities::Ellipse,
-    entities::Point, entities::Ray, entities::XLine, entities::Solid,
-    entities::Hatch, entities::Polyline, entities::LwPolyline,
-    entities::Spline, entities::Text, entities::MText, entities::MLine,
-    entities::Mesh, entities::Solid3d, entities::Light,
-    AcDbBlockReference>;
-
-// Read-write access to the common-properties member shared by every
-// payload type (all of them embed entities::EntityCommon as `common`).
-entities::EntityCommon &common(AcDbEntityVariant &payload);
-const entities::EntityCommon &common(const AcDbEntityVariant &payload);
-
-// ARX view of a payload's common properties (migration seam until the
-// lib/entities payloads embed acdb::AcDbEntity directly).
-AcDbEntity toAcDbEntity(const entities::EntityCommon &payloadCommon);
 
 } // namespace acdb

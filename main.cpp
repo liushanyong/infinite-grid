@@ -5,10 +5,10 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "coordinate/WorldRebase.h"
-#include "entities/tessellate.h"
-#include "entities/world_draw.h"
+#include "acdb/AcDbTessellate.h"
+#include "acdb/AcDbEntityWorldDraw.h"
 #include "libredwg/include/dwg.h"
-#include "entities/dwg_bridge.h"
+#include "acdb/AcDbDwgBridge.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionHighlighter.h"
@@ -662,10 +662,10 @@ void appendSceneLine(acgs::AcGsModel &drawList,
   draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, opacity)));
   draw.subEntityTraits().setLineWeight(lineWeight);
 
-  entities::Line line;
+  acdb::AcDbLine line;
   line.start = start;
   line.end = end;
-  entities::worldDraw(line, draw);
+  acdb::worldDraw(line, draw);
 }
 
 bool lineDebugEnabled()
@@ -685,9 +685,9 @@ void appendScenePoint(acgs::AcGsModel &drawList,
   draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, 1.0f)));
   draw.subEntityTraits().setLineWeight(pointSize);
 
-  entities::Point point;
+  acdb::AcDbPoint point;
   point.location = location;
-  entities::worldDraw(point, draw);
+  acdb::worldDraw(point, draw);
 }
 
 // Dynamic overlays stay in the AcGi-lite protocol but are never placed in the
@@ -698,14 +698,14 @@ int currentDrawableHeight();
 
 struct MeshEntityRecord
 {
-  entities::Mesh entity;
+  acdb::AcDbPolyFaceMesh entity;
   glm::dvec3 worldPosition;
   float size;
   rendering::MeshType mesh = rendering::MeshType::Cube;
 
   bool realistic() const
   {
-    return entity.style == entities::MeshStyle::Realistic;
+    return entity.style == acdb::MeshStyle::Realistic;
   }
 
   const std::string &displayName() const
@@ -994,8 +994,8 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
       for (size_t i = 0; i < objects.size(); ++i)
       {
         objects[i].entity.style = (i % 2) != 0
-                                      ? entities::MeshStyle::Realistic
-                                      : entities::MeshStyle::Cad;
+                                      ? acdb::MeshStyle::Realistic
+                                      : acdb::MeshStyle::Cad;
         objects[i].entity.material.metallicFactor = 0.82f;
         objects[i].entity.material.roughnessFactor = 0.22f;
       }
@@ -1115,7 +1115,7 @@ struct VisibilityCandidate
 
 struct VectorPrimitivesTessellation
 {
-  entities::TessellatedEntity geometry;
+  acdb::TessellatedEntity geometry;
   glm::dvec3 anchor{0.0};
   std::vector<MeshEntityRecord> meshes;
   std::vector<CadEntityRange> strokeRanges;
@@ -1132,7 +1132,7 @@ enum class CadEntityPickShape
 
 template <typename EntityType>
 void appendVectorPrimitive(const EntityType &entity, const char *name,
-                           const entities::TesselationOptions &options,
+                           const acdb::TesselationOptions &options,
                            VectorPrimitivesTessellation &target,
                            bool fillIs3DFace = false,
                            CadEntityPickShape pickShape =
@@ -1153,7 +1153,7 @@ void appendVectorPrimitive(const EntityType &entity, const char *name,
   const size_t pointBegin = target.geometry.points.size();
   acgs::ViewportDraw draw(target.geometry, options);
   draw.subEntityTraits().setFrom(entity.common);
-  entities::worldDraw(entity, draw, fillIs3DFace);
+  acdb::worldDraw(entity, draw, fillIs3DFace);
   addRange(target.strokeRanges, strokeBegin,
            target.geometry.strokes.size());
   addRange(target.fillRanges, fillBegin, target.geometry.fills.size());
@@ -1181,7 +1181,7 @@ static glm::vec4 aciColor(int index)
 // entity struct, and appendVectorPrimitive routes it through the same
 // tessellation/picking pipeline as the authored demo.
 static void appendDwgFile(const char *path,
-                          const entities::TesselationOptions &options,
+                          const acdb::TesselationOptions &options,
                           VectorPrimitivesTessellation &target)
 {
   Dwg_Data dwg;
@@ -1205,7 +1205,7 @@ static void appendDwgFile(const char *path,
     {
     case DWG_TYPE_LINE:
     {
-      entities::Line line = entities::toEntity(*object.tio.entity->tio.LINE);
+      acdb::AcDbLine line = acdb::toEntity(*object.tio.entity->tio.LINE);
       line.common.color = entityColor;
       appendVectorPrimitive(line, "DWG_LINE", options, target);
       ++appended;
@@ -1213,7 +1213,7 @@ static void appendDwgFile(const char *path,
     }
     case DWG_TYPE_ARC:
     {
-      entities::Arc arc = entities::toEntity(*object.tio.entity->tio.ARC);
+      acdb::AcDbArc arc = acdb::toEntity(*object.tio.entity->tio.ARC);
       arc.common.color = entityColor;
       appendVectorPrimitive(arc, "DWG_ARC", options, target);
       ++appended;
@@ -1221,8 +1221,8 @@ static void appendDwgFile(const char *path,
     }
     case DWG_TYPE_CIRCLE:
     {
-      entities::Circle circle =
-          entities::toEntity(*object.tio.entity->tio.CIRCLE);
+      acdb::AcDbCircle circle =
+          acdb::toEntity(*object.tio.entity->tio.CIRCLE);
       circle.common.color = entityColor;
       appendVectorPrimitive(circle, "DWG_CIRCLE", options, target);
       ++appended;
@@ -1230,8 +1230,8 @@ static void appendDwgFile(const char *path,
     }
     case DWG_TYPE_ELLIPSE:
     {
-      entities::Ellipse ellipse =
-          entities::toEntity(*object.tio.entity->tio.ELLIPSE);
+      acdb::AcDbEllipse ellipse =
+          acdb::toEntity(*object.tio.entity->tio.ELLIPSE);
       ellipse.common.color = entityColor;
       appendVectorPrimitive(ellipse, "DWG_ELLIPSE", options, target);
       ++appended;
@@ -1239,8 +1239,8 @@ static void appendDwgFile(const char *path,
     }
     case DWG_TYPE_POINT:
     {
-      entities::Point point =
-          entities::toEntity(*object.tio.entity->tio.POINT);
+      acdb::AcDbPoint point =
+          acdb::toEntity(*object.tio.entity->tio.POINT);
       point.common.color = entityColor;
       appendVectorPrimitive(point, "DWG_POINT", options, target);
       ++appended;
@@ -1248,7 +1248,7 @@ static void appendDwgFile(const char *path,
     }
     case DWG_TYPE_RAY:
     {
-      entities::Ray ray = entities::toEntity(*object.tio.entity->tio.RAY);
+      acdb::AcDbRay ray = acdb::toEntity(*object.tio.entity->tio.RAY);
       ray.common.color = entityColor;
       appendVectorPrimitive(ray, "DWG_RAY", options, target);
       ++appended;
@@ -1256,9 +1256,9 @@ static void appendDwgFile(const char *path,
     }
     case DWG_TYPE_XLINE:
     {
-      entities::XLine xline;
-      const entities::Ray ray =
-          entities::toEntity(*object.tio.entity->tio.RAY);
+      acdb::AcDbXline xline;
+      const acdb::AcDbRay ray =
+          acdb::toEntity(*object.tio.entity->tio.RAY);
       xline.point = ray.start;
       xline.direction = ray.direction;
       xline.common.color = entityColor;
@@ -1281,22 +1281,22 @@ static void appendDwgFile(const char *path,
 VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 {
   VectorPrimitivesTessellation target;
-  entities::TessellatedEntity &result = target.geometry;
+  acdb::TessellatedEntity &result = target.geometry;
   if (!cadEntityDemoEnabled())
     return target;
 
     const glm::dvec3 cadAnchor =
         vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
     target.anchor = cadAnchor;
-    const entities::TesselationOptions options;
+    const acdb::TesselationOptions options;
 
-    entities::Line line;
+    acdb::AcDbLine line;
     line.common.color = glm::vec4(1.0f, 0.24f, 0.20f, 1.0f);
     line.start = cadAnchor;
     line.end = cadAnchor + glm::dvec3(768.0, 0.0, 0.0);
     appendVectorPrimitive(line, "Line", options, target);
 
-    entities::Arc arc;
+    acdb::AcDbArc arc;
     arc.common.color = glm::vec4(1.0f, 0.52f, 0.10f, 1.0f);
     arc.center = cadAnchor + glm::dvec3(1024.0, 256.0, 0.0);
     arc.radius = 192.0;
@@ -1304,13 +1304,13 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     arc.endAngle = glm::radians(270.0);
     appendVectorPrimitive(arc, "Arc", options, target);
 
-    entities::Circle circle;
+    acdb::AcDbCircle circle;
     circle.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
     circle.center = cadAnchor + glm::dvec3(256.0, 512.0, 0.0);
     circle.radius = 160.0;
     appendVectorPrimitive(circle, "Circle", options, target);
 
-    entities::Ellipse ellipse;
+    acdb::AcDbEllipse ellipse;
     ellipse.common.color = glm::vec4(0.65f, 0.30f, 0.85f, 1.0f);
     ellipse.center = cadAnchor + glm::dvec3(768.0, 640.0, 0.0);
     ellipse.majorAxis = glm::dvec3(224.0, 0.0, 0.0);
@@ -1319,7 +1319,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // Partial ellipse: the parameter range draws an elliptical arc instead
     // of the closed curve.
-    entities::Ellipse ellipseArc;
+    acdb::AcDbEllipse ellipseArc;
     ellipseArc.common.color = glm::vec4(0.75f, 0.40f, 0.95f, 1.0f);
     ellipseArc.center = cadAnchor + glm::dvec3(1536.0, -640.0, 0.0);
     ellipseArc.majorAxis = glm::dvec3(160.0, 0.0, 0.0);
@@ -1328,7 +1328,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     ellipseArc.endParameter = glm::pi<double>() * 1.75;
     appendVectorPrimitive(ellipseArc, "EllipseArc", options, target);
 
-    entities::Polyline polyline;
+    acdb::AcDb2dPolyline polyline;
     polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     polyline.vertices = {
         cadAnchor + glm::dvec3(-384.0, 128.0, 0.0),
@@ -1338,7 +1338,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     polyline.bulges = {0.25, 0.0, -0.35};
     appendVectorPrimitive(polyline, "Polyline", options, target);
 
-    entities::LwPolyline lwpolyline;
+    acdb::AcDbPolyline lwpolyline;
     lwpolyline.common.color = glm::vec4(0.25f, 0.80f, 0.45f, 1.0f);
     lwpolyline.vertices = {glm::dvec2(-256.0, -384.0),
                            glm::dvec2(0.0, -192.0),
@@ -1349,7 +1349,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       vertex += glm::dvec2(cadAnchor);
     appendVectorPrimitive(lwpolyline, "LwPolyline", options, target);
 
-    entities::Spline spline;
+    acdb::AcDbSpline spline;
     spline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
     spline.degree = 3;
     spline.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
@@ -1360,7 +1360,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(0.0, 768.0, 0.0)};
     appendVectorPrimitive(spline, "Spline", options, target);
 
-    entities::Hatch hatch;
+    acdb::AcDbHatch hatch;
     hatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.75f);
     hatch.outerLoop = {
         cadAnchor + glm::dvec3(1024.0, -384.0, 0.0),
@@ -1371,7 +1371,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // ANSI31 line pattern at unit scale; the inner loop punches a hole via
     // the even-odd rule.
-    entities::Hatch patternHatch;
+    acdb::AcDbHatch patternHatch;
     patternHatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.90f);
     patternHatch.solidFill = false;
     patternHatch.patternName = "ANSI31";
@@ -1390,7 +1390,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     appendVectorPrimitive(patternHatch, "PatternHatch", options, target);
 
     // Same pattern family rotated 45 degrees and widened by patternScale.
-    entities::Hatch angledHatch;
+    acdb::AcDbHatch angledHatch;
     angledHatch.common.color = glm::vec4(0.35f, 0.55f, 0.95f, 0.90f);
     angledHatch.solidFill = false;
     angledHatch.patternName = "ANSI31";
@@ -1403,7 +1403,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1024.0, -832.0, 0.0)};
     appendVectorPrimitive(angledHatch, "AngledHatch", options, target);
 
-    entities::Solid solid;
+    acdb::AcDbSolid solid;
     solid.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 0.85f);
     solid.firstCorner = cadAnchor + glm::dvec3(0.0, -128.0, 256.0);
     solid.secondCorner = solid.firstCorner + glm::dvec3(512.0, 0.0, 0.0);
@@ -1411,13 +1411,13 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     solid.fourthCorner = solid.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
     appendVectorPrimitive(solid, "Solid", options, target);
 
-    entities::Ray ray;
+    acdb::AcDbRay ray;
     ray.common.color = glm::vec4(0.10f, 0.85f, 0.75f, 1.0f);
     ray.start = cadAnchor + glm::dvec3(-640.0, -768.0, 0.0);
     ray.direction = glm::dvec3(1.0, 0.25, 0.0);
     appendVectorPrimitive(ray, "Ray", options, target);
 
-    entities::XLine xline;
+    acdb::AcDbXline xline;
     xline.common.color = glm::vec4(0.65f, 0.35f, 0.95f, 1.0f);
     xline.point = cadAnchor + glm::dvec3(256.0, -1152.0, 0.0);
     xline.direction = glm::dvec3(2.0, -1.0, 0.0);
@@ -1439,14 +1439,14 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       const glm::dvec3 textUp(0.0, 0.0, 1.0);
       const glm::vec4 shxColor(0.95f, 0.85f, 0.30f, 1.0f);
 
-      // One entities::Stroke PER glyph stroke segment: a single stroke
+      // One acdb::Stroke PER glyph stroke segment: a single stroke
       // with all points would connect consecutive segments into spurious
       // pen-up lines ("连笔") across and within glyphs.
       const size_t strokeBegin = target.geometry.strokes.size();
       for (const rendering::ShxGlyphStroke &glyphStroke :
            acgi::textEngine().shxStrokes(shxText))
       {
-        entities::Stroke segment;
+        acdb::Stroke segment;
         segment.common.color = shxColor;
         segment.points = {
             textOrigin + textRight * (glyphStroke.fromX * textHeight) +
@@ -1466,7 +1466,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       }
     }
 
-    entities::MLine mline;
+    acdb::AcDbMline mline;
     mline.common.color = glm::vec4(0.85f, 0.35f, 0.35f, 0.95f);
     mline.vertices = {
         cadAnchor + glm::dvec3(-256.0, -768.0, 0.0),
@@ -1479,7 +1479,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // Closed multi-line: the offset band wraps around and the enclosed
     // strip is filled between the two boundary strokes.
-    entities::MLine closedMLine;
+    acdb::AcDbMline closedMLine;
     closedMLine.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 0.95f);
     closedMLine.vertices = {
         cadAnchor + glm::dvec3(1472.0, -880.0, 0.0),
@@ -1493,7 +1493,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // Closed polyline with non-zero thickness: the outline extrudes into
     // wall quads along the normal.
-    entities::Polyline borderedPolyline;
+    acdb::AcDb2dPolyline borderedPolyline;
     borderedPolyline.common.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f);
     borderedPolyline.vertices = {
         cadAnchor + glm::dvec3(1792.0, -576.0, 0.0),
@@ -1507,7 +1507,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // Fit-point splines: the C1 fallback interpolates the fit points, open
     // and closed forms.
-    entities::Spline fitSpline;
+    acdb::AcDbSpline fitSpline;
     fitSpline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
     fitSpline.degree = 3;
     fitSpline.fitPoints = {
@@ -1517,7 +1517,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1408.0, -1088.0, 0.0)};
     appendVectorPrimitive(fitSpline, "FitSpline", options, target);
 
-    entities::Spline closedFitSpline;
+    acdb::AcDbSpline closedFitSpline;
     closedFitSpline.common.color = glm::vec4(0.55f, 0.85f, 0.25f, 1.0f);
     closedFitSpline.degree = 3;
     closedFitSpline.closed = true;
@@ -1530,7 +1530,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     // The closed ring through the same points: the interpolation visibly
     // smooths the corners of this reference polygon.
-    entities::Polyline closedFitRing;
+    acdb::AcDb2dPolyline closedFitRing;
     closedFitRing.common.color = glm::vec4(0.55f, 0.55f, 0.55f, 0.9f);
     closedFitRing.vertices = closedFitSpline.fitPoints;
     closedFitRing.closed = true;
@@ -1539,7 +1539,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     // Non-planar fit spline: the fit points span all three dimensions, so
     // the curve bends out of the ground plane (the fit-point demos above
     // are flat for comparison).
-    entities::Spline spaceSpline;
+    acdb::AcDbSpline spaceSpline;
     spaceSpline.common.color = glm::vec4(0.30f, 0.65f, 0.95f, 1.0f);
     spaceSpline.degree = 3;
     spaceSpline.fitPoints = {
@@ -1550,19 +1550,19 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1536.0, -1216.0, 640.0)};
     appendVectorPrimitive(spaceSpline, "SpaceSpline", options, target);
 
-    entities::Point cadPoint;
+    acdb::AcDbPoint cadPoint;
     cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
     cadPoint.location = cadAnchor + glm::dvec3(512.0, 0.0, 0.0);
     appendVectorPrimitive(cadPoint, "Point", options, target);
 
-    entities::Text text;
+    acdb::AcDbText text;
     text.common.color = glm::vec4(0.95f, 0.95f, 0.30f, 1.0f);
     text.insertion = cadAnchor + glm::dvec3(1152.0, 128.0, 384.0);
     text.height = 96.0;
     text.text = "中文 TEXT";
     appendVectorPrimitive(text, "Text", options, target);
 
-    entities::MText mtext;
+    acdb::AcDbMText mtext;
     mtext.common.color = glm::vec4(0.35f, 0.90f, 0.95f, 1.0f);
     mtext.insertion = cadAnchor + glm::dvec3(1152.0, 320.0, 384.0);
     mtext.direction = glm::dvec3(1.0, 0.0, 0.0);
@@ -1573,22 +1573,22 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     // Text locators: bright vertical lines pointing at each text insertion
     // point, so the glyph position can be found from any distance while
     // debugging the SDF path.
-    entities::Line textLocator;
+    acdb::AcDbLine textLocator;
     textLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
     textLocator.common.lineWeight = 3.0;
     textLocator.start = text.insertion + glm::dvec3(0.0, 0.0, -320.0);
     textLocator.end = text.insertion;
     appendVectorPrimitive(textLocator, "TextLocator", options, target);
-    entities::Line mtextLocator;
+    acdb::AcDbLine mtextLocator;
     mtextLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
     mtextLocator.common.lineWeight = 3.0;
     mtextLocator.start = mtext.insertion + glm::dvec3(0.0, 0.0, -320.0);
     mtextLocator.end = mtext.insertion;
     appendVectorPrimitive(mtextLocator, "MTextLocator", options, target);
 
-    entities::Solid3d solid3d;
+    acdb::AcDb3dSolid solid3d;
     solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
-    solid3d.renderClass = entities::RenderClass::Cad;
+    solid3d.renderClass = acdb::RenderClass::Cad;
     const glm::dvec3 boxMin = cadAnchor + glm::dvec3(1536.0, 128.0, 384.0);
     const glm::dvec3 boxMax = boxMin + glm::dvec3(256.0, 256.0, 256.0);
     solid3d.vertices = {
@@ -1611,9 +1611,9 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     };
     appendVectorPrimitive(solid3d, "Solid3d", options, target, true);
 
-    entities::Light light;
+    acdb::AcDbLight light;
     light.common.color = glm::vec4(1.0f, 0.90f, 0.55f, 1.0f);
-    light.type = entities::LightType::Spot;
+    light.type = acdb::LightType::Spot;
     light.position = cadAnchor + glm::dvec3(-1152.0, 256.0, 512.0);
     light.target = cadAnchor + glm::dvec3(-768.0, 0.0, 0.0);
     light.range = 1024.0f;
@@ -1625,7 +1625,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     for (int i = 0; i < 24; ++i)
     {
-      entities::Point gridPoint;
+      acdb::AcDbPoint gridPoint;
       gridPoint.common.color = glm::vec4(
           0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i, 1.0f);
       gridPoint.common.lineWeight = 6.0;
@@ -1636,7 +1636,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
           gridPoint, ("PointGrid" + std::to_string(i)).c_str(), options, target);
     }
 
-    entities::Line dashedArrow;
+    acdb::AcDbLine dashedArrow;
     dashedArrow.common.color = glm::vec4(0.95f, 0.25f, 0.75f, 1.0f);
     dashedArrow.common.lineType = "DASHED";
     dashedArrow.common.lineWeight = 2.5;
@@ -1650,7 +1650,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       const glm::dvec3 side =
           glm::normalize(glm::cross(dir, glm::dvec3(0.0, 0.0, 1.0))) * 24.0;
       const glm::dvec3 base = dashedArrow.end - AcGeVector3d(dir) * 48.0;
-      entities::Solid arrowHead;
+      acdb::AcDbSolid arrowHead;
       arrowHead.common = dashedArrow.common;
       arrowHead.firstCorner = dashedArrow.end;
       arrowHead.secondCorner = base - side;
@@ -1671,10 +1671,10 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
                glm::dvec3(u * 768.0, height * 224.0, v * 512.0);
       };
 
-      entities::Mesh surface;
+      acdb::AcDbPolyFaceMesh surface;
       surface.common.color = glm::vec4(0.20f, 0.45f, 0.85f, 0.80f);
       surface.common.layer = "GRID_FILL_LAYER";
-      surface.style = entities::MeshStyle::Cad;
+      surface.style = acdb::MeshStyle::Cad;
       surface.geometry.positions.reserve(
           static_cast<size_t>(surfaceSegs + 1) * (surfaceSegs + 1));
       for (int iy = 0; iy <= surfaceSegs; ++iy)
@@ -1706,8 +1706,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       if (paramSurfaceIsolinesEnabled())
       for (int k = 0; k <= surfaceSegs; k += 4)
       {
-        entities::Polyline isoU;
-        entities::Polyline isoV;
+        acdb::AcDb2dPolyline isoU;
+        acdb::AcDb2dPolyline isoV;
         isoU.common.color = glm::vec4(0.05f, 0.10f, 0.25f, 0.85f);
         isoU.common.lineWeight = 2.0;
         isoV = isoU;
@@ -1729,7 +1729,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     for (int i = 0; i < 5; ++i)
     {
-      entities::Point widthDot;
+      acdb::AcDbPoint widthDot;
       widthDot.common.color = glm::vec4(
           0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f);
       widthDot.common.lineWeight = 12.0;
@@ -1746,7 +1746,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
           {0.2f, 0.4f, 1.0f, 1.0f}, {1.0f, 0.8f, 0.2f, 1.0f}};
       for (int i = 0; i < 4; ++i)
       {
-        entities::Line widthLine;
+        acdb::AcDbLine widthLine;
         widthLine.common.color = colors[i];
         widthLine.common.lineWeight = widths[i];
         widthLine.start =
@@ -1767,7 +1767,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
           {0.60f, 0.60f, 1.00f, 1.0f}, {0.80f, 0.20f, 0.20f, 1.0f}};
       for (int i = 0; i < 6; ++i)
       {
-        entities::Line specimen;
+        acdb::AcDbLine specimen;
         specimen.common.color = lineColors[i];
         specimen.common.lineType = lineTypes[i];
         specimen.common.lineWeight = 24.0;
@@ -1780,7 +1780,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       }
     }
 
-    entities::Polyline demoPolyline;
+    acdb::AcDb2dPolyline demoPolyline;
     demoPolyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     demoPolyline.common.lineWeight = 4.0;
     const glm::dvec3 polylineBase =
@@ -1792,7 +1792,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         polylineBase + glm::dvec3(768.0, 384.0, 0.0)};
     appendVectorPrimitive(demoPolyline, "DemoPolyline", options, target);
 
-    entities::Hatch hexagon;
+    acdb::AcDbHatch hexagon;
     hexagon.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 1.0f);
     hexagon.outerLoop.reserve(6);
     for (int i = 0; i < 6; ++i)
@@ -1805,7 +1805,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     appendVectorPrimitive(hexagon, "Hexagon", options, target);
 
     {
-      entities::Hatch circleFill;
+      acdb::AcDbHatch circleFill;
       circleFill.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
       constexpr int circleSegments = 48;
       circleFill.outerLoop.reserve(circleSegments);
@@ -1820,7 +1820,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       appendVectorPrimitive(circleFill, "CircleFill", options, target);
     }
 
-    entities::Solid rectangle;
+    acdb::AcDbSolid rectangle;
     rectangle.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 1.0f);
     rectangle.firstCorner =
         demoAnchor + glm::dvec3(-256.0, -128.0, 256.0);
@@ -1830,7 +1830,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         rectangle.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
     appendVectorPrimitive(rectangle, "Rectangle", options, target);
 
-    entities::Spline bezier;
+    acdb::AcDbSpline bezier;
     bezier.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
     bezier.common.lineWeight = 6.0;
     bezier.degree = 3;
@@ -1982,7 +1982,7 @@ cadVisibleFillVertices(const CadEntityRange &range)
   vertices.reserve(range.count * 3);
   for (size_t i = range.begin; i < range.begin + range.count; ++i)
   {
-    const entities::Triangle &triangle = tessellation.geometry.fills[i];
+    const acdb::Triangle &triangle = tessellation.geometry.fills[i];
     if (!triangle.common.visible)
       continue;
     const glm::vec4 fillColor =
@@ -2014,7 +2014,7 @@ cadGpuPickFillVertices(const CadEntityRange &range,
   vertices.reserve(range.count * 3);
   for (size_t i = range.begin; i < range.begin + range.count; ++i)
   {
-    const entities::Triangle &triangle = tessellation.geometry.fills[i];
+    const acdb::Triangle &triangle = tessellation.geometry.fills[i];
     if (!triangle.common.visible)
       continue;
     vertices.push_back(
@@ -2032,13 +2032,13 @@ int currentDrawableHeight();
 
 struct CadPairedBandPoints
 {
-    const entities::Stroke *left = nullptr;
-    const entities::Stroke *right = nullptr;
+    const acdb::Stroke *left = nullptr;
+    const acdb::Stroke *right = nullptr;
     size_t segmentCount = 0;
 };
 
 bool cadPairedBandPoints(const CadEntityRange &range,
-                         const entities::TessellatedEntity &tess,
+                         const acdb::TessellatedEntity &tess,
                          CadPairedBandPoints &band);
 
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
@@ -2081,7 +2081,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   static std::vector<bool> fillVisible;
   static std::vector<bool> pointVisible;
 
-  const entities::TessellatedEntity &tess = tessellation.geometry;
+  const acdb::TessellatedEntity &tess = tessellation.geometry;
   static std::vector<rendering::FillVertex> gpuPickVertices;
   const bool gpuPickQueueActive =
       rendererBackend && gpuPickEnabled() &&
@@ -2208,7 +2208,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     else
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
-      const entities::Stroke &stroke = tess.strokes[i];
+      const acdb::Stroke &stroke = tess.strokes[i];
       const size_t count = stroke.points.size();
       if (!stroke.common.visible || count < 2)
         continue;
@@ -2243,7 +2243,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     gpuPickVertices.clear();
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
-      const entities::TessellatedPoint &point = tess.points[i];
+      const acdb::TessellatedPoint &point = tess.points[i];
       if (!point.common.visible)
         continue;
       const float radius = std::max(
@@ -2315,7 +2315,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
   }
 
-  for (const entities::Stroke &stroke : tess.strokes)
+  for (const acdb::Stroke &stroke : tess.strokes)
   {
     if (strokeVisible.empty() || strokeVisible[&stroke - tess.strokes.data()])
       cadDrawList.geometry().strokes.push_back(stroke);
@@ -2374,7 +2374,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       bool hasColor = false;
       for (size_t i = range.begin; i < last; ++i)
       {
-        const entities::Triangle &triangle = tess.fills[i];
+        const acdb::Triangle &triangle = tess.fills[i];
         if (!triangle.common.visible)
           continue;
         if (!hasColor)
@@ -2396,7 +2396,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       cadDrawList.addCurveBatch() = *candidate->curve;
   }
 
-  for (const entities::TessellatedPoint &point : tess.points)
+  for (const acdb::TessellatedPoint &point : tess.points)
   {
     if (!pointVisible.empty() && !pointVisible[&point - tess.points.data()])
       continue;
@@ -2710,8 +2710,8 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
       object.size = static_cast<float>(kObjectSize);
       object.mesh = kMeshCycle[i % 4];
       object.entity.style = realisticMeshEnabled() && (i % 2) != 0
-                                ? entities::MeshStyle::Realistic
-                                : entities::MeshStyle::Cad;
+                                ? acdb::MeshStyle::Realistic
+                                : acdb::MeshStyle::Cad;
       object.entity.material.metallicFactor = 0.78f;
       object.entity.material.roughnessFactor = 0.28f;
       object.entity.common.name =
@@ -2754,7 +2754,7 @@ void expandCadTessellationBounds(WorldAabb &bounds,
   {
     for (size_t index = range.begin; index < range.begin + range.count; ++index)
     {
-      const entities::Stroke &stroke = tess.geometry.strokes[index];
+      const acdb::Stroke &stroke = tess.geometry.strokes[index];
       // Infinite entities (Ray/XLine) carry only a tessellation proxy
       // endpoint; their unbounded geometry must not inflate scene bounds.
       if (stroke.semiInfinite)
@@ -2763,13 +2763,13 @@ void expandCadTessellationBounds(WorldAabb &bounds,
         expandWorldAabb(bounds, point, glm::dvec3(0.0));
     }
   }
-  for (const entities::Triangle &triangle : tess.geometry.fills)
+  for (const acdb::Triangle &triangle : tess.geometry.fills)
   {
     expandWorldAabb(bounds, triangle.a, glm::dvec3(0.0));
     expandWorldAabb(bounds, triangle.b, glm::dvec3(0.0));
     expandWorldAabb(bounds, triangle.c, glm::dvec3(0.0));
   }
-  for (const entities::TessellatedPoint &point : tess.geometry.points)
+  for (const acdb::TessellatedPoint &point : tess.geometry.points)
     expandWorldAabb(bounds, point.location, glm::dvec3(0.0));
   for (const acgs::CurveBatchCommand &curve : tess.curves)
   {
@@ -3607,7 +3607,7 @@ bool rayIntersectsTriangle(const PickRay &ray,
 }
 
 bool cadPairedBandPoints(const CadEntityRange &range,
-                         const entities::TessellatedEntity &tess,
+                         const acdb::TessellatedEntity &tess,
                          CadPairedBandPoints &band)
 {
     if (range.pickShape != CadPickShape::PairedStrokeBand ||
@@ -3632,7 +3632,7 @@ bool cadPairedBandPoints(const CadEntityRange &range,
 }
 
 bool rayIntersectsCadPairedBand(const PickRay &ray,
-                                const entities::TessellatedEntity &tess,
+                                const acdb::TessellatedEntity &tess,
                                 const CadEntityRange &range,
                                 double &hitDepth)
 {
@@ -3829,7 +3829,7 @@ double cadCurvePickTolerance(const PickRay &ray,
 }
 
 double cadStrokePickTolerance(const PickRay &ray,
-                              const entities::Stroke &stroke,
+                              const acdb::Stroke &stroke,
                               const glm::dvec3 &worldPoint)
 {
     const double renderedHalfWidth = acgsView.strokeHalfWidth(stroke);
@@ -3837,7 +3837,7 @@ double cadStrokePickTolerance(const PickRay &ray,
 }
 
 double cadPointPickTolerance(const PickRay &ray,
-                             const entities::TessellatedPoint &point)
+                             const acdb::TessellatedPoint &point)
 {
     const double baseTolerance = cadPickTolerance(ray, point.location);
     const double worldPerPixel = baseTolerance / 3.0;
@@ -4228,7 +4228,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             for (size_t strokeIndex = range.begin;
                  strokeIndex < range.begin + range.count; ++strokeIndex)
             {
-                const entities::Stroke &stroke =
+                const acdb::Stroke &stroke =
                     cad.geometry.strokes[strokeIndex];
                 if (!stroke.common.visible || stroke.points.size() < 2)
                     continue;
@@ -4265,7 +4265,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             for (size_t fillIndex = range.begin;
                  fillIndex < range.begin + range.count; ++fillIndex)
             {
-                const entities::Triangle &triangle =
+                const acdb::Triangle &triangle =
                     cad.geometry.fills[fillIndex];
                 if (!triangle.common.visible)
                     continue;
@@ -4327,7 +4327,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             for (size_t pointIndex = range.begin;
                  pointIndex < range.begin + range.count; ++pointIndex)
             {
-                const entities::TessellatedPoint &point =
+                const acdb::TessellatedPoint &point =
                     cad.geometry.points[pointIndex];
                 if (!point.common.visible)
                     continue;
@@ -4537,7 +4537,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
             for (size_t strokeIndex = range.begin; strokeIndex < end;
                  ++strokeIndex)
             {
-                const entities::Stroke &stroke =
+                const acdb::Stroke &stroke =
                     cad.geometry.strokes[strokeIndex];
                 const size_t pointCount = stroke.points.size();
                 if (!stroke.common.visible || pointCount < 2)
@@ -4575,7 +4575,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                     range.begin + range.count);
         for (size_t fillIndex = range.begin; fillIndex < end; ++fillIndex)
         {
-            const entities::Triangle &triangle = cad.geometry.fills[fillIndex];
+            const acdb::Triangle &triangle = cad.geometry.fills[fillIndex];
             if (!triangle.common.visible)
                 continue;
 
@@ -4595,7 +4595,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                     range.begin + range.count);
         for (size_t pointIndex = range.begin; pointIndex < end; ++pointIndex)
         {
-            const entities::TessellatedPoint &point =
+            const acdb::TessellatedPoint &point =
                 cad.geometry.points[pointIndex];
             if (!point.common.visible)
                 continue;
@@ -4766,7 +4766,7 @@ bool runCadPickAudit()
   {
     if (!range.count)
       continue;
-    const entities::Stroke &stroke =
+    const acdb::Stroke &stroke =
         cad.geometry.strokes[range.begin];
     if (!stroke.common.visible || stroke.points.size() < 2)
       continue;
@@ -4784,7 +4784,7 @@ bool runCadPickAudit()
   {
     if (!range.count)
       continue;
-    const entities::Triangle &fill = cad.geometry.fills[range.begin];
+    const acdb::Triangle &fill = cad.geometry.fills[range.begin];
     if (!fill.common.visible)
       continue;
     const double extent = makeCadRangeCandidate(
@@ -4809,7 +4809,7 @@ bool runCadPickAudit()
   {
     if (!range.count)
       continue;
-    const entities::TessellatedPoint &point =
+    const acdb::TessellatedPoint &point =
         cad.geometry.points[range.begin];
     if (!point.common.visible)
       continue;
@@ -4929,7 +4929,7 @@ bool runCadPickAudit()
       for (size_t i = sample.candidate.rangeBegin;
            i < sample.candidate.rangeBegin + sample.candidate.rangeCount; ++i)
       {
-        const entities::Stroke &stroke = cad.geometry.strokes[i];
+        const acdb::Stroke &stroke = cad.geometry.strokes[i];
         for (size_t j = 0; j + 1 < stroke.points.size(); ++j)
         {
           double depth = 0.0;
@@ -4944,7 +4944,7 @@ bool runCadPickAudit()
       for (size_t i = sample.candidate.rangeBegin;
            i < sample.candidate.rangeBegin + sample.candidate.rangeCount; ++i)
       {
-        const entities::Triangle &fill = cad.geometry.fills[i];
+        const acdb::Triangle &fill = cad.geometry.fills[i];
         double depth = 0.0;
         directHit |= rayIntersectsTriangle(
             ray, fill.a, fill.b, fill.c, depth);
@@ -5147,7 +5147,7 @@ VisibilityCandidate makeCadRangeCandidate(
   {
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
-      const entities::Stroke &stroke = tessellation.geometry.strokes[i];
+      const acdb::Stroke &stroke = tessellation.geometry.strokes[i];
       for (const glm::dvec3 &point : stroke.points)
         include(point);
       if (stroke.semiInfinite && stroke.points.size() >= 2)
@@ -5174,7 +5174,7 @@ VisibilityCandidate makeCadRangeCandidate(
   {
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
-      const entities::Triangle &fill = tessellation.geometry.fills[i];
+      const acdb::Triangle &fill = tessellation.geometry.fills[i];
       include(fill.a);
       include(fill.b);
       include(fill.c);
@@ -5185,7 +5185,7 @@ VisibilityCandidate makeCadRangeCandidate(
   {
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
-      const entities::TessellatedPoint &point =
+      const acdb::TessellatedPoint &point =
           tessellation.geometry.points[i];
       include(point.location);
       candidate.overlayColor = acgsView.contrastColor(point.common.color);
@@ -5823,7 +5823,7 @@ void render()
           for (size_t i = candidate.rangeBegin;
                i < candidate.rangeBegin + candidate.rangeCount; ++i)
           {
-            const entities::Stroke &stroke = tess.geometry.strokes[i];
+            const acdb::Stroke &stroke = tess.geometry.strokes[i];
             if (stroke.points.size() < 2)
               continue;
             if (stroke.semiInfinite)
@@ -6807,7 +6807,7 @@ void render()
   // their wider outline instead of the outline covering them.
   if (outlineEntity)
   {
-    const entities::TessellatedEntity &outlineTess =
+    const acdb::TessellatedEntity &outlineTess =
         getVectorPrimitivesTessellation().geometry;
     if (outlineEntity->kind == VisibilityKind::CadFill &&
         outlineEntity->cadRange && outlineEntity->cadRange->count)

@@ -24,7 +24,7 @@
 #include "rendering/RenderMode.h"
 #include "acgs/model/AcGsModel.h"
 
-namespace entities
+namespace acdb
 {
 struct Stroke;
 }
@@ -210,7 +210,7 @@ public:
 
     // Wireframe-mode fill boundary: emit the single-use triangle edges of
     // a fill range as camera-facing ribbons (shared edges stay hidden).
-    void drawFillBoundary(const entities::TessellatedEntity &tess,
+    void drawFillBoundary(const acdb::TessellatedEntity &tess,
                           size_t begin, size_t count, float halfWidth,
                           const glm::vec4 &color) const;
 
@@ -228,7 +228,7 @@ public:
     glm::vec3 ribbonSide(const glm::vec3 &direction,
                          const glm::vec3 &front, float halfWidth) const;
 
-    float strokeHalfWidth(const entities::Stroke &stroke,
+    float strokeHalfWidth(const acdb::Stroke &stroke,
                           float fallback = 2.0f) const;
 
     // Clip one world segment to the frame's frustum slab and viewport.

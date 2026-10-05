@@ -10,7 +10,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "entities/entity_common.h"
+#include "acdb/AcDbCore.h"
 
 namespace acdb
 {
@@ -22,7 +22,7 @@ class AcDbBlockReference
 public:
     // Common entity properties (same payload shape as the lib/entities
     // value types so the database variant's common() accessor applies).
-    entities::EntityCommon common;
+    acdb::AcDbEntity common;
 
     // Name of the referenced AcDbBlockTableRecord.
     std::string blockTableRecordName;

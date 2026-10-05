@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 
-#include "entities/tessellate.h"
+#include "acdb/AcDbTessellate.h"
 #include "rendering/RendererBackend.h"
 #include "acgs/model/DrawContext.h"
 
@@ -103,8 +103,8 @@ public:
 class AcGsModel final : public AcGiDrawable
 {
 public:
-    [[nodiscard]] entities::TessellatedEntity &geometry() { return geometry_; }
-    [[nodiscard]] const entities::TessellatedEntity &geometry() const
+    [[nodiscard]] acdb::TessellatedEntity &geometry() { return geometry_; }
+    [[nodiscard]] const acdb::TessellatedEntity &geometry() const
     {
         return geometry_;
     }
@@ -214,7 +214,7 @@ public:
     }
 
 private:
-    entities::TessellatedEntity geometry_;
+    acdb::TessellatedEntity geometry_;
     std::vector<MeshBatchCommand> meshBatches_;
     std::vector<CurveBatchCommand> curveBatches_;
     std::optional<GridCommand> grid_;

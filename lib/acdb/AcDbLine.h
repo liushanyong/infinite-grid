@@ -3,14 +3,14 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
-struct Line
+struct AcDbLine
 {
-    EntityCommon common;
+    AcDbEntity common;
     AcGePoint3d start{0.0, 0.0, 0.0};
     AcGePoint3d end{0.0, 0.0, 0.0};
     // DWG LINE carries an OCS extrusion and a wall thickness.
@@ -18,4 +18,4 @@ struct Line
     AcGeVector3d extrusion{0.0, 0.0, 1.0};
 };
 
-} // namespace entities
+} // namespace acdb

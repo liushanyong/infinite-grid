@@ -4,9 +4,9 @@
 
 #include "acgs/model/DrawContext.h"
 #include "../acgi/AcGiWorldDraw.h"
-#include "tessellate.h"
+#include "acdb/AcDbTessellate.h"
 
-namespace entities
+namespace acdb
 {
 
 // Translate the established value-type tessellation overload set into the
@@ -29,7 +29,7 @@ inline void worldDraw(const EntityType &entity, acgs::WorldDraw &draw,
 }
 
 // Viewport-aware curves choose their chord angle from ViewportDraw::deviation.
-inline void worldDraw(const Arc &arc, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbArc &arc, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -37,7 +37,7 @@ inline void worldDraw(const Arc &arc, acgs::ViewportDraw &draw,
                                        arc.startAngle, arc.endAngle));
 }
 
-inline void worldDraw(const Circle &circle, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbCircle &circle, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -49,7 +49,7 @@ inline void worldDraw(const Circle &circle, acgs::ViewportDraw &draw,
 // AcGiWorldDraw callback interface instead of tessellating up front, which
 // is how ObjectARX custom entities emit geometry.
 
-inline void worldDraw(const Ellipse &ellipse, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbEllipse &ellipse, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -59,7 +59,7 @@ inline void worldDraw(const Ellipse &ellipse, acgs::ViewportDraw &draw,
                                       ellipse.endParameter));
 }
 
-inline void worldDraw(const Line &line, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbLine &line, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -68,11 +68,11 @@ inline void worldDraw(const Line &line, acgs::ViewportDraw &draw,
 
 // Fit-point splines draw through the same chord-length natural cubic
 // interpolation as the tessellation path.
-inline void worldDraw(const Spline &spline, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbSpline &spline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     const std::vector<AcGePoint3d> points =
-        entities::sampleFitPointSpline(spline, draw.options());
+        acdb::sampleFitPointSpline(spline, draw.options());
     if (points.size() < 2)
         return;
     AcGiWorldDraw graphics(draw);
@@ -80,15 +80,15 @@ inline void worldDraw(const Spline &spline, acgs::ViewportDraw &draw,
                            spline.closed);
 }
 
-inline void worldDraw(const Ray &ray, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbRay &ray, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
     graphics.worldInfiniteLine(ray.start, ray.direction);
 }
 
-// XLine draws as two opposite semi-infinite strokes sharing the point.
-inline void worldDraw(const XLine &xline, acgs::ViewportDraw &draw,
+// AcDbXline draws as two opposite semi-infinite strokes sharing the point.
+inline void worldDraw(const AcDbXline &xline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -96,22 +96,22 @@ inline void worldDraw(const XLine &xline, acgs::ViewportDraw &draw,
     graphics.worldInfiniteLine(xline.point, -xline.direction);
 }
 
-inline void worldDraw(const Solid &solid, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbSolid &solid, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
     // DXF SOLID semantics: the corners are authored in zigzag order and
     // the quad is 1-2-4-3, split along the 2-3 diagonal — matching
-    // tessellate(Solid) exactly, winding included.
+    // tessellate(AcDbSolid) exactly, winding included.
     graphics.worldTriangle(solid.firstCorner, solid.secondCorner,
                            solid.thirdCorner, fillIs3DFace);
     graphics.worldTriangle(solid.secondCorner, solid.fourthCorner,
                            solid.thirdCorner, fillIs3DFace);
 }
 
-// Hatch: the solid variant fans its loop into triangles; line patterns emit
+// AcDbHatch: the solid variant fans its loop into triangles; line patterns emit
 // one worldLine per clipped scanline segment.
-inline void worldDraw(const Hatch &hatch, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbHatch &hatch, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -140,28 +140,28 @@ inline void drawPolylineCallbacks(AcGiWorldDraw &graphics,
     graphics.worldPolyline(outline.data(),
                            static_cast<int>(outline.size()),
                            polyline.closed);
-    for (const entities::Triangle &wall :
-         entities::polylineWallTriangles(polyline, outline))
+    for (const acdb::Triangle &wall :
+         acdb::polylineWallTriangles(polyline, outline))
         graphics.worldTriangle(wall.a, wall.b, wall.c, false);
 }
 
-inline void worldDraw(const Polyline &polyline, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDb2dPolyline &polyline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
     drawPolylineCallbacks(graphics, polyline, draw.options());
 }
 
-inline void worldDraw(const LwPolyline &polyline, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbPolyline &polyline, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
     drawPolylineCallbacks(graphics, polyline, draw.options());
 }
 
-// Text entities draw through the worldText callback; the style carries the
+// AcDbText entities draw through the worldText callback; the style carries the
 // entity height so the layout frame matches the tessellation path.
-inline void worldDraw(const Text &text, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbText &text, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -173,7 +173,7 @@ inline void worldDraw(const Text &text, acgs::ViewportDraw &draw,
                   text.text.c_str(), style);
 }
 
-inline void worldDraw(const MText &text, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDbMText &text, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
     AcGiWorldDraw graphics(draw);
@@ -183,16 +183,16 @@ inline void worldDraw(const MText &text, acgs::ViewportDraw &draw,
                   text.direction, text.text.c_str(), style);
 }
 
-// A Solid3d renders its fill with the entity color and its feature-edge
+// A AcDb3dSolid renders its fill with the entity color and its feature-edge
 // border strokes with the inverted color, so the border reads against the
 // fill no matter which entity color is authored.
-inline void worldDraw(const Solid3d &solid, acgs::ViewportDraw &draw,
+inline void worldDraw(const AcDb3dSolid &solid, acgs::ViewportDraw &draw,
                       bool fillIs3DFace = false)
 {
-    entities::TessellatedEntity fragment;
-    entities::tessellate(solid, fragment, draw.options());
+    acdb::TessellatedEntity fragment;
+    acdb::tessellate(solid, fragment, draw.options());
 
-    entities::TessellatedEntity fillsOnly;
+    acdb::TessellatedEntity fillsOnly;
     fillsOnly.fills = std::move(fragment.fills);
     draw.sink().append(fillsOnly, draw.subEntityTraits().traits(),
                        fillIs3DFace);
@@ -201,9 +201,9 @@ inline void worldDraw(const Solid3d &solid, acgs::ViewportDraw &draw,
     acgs::DrawTraits edgeTraits = draw.subEntityTraits().traits();
     edgeTraits.color = glm::vec4(1.0f - color.r, 1.0f - color.g,
                                  1.0f - color.b, color.a);
-    entities::TessellatedEntity strokesOnly;
+    acdb::TessellatedEntity strokesOnly;
     strokesOnly.strokes = std::move(fragment.strokes);
     draw.sink().append(strokesOnly, edgeTraits, fillIs3DFace);
 }
 
-} // namespace entities
+} // namespace acdb

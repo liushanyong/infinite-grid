@@ -42,14 +42,14 @@ class AcGsSelectionHighlighter
 public:
     explicit AcGsSelectionHighlighter(AcGsView &view) : view_(view) {}
 
-    void drawFillOutline(const entities::TessellatedEntity &tess,
+    void drawFillOutline(const acdb::TessellatedEntity &tess,
                          size_t begin, size_t count, float pixelSizeWorld);
 
-    void drawPointHighlight(const entities::TessellatedEntity &tess,
+    void drawPointHighlight(const acdb::TessellatedEntity &tess,
                             size_t begin, size_t count,
                             float pixelSizeWorld);
 
-    void drawStrokeOutline(const entities::TessellatedEntity &tess,
+    void drawStrokeOutline(const acdb::TessellatedEntity &tess,
                            size_t begin, size_t count, float pixelSizeWorld);
 
     void drawCurveOutline(const acgs::CurveBatchCommand &curve,

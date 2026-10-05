@@ -28,7 +28,7 @@ bool lineDebugEnabled()
 } // namespace
 
 void AcGsSelectionHighlighter::drawFillOutline(
-    const entities::TessellatedEntity &tess, size_t begin, size_t count,
+    const acdb::TessellatedEntity &tess, size_t begin, size_t count,
     float pixelSizeWorld)
 {
     if (begin >= tess.fills.size())
@@ -64,7 +64,7 @@ void AcGsSelectionHighlighter::drawFillOutline(
             (p.y == q.y && p.z <= q.z)))
             ? BoundaryKey{p, q} : BoundaryKey{q, p};
     };
-    auto addTriangle = [&](const entities::Triangle &triangle) {
+    auto addTriangle = [&](const acdb::Triangle &triangle) {
         if (!triangle.common.visible)
             return;
         const glm::dvec3 normal = glm::cross(triangle.b - triangle.a,
@@ -133,7 +133,7 @@ void AcGsSelectionHighlighter::drawFillOutline(
 }
 
 void AcGsSelectionHighlighter::drawPointHighlight(
-    const entities::TessellatedEntity &tess, size_t begin, size_t count,
+    const acdb::TessellatedEntity &tess, size_t begin, size_t count,
     float pixelSizeWorld)
 {
     if (begin >= tess.points.size())
@@ -158,7 +158,7 @@ void AcGsSelectionHighlighter::drawPointHighlight(
     constexpr int kCircleSegments = 32;
     for (size_t i = begin; i < last; ++i)
     {
-        const entities::TessellatedPoint &point = tess.points[i];
+        const acdb::TessellatedPoint &point = tess.points[i];
         if (!point.common.visible)
             continue;
 
@@ -204,7 +204,7 @@ void AcGsSelectionHighlighter::drawPointHighlight(
 }
 
 void AcGsSelectionHighlighter::drawStrokeOutline(
-    const entities::TessellatedEntity &tess, size_t begin, size_t count,
+    const acdb::TessellatedEntity &tess, size_t begin, size_t count,
     float pixelSizeWorld)
 {
     static std::vector<rendering::LineInstance> outlineLineInstances;
@@ -213,7 +213,7 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
     for (size_t i = begin;
          i < begin + count && i < tess.strokes.size(); ++i)
     {
-        const entities::Stroke &stroke = tess.strokes[i];
+        const acdb::Stroke &stroke = tess.strokes[i];
         const size_t pointCount = stroke.points.size();
         if (!stroke.common.visible || pointCount < 2)
             continue;

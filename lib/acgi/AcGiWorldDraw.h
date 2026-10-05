@@ -23,7 +23,7 @@ public:
 
     bool worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
     {
-        entities::Stroke &stroke = sink().addStroke();
+        acdb::Stroke &stroke = sink().addStroke();
         stroke.points = {apply(from), apply(to)};
         applyTraits(stroke);
         return true;
@@ -33,7 +33,7 @@ public:
     {
         if (!points || count < 2)
             return false;
-        entities::Stroke &stroke = sink().addStroke(closed);
+        acdb::Stroke &stroke = sink().addStroke(closed);
         stroke.points.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i)
             stroke.points.push_back(apply(points[i]));
@@ -44,7 +44,7 @@ public:
     bool worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                        const AcGePoint3d &c, bool fillIs3DFace = false)
     {
-        entities::Triangle triangle{{}, apply(a), apply(b), apply(c)};
+        acdb::Triangle triangle{{}, apply(a), apply(b), apply(c)};
         applyTraits(triangle, fillIs3DFace);
         sink().appendTriangle(triangle);
         return true;
@@ -56,13 +56,13 @@ public:
         const double sweep = arc.endAngle - arc.startAngle;
         if (!(arc.radius > 0.0) || !(sweep > 0.0))
             return false;
-        const entities::TesselationOptions options =
+        const acdb::TesselationOptions options =
             draw_.optionsFor(arc.radius);
         const int segments = std::max(
             8, static_cast<int>(std::ceil(sweep / options.angleStep)));
         if (arc.isFullCircle())
         {
-            entities::Stroke &stroke = sink().addStroke(true);
+            acdb::Stroke &stroke = sink().addStroke(true);
             stroke.points.reserve(static_cast<size_t>(segments));
             for (int i = 0; i < segments; ++i)
             {
@@ -73,7 +73,7 @@ public:
         }
         else
         {
-            entities::Stroke &stroke = sink().addStroke(false);
+            acdb::Stroke &stroke = sink().addStroke(false);
             stroke.points.reserve(static_cast<size_t>(segments) + 1);
             for (int i = 0; i <= segments; ++i)
             {
@@ -88,7 +88,7 @@ public:
     bool worldPoint(const AcGePoint3d &position)
     {
         const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
-        entities::TessellatedPoint point;
+        acdb::TessellatedPoint point;
         point.location = apply(position);
         point.common = traits.toEntityCommon();
         point.pointSize =
@@ -108,7 +108,7 @@ public:
         if (dir.lengthSq() <= 0.0)
             return false;
         constexpr double kProxyLength = 1.0e6;
-        entities::Stroke &stroke = sink().addStroke(false);
+        acdb::Stroke &stroke = sink().addStroke(false);
         stroke.points = {apply(start),
                          apply(start + dir * kProxyLength)};
         stroke.semiInfinite = true;
@@ -173,7 +173,7 @@ public:
             glm::normalize(glm::cross(glm::dvec3(normal.normal()), right));
         const glm::dvec3 frameHeight = up * (height * double(lineCount));
 
-        entities::Stroke &frame = sink().addStroke(true);
+        acdb::Stroke &frame = sink().addStroke(true);
         frame.points.reserve(5);
         frame.points.push_back(apply(position));
         frame.points.push_back(apply(position + AcGeVector3d(right * width)));
@@ -193,7 +193,7 @@ public:
         double sweep = ellipse.endAngle - ellipse.startAngle;
         if (!(sweep > 0.0))
             return false;
-        const entities::TesselationOptions options =
+        const acdb::TesselationOptions options =
             draw_.optionsFor(ellipse.majorRadius());
         const int segments = std::max(
             8, static_cast<int>(std::ceil(sweep / options.angleStep)));
@@ -241,14 +241,14 @@ private:
 
     acgs::GeometrySink &sink() { return draw_.sink(); }
 
-    void applyTraits(entities::Stroke &stroke) const
+    void applyTraits(acdb::Stroke &stroke) const
     {
         const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
         stroke.common = traits.toEntityCommon();
         stroke.lineWeight = traits.lineWeight;
     }
 
-    void applyTraits(entities::Triangle &triangle, bool fillIs3DFace) const
+    void applyTraits(acdb::Triangle &triangle, bool fillIs3DFace) const
     {
         const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
         triangle.common = traits.toEntityCommon();

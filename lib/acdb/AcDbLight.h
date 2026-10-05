@@ -3,22 +3,22 @@
 #include <glm/glm.hpp>
 
 #include "../ge/ge.h"
-#include "entity_common.h"
+#include "acdb/AcDbCore.h"
 
-namespace entities
+namespace acdb
 {
 
 enum class LightType
 {
-    Point,
+    AcDbPoint,
     Directional,
     Spot,
 };
 
-struct Light
+struct AcDbLight
 {
-    EntityCommon common;
-    LightType type = LightType::Point;
+    AcDbEntity common;
+    LightType type = LightType::AcDbPoint;
     AcGePoint3d position{0.0, 0.0, 0.0};
     AcGeVector3d target{0.0, 0.0, -1.0};
     glm::vec3 color{1.0f, 1.0f, 1.0f};
@@ -28,4 +28,4 @@ struct Light
     float outerConeAngle = 0.0f;
 };
 
-} // namespace entities
+} // namespace acdb

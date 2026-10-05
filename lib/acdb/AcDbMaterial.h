@@ -4,15 +4,15 @@
 
 #include <string>
 
-#include "render_class.h"
+#include "acdb/AcDbRenderClass.h"
 
-namespace entities
+namespace acdb
 {
 
-// Field names and defaults follow vsg::PbrMaterial.  The first implementation
+// Field names and defaults follow vsg::AcDbMaterial.  The first implementation
 // packs metallic/roughness/emissive/alpha into mesh instance data, while these
 // fields remain the canonical authoring representation.
-struct PbrMaterial
+struct AcDbMaterial
 {
     glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 emissiveFactor{0.0f, 0.0f, 0.0f, 1.0f};
@@ -27,4 +27,4 @@ struct PbrMaterial
     RenderClass renderClass = RenderClass::Realistic;
 };
 
-} // namespace entities
+} // namespace acdb
