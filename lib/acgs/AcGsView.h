@@ -114,6 +114,33 @@ public:
     // useOrthoProjection() wrapper keeps its existing call sites.
     bool &orthoMode() { return orthoMode_; }
 
+    // ---- depth-slab scheduling (near/far auto-management) ----
+
+    // One independent slab per projection channel: the ortho object pass,
+    // the perspective object pass, and the perspective overlay pass.
+    enum class DepthSlab
+    {
+        Ortho,
+        Perspective,
+        Overlay
+    };
+
+    // Re-arm every stabilizer after a view-state change (projection
+    // switch, grid-plane change, camera teleport): the next candidate slab
+    // is applied immediately instead of waiting out the hysteresis.
+    void resetDepthSlabs();
+
+    // Apply the slab policy to one candidate interval: expansion is applied
+    // immediately (nothing clips while moving), shrinkage waits until the
+    // candidate has been stable for twenty frames.  The stable interval is
+    // then rounded outward to the enclosing float32 values, because the
+    // projection matrices are float32 while the slab bounds accumulate in
+    // double - rounding must never move a plane inside the bounds it was
+    // computed to contain.
+    void stabilizeDepthSlab(DepthSlab slab, double candidateNear,
+                            double candidateFar, double &outNear,
+                            double &outFar);
+
     void attach(rendering::RendererBackend *backend);
     rendering::RendererBackend *backend() const { return backend_; }
 
@@ -243,6 +270,9 @@ private:
     AcGsOrbitCamera orbitCamera_;
     bool orthoMode_ = false;
     rendering::RenderModeManager visualStyle_;
+
+    struct DepthSlabStabilizer;
+    DepthSlabStabilizer &slabStabilizer(DepthSlab slab);
 };
 
 } // namespace acgs

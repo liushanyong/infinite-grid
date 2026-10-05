@@ -42,6 +42,27 @@ rendering::SurfaceMaterial toSurfaceMaterial(
 namespace
 {
 
+// Projection matrices are float32, while slab bounds are accumulated in
+// double.  Convert in the outward direction so rounding can never move a
+// near/far plane inside a bounds that was calculated to contain it.
+float floatExpandOutward(double value, bool downward)
+{
+    constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
+    constexpr float kPositiveInfinity = std::numeric_limits<float>::infinity();
+    const float direction = downward ? kNegativeInfinity : kPositiveInfinity;
+    float result = static_cast<float>(value);
+
+    if ((downward && static_cast<double>(result) > value) ||
+        (!downward && static_cast<double>(result) < value))
+    {
+        result = std::nextafterf(result, direction);
+    }
+
+    for (int i = 0; i < 3 && std::isfinite(result); ++i)
+        result = std::nextafterf(result, direction);
+    return result;
+}
+
 bool lineDebugEnabled()
 {
     static const bool enabled = [] {
@@ -457,6 +478,98 @@ AcGsView &AcGsView::instance()
 void AcGsView::attach(rendering::RendererBackend *backend)
 {
     backend_ = backend;
+}
+
+// Depth-slab hysteresis: expansion is applied immediately so nothing is
+// clipped while moving, but shrinkage is delayed until the candidate slab
+// has stayed stable for twenty frames.
+struct AcGsView::DepthSlabStabilizer
+{
+    bool initialized = false;
+    double stableNear = 0.0;
+    double stableFar = 0.0;
+    double pendingNear = 0.0;
+    double pendingFar = 0.0;
+    int stableFrames = 0;
+
+    void reset()
+    {
+        initialized = false;
+        stableFrames = 0;
+    }
+
+    void apply(double candidateNear, double candidateFar,
+               double &outNear, double &outFar)
+    {
+        if (!initialized)
+        {
+            stableNear = pendingNear = candidateNear;
+            stableFar = pendingFar = candidateFar;
+            stableFrames = 0;
+            initialized = true;
+        }
+        else if (candidateNear < stableNear || candidateFar > stableFar)
+        {
+            stableNear = std::min(stableNear, candidateNear);
+            stableFar = std::max(stableFar, candidateFar);
+            pendingNear = stableNear;
+            pendingFar = stableFar;
+            stableFrames = 0;
+        }
+        else
+        {
+            const double magnitude = std::max(
+                {std::abs(stableNear), std::abs(stableFar),
+                 std::abs(candidateNear), std::abs(candidateFar)});
+            const double epsilon = std::max(1.0e-4, magnitude * 1.0e-4);
+            if (std::abs(candidateNear - pendingNear) > epsilon ||
+                std::abs(candidateFar - pendingFar) > epsilon)
+            {
+                pendingNear = candidateNear;
+                pendingFar = candidateFar;
+                stableFrames = 0;
+            }
+            else
+            {
+                ++stableFrames;
+            }
+            if (stableFrames >= 20)
+            {
+                stableNear = pendingNear;
+                stableFar = pendingFar;
+                stableFrames = 0;
+            }
+        }
+        outNear = stableNear;
+        outFar = stableFar;
+    }
+};
+
+AcGsView::DepthSlabStabilizer &AcGsView::slabStabilizer(DepthSlab slab)
+{
+    static DepthSlabStabilizer stabilizers[3];
+    return stabilizers[static_cast<int>(slab)];
+}
+
+void AcGsView::resetDepthSlabs()
+{
+    for (const DepthSlab slab :
+         {DepthSlab::Ortho, DepthSlab::Perspective, DepthSlab::Overlay})
+    {
+        slabStabilizer(slab).reset();
+    }
+}
+
+void AcGsView::stabilizeDepthSlab(DepthSlab slab, double candidateNear,
+                                  double candidateFar, double &outNear,
+                                  double &outFar)
+{
+    double stableNear = 0.0;
+    double stableFar = 0.0;
+    slabStabilizer(slab).apply(candidateNear, candidateFar, stableNear,
+                               stableFar);
+    outNear = floatExpandOutward(stableNear, true);
+    outFar = floatExpandOutward(stableFar, false);
 }
 
 glm::vec4 AcGsView::contrastColor(const glm::vec4 &color) const

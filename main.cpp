@@ -5,8 +5,6 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "coordinate/WorldRebase.h"
-//#include "acgs/AcGsOrbitCamera.h"
-//#include "rendering/RendererBackend.h"
 #include "entities/tessellate.h"
 #include "entities/world_draw.h"
 #include "libredwg/include/dwg.h"
@@ -233,106 +231,12 @@ glm::dvec3 customGridPlaneStartAxisDirection =
 
 void enforceTargetPlaneConstraint();
 
-// Projection matrices are float32, while slab bounds are accumulated in
-// double.  Convert in the outward direction so rounding can never move a
-// near/far plane inside a bounds that was calculated to contain it.
-float floatExpandOutward(double value, bool downward)
-{
-    constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
-    constexpr float kPositiveInfinity = std::numeric_limits<float>::infinity();
-    const float direction = downward ? kNegativeInfinity : kPositiveInfinity;
-    float result = static_cast<float>(value);
-
-    if ((downward && static_cast<double>(result) > value) ||
-        (!downward && static_cast<double>(result) < value))
-    {
-        result = std::nextafterf(result, direction);
-    }
-
-
-    for (int i = 0; i < 3 && std::isfinite(result); ++i)
-        result = std::nextafterf(result, direction);
-    return result;
-}
-// Depth-slab hysteresis: expansion is applied immediately so nothing is
-// clipped while moving, but shrinkage is delayed until the candidate slab
-// has been stable for twenty frames.  This prevents one-ULP per-frame noise
-// from making the near/far planes (and therefore the log-depth mapping)
-// ping-pong between two values.
-struct SlabStabilizer
-{
-    bool initialized = false;
-    double stableNear = 0.0;
-    double stableFar = 0.0;
-    double pendingNear = 0.0;
-    double pendingFar = 0.0;
-    int stableFrames = 0;
-
-    void reset()
-    {
-        initialized = false;
-        stableFrames = 0;
-    }
-
-    void apply(double candidateNear, double candidateFar,
-               double &outNear, double &outFar)
-    {
-        if (!initialized)
-        {
-            stableNear = pendingNear = candidateNear;
-            stableFar = pendingFar = candidateFar;
-            stableFrames = 0;
-            initialized = true;
-        }
-        else if (candidateNear < stableNear || candidateFar > stableFar)
-        {
-            stableNear = std::min(stableNear, candidateNear);
-            stableFar = std::max(stableFar, candidateFar);
-            pendingNear = stableNear;
-            pendingFar = stableFar;
-            stableFrames = 0;
-        }
-        else
-        {
-            const double magnitude = std::max(
-                {std::abs(stableNear), std::abs(stableFar),
-                 std::abs(candidateNear), std::abs(candidateFar)});
-            const double epsilon = std::max(1.0e-4, magnitude * 1.0e-4);
-            if (std::abs(candidateNear - pendingNear) > epsilon ||
-                std::abs(candidateFar - pendingFar) > epsilon)
-            {
-                pendingNear = candidateNear;
-                pendingFar = candidateFar;
-                stableFrames = 0;
-            }
-            else
-            {
-                ++stableFrames;
-            }
-            if (stableFrames >= 20)
-            {
-                stableNear = pendingNear;
-                stableFar = pendingFar;
-                stableFrames = 0;
-            }
-        }
-        outNear = stableNear;
-        outFar = stableFar;
-    }
-};
-
-SlabStabilizer g_orthoSlabStabilizer;
-SlabStabilizer g_perspectiveSlabStabilizer;
-SlabStabilizer g_overlaySlabStabilizer;
-
+// Depth-slab scheduling (hysteresis + float32-outward rounding) lives in
+// acgs::AcGsView; the demo keeps its call sites through this forwarder.
 void resetSlabStabilizers()
 {
-    g_orthoSlabStabilizer.reset();
-    g_perspectiveSlabStabilizer.reset();
-    g_overlaySlabStabilizer.reset();
+  acgsView.resetDepthSlabs();
 }
-
-
 
 const char *gridPlaneName(GridPlaneType plane)
 {
@@ -6046,11 +5950,11 @@ void render()
     // Hysteresis: expand immediately, shrink only after twenty stable frames.
     double stableOrthoNear = 0.0;
     double stableOrthoFar = 0.0;
-    g_orthoSlabStabilizer.apply(slabCenterDepth - slabRadius,
-                                slabCenterDepth + slabRadius,
-                                stableOrthoNear, stableOrthoFar);
-    const double near = floatExpandOutward(stableOrthoNear, true);
-    const double far = floatExpandOutward(stableOrthoFar, false);
+    double near = 0.0;
+    double far = 0.0;
+    acgsView.stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Ortho,
+                                slabCenterDepth - slabRadius,
+                                slabCenterDepth + slabRadius, near, far);
 
     const glm::dmat4 orthoDouble = glm::ortho(
         -halfH * (double)aspect, halfH * (double)aspect,
@@ -6226,14 +6130,11 @@ void render()
         kMaxPerspectiveFar,
         std::max(objectMaxDepth + depthMargin,
                  candidateObjectNear + kMinPerspectiveSpan));
-    double stablePerspectiveNear = 0.0;
-    double stablePerspectiveFar = 0.0;
-    g_perspectiveSlabStabilizer.apply(candidateObjectNear,
-                                      candidateObjectFar,
-                                      stablePerspectiveNear,
-                                      stablePerspectiveFar);
-    const double near = floatExpandOutward(stablePerspectiveNear, true);
-    const double far = floatExpandOutward(stablePerspectiveFar, false);
+    double near = 0.0;
+    double far = 0.0;
+    acgsView.stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Perspective,
+                                      candidateObjectNear,
+                                      candidateObjectFar, near, far);
 
     const glm::dmat4 perspectiveDouble = glm::perspective(
         glm::radians(45.0), (double)aspect, near, far);
@@ -6255,11 +6156,11 @@ void render()
                  kNearDepthFloor + kMinPerspectiveSpan));
     double stableOverlayNear = 0.0;
     double stableOverlayFar = 0.0;
-    g_overlaySlabStabilizer.apply(
-        (double)kNearDepthFloor, candidateOverlayFar,
-        stableOverlayNear, stableOverlayFar);
-    overlayNear = floatExpandOutward(stableOverlayNear, true);
-    overlayFar = floatExpandOutward(stableOverlayFar, false);
+    acgsView.stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Overlay,
+                                (double)kNearDepthFloor, candidateOverlayFar,
+                                stableOverlayNear, stableOverlayFar);
+    overlayNear = stableOverlayNear;
+    overlayFar = stableOverlayFar;
     const glm::dmat4 overlayDouble = glm::perspective(
         glm::radians(45.0), (double)aspect, (double)overlayNear, (double)overlayFar);
     overlayProjection = glm::mat4(overlayDouble);
