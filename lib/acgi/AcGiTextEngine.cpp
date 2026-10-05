@@ -1,3 +1,9 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 // AcGi text engine implementation.  Drawing logic mirrors the ObjectARX
 // model: the request (message + placement + style metrics) is expanded
 // into per-glyph quads through the loaded font, and the renderer submits
@@ -10,6 +16,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#ifdef _WIN32
+#endif
 #include <limits>
 
 namespace acgi
@@ -207,8 +215,8 @@ bool TextEngine::intersectsOrthoViewport(
     const glm::dvec3 &cameraFront, double halfWidth,
     double halfHeight) const
 {
-    // Oriented text rectangle in the entity plane: baseline direction ×
-    // message width, in-plane up × line count.
+    // Oriented text rectangle in the entity plane: baseline direction x
+    // message width, in-plane up x line count.
     glm::dvec3 textRight = request.direction;
     if (glm::dot(textRight, textRight) < 1.0e-18)
         textRight = glm::dvec3(1.0, 0.0, 0.0);
@@ -267,15 +275,60 @@ bool TextEngine::intersectsOrthoViewport(
            maximum.y >= -halfHeight && minimum.y <= halfHeight;
 }
 
+namespace
+{
+
+// Convert a UTF-8 message to AutoCAD bigfont query bytes: codepage 936
+// (GB2312), where each CJK glyph is addressed by a two-byte code (lead in
+// the font's escape ranges).  Non-lead bytes keep their identity so the
+// regular font serves ASCII.
+std::vector<unsigned char> toBigfontBytes(const std::string &utf8)
+{
+#ifdef _WIN32
+    const int wideLength =
+        MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), int(utf8.size()),
+                            nullptr, 0);
+    std::wstring wide;
+    if (wideLength > 0)
+        wide.resize(size_t(wideLength));
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), int(utf8.size()),
+                        wide.data(), wideLength);
+    const int byteLength = WideCharToMultiByte(
+        936, 0, wide.c_str(), wideLength, nullptr, 0, nullptr, nullptr);
+    std::vector<unsigned char> bytes(size_t(byteLength), 0);
+    WideCharToMultiByte(936, 0, wide.c_str(), wideLength,
+                        reinterpret_cast<char *>(bytes.data()), byteLength,
+                        nullptr, nullptr);
+    return bytes;
+#else
+    return std::vector<unsigned char>(utf8.begin(), utf8.end());
+#endif
+}
+
+} // namespace
+
 std::vector<rendering::ShxGlyphStroke> TextEngine::shxStrokes(
     const std::string &message) const
 {
     std::vector<rendering::ShxGlyphStroke> strokes;
     double penX = 0.0;
-    for (unsigned char character : message)
+    const std::vector<unsigned char> bytes = toBigfontBytes(message);
+    for (size_t position = 0; position < bytes.size();)
     {
+        const unsigned char lead = bytes[position];
+        uint32_t character = lead;
+        size_t width = 1;
+        // Bigfont escape-lead bytes introduce a two-byte CJK code
+        // (lead << 8 | second) queried against the big-font index.
+        if (lead >= 0x81 && position + 1 < bytes.size())
+        {
+            character = uint32_t(lead << 8) | bytes[position + 1];
+            width = 2;
+        }
+        position += width;
+
         const rendering::ShxGlyphSlot &glyph =
-            shxFontFor(character).shxGlyph(character);
+            shxFontFor(lead).shxGlyph(character);
         if (!glyph.valid)
         {
             penX += 0.5;
@@ -296,10 +349,20 @@ std::vector<rendering::ShxGlyphStroke> TextEngine::shxStrokes(
 double TextEngine::shxAdvance(const std::string &message) const
 {
     double advance = 0.0;
-    for (unsigned char character : message)
+    const std::vector<unsigned char> bytes = toBigfontBytes(message);
+    for (size_t position = 0; position < bytes.size();)
     {
+        const unsigned char lead = bytes[position];
+        uint32_t character = lead;
+        size_t width = 1;
+        if (lead >= 0x81 && position + 1 < bytes.size())
+        {
+            character = uint32_t(lead << 8) | bytes[position + 1];
+            width = 2;
+        }
+        position += width;
         const rendering::ShxGlyphSlot &glyph =
-            shxFontFor(character).shxGlyph(character);
+            shxFontFor(lead).shxGlyph(character);
         advance += glyph.valid ? glyph.advanceWidth : 0.5;
     }
     return advance;

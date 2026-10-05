@@ -2067,7 +2067,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     // an AutoCAD big-font covering ASCII + CJK punctuation.
     if (gShxFontReady)
     {
-      const std::string shxText = "INFINITE - GRID 123";
+      const std::string shxText = "中文 INFINITE - GRID 123";
       // SHX glyphs hang below their anchor (cap line at the anchor,
       // baseline one em down): raise the anchor one em above the ground.
       const glm::dvec3 textOrigin =
