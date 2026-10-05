@@ -5,16 +5,16 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "coordinate/WorldRebase.h"
-#include "camera/orbit.h"
-#include "rendering/RendererBackend.h"
+//#include "acgs/AcGsOrbitCamera.h"
+//#include "rendering/RendererBackend.h"
 #include "entities/tessellate.h"
 #include "entities/world_draw.h"
 #include "libredwg/include/dwg.h"
 #include "entities/dwg_bridge.h"
 #include "acgi/AcGiTextQueue.h"
-#include "acgi/AcGiView.h"
-#include "acgi/AcGiSelectionHighlighter.h"
-#include "acgi/AcGiSelectionManager.h"
+#include "acgs/AcGsView.h"
+#include "acgs/AcGsSelectionHighlighter.h"
+#include "acgs/AcGsSelectionManager.h"
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -50,10 +50,13 @@ namespace
 constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
 
+// The AcGs view owns the camera, projection mode, and every renderer
+// submission; demo code reaches it through this reference.
+acgs::AcGsView &acgsView = acgs::AcGsView::instance();
+
 bool &useOrthoProjection()
 {
-    static bool enabled = false;
-    return enabled;
+    return acgsView.orthoMode();
 }
 
 WorldRebase &worldRebase()
@@ -120,13 +123,14 @@ std::unique_ptr<rendering::RendererBackend> rendererBackend;
 // delta, which is enough to catch near-black/near-background overlays while
 // avoiding needless color changes for clearly distinct hues.
 // The single render gateway every submission goes through.
-acgi::AcGiView &acgiView = acgi::AcGiView::instance();
+// Legacy alias kept for the submission call sites below.
+acgs::AcGsView &acgiView = acgsView;
 
 // Selection highlight drawing (the selection state itself stays here).
-static acgi::AcGiSelectionHighlighter selectionHighlighter(acgiView);
+static acgs::AcGsSelectionHighlighter selectionHighlighter(acgiView);
 
 // Camera-space projection now lives in the acgi render gateway.
-using CameraSpacePoint = acgi::CameraSpacePoint;
+using CameraSpacePoint = acgs::CameraSpacePoint;
 
 
 static bool debugValidationMeshesEnabled()
@@ -441,12 +445,8 @@ void activePlaneTangents(glm::dvec3 &tangentU, glm::dvec3 &tangentV)
 const glm::dvec3 LARGE_COORDINATE_BASE_POINT(1e7, 0.0, 1e7);
 const glm::dvec3 LARGE_COORDINATE_DETAIL_OFFSET(1536.0, 0.0, -1024.0);
 
-OrbitCamera orbitCam(
-    glm::vec3(0.0f), // Target is origin
-    15.0f,           // Radius distance from target
-    -45.0f,          // Yaw
-    20.0f            // Pitch
-);
+// The view owns the orbit camera; demo code keeps the orbitCam alias.
+AcGsOrbitCamera &orbitCam = acgsView.orbitCamera();
 
 // An orbit drag locks its pivot when it starts.  Until this demo has a
 // selection system, use the same fallback as OpenCADStudio: the camera target.
@@ -515,7 +515,7 @@ bool init()
   const auto requestedRenderer = resolveRequestedBackend();
   rendererBackend = rendering::createRenderer(
       requestedRenderer.type, requestedRenderer.api);
-  acgiView.attach(rendererBackend.get());
+  acgsView.attach(rendererBackend.get());
 
   if (!rendererBackend->configureSDL())
   {
@@ -555,10 +555,10 @@ bool init()
     const int styleIndex = std::atoi(styleEnv);
     if (styleIndex > 0 && styleIndex < 6)
     {
-      acgiView.visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
-      rendererBackend->setRenderMode(acgiView.visualStyle().mode());
+      acgsView.visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
+      rendererBackend->setRenderMode(acgsView.visualStyle().mode());
       std::cout << "Visual style: "
-              << rendering::renderModeLabel(acgiView.visualStyle().mode())
+              << rendering::renderModeLabel(acgsView.visualStyle().mode())
               << std::endl;
     }
   }
@@ -762,7 +762,7 @@ void appendSceneLine(scene::SceneDrawList &drawList,
                      double lineWeight = 2.0)
 {
   scene::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgiView.contrastColor(glm::vec4(color, opacity)));
+  draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, opacity)));
   draw.subEntityTraits().setLineWeight(lineWeight);
 
   entities::Line line;
@@ -785,7 +785,7 @@ void appendScenePoint(scene::SceneDrawList &drawList,
                       double pointSize)
 {
   scene::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgiView.contrastColor(glm::vec4(color, 1.0f)));
+  draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, 1.0f)));
   draw.subEntityTraits().setLineWeight(pointSize);
 
   entities::Point point;
@@ -847,15 +847,15 @@ struct GpuPickEntity
   }
 };
 
-static acgi::AcGiSelectionManager &gpuPickManager()
+static acgs::AcGsSelectionManager &gpuPickManager()
 {
-  return acgi::AcGiSelectionManager::instance();
+  return acgs::AcGsSelectionManager::instance();
 }
 
 // The demo entity type bridges to the type-erased pick record: the
 // manager stores a kind tag plus opaque pointers and never sees the
 // demo-level scene types.
-static acgi::AcGiPickEntity toPickEntity(const GpuPickEntity &entity)
+static acgs::AcGsPickEntity toPickEntity(const GpuPickEntity &entity)
 {
   return {uint32_t(entity.kind), entity.mesh, entity.cadRange,
           entity.curve};
@@ -863,7 +863,7 @@ static acgi::AcGiPickEntity toPickEntity(const GpuPickEntity &entity)
 
 static bool gpuPickEnabled()
 {
-  return acgi::AcGiSelectionManager::pickEnabled();
+  return acgs::AcGsSelectionManager::pickEnabled();
 }
 
 static uint32_t registerGpuPickEntity(GpuPickEntity entity)
@@ -874,7 +874,7 @@ static uint32_t registerGpuPickEntity(GpuPickEntity entity)
 static const GpuPickEntity *findGpuPickEntity(uint32_t id)
 {
   thread_local GpuPickEntity converted;
-  const acgi::AcGiPickEntity *found = gpuPickManager().find(id);
+  const acgs::AcGsPickEntity *found = gpuPickManager().find(id);
   if (!found)
     return nullptr;
   converted.kind = VisibilityKind(found->kind);
@@ -888,8 +888,8 @@ static const GpuPickEntity *findGpuPickEntity(uint32_t id)
 
 constexpr uint32_t kGpuPickCenterCubeId = 1;
 
-using GpuPickCameraBasis = acgi::AcGiSelectionManager::CameraBasis;
-using GpuPickFocusState = acgi::AcGiSelectionManager::FocusState;
+using GpuPickCameraBasis = acgs::AcGsSelectionManager::CameraBasis;
+using GpuPickFocusState = acgs::AcGsSelectionManager::FocusState;
 
 GpuPickFocusState &gpuPickFocus = gpuPickManager().focus();
 bool gpuPickSceneDebug = false;
@@ -902,7 +902,7 @@ uint32_t lockedOutlineId = 0;
 static uint64_t hashGpuPickSceneBytes(uint64_t hash, const void *data,
                                       size_t size)
 {
-  return acgi::AcGiSelectionManager::hashSceneBytes(hash, data, size);
+  return acgs::AcGsSelectionManager::hashSceneBytes(hash, data, size);
 }
 
 uint32_t findGpuPickObjectIdForEntity(const GpuPickEntity &entity)
@@ -919,7 +919,7 @@ static bool gpuPickFocusWaiting()
 
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
-  return acgiView.contrastColor(entity.entity.common.color);
+  return acgsView.contrastColor(entity.entity.common.color);
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
@@ -2089,7 +2089,7 @@ cadVisibleFillVertices(const CadEntityRange &range)
     if (!triangle.common.visible)
       continue;
     const glm::vec4 fillColor =
-        acgiView.contrastColor(triangle.common.color);
+        acgsView.contrastColor(triangle.common.color);
     vertices.push_back(
         {glm::vec3(triangle.a - tessellation.anchor), fillColor});
     vertices.push_back(
@@ -2208,7 +2208,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const float minimumHalfWidth =
         pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
-    const glm::vec3 side = acgiView.ribbonSide(direction, camFront, halfWidth);
+    const glm::vec3 side = acgsView.ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2232,7 +2232,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // stroke ribbons; otherwise the visible curve is easier to see than to
     // pick.
     const float halfWidth = float(pointWorldPerPixel(worldMidpoint));
-    const glm::vec3 side = acgiView.ribbonSide(direction, camFront, halfWidth);
+    const glm::vec3 side = acgsView.ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2257,7 +2257,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
-    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     const std::vector<rendering::FillVertex> &pickVertices =
         cadGpuPickFillVertices(range, idColor, objectId);
     // CAD surfaces participate in occlusion. Transparent CAD fills behave like
@@ -2282,7 +2282,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadStroke, nullptr, &range});
-    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     CadPairedBandPoints band;
     if (cadPairedBandPoints(range, tess, band))
@@ -2315,7 +2315,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const size_t count = stroke.points.size();
       if (!stroke.common.visible || count < 2)
         continue;
-      const float halfWidth = acgiView.strokeHalfWidth(stroke);
+      const float halfWidth = acgsView.strokeHalfWidth(stroke);
       const size_t segmentCount =
           stroke.closed ? count : count - 1;
       for (size_t segment = 0; segment < segmentCount; ++segment)
@@ -2323,7 +2323,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         // The scene ID pass and the 1x1 pick pass both hardware-clip at
         // the overlay slab, so clipping the soup there is pixel-exact.
         glm::dvec3 clippedStart, clippedEnd;
-        if (!acgiView.clipStrokeSegment(
+        if (!acgsView.clipStrokeSegment(
                 stroke.points[segment],
                 stroke.points[(segment + 1) % count],
                 clippedStart, clippedEnd, stroke.semiInfinite))
@@ -2342,7 +2342,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadPoint, nullptr, &range});
-    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
@@ -2361,9 +2361,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       return;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadCurve, nullptr, nullptr, candidate.curve});
-    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
-    const std::vector<glm::dvec3> points = acgi::AcGiView::sampleCurveBatch(*candidate.curve);
+    const std::vector<glm::dvec3> points = acgs::AcGsView::sampleCurveBatch(*candidate.curve);
     for (size_t i = 0; i + 1 < points.size(); ++i)
       appendCenteredPickRibbon(
           glm::vec3(points[i] - cameraPos),
@@ -2376,7 +2376,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const CadEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {candidate.kind, nullptr, &range});
-    const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
+    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     const float minimumRadius =
         float(3.0 * pointWorldPerPixel(candidate.center));
@@ -2446,13 +2446,13 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         .vertexCount =
             static_cast<uint32_t>(visibleFillVertices.size()),
         .is3DFace = false,
-        .layer = acgi::envLayer("GRID_FILL_LAYER"),
+        .layer = acgs::envLayer("GRID_FILL_LAYER"),
         .logDepth = logDepth,
-        .material = acgi::toSurfaceMaterial(scene::AcGiMaterial{}),
+        .material = acgs::toSurfaceMaterial(scene::AcGiMaterial{}),
     };
-    acgiView.drawFillTriangles(visibleFillVertices, cadAnchorView,
+    acgsView.drawFillTriangles(visibleFillVertices, cadAnchorView,
                                projection, false,
-                               acgi::envLayer("GRID_FILL_LAYER"));
+                               acgs::envLayer("GRID_FILL_LAYER"));
   }
 
   // Wireframe modes suppress solid fills, which would make fill-only
@@ -2482,15 +2482,15 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           continue;
         if (!hasColor)
         {
-          rangeColor = acgiView.contrastColor(triangle.common.color);
+          rangeColor = acgsView.contrastColor(triangle.common.color);
           hasColor = true;
         }
       }
       if (!hasColor)
         continue;
-      acgiView.drawFillBoundary(
+      acgsView.drawFillBoundary(
           tess, range.begin, range.count,
-          0.5f * acgi::outlineWidthWorld(pixelSizeWorld), rangeColor);
+          0.5f * acgs::outlineWidthWorld(pixelSizeWorld), rangeColor);
     }
   }
   for (const VisibilityCandidate *candidate : visibleCad)
@@ -2570,7 +2570,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           rendererBackend->gpuPickQueueStats();
       std::cout << "[PICK_QUEUE] style="
                 << rendering::renderModeLabel(
-                       acgiView.visualStyle().mode())
+                       acgsView.visualStyle().mode())
                 << " meshes=" << stats.queuedMeshes
                 << " edges=" << stats.queuedEdges
                 << " triangles=" << stats.queuedTriangles
@@ -2580,7 +2580,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
   }
 
-  acgiView.submit(cadDrawList, {nullptr, pixelSizeWorld, 2.0f, 7.0f});
+  acgsView.submit(cadDrawList, {nullptr, pixelSizeWorld, 2.0f, 7.0f});
 
   for (const VisibilityCandidate *candidate : visibleCad)
   {
@@ -2596,7 +2596,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     appendMeshEntityToScene(mesh, meshDrawList);
     const rendering::DoubleSingleVec3 meshEye =
         rendering::encodeDoubleSingle(rebase);
-    acgiView.submit(meshDrawList,
+    acgsView.submit(meshDrawList,
                     {nullptr, pixelSizeWorld, 0.0f, 0.0f, &meshEye});
     queueGpuMeshEntity(&mesh);
   }
@@ -2690,7 +2690,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       batch.instances = std::move(instances);
       cadDrawList.meshBatches().push_back(std::move(batch));
     }
-    acgiView.submit(cadDrawList, {&projection, pixelSizeWorld});
+    acgsView.submit(cadDrawList, {&projection, pixelSizeWorld});
     return;
   }
   // CAD and PBR meshes share the global far-to-near painter order. Depth
@@ -2762,7 +2762,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         batch.instances = std::move(group.instances);
         meshDrawList.meshBatches().push_back(std::move(batch));
     }
-  acgiView.submit(meshDrawList, {&projection, pixelSizeWorld});
+  acgsView.submit(meshDrawList, {&projection, pixelSizeWorld});
 }
 
 int stressObjectCount()
@@ -3509,10 +3509,10 @@ VisibilityCandidate makeCurveCandidate(const scene::CurveBatchCommand &curve)
     VisibilityCandidate candidate;
     candidate.kind = VisibilityKind::CadCurve;
     candidate.curve = &curve;
-    candidate.overlayColor = acgiView.contrastColor(curve.acgiMaterial.baseColor);
+    candidate.overlayColor = acgsView.contrastColor(curve.acgiMaterial.baseColor);
     candidate.overlayPointSize = 2.0f;
 
-    const std::vector<glm::dvec3> points = acgi::AcGiView::sampleCurveBatch(curve);
+    const std::vector<glm::dvec3> points = acgs::AcGsView::sampleCurveBatch(curve);
     if (points.empty())
         return candidate;
 
@@ -3936,7 +3936,7 @@ double cadStrokePickTolerance(const PickRay &ray,
                               const entities::Stroke &stroke,
                               const glm::dvec3 &worldPoint)
 {
-    const double renderedHalfWidth = acgiView.strokeHalfWidth(stroke);
+    const double renderedHalfWidth = acgsView.strokeHalfWidth(stroke);
     return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
 }
 
@@ -4408,7 +4408,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             if (!candidate->curve)
                 continue;
             const std::vector<glm::dvec3> points =
-                acgi::AcGiView::sampleCurveBatch(*candidate->curve);
+                acgs::AcGsView::sampleCurveBatch(*candidate->curve);
             for (size_t i = 0; i + 1 < points.size(); ++i)
             {
                 double hitDepth = 0.0;
@@ -4579,7 +4579,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         pickEntity->curve)
     {
         const std::vector<glm::dvec3> points =
-            acgi::AcGiView::sampleCurveBatch(*pickEntity->curve);
+            acgs::AcGsView::sampleCurveBatch(*pickEntity->curve);
         bool hit = false;
         double bestDepth = std::numeric_limits<double>::infinity();
         for (size_t i = 0; i + 1 < points.size(); ++i)
@@ -4750,7 +4750,7 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
   thread_local GpuPickEntity converted;
   const GpuPickEntity *result = nullptr;
   gpuPickManager().forEach(
-      [&](std::uint32_t, const acgi::AcGiPickEntity &registered) {
+      [&](std::uint32_t, const acgs::AcGsPickEntity &registered) {
         if (result)
           return;
         if (registered.mesh &&
@@ -5270,7 +5270,7 @@ VisibilityCandidate makeCadRangeCandidate(
           include(stroke.points.front() + direction / length *
                       kSemiInfiniteClassificationLength);
       }
-      candidate.overlayColor = acgiView.contrastColor(stroke.common.color);
+      candidate.overlayColor = acgsView.contrastColor(stroke.common.color);
       candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
     }
   }
@@ -5282,7 +5282,7 @@ VisibilityCandidate makeCadRangeCandidate(
       include(fill.a);
       include(fill.b);
       include(fill.c);
-      candidate.overlayColor = acgiView.contrastColor(fill.common.color);
+      candidate.overlayColor = acgsView.contrastColor(fill.common.color);
     }
   }
   else
@@ -5292,7 +5292,7 @@ VisibilityCandidate makeCadRangeCandidate(
       const entities::TessellatedPoint &point =
           tessellation.geometry.points[i];
       include(point.location);
-      candidate.overlayColor = acgiView.contrastColor(point.common.color);
+      candidate.overlayColor = acgsView.contrastColor(point.common.color);
       candidate.overlayPointSize = float(point.pointSize);
     }
   }
@@ -5405,9 +5405,9 @@ void includeSegmentCameraDepth(const glm::dvec3 &startWorldPosition,
                                double &minDepth,
                                double &maxDepth)
 {
-  const CameraSpacePoint p0 = acgi::toCameraSpace(
+  const CameraSpacePoint p0 = acgs::toCameraSpace(
       startWorldPosition, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const CameraSpacePoint p1 = acgi::toCameraSpace(
+  const CameraSpacePoint p1 = acgs::toCameraSpace(
       endWorldPosition, cameraPosition, cameraRight, cameraUp, cameraFront);
 
   const double dx = p1.x - p0.x;
@@ -5595,7 +5595,7 @@ void render()
   if (!rendererBackend)
     return;
 
-  if (!rendererBackend->beginFrame(acgi::kClearColor))
+  if (!rendererBackend->beginFrame(acgs::kClearColor))
     return;
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
@@ -5793,7 +5793,7 @@ void render()
     // because orthographic geometry can straddle the camera plane.
     // Clamping near to zero would hide the lower half of the center cube.
     const CameraSpacePoint targetCamera =
-        acgi::toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
+        acgs::toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
     const double targetDepth = targetCamera.depth;
 
     const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
@@ -5933,13 +5933,13 @@ void render()
             if (stroke.semiInfinite)
             {
               glm::dvec3 clippedStart, clippedEnd;
-              if (!acgiView.clipSemiInfiniteRay(
+              if (!acgsView.clipSemiInfiniteRay(
                       stroke.points.front(), stroke.points.back(), 0.0, 0.0,
                       clippedStart, clippedEnd, false))
                 continue;
-              const CameraSpacePoint a = acgi::toCameraSpace(
+              const CameraSpacePoint a = acgs::toCameraSpace(
                   clippedStart, cameraPos, right, up, front);
-              const CameraSpacePoint b = acgi::toCameraSpace(
+              const CameraSpacePoint b = acgs::toCameraSpace(
                   clippedEnd, cameraPos, right, up, front);
               unionBounds({std::min(a.x, b.x), std::max(a.x, b.x),
                            std::min(a.y, b.y), std::max(a.y, b.y),
@@ -5950,7 +5950,7 @@ void render()
             {
               for (const glm::dvec3 &point : stroke.points)
               {
-                const CameraSpacePoint c = acgi::toCameraSpace(
+                const CameraSpacePoint c = acgs::toCameraSpace(
                     point, cameraPos, right, up, front);
                 unionBounds({c.x, c.x, c.y, c.y, c.depth, c.depth});
               }
@@ -6025,7 +6025,7 @@ void render()
     for (const acgi::TextRequest &request : acgi::textRequests())
     {
       const CameraSpacePoint center =
-          acgi::toCameraSpace(request.position, cameraPos, right, up, front);
+          acgs::toCameraSpace(request.position, cameraPos, right, up, front);
       const double extent =
           double(request.message.size()) * request.height +
           request.height * 2.0;
@@ -6099,7 +6099,7 @@ void render()
     }
 
     const CameraSpacePoint targetCamera =
-        acgi::toCameraSpace(orbitCam.Target, cameraPos, right, up, frontVec);
+        acgs::toCameraSpace(orbitCam.Target, cameraPos, right, up, frontVec);
     double overlayMinDepth = targetCamera.depth;
     double overlayMaxDepth = targetCamera.depth;
     double objectMinDepth = targetCamera.depth;
@@ -6195,8 +6195,8 @@ void render()
     // the exact perspective side frusta.  It is a non-depth-writing overlay
     // and must not consume the depth precision reserved for solid geometry.
     includeSegmentPerspectiveDepth(
-        acgi::toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
-        acgi::toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
+        acgs::toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
+        acgs::toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
         kNearDepthFloor, tanHalfVertical, tanHalfHorizontal,
         overlayMinDepth, overlayMaxDepth);
 
@@ -6293,8 +6293,8 @@ void render()
 
   // Publish this frame's overlay slab for stroke frustum clipping; the
   // full viewport context is pushed once the frame's locals exist.
-  acgiView.mutableFrame().slabNear = overlayNear;
-  acgiView.mutableFrame().slabFar = overlayFar;
+  acgsView.mutableFrame().slabNear = overlayNear;
+  acgsView.mutableFrame().slabFar = overlayFar;
 
   logSlabIfChanged(useOrthoProjection(), activeNear, activeFar,
                    overlayNear, overlayFar);
@@ -6440,7 +6440,7 @@ void render()
   const glm::dvec3 cameraUp(orbitCam.Up);
   if (useOrthoProjection())
   {
-    referenceLineVisible = acgiView.clipSegmentToOrtho(
+    referenceLineVisible = acgsView.clipSegmentToOrtho(
         glm::dvec3(0.0), worldLineEnd, activeNear, activeFar,
         orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
         referenceLineStart, referenceLineEnd);
@@ -6448,7 +6448,7 @@ void render()
   else
   {
     const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
-    referenceLineVisible = acgiView.clipSegmentToPerspective(
+    referenceLineVisible = acgsView.clipSegmentToPerspective(
         glm::dvec3(0.0), worldLineEnd, overlayNear, overlayFar,
         tanHalfVertical, tanHalfVertical * (double)aspect,
         referenceLineStart, referenceLineEnd);
@@ -6878,7 +6878,7 @@ void render()
   // Push the complete per-frame viewport context for every acgi
   // submission this frame (submit, text flush, outline primitives).
   {
-    acgi::ViewFrameContext ctx;
+    acgs::ViewFrameContext ctx;
     ctx.view = viewRte;
     ctx.projection = projection;
     ctx.overlayProjection = overlayProjection;
@@ -6899,10 +6899,10 @@ void render()
     ctx.meshTextureIndex = gMeshTextureIndex;
     ctx.meshHeadlight = meshHeadlight();
     ctx.meshTriplanar = meshTriplanar();
-    acgiView.setFrameContext(ctx);
+    acgsView.setFrameContext(ctx);
   }
 
-  acgiView.submit(sceneOverlay, {nullptr, pixelSize});
+  acgsView.submit(sceneOverlay, {nullptr, pixelSize});
 
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
@@ -6961,7 +6961,7 @@ void render()
   // content bounds so the depth slab covers the glyphs).
   // The AcGi view flushes queued text requests into SDF glyph quads,
   // including the ortho viewport cull.
-  acgiView.flushTextRequests();
+  acgsView.flushTextRequests();
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -7003,7 +7003,7 @@ void render()
       const float radius = std::max(1.5f, float(2.0 * objectPixelSize));
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::MeshObject, object, nullptr});
-      const glm::vec4 idColor = acgi::encodeGpuPickId(objectId);
+      const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
       const glm::vec3 relative = glm::vec3(center - orbitCam.Position);
       const glm::vec3 right = pickRight * radius;
       const glm::vec3 up = pickUp * radius;
@@ -7055,7 +7055,7 @@ void render()
     }
   }
 
-  acgiView.submit(sceneOverlay, {nullptr, pixelSize});
+  acgsView.submit(sceneOverlay, {nullptr, pixelSize});
 
   static bool screenshotRequested = false;
   if (!screenshotRequested && lineDebugEnabled())
@@ -7318,11 +7318,11 @@ int main(int argc, char *argv[])
         // V -- cycle the visual style through all render modes.
         if (evt.key.key == SDLK_V)
         {
-          acgiView.visualStyle().cycle();
+          acgsView.visualStyle().cycle();
           if (rendererBackend)
-            rendererBackend->setRenderMode(acgiView.visualStyle().mode());
+            rendererBackend->setRenderMode(acgsView.visualStyle().mode());
           std::cout << "Visual style: "
-                    << rendering::renderModeLabel(acgiView.visualStyle().mode())
+                    << rendering::renderModeLabel(acgsView.visualStyle().mode())
                     << std::endl;
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
