@@ -521,6 +521,7 @@ bool init()
   const auto requestedRenderer = resolveRequestedBackend();
   rendererBackend = rendering::createRenderer(
       requestedRenderer.type, requestedRenderer.api);
+  acgiView.attach(rendererBackend.get());
 
   if (!rendererBackend->configureSDL())
   {

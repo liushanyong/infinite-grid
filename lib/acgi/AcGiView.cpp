@@ -786,6 +786,8 @@ void AcGiView::submit(scene::SceneDrawList &drawList,
         }
     };
 
+    size_t debugClipRejected = 0;
+    size_t debugClipAccepted = 0;
     for (const entities::Stroke &stroke : drawList.geometry().strokes)
     {
         if (!stroke.common.visible || stroke.points.size() < 2)
@@ -806,7 +808,11 @@ void AcGiView::submit(scene::SceneDrawList &drawList,
             if (!clipStrokeSegment(
                     stroke.points[i], stroke.points[(i + 1) % strokeCount],
                     clippedStart, clippedEnd, stroke.semiInfinite))
+            {
+                ++debugClipRejected;
                 continue;
+            }
+            ++debugClipAccepted;
             if (lineDebugEnabled() && stroke.semiInfinite)
             {
                 std::printf(
@@ -880,6 +886,14 @@ void AcGiView::submit(scene::SceneDrawList &drawList,
         backend_->drawPolylines(polylineData);
     }
 
+    const bool submitDebug = [] {
+        const char *v = std::getenv("GRID_SUBMIT_DEBUG");
+        return v && *v && std::strcmp(v, "0") != 0;
+    }();
+    static int submitDebugFrame = 0;
+    const bool submitDebugFrameNow =
+        submitDebug && (submitDebugFrame++ % 90 == 0);
+
     static std::vector<rendering::FillVertex> fillVertices;
     static std::vector<rendering::FillVertex> surfaceFillVertices;
     fillVertices.clear();
@@ -928,6 +942,21 @@ void AcGiView::submit(scene::SceneDrawList &drawList,
         points.push_back({glm::vec3(point.location - ctx.cameraPos),
                           glm::vec3(contrastColor(point.common.color)),
                           float(point.pointSize)});
+    }
+    if (submitDebugFrameNow)
+    {
+        std::printf(
+            "[SUBMIT] strokes_in=%zu line_inst=%zu ribbon=%zu fills_in=%zu "
+            "fill_out=%zu points_in=%zu pts_out=%zu slabs=[%.1f %.1f] "
+            "cam=(%.0f,%.0f,%.0f) ortho=%d clip_ok=%zu clip_rej=%zu\n",
+            drawList.geometry().strokes.size(), lineInstances.size(),
+            polylineVertices.size(), drawList.geometry().fills.size(),
+            fillVertices.size() + surfaceFillVertices.size(),
+            drawList.geometry().points.size(), points.size(),
+            ctx.slabNear, ctx.slabFar, ctx.cameraPos.x, ctx.cameraPos.y,
+            ctx.cameraPos.z, int(ctx.ortho), debugClipAccepted,
+            debugClipRejected);
+        if (submitDebugFrameNow) std::fflush(stdout);
     }
     if (!points.empty())
     {
