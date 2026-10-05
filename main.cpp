@@ -699,8 +699,9 @@ bool init()
     // queue instead of their baked layout frames.
     acgi::textFrameFallback() = false;
   }
-  // AutoCAD bigfont pairing: txt.shx provides ASCII glyphs, whgdtxt.shx
-  // provides the double-byte CJK glyphs.
+  // AutoCAD bigfont pairing: txt.shx provides ASCII glyphs, gbcbig.shx
+  // provides the double-byte CJK glyphs (full GB2312 coverage; whgdtxt
+  // tops out at 0xC8FE and misses many common characters).
   bool shxRegularReady = false;
   if (util::resourceExists("fonts/txt.shx"))
   {
@@ -709,11 +710,11 @@ bool init()
     std::cout << "SHX regular font (txt): "
               << (shxRegularReady ? "loaded" : "failed") << std::endl;
   }
-  if (util::resourceExists("fonts/whgdtxt.shx"))
+  if (util::resourceExists("fonts/gbcbig.shx"))
   {
     const bool bigReady = acgi::textEngine().loadShxBigFont(
-        util::resourcePath("fonts/whgdtxt.shx").string());
-    std::cout << "SHX big font (whgdtxt): "
+        util::resourcePath("fonts/gbcbig.shx").string());
+    std::cout << "SHX big font (bigfont): "
               << (bigReady ? "loaded" : "failed") << std::endl;
     gShxFontReady = shxRegularReady || bigReady;
   }
