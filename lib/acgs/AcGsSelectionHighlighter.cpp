@@ -1,4 +1,4 @@
-#include "acgi/AcGiSelectionHighlighter.h"
+#include "acgs/AcGsSelectionHighlighter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,9 +8,9 @@
 #include <map>
 #include <vector>
 
-#include "acgi/AcGiView.h"
+#include "acgs/AcGsView.h"
 
-namespace acgi
+namespace acgs
 {
 
 namespace
@@ -27,7 +27,7 @@ bool lineDebugEnabled()
 
 } // namespace
 
-void AcGiSelectionHighlighter::drawFillOutline(
+void AcGsSelectionHighlighter::drawFillOutline(
     const entities::TessellatedEntity &tess, size_t begin, size_t count,
     float pixelSizeWorld)
 {
@@ -132,7 +132,7 @@ void AcGiSelectionHighlighter::drawFillOutline(
     view_.drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
 }
 
-void AcGiSelectionHighlighter::drawPointHighlight(
+void AcGsSelectionHighlighter::drawPointHighlight(
     const entities::TessellatedEntity &tess, size_t begin, size_t count,
     float pixelSizeWorld)
 {
@@ -203,7 +203,7 @@ void AcGiSelectionHighlighter::drawPointHighlight(
     view_.drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
 }
 
-void AcGiSelectionHighlighter::drawStrokeOutline(
+void AcGsSelectionHighlighter::drawStrokeOutline(
     const entities::TessellatedEntity &tess, size_t begin, size_t count,
     float pixelSizeWorld)
 {
@@ -268,11 +268,11 @@ void AcGiSelectionHighlighter::drawStrokeOutline(
     view_.drawLineInstanceBatch(outlineLineInstances, 2.0f, 0.0f);
 }
 
-void AcGiSelectionHighlighter::drawCurveOutline(
+void AcGsSelectionHighlighter::drawCurveOutline(
     const scene::CurveBatchCommand &curve, float pixelSizeWorld)
 {
     const std::vector<glm::dvec3> points =
-        AcGiView::sampleCurveBatch(curve);
+        AcGsView::sampleCurveBatch(curve);
     const size_t segmentCount = points.size() > 1 ? points.size() - 1 : 0;
     const float halfWidth =
         std::max(curve.acgiMaterial.lineWidth * 0.5f, 1.0f) +
@@ -292,4 +292,4 @@ void AcGiSelectionHighlighter::drawCurveOutline(
     view_.drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
 }
 
-} // namespace acgi
+} // namespace acgs

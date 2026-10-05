@@ -1,6 +1,6 @@
 #pragma once
 
-// AcGiView — the single app-facing render gateway, modeled on ObjectARX's
+// AcGsView — the single app-facing render gateway, modeled on ObjectARX's
 // AcGsView + AcGiDefaultContext.  Everything the application draws goes
 // through here:
 //   * scene::SceneDrawList submissions (AcGiDrawable::collect output) are
@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "acgs/AcGsOrbitCamera.h"
 #include "rendering/RenderMode.h"
 #include "scene/SceneDrawList.h"
 
@@ -33,7 +34,7 @@ namespace rendering
 struct DoubleSingleVec3;
 }
 
-namespace acgi
+namespace acgs
 {
 
 // Background the demo composites against; beginFrame and every contrast
@@ -66,7 +67,7 @@ CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
 rendering::SurfaceMaterial toSurfaceMaterial(
     const scene::AcGiMaterial &material);
 
-// Per-frame viewport state (ObjectARX: AcGsView + AcGiViewportData).
+// Per-frame viewport state (ObjectARX: AcGsView + AcGsViewportData).
 struct ViewFrameContext
 {
     glm::mat4 view{1.0f};
@@ -101,10 +102,17 @@ struct ViewFrameContext
     float meshTriplanar = 0.0f;
 };
 
-class AcGiView
+class AcGsView
 {
 public:
-    static AcGiView &instance();
+    static AcGsView &instance();
+
+    // View camera state (ObjectARX: AcGsView::setView/setEye/setTarget).
+    // The demo keeps calling it through the orbitCamera() alias.
+    AcGsOrbitCamera &orbitCamera() { return orbitCamera_; }
+    // Projection toggle; exposed as a mutable reference so the demo's
+    // useOrthoProjection() wrapper keeps its existing call sites.
+    bool &orthoMode() { return orthoMode_; }
 
     void attach(rendering::RendererBackend *backend);
     rendering::RendererBackend *backend() const { return backend_; }
@@ -221,7 +229,10 @@ public:
         glm::dvec3 &clippedEnd) const;
 
 private:
-    AcGiView() = default;
+    AcGsView()
+        : orbitCamera_(glm::vec3(0.0f), 15.0f, -45.0f, 20.0f)
+    {
+    }
 
     void submitMeshBatch(scene::MeshBatchCommand &command,
                          const rendering::DoubleSingleVec3 &eye,
@@ -229,7 +240,9 @@ private:
 
     rendering::RendererBackend *backend_ = nullptr;
     ViewFrameContext frame_;
+    AcGsOrbitCamera orbitCamera_;
+    bool orthoMode_ = false;
     rendering::RenderModeManager visualStyle_;
 };
 
-} // namespace acgi
+} // namespace acgs

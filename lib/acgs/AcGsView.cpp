@@ -1,10 +1,10 @@
-// AcGiView implementation: every definition here was previously scattered
+// AcGsView implementation: every definition here was previously scattered
 // through main.cpp (submitAcGiDrawable, the text flush loop, the camera-
 // space frustum-clip chain, the CPU curve sampler).  The behaviour is
 // unchanged; the only edits replace main.cpp globals with the injected
 // ViewFrameContext.
 
-#include "acgi/AcGiView.h"
+#include "acgs/AcGsView.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,7 +21,7 @@
 #include "acgi/AcGiTextQueue.h"
 #include "rendering/RendererBackend.h"
 
-namespace acgi
+namespace acgs
 {
 
 rendering::SurfaceMaterial toSurfaceMaterial(
@@ -284,7 +284,7 @@ bool clipSemiInfiniteRayToView(const ViewFrameContext &frame,
 // picking/ID geometry: Bezier via de Casteljau, BSpline/NURBS via the
 // standard de Boor recursion, clamped to the shader's CAD_CURVE_MAX_CP
 // window so CPU and GPU evaluate identical geometry.
-std::vector<glm::dvec3> AcGiView::sampleCurveBatch(
+std::vector<glm::dvec3> AcGsView::sampleCurveBatch(
     const scene::CurveBatchCommand &curve)
 {
     std::vector<glm::dvec3> result;
@@ -448,18 +448,18 @@ CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
             glm::dot(delta, cameraFront)};
 }
 
-AcGiView &AcGiView::instance()
+AcGsView &AcGsView::instance()
 {
-    static AcGiView view;
+    static AcGsView view;
     return view;
 }
 
-void AcGiView::attach(rendering::RendererBackend *backend)
+void AcGsView::attach(rendering::RendererBackend *backend)
 {
     backend_ = backend;
 }
 
-glm::vec4 AcGiView::contrastColor(const glm::vec4 &color) const
+glm::vec4 AcGsView::contrastColor(const glm::vec4 &color) const
 {
     if (!colorIsCloseToBackground(color))
         return color;
@@ -467,7 +467,7 @@ glm::vec4 AcGiView::contrastColor(const glm::vec4 &color) const
                      color.a);
 }
 
-glm::vec3 AcGiView::ribbonSide(const glm::vec3 &direction,
+glm::vec3 AcGsView::ribbonSide(const glm::vec3 &direction,
                                const glm::vec3 &front,
                                float halfWidth) const
 {
@@ -479,7 +479,7 @@ glm::vec3 AcGiView::ribbonSide(const glm::vec3 &direction,
     return glm::normalize(sideAxis) * halfWidth;
 }
 
-float AcGiView::strokeHalfWidth(const entities::Stroke &stroke,
+float AcGsView::strokeHalfWidth(const entities::Stroke &stroke,
                                 float fallback) const
 {
     return stroke.lineWeight > 0.0
@@ -487,7 +487,7 @@ float AcGiView::strokeHalfWidth(const entities::Stroke &stroke,
                : fallback;
 }
 
-bool AcGiView::clipStrokeSegment(const glm::dvec3 &startWorld,
+bool AcGsView::clipStrokeSegment(const glm::dvec3 &startWorld,
                                  const glm::dvec3 &endWorld,
                                  glm::dvec3 &clippedStart,
                                  glm::dvec3 &clippedEnd,
@@ -534,7 +534,7 @@ bool AcGiView::clipStrokeSegment(const glm::dvec3 &startWorld,
         tanHalfHorizontal, clippedStart, clippedEnd);
 }
 
-bool AcGiView::clipSemiInfiniteRay(const glm::dvec3 &startWorld,
+bool AcGsView::clipSemiInfiniteRay(const glm::dvec3 &startWorld,
                                    const glm::dvec3 &endWorld,
                                    double nearDepth, double farDepth,
                                    glm::dvec3 &clippedStart,
@@ -546,7 +546,7 @@ bool AcGiView::clipSemiInfiniteRay(const glm::dvec3 &startWorld,
                                      flattenToSlabCenter);
 }
 
-bool AcGiView::clipSegmentToOrtho(const glm::dvec3 &startWorld,
+bool AcGsView::clipSegmentToOrtho(const glm::dvec3 &startWorld,
                                   const glm::dvec3 &endWorld,
                                   double nearPlane, double farPlane,
                                   double halfWidth, double halfHeight,
@@ -558,7 +558,7 @@ bool AcGiView::clipSegmentToOrtho(const glm::dvec3 &startWorld,
                                        halfHeight, clippedStart, clippedEnd);
 }
 
-bool AcGiView::clipSegmentToPerspective(
+bool AcGsView::clipSegmentToPerspective(
     const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
     double nearPlane, double farPlane, double tanHalfVertical,
     double tanHalfHorizontal, glm::dvec3 &clippedStart,
@@ -571,7 +571,7 @@ bool AcGiView::clipSegmentToPerspective(
                                              clippedEnd);
 }
 
-void AcGiView::submitMeshBatch(scene::MeshBatchCommand &command,
+void AcGsView::submitMeshBatch(scene::MeshBatchCommand &command,
                                const rendering::DoubleSingleVec3 &eye,
                                const SubmitOptions &options)
 {
@@ -638,7 +638,7 @@ void AcGiView::submitMeshBatch(scene::MeshBatchCommand &command,
     backend_->drawMeshInstances(renderData);
 }
 
-void AcGiView::submit(scene::SceneDrawList &drawList,
+void AcGsView::submit(scene::SceneDrawList &drawList,
                       const SubmitOptions &options)
 {
     if (!backend_)
@@ -976,7 +976,7 @@ void AcGiView::submit(scene::SceneDrawList &drawList,
     }
 }
 
-void AcGiView::appendRibbon(std::vector<rendering::PrimVertex> &vertices,
+void AcGsView::appendRibbon(std::vector<rendering::PrimVertex> &vertices,
                             const glm::dvec3 &startWorld,
                             const glm::dvec3 &endWorld, float halfWidth,
                             float u0, float u1, bool centered,
@@ -1009,7 +1009,7 @@ void AcGiView::appendRibbon(std::vector<rendering::PrimVertex> &vertices,
     }
 }
 
-void AcGiView::drawRibbonVertices(
+void AcGsView::drawRibbonVertices(
     std::vector<rendering::PrimVertex> &vertices, float edgeSoftness,
     float layer) const
 {
@@ -1028,7 +1028,7 @@ void AcGiView::drawRibbonVertices(
     vertices.clear();
 }
 
-void AcGiView::drawLineInstanceBatch(
+void AcGsView::drawLineInstanceBatch(
     std::vector<rendering::LineInstance> &instances, float edgeSoftness,
     float layer) const
 {
@@ -1047,7 +1047,7 @@ void AcGiView::drawLineInstanceBatch(
     instances.clear();
 }
 
-void AcGiView::drawFillTriangles(
+void AcGsView::drawFillTriangles(
     std::vector<rendering::FillVertex> &vertices, const glm::mat4 &view,
     const glm::mat4 &projection, bool is3DFace, float layer) const
 {
@@ -1066,7 +1066,7 @@ void AcGiView::drawFillTriangles(
     backend_->drawFilledTriangles(data);
 }
 
-void AcGiView::drawFillBoundary(const entities::TessellatedEntity &tess,
+void AcGsView::drawFillBoundary(const entities::TessellatedEntity &tess,
                                 size_t begin, size_t count, float halfWidth,
                                 const glm::vec4 &color) const
 {
@@ -1119,9 +1119,9 @@ void AcGiView::drawFillBoundary(const entities::TessellatedEntity &tess,
         drawRibbonVertices(vertices, 0.15f, envLayer("GRID_LINE_LAYER"));
 }
 
-int AcGiView::flushTextRequests()
+int AcGsView::flushTextRequests()
 {
-    if (!backend_ || !textEngine().sdfReady())
+    if (!backend_ || !acgi::textEngine().sdfReady())
         return 0;
 
     constexpr glm::mat4 identityView(1.0f);
@@ -1135,20 +1135,20 @@ int AcGiView::flushTextRequests()
         orthoHalfHeight * double(ctx.viewportWidth) /
         std::max(1, ctx.viewportHeight);
     int glyphsDrawn = 0;
-    for (const TextRequest &request : textRequests())
+    for (const acgi::TextRequest &request : acgi::textRequests())
     {
         if (ctx.ortho &&
-            !textEngine().intersectsOrthoViewport(
+            !acgi::textEngine().intersectsOrthoViewport(
                 request, ctx.cameraPos, ctx.cameraRight, ctx.cameraUp,
                 ctx.cameraFront, orthoHalfWidth, orthoHalfHeight))
         {
             continue;
         }
-        glyphsDrawn += textEngine().drawText(
+        glyphsDrawn += acgi::textEngine().drawText(
             *backend_, identityView, ctx.projection, ctx.cameraPos,
             ctx.cameraRight, ctx.cameraUp, ctx.cameraFront, request);
     }
     return glyphsDrawn;
 }
 
-} // namespace acgi
+} // namespace acgs

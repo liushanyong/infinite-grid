@@ -1,5 +1,5 @@
-#ifndef ORBIT_CAMERA_H
-#define ORBIT_CAMERA_H
+#ifndef ACGS_ORBIT_CAMERA_H
+#define ACGS_ORBIT_CAMERA_H
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -12,7 +12,7 @@
 // OpenCADStudio-style camera in Z-up convention.  Target/Rotation/Distance
 // are authoritative; Position and the screen basis are derived so navigation
 // cannot desynchronize.
-class OrbitCamera
+class AcGsOrbitCamera
 {
 public:
   glm::dquat Rotation; // columns are right, up, eye direction
@@ -40,7 +40,7 @@ public:
   std::optional<glm::dvec3> ModelMaximum;
   double DepthHalfRange = 0.0;
 
-  OrbitCamera(
+  AcGsOrbitCamera(
       glm::vec3 target = glm::vec3(0.0f),
       float radius = 10.0f,
       float yaw = -90.0f,

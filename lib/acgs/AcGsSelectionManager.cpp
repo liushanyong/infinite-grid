@@ -1,4 +1,4 @@
-#include "acgi/AcGiSelectionManager.h"
+#include "acgs/AcGsSelectionManager.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -7,7 +7,7 @@
 
 #include "rendering/RendererBackend.h"
 
-namespace acgi
+namespace acgs
 {
 
 glm::vec4 encodeGpuPickId(std::uint32_t id)
@@ -19,14 +19,14 @@ glm::vec4 encodeGpuPickId(std::uint32_t id)
         float((id >> 24) & 0xff) / 255.0f};
 }
 
-AcGiSelectionManager &AcGiSelectionManager::instance()
+AcGsSelectionManager &AcGsSelectionManager::instance()
 {
-    static AcGiSelectionManager manager;
+    static AcGsSelectionManager manager;
     return manager;
 }
 
-std::uint32_t AcGiSelectionManager::registerEntity(
-    const AcGiPickEntity &entity)
+std::uint32_t AcGsSelectionManager::registerEntity(
+    const AcGsPickEntity &entity)
 {
     // Ids 0, 1 and 0xffffffff are reserved (0/0xffffffff are the "no pick"
     // encodings, 1 is the fixed center-cube id).
@@ -45,14 +45,14 @@ std::uint32_t AcGiSelectionManager::registerEntity(
     return 0;
 }
 
-const AcGiPickEntity *AcGiSelectionManager::find(std::uint32_t id) const
+const AcGsPickEntity *AcGsSelectionManager::find(std::uint32_t id) const
 {
     const auto found = registry_.find(id);
     return found != registry_.end() ? &found->second : nullptr;
 }
 
-std::uint32_t AcGiSelectionManager::findIdFor(
-    const AcGiPickEntity &entity) const
+std::uint32_t AcGsSelectionManager::findIdFor(
+    const AcGsPickEntity &entity) const
 {
     for (const auto &[objectId, registered] : registry_)
         if (registered == entity)
@@ -60,13 +60,13 @@ std::uint32_t AcGiSelectionManager::findIdFor(
     return 0;
 }
 
-bool AcGiSelectionManager::pickEnabled()
+bool AcGsSelectionManager::pickEnabled()
 {
     const char *value = std::getenv("GRID_GPU_PICK");
     return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
-void AcGiSelectionManager::queueSoupChunks(
+void AcGsSelectionManager::queueSoupChunks(
     rendering::RendererBackend &backend,
     const std::vector<rendering::FillVertex> &vertices,
     const glm::mat4 &view, const glm::mat4 &pickProjection,
@@ -87,7 +87,7 @@ void AcGiSelectionManager::queueSoupChunks(
     }
 }
 
-std::uint64_t AcGiSelectionManager::hashSceneBytes(std::uint64_t hash,
+std::uint64_t AcGsSelectionManager::hashSceneBytes(std::uint64_t hash,
                                                    const void *data,
                                                    std::size_t size)
 {
@@ -101,4 +101,4 @@ std::uint64_t AcGiSelectionManager::hashSceneBytes(std::uint64_t hash,
     return hash;
 }
 
-} // namespace acgi
+} // namespace acgs

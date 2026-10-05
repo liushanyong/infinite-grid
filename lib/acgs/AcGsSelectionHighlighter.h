@@ -1,6 +1,6 @@
 #pragma once
 
-// AcGiSelectionHighlighter — selection highlight geometry, modeled on the
+// AcGsSelectionHighlighter — selection highlight geometry, modeled on the
 // selection rendering ObjectARX performs through AcGiSubEntityTraits
 // selection flags.  The caller owns the selection state (which entity is
 // highlighted and its tessellation range); this class owns how the
@@ -21,10 +21,10 @@
 
 #include "scene/SceneDrawList.h"
 
-namespace acgi
+namespace acgs
 {
 
-class AcGiView;
+class AcGsView;
 
 // Highlight color and screen-space width shared by every highlight pass.
 constexpr glm::vec4 kOutlineColor(1.0f, 0.55f, 0.05f, 1.0f);
@@ -37,10 +37,10 @@ inline float outlineWidthWorld(float pixelSizeWorld)
     return kOutlineWidthPixels * pixelSizeWorld;
 }
 
-class AcGiSelectionHighlighter
+class AcGsSelectionHighlighter
 {
 public:
-    explicit AcGiSelectionHighlighter(AcGiView &view) : view_(view) {}
+    explicit AcGsSelectionHighlighter(AcGsView &view) : view_(view) {}
 
     void drawFillOutline(const entities::TessellatedEntity &tess,
                          size_t begin, size_t count, float pixelSizeWorld);
@@ -56,7 +56,7 @@ public:
                           float pixelSizeWorld);
 
 private:
-    AcGiView &view_;
+    AcGsView &view_;
 };
 
-} // namespace acgi
+} // namespace acgs

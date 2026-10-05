@@ -1,12 +1,12 @@
 #pragma once
 
-// AcGiSelectionManager — GPU-assisted selection bookkeeping, modeled on the
+// AcGsSelectionManager — GPU-assisted selection bookkeeping, modeled on the
 // selection internals ObjectARX keeps inside AcGiManager: an entity-id
 // registry shared between the visible pass and the GPU ID pass, the
 // 1x1-pick request lifecycle, and the bounded-chunk triangle-soup queue.
 //
 // Entity identity is type-erased (kind tag + three opaque pointers): the
-// application maps its own entity records to and from AcGiPickEntity, so
+// application maps its own entity records to and from AcGsPickEntity, so
 // the manager never depends on demo-level scene types.
 
 #include <glm/glm.hpp>
@@ -23,30 +23,30 @@ class RendererBackend;
 struct FillVertex;
 }
 
-namespace acgi
+namespace acgs
 {
 
 // Type-erased entity reference.  |kind| is an application-defined
 // discriminator; the three pointers carry whatever the application needs to
 // resolve the entity later (mesh record, tessellation range, curve command
 // — any may be null).
-struct AcGiPickEntity
+struct AcGsPickEntity
 {
     std::uint32_t kind = 0;
     const void *mesh = nullptr;
     const void *range = nullptr;
     const void *curve = nullptr;
 
-    bool operator==(const AcGiPickEntity &other) const = default;
+    bool operator==(const AcGsPickEntity &other) const = default;
 };
 
 // Encode an entity id into the RGBA color the GPU ID pass writes.
 glm::vec4 encodeGpuPickId(std::uint32_t id);
 
-class AcGiSelectionManager
+class AcGsSelectionManager
 {
 public:
-    static AcGiSelectionManager &instance();
+    static AcGsSelectionManager &instance();
 
     // Camera basis captured when a pick request is issued, so the CPU
     // fallback raycast can reuse the exact frustum of the request.
@@ -76,9 +76,9 @@ public:
 
     // Registers |entity| and returns a stable pick id (0 on exhaustion).
     // Re-registering an equal entity returns the same id.
-    std::uint32_t registerEntity(const AcGiPickEntity &entity);
-    const AcGiPickEntity *find(std::uint32_t id) const;
-    std::uint32_t findIdFor(const AcGiPickEntity &entity) const;
+    std::uint32_t registerEntity(const AcGsPickEntity &entity);
+    const AcGsPickEntity *find(std::uint32_t id) const;
+    std::uint32_t findIdFor(const AcGsPickEntity &entity) const;
     // The full-scene ID pass rebuilds the registry every request frame.
     void clearRegistry() { registry_.clear(); }
     std::size_t registrySize() const { return registry_.size(); }
@@ -119,11 +119,11 @@ public:
                                         std::size_t size);
 
 private:
-    AcGiSelectionManager() = default;
+    AcGsSelectionManager() = default;
 
-    std::unordered_map<std::uint32_t, AcGiPickEntity> registry_;
+    std::unordered_map<std::uint32_t, AcGsPickEntity> registry_;
     std::uint32_t nextEntityId_ = 2;
     FocusState focus_;
 };
 
-} // namespace acgi
+} // namespace acgs
