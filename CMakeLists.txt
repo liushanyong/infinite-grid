@@ -108,6 +108,7 @@ set(WINDOW_SOURCES
     lib/text/shx_parser.cpp
     lib/acgi/AcGiTextEngine.cpp
     lib/acgs/AcGsView.cpp
+    lib/acdb/AcDbDatabase.cpp
     lib/acgs/AcGsSelectionHighlighter.cpp
     lib/acgs/AcGsSelectionManager.cpp
 )
