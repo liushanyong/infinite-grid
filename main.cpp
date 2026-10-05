@@ -1160,13 +1160,6 @@ void appendVectorPrimitive(const EntityType &entity, const char *name,
   const size_t strokeBegin = target.geometry.strokes.size();
   const size_t fillBegin = target.geometry.fills.size();
   const size_t pointBegin = target.geometry.points.size();
-
-  // AcDb residency: the demo entity joins the document under its label.
-  {
-    EntityType resident = entity;
-    resident.common.name = name;
-    acdbDocument().addEntity(std::move(resident));
-  }
   acgs::ViewportDraw draw(target.geometry, options);
   draw.subEntityTraits().setFrom(entity.common);
   acdb::worldDraw(entity, draw, fillIs3DFace);
@@ -1342,34 +1335,24 @@ static void appendBlockInstances(const char *recordName,
                                  VectorPrimitivesTessellation &target)
 {
   acdb::AcDbDatabase &document = acdbDocument();
-  const acdb::AcDbHandle topInsert =
-      [&]() -> acdb::AcDbHandle {
-        for (const acdb::AcDbHandle handle :
-             document.modelSpace().entityHandles())
-        {
-          if (const acdb::AcDbEntityVariant *payload =
-                  document.getEntity(handle))
-          {
-            if (const auto *reference =
-                    std::get_if<acdb::AcDbBlockReference>(payload))
-            {
-              if (reference->blockTableRecordName == recordName)
-                return handle;
-            }
-          }
-        }
-        return acdb::kNullHandle;
-      }();
-  if (!topInsert.isValid())
-    return;
+  // Every model-space INSERT of the record renders one instance.
+  for (const acdb::AcDbHandle insertHandle :
+       document.modelSpace().entityHandles())
+  {
+    const acdb::AcDbEntityVariant *topPayload =
+        document.getEntity(insertHandle);
+    if (topPayload == nullptr)
+      continue;
+    const auto *topReference =
+        std::get_if<acdb::AcDbBlockReference>(topPayload);
+    if (topReference == nullptr ||
+        topReference->blockTableRecordName != recordName)
+      continue;
+    const glm::dmat4 topWorld =
+        document.referenceTransform(*topReference);
 
-  const acdb::AcDbEntityVariant *topPayload =
-      document.getEntity(topInsert);
-  const glm::dmat4 topWorld = document.referenceTransform(
-      std::get<acdb::AcDbBlockReference>(*topPayload));
-
-  document.walkInsertInstances(
-      recordName, topWorld,
+    document.walkInsertInstances(
+        recordName, topWorld,
       [&](const glm::dmat4 &world, acdb::AcDbHandle memberHandle,
           const acdb::AcDbEntityVariant &payload) {
         if (std::holds_alternative<acdb::AcDbBlockReference>(payload))
@@ -1389,13 +1372,13 @@ static void appendBlockInstances(const char *recordName,
             instance);
         (void)memberHandle;
       });
+  }
 }
 
 // Demo block: a two-stroke bracket block inserted at three positions
 // (GRID_BLOCKS=1).  Exercises createBlockDefinition / addBlockReference /
 // nested-instance rendering end to end.
-static void appendDemoBlocks(const acdb::TesselationOptions &options,
-                             VectorPrimitivesTessellation &target)
+static void appendDemoBlocks()
 {
   acdb::AcDbDatabase &document = acdbDocument();
   if (document.blockTable().contains("DEMO_BRACKET"))
@@ -1427,29 +1410,99 @@ static void appendDemoBlocks(const acdb::TesselationOptions &options,
   {
     document.addBlockReference("DEMO_BRACKET", position);
   }
-  appendBlockInstances("DEMO_BRACKET", options, target);
 }
 
 // The CAD vector demo is authored as formal entities.  The cached draw list is
 // shared by drawing and CPU picking; dynamic documents replace this builder's
 // revision with a dirty-document notification.
-VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
-{
-  VectorPrimitivesTessellation target;
-  acdb::TessellatedEntity &result = target.geometry;
-  if (!cadEntityDemoEnabled())
-    return target;
+// ---- demo document (AcDb): the drawing is the single source of truth --
 
-    const glm::dvec3 cadAnchor =
-        vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
-    target.anchor = cadAnchor;
-    const acdb::TesselationOptions options;
+struct DemoEntityHints
+{
+  bool fillIs3DFace = false;
+  CadEntityPickShape pickShape = CadEntityPickShape::Primitives;
+};
+
+static std::map<std::string, DemoEntityHints> &demoHints()
+{
+  static std::map<std::string, DemoEntityHints> hints;
+  return hints;
+}
+
+static glm::dvec3 demoAnchorPoint()
+{
+  return vectorPrimitivesAnchor();
+}
+
+static glm::dvec3 demoCadAnchor()
+{
+  return vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
+}
+
+// Authors one demo entity into the document under a stable label; the
+// label doubles as the CadEntityRange key for picking and selection.
+template <typename EntityType>
+static void addDemo(EntityType entity, const std::string &name,
+                    bool fillIs3DFace = false,
+                    CadEntityPickShape pickShape =
+                        CadEntityPickShape::Primitives)
+{
+  entity.common.name = name;
+  DemoEntityHints hints;
+  hints.fillIs3DFace = fillIs3DFace;
+  hints.pickShape = pickShape;
+  demoHints()[name] = hints;
+  acdbDocument().addEntity(std::move(entity));
+}
+
+// SHX-styled text renders through the stroke-font engine: each glyph
+// stroke becomes an ordinary CAD stroke, so picking/outlines/styles
+// treat text like any other entity.
+static void appendShxTextEntity(const acdb::AcDbText &text,
+                                VectorPrimitivesTessellation &target)
+{
+  const glm::dvec3 textOrigin(text.insertion);
+  const double textHeight = text.height;
+  const glm::dvec3 textRight(1.0, 0.0, 0.0);
+  const glm::dvec3 textUp(0.0, 0.0, 1.0);
+  const size_t strokeBegin = target.geometry.strokes.size();
+  for (const rendering::ShxGlyphStroke &glyphStroke :
+       acgi::textEngine().shxStrokes(text.text))
+  {
+    acdb::Stroke segment;
+    segment.common.color = text.common.color;
+    segment.points = {
+        textOrigin + textRight * (glyphStroke.fromX * textHeight) +
+            textUp * (glyphStroke.fromY * textHeight),
+        textOrigin + textRight * (glyphStroke.toX * textHeight) +
+            textUp * (glyphStroke.toY * textHeight)};
+    target.geometry.strokes.push_back(std::move(segment));
+  }
+  if (target.geometry.strokes.size() > strokeBegin)
+  {
+    target.strokeRanges.push_back(
+        {text.common.name.c_str(), strokeBegin,
+         target.geometry.strokes.size() - strokeBegin,
+         CadPickShape::Primitives});
+  }
+}
+
+// Authors the demo content once per process: guard entities, DWG
+// import, and block definitions all land in the document here.
+static void buildDemoDocument()
+{
+  // Author exactly once; the tessellation cache may rebuild many
+  // times but the document only ever receives one copy.
+  static const bool authored = []() -> bool {
+    acdb::AcDbDatabase &document = acdbDocument();
+    const glm::dvec3 cadAnchor = demoCadAnchor();
+    const glm::dvec3 demoAnchor = demoAnchorPoint();
 
     acdb::AcDbLine line;
     line.common.color = glm::vec4(1.0f, 0.24f, 0.20f, 1.0f);
     line.start = cadAnchor;
     line.end = cadAnchor + glm::dvec3(768.0, 0.0, 0.0);
-    appendVectorPrimitive(line, "Line", options, target);
+    addDemo(line, "Line");
 
     acdb::AcDbArc arc;
     arc.common.color = glm::vec4(1.0f, 0.52f, 0.10f, 1.0f);
@@ -1457,20 +1510,20 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     arc.radius = 192.0;
     arc.startAngle = 0.0;
     arc.endAngle = glm::radians(270.0);
-    appendVectorPrimitive(arc, "Arc", options, target);
+    addDemo(arc, "Arc");
 
     acdb::AcDbCircle circle;
     circle.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
     circle.center = cadAnchor + glm::dvec3(256.0, 512.0, 0.0);
     circle.radius = 160.0;
-    appendVectorPrimitive(circle, "Circle", options, target);
+    addDemo(circle, "Circle");
 
     acdb::AcDbEllipse ellipse;
     ellipse.common.color = glm::vec4(0.65f, 0.30f, 0.85f, 1.0f);
     ellipse.center = cadAnchor + glm::dvec3(768.0, 640.0, 0.0);
     ellipse.majorAxis = glm::dvec3(224.0, 0.0, 0.0);
     ellipse.radiusRatio = 0.55;
-    appendVectorPrimitive(ellipse, "Ellipse", options, target);
+    addDemo(ellipse, "Ellipse");
 
     // Partial ellipse: the parameter range draws an elliptical arc instead
     // of the closed curve.
@@ -1481,7 +1534,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     ellipseArc.radiusRatio = 0.55;
     ellipseArc.startParameter = glm::pi<double>() * 0.25;
     ellipseArc.endParameter = glm::pi<double>() * 1.75;
-    appendVectorPrimitive(ellipseArc, "EllipseArc", options, target);
+    addDemo(ellipseArc, "EllipseArc");
 
     acdb::AcDb3dPolyline polyline;
     polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
@@ -1491,7 +1544,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(128.0, 256.0, 0.0),
         cadAnchor + glm::dvec3(384.0, 512.0, 0.0)};
     polyline.bulges = {0.25, 0.0, -0.35};
-    appendVectorPrimitive(polyline, "Polyline", options, target);
+    addDemo(polyline, "Polyline");
 
     acdb::AcDbPolyline lwpolyline;
     lwpolyline.common.color = glm::vec4(0.25f, 0.80f, 0.45f, 1.0f);
@@ -1502,7 +1555,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     lwpolyline.closed = true;
     for (AcGePoint2d &vertex : lwpolyline.vertices)
       vertex += glm::dvec2(cadAnchor);
-    appendVectorPrimitive(lwpolyline, "LwPolyline", options, target);
+    addDemo(lwpolyline, "LwPolyline");
 
     acdb::AcDbSpline spline;
     spline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
@@ -1513,7 +1566,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(-512.0, 896.0, 128.0),
         cadAnchor + glm::dvec3(-256.0, 384.0, -128.0),
         cadAnchor + glm::dvec3(0.0, 768.0, 0.0)};
-    appendVectorPrimitive(spline, "Spline", options, target);
+    addDemo(spline, "Spline");
 
     acdb::AcDbHatch hatch;
     hatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.75f);
@@ -1522,7 +1575,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1408.0, -384.0, 0.0),
         cadAnchor + glm::dvec3(1408.0, -128.0, 0.0),
         cadAnchor + glm::dvec3(1024.0, -128.0, 0.0)};
-    appendVectorPrimitive(hatch, "Hatch", options, target);
+    addDemo(hatch, "Hatch");
 
     // ANSI31 line pattern at unit scale; the inner loop punches a hole via
     // the even-odd rule.
@@ -1542,7 +1595,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1280.0, -704.0, 0.0),
         cadAnchor + glm::dvec3(1280.0, -576.0, 0.0),
         cadAnchor + glm::dvec3(1152.0, -576.0, 0.0)}};
-    appendVectorPrimitive(patternHatch, "PatternHatch", options, target);
+    addDemo(patternHatch, "PatternHatch");
 
     // Same pattern family rotated 45 degrees and widened by patternScale.
     acdb::AcDbHatch angledHatch;
@@ -1556,7 +1609,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1408.0, -1024.0, 0.0),
         cadAnchor + glm::dvec3(1408.0, -832.0, 0.0),
         cadAnchor + glm::dvec3(1024.0, -832.0, 0.0)};
-    appendVectorPrimitive(angledHatch, "AngledHatch", options, target);
+    addDemo(angledHatch, "AngledHatch");
 
     acdb::AcDbSolid solid;
     solid.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 0.85f);
@@ -1564,61 +1617,34 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     solid.secondCorner = solid.firstCorner + glm::dvec3(512.0, 0.0, 0.0);
     solid.thirdCorner = solid.firstCorner + glm::dvec3(0.0, 384.0, 0.0);
     solid.fourthCorner = solid.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
-    appendVectorPrimitive(solid, "Solid", options, target);
+    addDemo(solid, "Solid");
 
     acdb::AcDbRay ray;
     ray.common.color = glm::vec4(0.10f, 0.85f, 0.75f, 1.0f);
     ray.start = cadAnchor + glm::dvec3(-640.0, -768.0, 0.0);
     ray.direction = glm::dvec3(1.0, 0.25, 0.0);
-    appendVectorPrimitive(ray, "Ray", options, target);
+    addDemo(ray, "Ray");
 
     acdb::AcDbXline xline;
     xline.common.color = glm::vec4(0.65f, 0.35f, 0.95f, 1.0f);
     xline.point = cadAnchor + glm::dvec3(256.0, -1152.0, 0.0);
     xline.direction = glm::dvec3(2.0, -1.0, 0.0);
-    appendVectorPrimitive(xline, "XLine", options, target);
+    addDemo(xline, "XLine");
 
-    // SHX vector-font text: each glyph's stroke list becomes ordinary CAD
-    // strokes, so the full pipeline (ribbons, picking, outlines, visual
-    // styles) applies to text exactly like any other entity.  whgdtxt is
-    // an AutoCAD big-font covering ASCII + CJK punctuation.
+    // SHX vector-font text: authored as an AcDbText whose style
+    // ("SHX") routes rendering through the stroke-font engine, so
+    // picking/outlines/styles treat text like any other entity.
     if (gShxFontReady)
     {
-      const std::string shxText = "中文 INFINITE - GRID 123";
+      acdb::AcDbText shxText;
+      shxText.common.color = glm::vec4(0.95f, 0.85f, 0.30f, 1.0f);
+      shxText.styleName = "SHX";
       // SHX glyphs hang below their anchor (cap line at the anchor,
-      // baseline one em down): raise the anchor one em above the ground.
-      const glm::dvec3 textOrigin =
-          cadAnchor + glm::dvec3(256.0, 128.0, 96.0);
-      const double textHeight = 96.0; // world units per em
-      const glm::dvec3 textRight(1.0, 0.0, 0.0);
-      const glm::dvec3 textUp(0.0, 0.0, 1.0);
-      const glm::vec4 shxColor(0.95f, 0.85f, 0.30f, 1.0f);
-
-      // One acdb::Stroke PER glyph stroke segment: a single stroke
-      // with all points would connect consecutive segments into spurious
-      // pen-up lines ("连笔") across and within glyphs.
-      const size_t strokeBegin = target.geometry.strokes.size();
-      for (const rendering::ShxGlyphStroke &glyphStroke :
-           acgi::textEngine().shxStrokes(shxText))
-      {
-        acdb::Stroke segment;
-        segment.common.color = shxColor;
-        segment.points = {
-            textOrigin + textRight * (glyphStroke.fromX * textHeight) +
-                textUp * (glyphStroke.fromY * textHeight),
-            textOrigin + textRight * (glyphStroke.toX * textHeight) +
-                textUp * (glyphStroke.toY * textHeight)};
-        target.geometry.strokes.push_back(std::move(segment));
-      }
-      if (target.geometry.strokes.size() > strokeBegin)
-      {
-        // Register the range so visibility/pick treat the text as one
-        // entity.
-        target.strokeRanges.push_back(
-            {"ShxText", strokeBegin,
-             target.geometry.strokes.size() - strokeBegin,
-             CadPickShape::Primitives});
-      }
+      // baseline one em down): the insertion is the cap line.
+      shxText.insertion = cadAnchor + glm::dvec3(256.0, 128.0, 96.0);
+      shxText.height = 96.0; // world units per em
+      shxText.text = "\u4E2D\u6587 INFINITE - GRID 123";
+      addDemo(std::move(shxText), "ShxText");
     }
 
     acdb::AcDbMline mline;
@@ -1628,9 +1654,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(256.0, -704.0, 0.0),
         cadAnchor + glm::dvec3(768.0, -832.0, 0.0)};
     mline.scale = glm::dvec3(24.0, 1.0, 1.0);
-    appendVectorPrimitive(
-        mline, "MLine", options, target, false,
-        CadEntityPickShape::PairedStrokeBand);
+    addDemo(mline, "MLine", false, CadEntityPickShape::PairedStrokeBand);
 
     // Closed multi-line: the offset band wraps around and the enclosed
     // strip is filled between the two boundary strokes.
@@ -1642,9 +1666,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1600.0, -1088.0, 0.0)};
     closedMLine.scale = glm::dvec3(40.0, 1.0, 1.0);
     closedMLine.closed = true;
-    appendVectorPrimitive(
-        closedMLine, "ClosedMLine", options, target, false,
-        CadEntityPickShape::PairedStrokeBand);
+    addDemo(closedMLine, "ClosedMLine", false, CadEntityPickShape::PairedStrokeBand);
 
     // Closed polyline with non-zero thickness: the outline extrudes into
     // wall quads along the normal.
@@ -1657,8 +1679,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1792.0, -736.0, 0.0)};
     borderedPolyline.closed = true;
     borderedPolyline.thickness = 48.0;
-    appendVectorPrimitive(
-        borderedPolyline, "BorderedPolyline", options, target);
+    addDemo(borderedPolyline, "BorderedPolyline");
 
     // Fit-point splines: the C1 fallback interpolates the fit points, open
     // and closed forms.
@@ -1670,7 +1691,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1152.0, -1024.0, 0.0),
         cadAnchor + glm::dvec3(1280.0, -1216.0, 0.0),
         cadAnchor + glm::dvec3(1408.0, -1088.0, 0.0)};
-    appendVectorPrimitive(fitSpline, "FitSpline", options, target);
+    addDemo(fitSpline, "FitSpline");
 
     acdb::AcDbSpline closedFitSpline;
     closedFitSpline.common.color = glm::vec4(0.55f, 0.85f, 0.25f, 1.0f);
@@ -1681,7 +1702,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1152.0, -1296.0, -160.0),
         cadAnchor + glm::dvec3(1312.0, -1424.0, 288.0),
         cadAnchor + glm::dvec3(1152.0, -1520.0, -96.0)};
-    appendVectorPrimitive(closedFitSpline, "ClosedFitSpline", options, target);
+    addDemo(closedFitSpline, "ClosedFitSpline");
 
     // The closed ring through the same points: the interpolation visibly
     // smooths the corners of this reference polygon.
@@ -1689,7 +1710,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     closedFitRing.common.color = glm::vec4(0.55f, 0.55f, 0.55f, 0.9f);
     closedFitRing.vertices = closedFitSpline.fitPoints;
     closedFitRing.closed = true;
-    appendVectorPrimitive(closedFitRing, "ClosedFitRing", options, target);
+    addDemo(closedFitRing, "ClosedFitRing");
 
     // Non-planar fit spline: the fit points span all three dimensions, so
     // the curve bends out of the ground plane (the fit-point demos above
@@ -1703,19 +1724,19 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         cadAnchor + glm::dvec3(1280.0, -1216.0, 768.0),
         cadAnchor + glm::dvec3(1408.0, -1088.0, -320.0),
         cadAnchor + glm::dvec3(1536.0, -1216.0, 640.0)};
-    appendVectorPrimitive(spaceSpline, "SpaceSpline", options, target);
+    addDemo(spaceSpline, "SpaceSpline");
 
     acdb::AcDbPoint cadPoint;
     cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
     cadPoint.location = cadAnchor + glm::dvec3(512.0, 0.0, 0.0);
-    appendVectorPrimitive(cadPoint, "Point", options, target);
+    addDemo(cadPoint, "Point");
 
     acdb::AcDbText text;
     text.common.color = glm::vec4(0.95f, 0.95f, 0.30f, 1.0f);
     text.insertion = cadAnchor + glm::dvec3(1152.0, 128.0, 384.0);
     text.height = 96.0;
     text.text = "中文 TEXT";
-    appendVectorPrimitive(text, "Text", options, target);
+    addDemo(text, "Text");
 
     acdb::AcDbMText mtext;
     mtext.common.color = glm::vec4(0.35f, 0.90f, 0.95f, 1.0f);
@@ -1723,7 +1744,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     mtext.direction = glm::dvec3(1.0, 0.0, 0.0);
     mtext.height = 64.0;
     mtext.text = "中文 MTEXT\nDEMO";
-    appendVectorPrimitive(mtext, "MText", options, target);
+    addDemo(mtext, "MText");
 
     // Text locators: bright vertical lines pointing at each text insertion
     // point, so the glyph position can be found from any distance while
@@ -1733,13 +1754,13 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     textLocator.common.lineWeight = 3.0;
     textLocator.start = text.insertion + glm::dvec3(0.0, 0.0, -320.0);
     textLocator.end = text.insertion;
-    appendVectorPrimitive(textLocator, "TextLocator", options, target);
+    addDemo(textLocator, "TextLocator");
     acdb::AcDbLine mtextLocator;
     mtextLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
     mtextLocator.common.lineWeight = 3.0;
     mtextLocator.start = mtext.insertion + glm::dvec3(0.0, 0.0, -320.0);
     mtextLocator.end = mtext.insertion;
-    appendVectorPrimitive(mtextLocator, "MTextLocator", options, target);
+    addDemo(mtextLocator, "MTextLocator");
 
     acdb::AcDb3dSolid solid3d;
     solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
@@ -1764,7 +1785,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         2, 3, 7, 2, 7, 6,
         3, 0, 4, 3, 4, 7
     };
-    appendVectorPrimitive(solid3d, "Solid3d", options, target, true);
+    addDemo(solid3d, "Solid3d", true);
 
     acdb::AcDbLight light;
     light.common.color = glm::vec4(1.0f, 0.90f, 0.55f, 1.0f);
@@ -1772,11 +1793,10 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     light.position = cadAnchor + glm::dvec3(-1152.0, 256.0, 512.0);
     light.target = cadAnchor + glm::dvec3(-768.0, 0.0, 0.0);
     light.range = 1024.0f;
-    appendVectorPrimitive(light, "Light", options, target);
+    addDemo(light, "Light");
 
     // Former in-function demo geometry.  These are now ordinary CAD entities,
     // so the same tessellation drives rendering, names, and autofocus picking.
-    const glm::dvec3 demoAnchor = vectorPrimitivesAnchor();
 
     for (int i = 0; i < 24; ++i)
     {
@@ -1787,8 +1807,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       gridPoint.location = demoAnchor +
           glm::dvec3((i % 8) * 96.0, (i / 8) * 96.0 - 640.0, 0.0) +
           glm::dvec3(1024.0, 0.0, 0.0);
-      appendVectorPrimitive(
-          gridPoint, ("PointGrid" + std::to_string(i)).c_str(), options, target);
+      addDemo(gridPoint, "PointGrid" + std::to_string(i));
     }
 
     acdb::AcDbLine dashedArrow;
@@ -1797,7 +1816,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     dashedArrow.common.lineWeight = 2.5;
     dashedArrow.start = demoAnchor + glm::dvec3(-1024.0, -640.0, -512.0);
     dashedArrow.end = dashedArrow.start + glm::dvec3(1024.0, 256.0, 0.0);
-    appendVectorPrimitive(dashedArrow, "DashedArrow", options, target);
+    addDemo(dashedArrow, "DashedArrow");
 
     {
       const glm::dvec3 dir = glm::dvec3(
@@ -1811,7 +1830,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       arrowHead.secondCorner = base - side;
       arrowHead.thirdCorner = base + side;
       arrowHead.fourthCorner = base + side;
-      appendVectorPrimitive(arrowHead, "ArrowHead", options, target);
+      addDemo(arrowHead, "ArrowHead");
     }
 
     if (paramSurfaceDemoEnabled())
@@ -1856,7 +1875,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       // ParamSurface uses solid-fill semantics, so its tessellated face stays
       // visible in 2D wireframe like Solid/Hatch fills instead of being treated
       // as a 3D face.
-      appendVectorPrimitive(surface, "ParamSurface", options, target, false);
+      addDemo(surface, "ParamSurface", false);
 
       if (paramSurfaceIsolinesEnabled())
       for (int k = 0; k <= surfaceSegs; k += 4)
@@ -1873,12 +1892,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
           isoU.vertices.push_back(surfacePoint(t, g));
           isoV.vertices.push_back(surfacePoint(g, t));
         }
-        appendVectorPrimitive(
-            isoU, ("ParamSurfaceIsoU" + std::to_string(k)).c_str(),
-            options, target);
-        appendVectorPrimitive(
-            isoV, ("ParamSurfaceIsoV" + std::to_string(k)).c_str(),
-            options, target);
+        addDemo(isoU, "ParamSurfaceIsoU" + std::to_string(k));
+        addDemo(isoV, "ParamSurfaceIsoV" + std::to_string(k));
       }
     }
 
@@ -1890,8 +1905,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       widthDot.common.lineWeight = 12.0;
       widthDot.location =
           demoAnchor + glm::dvec3(i * 256.0, -768.0, 0.0);
-      appendVectorPrimitive(
-          widthDot, ("WidthDot" + std::to_string(i)).c_str(), options, target);
+      addDemo(widthDot, "WidthDot" + std::to_string(i));
     }
 
     {
@@ -1907,9 +1921,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         widthLine.start =
             demoAnchor + glm::dvec3(-1024.0, -384.0 + i * 192.0, -512.0);
         widthLine.end = widthLine.start + glm::dvec3(1024.0, 0.0, 0.0);
-        appendVectorPrimitive(
-            widthLine, ("WidthLine" + std::to_string(i)).c_str(),
-            options, target);
+        addDemo(widthLine, "WidthLine" + std::to_string(i));
       }
     }
 
@@ -1929,9 +1941,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         specimen.start =
             demoAnchor + glm::dvec3(-1024.0, 1536.0 + i * 256.0, -3072.0);
         specimen.end = specimen.start + glm::dvec3(2048.0, 0.0, 0.0);
-        appendVectorPrimitive(
-            specimen, (std::string(lineTypes[i]) + "Line").c_str(),
-            options, target);
+        addDemo(specimen, std::string(lineTypes[i]) + "Line");
       }
     }
 
@@ -1945,7 +1955,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         polylineBase + glm::dvec3(256.0, 256.0, 0.0),
         polylineBase + glm::dvec3(512.0, 128.0, 256.0),
         polylineBase + glm::dvec3(768.0, 384.0, 0.0)};
-    appendVectorPrimitive(demoPolyline, "DemoPolyline", options, target);
+    addDemo(demoPolyline, "DemoPolyline");
 
     acdb::AcDbHatch hexagon;
     hexagon.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 1.0f);
@@ -1957,7 +1967,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
           demoAnchor + glm::dvec3(0.0, 256.0, -512.0) +
           glm::dvec3(128.0 * std::cos(angle), 128.0 * std::sin(angle), 0.0));
     }
-    appendVectorPrimitive(hexagon, "Hexagon", options, target);
+    addDemo(hexagon, "Hexagon");
 
     {
       acdb::AcDbHatch circleFill;
@@ -1972,7 +1982,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
             glm::dvec3(160.0 * std::cos(angle),
                        160.0 * std::sin(angle), 0.0));
       }
-      appendVectorPrimitive(circleFill, "CircleFill", options, target);
+      addDemo(circleFill, "CircleFill");
     }
 
     acdb::AcDbSolid rectangle;
@@ -1983,7 +1993,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     rectangle.thirdCorner = rectangle.firstCorner + glm::dvec3(0.0, 384.0, 0.0);
     rectangle.fourthCorner =
         rectangle.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
-    appendVectorPrimitive(rectangle, "Rectangle", options, target);
+    addDemo(rectangle, "Rectangle");
 
     acdb::AcDbSpline bezier;
     bezier.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
@@ -1997,7 +2007,75 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         bezierBase + glm::dvec3(256.0, 384.0, 128.0),
         bezierBase + glm::dvec3(512.0, -128.0, -128.0),
         bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
-    appendVectorPrimitive(bezier, "Bezier", options, target);
+    addDemo(bezier, "Bezier");
+
+    // Decoded DWG models ride the document pipeline when GRID_DWG
+    // names a file: the parser fills the database directly.
+    if (const char *dwgPath = std::getenv("GRID_DWG"))
+    {
+      Dwg_Data dwg;
+      memset(&dwg, 0, sizeof(dwg));
+      if (dwg_read_file(dwgPath, &dwg) == 0)
+      {
+        const std::size_t inserted = acdb::addDwgEntities(document, dwg);
+        std::cout << "GRID_DWG: inserted " << inserted << " entities from "
+                  << dwgPath << std::endl;
+        dwg_free(&dwg);
+      }
+      else
+      {
+        std::cout << "GRID_DWG: failed to decode " << dwgPath << std::endl;
+      }
+    }
+
+    // Block references (GRID_BLOCKS=1): definition + three inserts.
+    if (const char *blocks = std::getenv("GRID_BLOCKS");
+        blocks && *blocks && std::strcmp(blocks, "0") != 0)
+      appendDemoBlocks();
+
+    return true;
+  }();
+  (void)authored;
+}
+
+VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
+{  VectorPrimitivesTessellation target;
+  acdb::TessellatedEntity &result = target.geometry;
+  if (!cadEntityDemoEnabled())
+    return target;
+
+  buildDemoDocument();
+  acdb::AcDbDatabase &document = acdbDocument();
+
+  target.anchor = demoCadAnchor();
+  const glm::dvec3 demoAnchor = demoAnchorPoint();
+  const acdb::TesselationOptions options;
+
+  // Render the document model space: every resident entity goes
+  // through the same tessellation path as before.
+  for (const acdb::AcDbHandle handle :
+       document.modelSpace().entityHandles())
+  {
+    const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
+    if (payload == nullptr)
+      continue;
+    if (const auto *text = std::get_if<acdb::AcDbText>(payload);
+        text != nullptr && text->styleName == "SHX")
+    {
+      appendShxTextEntity(*text, target);
+      continue;
+    }
+    const std::string &name = acdb::common(*payload).name;
+    const DemoEntityHints hints = demoHints().count(name)
+                                      ? demoHints()[name]
+                                      : DemoEntityHints{};
+    std::visit(
+        [&](const auto &entity) {
+          appendVectorPrimitive(entity, name.c_str(), options, target,
+                                hints.fillIs3DFace, hints.pickShape);
+        },
+        *payload);
+  }
 
     auto addCurveDemo = [&target](rendering::CurveAlgorithm algorithm,
                                    const char *name,
@@ -2051,22 +2129,17 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     curveArc.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
     curveArc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
 
-    {
-      // Demo meshes remain formal entities, but stay out of the default CAD
-      // scene.  They are available only for explicit rendering/pick debugging.
-      if (!demoMeshesEnabled())
-          // Decoded DWG models ride the same pipeline when GRID_DWG names a file.
-  if (const char *dwgPath = std::getenv("GRID_DWG"))
-    appendDwgFile(dwgPath, options, target);
 
-  // Block references (GRID_BLOCKS=1): definition + three inserts rendered
-  // through the nested-instance walk.
+  // Block-reference instances (GRID_BLOCKS=1) render through the
+  // nested-instance walk.
   if (const char *blocks = std::getenv("GRID_BLOCKS");
       blocks && *blocks && std::strcmp(blocks, "0") != 0)
-    appendDemoBlocks(options, target);
+    appendBlockInstances("DEMO_BRACKET", options, target);
 
-return target;
+  if (!demoMeshesEnabled())
+    return target;
 
+  {
       MeshEntityRecord debugCube;
       debugCube.entity.common.name = "RedDebugCube";
       debugCube.entity.common.color = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -2092,7 +2165,7 @@ return target;
         mesh.mesh = meshTypes[index];
         target.meshes.push_back(std::move(mesh));
       }
-    }
+  }
   return target;
 }
 

@@ -133,6 +133,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_LINE:
         {
             AcDbLine line = toEntity(*object.tio.entity->tio.LINE);
+            line.common.name = "DWG_LINE";
             line.common.color = entityColor;
             ensureLayer(database, line.common.layer);
             database.addEntity(std::move(line));
@@ -142,6 +143,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_ARC:
         {
             AcDbArc arc = toEntity(*object.tio.entity->tio.ARC);
+            arc.common.name = "DWG_ARC";
             arc.common.color = entityColor;
             ensureLayer(database, arc.common.layer);
             database.addEntity(std::move(arc));
@@ -151,6 +153,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_CIRCLE:
         {
             AcDbCircle circle = toEntity(*object.tio.entity->tio.CIRCLE);
+            circle.common.name = "DWG_CIRCLE";
             circle.common.color = entityColor;
             ensureLayer(database, circle.common.layer);
             database.addEntity(std::move(circle));
@@ -160,6 +163,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_ELLIPSE:
         {
             AcDbEllipse ellipse = toEntity(*object.tio.entity->tio.ELLIPSE);
+            ellipse.common.name = "DWG_ELLIPSE";
             ellipse.common.color = entityColor;
             ensureLayer(database, ellipse.common.layer);
             database.addEntity(std::move(ellipse));
@@ -169,6 +173,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_POINT:
         {
             AcDbPoint point = toEntity(*object.tio.entity->tio.POINT);
+            point.common.name = "DWG_POINT";
             point.common.color = entityColor;
             ensureLayer(database, point.common.layer);
             database.addEntity(std::move(point));
@@ -178,6 +183,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_RAY:
         {
             AcDbRay ray = toEntity(*object.tio.entity->tio.RAY);
+            ray.common.name = "DWG_RAY";
             ray.common.color = entityColor;
             ensureLayer(database, ray.common.layer);
             database.addEntity(std::move(ray));
@@ -188,6 +194,7 @@ inline std::size_t addDwgEntities(AcDbDatabase &database,
         {
             const AcDbRay ray = toEntity(*object.tio.entity->tio.RAY);
             AcDbXline xline;
+            xline.common.name = "DWG_XLINE";
             xline.point = ray.start;
             xline.direction = ray.direction;
             xline.common.color = entityColor;
