@@ -151,6 +151,22 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/lib/libredwg"
 
 target_link_libraries(WINDOW PRIVATE libredwg)
 
+# Shewchuk robust predicates (public domain): exact-sign orient2d/3d,
+# incircle, insphere for CPU-side sign decisions (picking degeneracies,
+# future triangulation/intersection).  The translation unit MUST keep
+# IEEE double semantics: fast-math silently destroys the exactness that
+# the ge:: wrappers rely on, so /fp:precise is locked on this target.
+add_library(predicates STATIC
+    "${CMAKE_SOURCE_DIR}/external/predicates/predicates.c"
+    "${CMAKE_SOURCE_DIR}/external/predicates/predicates.h")
+target_include_directories(predicates PUBLIC
+    "${CMAKE_SOURCE_DIR}/external/predicates")
+if(MSVC)
+    target_compile_options(predicates PRIVATE /fp:precise)
+endif()
+
+target_link_libraries(WINDOW PRIVATE predicates)
+
 # wgpu-native is dynamically loaded so a missing optional runtime still allows
 # every legacy backend to build and run.
 if(EXISTS "${CMAKE_SOURCE_DIR}/lib/wgpu/bin/wgpu_native-release.dll")
