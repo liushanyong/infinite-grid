@@ -13,6 +13,7 @@
 #include "entities/dwg_bridge.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgi/AcGiView.h"
+#include "acgi/AcGiSelectionHighlighter.h"
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -117,19 +118,11 @@ std::unique_ptr<rendering::RendererBackend> rendererBackend;
 // clear color.  A squared RGB distance of 0.04 corresponds to a 0.2 channel
 // delta, which is enough to catch near-black/near-background overlays while
 // avoiding needless color changes for clearly distinct hues.
-constexpr glm::vec4 kOutlineColor(1.0f, 0.55f, 0.05f, 1.0f);
-
-// Global geometric outline expansion. For centered line ribbons this is the
-// extra half-width added to each side, so the full width grows by two copies.
-constexpr float kOutlineWidthPixels = 3.0f;
-
-static float outlineWidthWorld(float pixelSizeWorld)
-{
-    return kOutlineWidthPixels * pixelSizeWorld;
-}
-
 // The single render gateway every submission goes through.
 acgi::AcGiView &acgiView = acgi::AcGiView::instance();
+
+// Selection highlight drawing (the selection state itself stays here).
+static acgi::AcGiSelectionHighlighter selectionHighlighter(acgiView);
 
 // Camera-space projection now lives in the acgi render gateway.
 using CameraSpacePoint = acgi::CameraSpacePoint;
@@ -2190,12 +2183,6 @@ bool cadPairedBandPoints(const CadEntityRange &range,
                          const entities::TessellatedEntity &tess,
                          CadPairedBandPoints &band);
 
-static void appendOutlineRibbon(
-    std::vector<rendering::PrimVertex> &vertices, const glm::vec3 &start,
-    const glm::vec3 &end, const glm::vec3 &front, float halfWidth, float u0,
-    float u1, bool centered,
-    const glm::vec4 &color = kOutlineColor);
-
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
                                      const glm::mat4 &overlayProjection,
@@ -2512,7 +2499,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         .logDepth = logDepth,
         .material = acgi::toSurfaceMaterial(scene::AcGiMaterial{}),
     };
-    rendererBackend->drawFilledTriangles(cadFillData);
+    acgiView.drawFillTriangles(visibleFillVertices, cadAnchorView,
+                               projection, false,
+                               acgi::envLayer("GRID_FILL_LAYER"));
   }
 
   // Wireframe modes suppress solid fills, which would make fill-only
@@ -2525,18 +2514,6 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   if (!fillRenderFlags.show2dSolidFills && !fillRenderFlags.face3dFill &&
       !fillRenderFlags.hiddenLine)
   {
-    struct FillEdgeKey
-    {
-      double v[6];
-      bool operator<(const FillEdgeKey &other) const
-      {
-        for (int i = 0; i < 6; ++i)
-          if (v[i] != other.v[i]) return v[i] < other.v[i];
-        return false;
-      }
-    };
-    static std::vector<rendering::PrimVertex> wireBoundaryVertices;
-    wireBoundaryVertices.clear();
     for (const VisibilityCandidate *candidate : visibleCad)
     {
       if (!candidate || candidate->kind != VisibilityKind::CadFill ||
@@ -2545,8 +2522,6 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const CadEntityRange &range = *candidate->cadRange;
       const size_t last = std::min(range.begin + range.count,
                                    tess.fills.size());
-      std::map<FillEdgeKey, int> useCounts;
-      std::map<FillEdgeKey, std::pair<glm::dvec3, glm::dvec3>> edgeEnds;
       glm::vec4 rangeColor(1.0f);
       bool hasColor = false;
       for (size_t i = range.begin; i < last; ++i)
@@ -2559,52 +2534,12 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           rangeColor = acgiView.contrastColor(triangle.common.color);
           hasColor = true;
         }
-        const glm::dvec3 corners[3] = {triangle.a, triangle.b, triangle.c};
-        for (int e = 0; e < 3; ++e)
-        {
-          const glm::dvec3 &p = corners[e];
-          const glm::dvec3 &q = corners[(e + 1) % 3];
-          FillEdgeKey key;
-          const glm::dvec3 *first = &p;
-          const glm::dvec3 *second = &q;
-          if (std::tie(q.x, q.y, q.z) < std::tie(p.x, p.y, p.z))
-            std::swap(first, second);
-          key.v[0] = first->x; key.v[1] = first->y; key.v[2] = first->z;
-          key.v[3] = second->x; key.v[4] = second->y; key.v[5] = second->z;
-          ++useCounts[key];
-          edgeEnds[key] = {*first, *second};
-        }
       }
       if (!hasColor)
         continue;
-      const float boundaryHalfWidth =
-          0.5f * outlineWidthWorld(pixelSizeWorld);
-      for (const auto &entry : useCounts)
-      {
-        if (entry.second != 1)
-          continue; // shared edges stay hidden in wireframe
-        const auto &ends = edgeEnds[entry.first];
-        appendOutlineRibbon(
-            wireBoundaryVertices,
-            glm::vec3(ends.first - cameraPos),
-            glm::vec3(ends.second - cameraPos),
-            glm::vec3(cameraFront), boundaryHalfWidth, 0.0f, 1.0f,
-            true, rangeColor);
-      }
-    }
-    if (!wireBoundaryVertices.empty())
-    {
-      const rendering::PolylineRenderData boundaryData{
-          .view = view,
-          .projection = overlayProjection,
-          .vertices = wireBoundaryVertices.data(),
-          .vertexCount =
-              static_cast<uint32_t>(wireBoundaryVertices.size()),
-          .logDepth = logDepth,
-          .edgeSoftness = 0.15f,
-          .layer = acgi::envLayer("GRID_LINE_LAYER"),
-      };
-      rendererBackend->drawPolylines(boundaryData);
+      acgiView.drawFillBoundary(
+          tess, range.begin, range.count,
+          0.5f * acgi::outlineWidthWorld(pixelSizeWorld), rangeColor);
     }
   }
   for (const VisibilityCandidate *candidate : visibleCad)
@@ -5671,406 +5606,6 @@ bool outlineUsesGeometry(const GpuPickEntity &entity)
            entity.kind == VisibilityKind::CadPoint;
 }
 
-static void appendOutlineRibbon(
-    std::vector<rendering::PrimVertex> &vertices, const glm::vec3 &start,
-    const glm::vec3 &end, const glm::vec3 &front, float halfWidth, float u0,
-    float u1, bool centered, const glm::vec4 &color)
-{
-    const glm::vec3 direction = end - start;
-    if (glm::length(direction) < 1.0e-5f)
-        return;
-
-    const glm::vec3 side = acgiView.ribbonSide(direction, front, halfWidth);
-    if (centered)
-    {
-        vertices.push_back({start - side, color, {u0, 0.0f}});
-        vertices.push_back({start + side, color, {u0, 1.0f}});
-        vertices.push_back({end + side, color, {u1, 1.0f}});
-        vertices.push_back({start - side, color, {u0, 0.0f}});
-        vertices.push_back({end + side, color, {u1, 1.0f}});
-        vertices.push_back({end - side, color, {u1, 0.0f}});
-    }
-    else
-    {
-        vertices.push_back({start, color, {u0, 0.0f}});
-        vertices.push_back({start + side, color, {u0, 1.0f}});
-        vertices.push_back({end + side, color, {u1, 1.0f}});
-        vertices.push_back({start, color, {u0, 0.0f}});
-        vertices.push_back({end + side, color, {u1, 1.0f}});
-        vertices.push_back({end, color, {u1, 0.0f}});
-    }
-}
-
-
-// Draw a solid fill outline from the same tessellated boundary used by the
-// renderer.  Shared triangle edges are skipped, so triangulated hatches and
-// solids get one clean silhouette instead of internal mesh edges.  The
-// boundary is redrawn as camera-facing ribbons (like the line-like
-// outlines), so the visible outline width stays constant at every viewing
-// angle; an in-plane outward offset would foreshorten to zero when the fill
-// is viewed edge-on.  The fill itself is submitted after this pass in the
-// sequential overlay view and covers the inner half of each ribbon.
-static void drawSolidFillOutline(const glm::mat4 &view,
-                                 const glm::mat4 &overlayProjection,
-                                 const glm::dvec3 &cameraPos,
-                                 const glm::vec3 &cameraFront,
-                                 float pixelSizeWorld,
-                                 const glm::vec4 &logDepth)
-{
-    if (!rendererBackend || !outlineEntity ||
-        outlineEntity->kind != VisibilityKind::CadFill ||
-        !outlineEntity->cadRange)
-    {
-        return;
-    }
-
-    const CadEntityRange &range = *outlineEntity->cadRange;
-    const entities::TessellatedEntity &tess =
-        getVectorPrimitivesTessellation().geometry;
-    if (range.begin >= tess.fills.size())
-        return;
-    const size_t last = std::min(range.begin + range.count,
-                                 tess.fills.size());
-
-    struct BoundaryKey
-    {
-        glm::dvec3 a;
-        glm::dvec3 b;
-        bool operator<(const BoundaryKey &other) const
-        {
-            if (a.x != other.a.x) return a.x < other.a.x;
-            if (a.y != other.a.y) return a.y < other.a.y;
-            if (a.z != other.a.z) return a.z < other.a.z;
-            if (b.x != other.b.x) return b.x < other.b.x;
-            if (b.y != other.b.y) return b.y < other.b.y;
-            return b.z < other.b.z;
-        }
-    };
-    struct BoundaryUse
-    {
-        glm::dvec3 start;
-        glm::dvec3 end;
-        glm::dvec3 normal;
-        glm::dvec3 center;
-        bool is3DFace;
-    };
-
-    std::map<BoundaryKey, std::vector<BoundaryUse>> boundaryUses;
-    auto canonical = [](const glm::dvec3 &p, const glm::dvec3 &q) {
-        return p.x < q.x || (p.x == q.x && (p.y < q.y ||
-            (p.y == q.y && p.z <= q.z)))
-            ? BoundaryKey{p, q} : BoundaryKey{q, p};
-    };
-    auto addTriangle = [&](const entities::Triangle &triangle) {
-        if (!triangle.common.visible)
-            return;
-        const glm::dvec3 normal = glm::cross(triangle.b - triangle.a,
-                                             triangle.c - triangle.a);
-        const bool degenerate =
-            glm::dot(normal, normal) <= 1.0e-24;
-        const glm::dvec3 unit =
-            degenerate ? glm::dvec3(0.0) : glm::normalize(normal);
-        const glm::dvec3 center =
-            (triangle.a + triangle.b + triangle.c) / 3.0;
-        const std::pair<glm::dvec3, glm::dvec3> edges[3] = {
-            {triangle.a, triangle.b},
-            {triangle.b, triangle.c},
-            {triangle.c, triangle.a},
-        };
-        for (const auto &edge : edges)
-            boundaryUses[canonical(edge.first, edge.second)].push_back(
-                {edge.first, edge.second, unit, center, triangle.is3DFace});
-    };
-    for (size_t i = range.begin; i < last; ++i)
-        addTriangle(tess.fills[i]);
-
-    static std::vector<rendering::PrimVertex> outlineVertices;
-    outlineVertices.clear();
-    // The fill covers the ribbon's inner half, so only the outward half is
-    // visible. Use two copies of the shared half-width to keep the visible
-    // border at 2 * kOutlineWidthPixels, matching the previous in-plane
-    // offset thickness.
-    const float outlineWidth = 2.0f * outlineWidthWorld(pixelSizeWorld);
-    // A closed 3D solid has no used-once boundary edges; its selection
-    // outline is the view-dependent silhouette instead: edges whose two
-    // adjacent triangles face opposite sides of the camera.  These ribbons
-    // are drawn twice as wide so the solid reads as boldly selected as a
-    // planar fill.
-    const float silhouetteWidth = 2.0f * outlineWidth;
-    const bool ortho = useOrthoProjection();
-    auto facesCamera = [&](const BoundaryUse &use) {
-        if (ortho)
-            return glm::dot(use.normal, glm::dvec3(cameraFront)) < 0.0;
-        return glm::dot(use.normal, use.center - cameraPos) > 0.0;
-    };
-    for (const auto &[key, uses] : boundaryUses)
-    {
-        (void)key;
-        if (uses.size() == 1)
-        {
-            appendOutlineRibbon(
-                outlineVertices,
-                glm::vec3(uses.front().start - cameraPos),
-                glm::vec3(uses.front().end - cameraPos),
-                cameraFront, outlineWidth, 0.0f, 1.0f, true);
-        }
-        else if (uses.size() == 2 && uses.front().is3DFace &&
-                 uses.back().is3DFace)
-        {
-            const BoundaryUse &first = uses.front();
-            const BoundaryUse &second = uses.back();
-            if (facesCamera(first) == facesCamera(second))
-                continue; // both sides face the same way: interior edge
-            appendOutlineRibbon(
-                outlineVertices,
-                glm::vec3(first.start - cameraPos),
-                glm::vec3(first.end - cameraPos),
-                cameraFront, silhouetteWidth, 0.0f, 1.0f, true);
-        }
-    }
-
-    if (outlineVertices.empty())
-        return;
-
-    const rendering::PolylineRenderData outlineData{
-        .view = view,
-        .projection = overlayProjection,
-        .vertices = outlineVertices.data(),
-        .vertexCount = static_cast<uint32_t>(outlineVertices.size()),
-        .logDepth = logDepth,
-        .edgeSoftness = 0.15f,
-        .layer = 1.0f,
-    };
-    rendererBackend->drawPolylines(outlineData);
-}
-
-// Draw a camera-facing annulus around each CAD point.  The inner radius
-// matches the visible point impostor and the outer radius adds a fixed
-// screen-space outline, so the source point is never covered by the outline.
-static void drawCadPointOutline(const glm::mat4 &view,
-                                const glm::mat4 &overlayProjection,
-                                const glm::dvec3 &cameraPos,
-                                const glm::vec3 &cameraFront,
-                                float pixelSizeWorld,
-                                const glm::vec4 &logDepth)
-{
-    if (!rendererBackend || !outlineEntity ||
-        outlineEntity->kind != VisibilityKind::CadPoint ||
-        !outlineEntity->cadRange)
-    {
-        return;
-    }
-
-    const CadEntityRange &range = *outlineEntity->cadRange;
-    const entities::TessellatedEntity &tess =
-        getVectorPrimitivesTessellation().geometry;
-    if (range.begin >= tess.points.size())
-        return;
-    const size_t last = std::min(range.begin + range.count,
-                                 tess.points.size());
-
-    auto worldPerPixel = [&](const glm::dvec3 &worldPoint) {
-        if (useOrthoProjection())
-            return 2.0 * orbitCam.orthoSize() /
-                   double(currentDrawableHeight());
-        const double viewDepth = std::max(1.0e-9,
-            glm::dot(worldPoint - cameraPos, glm::dvec3(cameraFront)));
-        return 2.0 * viewDepth * std::tan(glm::radians(45.0) * 0.5) /
-               double(currentDrawableHeight());
-    };
-
-    static std::vector<rendering::PrimVertex> outlineVertices;
-    outlineVertices.clear();
-    const glm::vec3 right(orbitCam.Right);
-    const glm::vec3 up(orbitCam.Up);
-    constexpr int kCircleSegments = 32;
-    for (size_t i = range.begin; i < last; ++i)
-    {
-        const entities::TessellatedPoint &point = tess.points[i];
-        if (!point.common.visible)
-            continue;
-
-        const double pixelsPerWorldUnit = 1.0 /
-            std::max(worldPerPixel(point.location), 1.0e-12);
-        // The point impostor shader uses 2 * pointSize as the visible
-        // screen-space radius, so the outline inner edge must match it.
-        const double innerPixels = double(point.pointSize);
-        const double outerPixels = innerPixels + kOutlineWidthPixels;
-        const double innerRadius = innerPixels / pixelsPerWorldUnit;
-        const double outerRadius = outerPixels / pixelsPerWorldUnit;
-        const glm::vec3 center(point.location - cameraPos);
-        for (int segment = 0; segment < kCircleSegments; ++segment)
-        {
-            const double angle0 = glm::two_pi<double>() * double(segment) /
-                                  double(kCircleSegments);
-            const double angle1 = glm::two_pi<double>() * double(segment + 1) /
-                                  double(kCircleSegments);
-            const glm::vec3 inner0 = center +
-                right * float(innerRadius * std::cos(angle0)) +
-                up * float(innerRadius * std::sin(angle0));
-            const glm::vec3 outer0 = center +
-                right * float(outerRadius * std::cos(angle0)) +
-                up * float(outerRadius * std::sin(angle0));
-            const glm::vec3 inner1 = center +
-                right * float(innerRadius * std::cos(angle1)) +
-                up * float(innerRadius * std::sin(angle1));
-            const glm::vec3 outer1 = center +
-                right * float(outerRadius * std::cos(angle1)) +
-                up * float(outerRadius * std::sin(angle1));
-
-            outlineVertices.push_back({inner0, kOutlineColor, {0.5f, 0.5f}});
-            outlineVertices.push_back({outer0, kOutlineColor, {0.5f, 0.5f}});
-            outlineVertices.push_back({outer1, kOutlineColor, {0.5f, 0.5f}});
-            outlineVertices.push_back({inner0, kOutlineColor, {0.5f, 0.5f}});
-            outlineVertices.push_back({outer1, kOutlineColor, {0.5f, 0.5f}});
-            outlineVertices.push_back({inner1, kOutlineColor, {0.5f, 0.5f}});
-        }
-    }
-
-    if (outlineVertices.empty())
-        return;
-
-    const rendering::PolylineRenderData outlineData{
-        .view = view,
-        .projection = overlayProjection,
-        .vertices = outlineVertices.data(),
-        .vertexCount = static_cast<uint32_t>(outlineVertices.size()),
-        .logDepth = logDepth,
-        .edgeSoftness = 0.15f,
-        .layer = 1.0f,
-    };
-    rendererBackend->drawPolylines(outlineData);
-}
-
-static void drawLineLikeOutline(const glm::mat4 &view,
-                                const glm::mat4 &overlayProjection,
-                                const glm::dvec3 &cameraPos,
-                                const glm::dvec3 &cameraRight,
-                                const glm::dvec3 &cameraUp,
-                                const glm::dvec3 &cameraFront,
-                                float pixelSizeWorld,
-                                const glm::vec4 &logDepth)
-{
-    if (!rendererBackend || !outlineEntity ||
-        !outlineIsLineLike(*outlineEntity))
-    {
-        return;
-    }
-
-    static std::vector<rendering::PrimVertex> outlineVertices;
-    outlineVertices.clear();
-    static std::vector<rendering::LineInstance> outlineLineInstances;
-    outlineLineInstances.clear();
-
-    if (outlineEntity->kind == VisibilityKind::CadStroke &&
-        outlineEntity->cadRange)
-    {
-        const CadEntityRange &range = *outlineEntity->cadRange;
-        const entities::TessellatedEntity &tess =
-            getVectorPrimitivesTessellation().geometry;
-        for (size_t i = range.begin;
-             i < range.begin + range.count && i < tess.strokes.size(); ++i)
-        {
-            const entities::Stroke &stroke = tess.strokes[i];
-            const size_t pointCount = stroke.points.size();
-            if (!stroke.common.visible || pointCount < 2)
-                continue;
-
-            // Match the visible ribbon's pixel-size floor, then add one shared
-            // outline half-width. The full width grows by two copies of
-            // kOutlineWidthPixels.
-            const float sourceHalfWidth =
-                std::max(acgiView.strokeHalfWidth(stroke), pixelSizeWorld);
-            const float halfWidth = sourceHalfWidth +
-                outlineWidthWorld(pixelSizeWorld);
-            const size_t segmentCount = stroke.closed ? pointCount : pointCount - 1;
-            for (size_t j = 0; j < segmentCount; ++j)
-            {
-                const size_t next = (j + 1) % pointCount;
-                // The outline must use the same visible span as the source
-                // stroke.  In particular a semi-infinite Ray must not draw an
-                // outline around its finite tessellation proxy only.
-                glm::dvec3 clippedStart, clippedEnd;
-                if (!acgiView.clipStrokeSegment(
-                        stroke.points[j], stroke.points[next],
-                        clippedStart, clippedEnd, stroke.semiInfinite))
-                {
-                    continue;
-                }
-                if (lineDebugEnabled() && stroke.semiInfinite)
-                {
-                    std::printf(
-                        "[OUTLINE_RAY] cam=(%.6f,%.6f,%.6f) start=(%.6f,%.6f,%.6f) end=(%.6f,%.6f,%.6f) half=%.6f\n",
-                        cameraPos.x, cameraPos.y, cameraPos.z,
-                        clippedStart.x, clippedStart.y, clippedStart.z,
-                        clippedEnd.x, clippedEnd.y, clippedEnd.z,
-                        halfWidth);
-                }
-                // Visible CAD strokes use the screen-space line-instance
-                // pipeline.  A world-space CPU ribbon can look offset from the
-                // body in perspective, especially for long semi-infinite rays.
-                // Keep outline and body on the same centerline/expansion path.
-                outlineLineInstances.push_back({
-                    glm::vec4(glm::vec3(clippedStart - cameraPos), 0.0f),
-                    glm::vec4(glm::vec3(clippedEnd - cameraPos), 1.0f),
-                    glm::vec4(glm::vec3(kOutlineColor), halfWidth),
-                    glm::vec4(kOutlineColor.a, 0.0f, 0.0f, 0.0f),
-                });
-            }
-        }
-    }
-    else if (outlineEntity->kind == VisibilityKind::CadCurve &&
-             outlineEntity->curve)
-    {
-        const std::vector<glm::dvec3> points =
-            acgi::AcGiView::sampleCurveBatch(*outlineEntity->curve);
-        const size_t segmentCount = points.size() > 1 ? points.size() - 1 : 0;
-        const float halfWidth =
-            std::max(outlineEntity->curve->acgiMaterial.lineWidth * 0.5f,
-                     1.0f) +
-            outlineWidthWorld(pixelSizeWorld);
-        for (size_t i = 0; i < segmentCount; ++i)
-        {
-            appendOutlineRibbon(
-                outlineVertices, glm::vec3(points[i] - cameraPos),
-                glm::vec3(points[i + 1] - cameraPos),
-                glm::vec3(cameraFront), halfWidth,
-                float(i) / float(std::max<size_t>(segmentCount, 1)),
-                float(i + 1) / float(std::max<size_t>(segmentCount, 1)),
-                true);
-        }
-    }
-
-    if (!outlineLineInstances.empty())
-    {
-        const rendering::LineInstancesRenderData outlineData{
-            .view = view,
-            .projection = overlayProjection,
-            .instances = outlineLineInstances.data(),
-            .instanceCount = static_cast<uint32_t>(outlineLineInstances.size()),
-            .logDepth = logDepth,
-            .edgeSoftness = 2.0f,
-            .layer = 0.0f,
-        };
-        rendererBackend->drawLineInstances(outlineData);
-        return;
-    }
-
-    if (outlineVertices.empty())
-        return;
-
-    const rendering::PolylineRenderData outlineData{
-        .view = view,
-        .projection = overlayProjection,
-        .vertices = outlineVertices.data(),
-        .vertexCount = static_cast<uint32_t>(outlineVertices.size()),
-        .logDepth = logDepth,
-        .edgeSoftness = 0.15f,
-        .layer = 1.0f,
-    };
-    rendererBackend->drawPolylines(outlineData);
-}
-
 void render()
 {
   if (!rendererBackend)
@@ -7395,12 +6930,42 @@ void render()
   // Draw line-like outlines before the original CAD overlays.  The overlay
   // view is sequential, so the source line strokes/curves composite on top of
   // their wider outline instead of the outline covering them.
-  drawLineLikeOutline(viewRte, overlayProjection, cameraPos, cameraRight,
-                      cameraUp, frontVec, pixelSize, logDepth);
-  drawSolidFillOutline(viewRte, overlayProjection, cameraPos, frontVec,
-                       pixelSize, logDepth);
-  drawCadPointOutline(viewRte, overlayProjection, cameraPos, frontVec,
-                      pixelSize, logDepth);
+  if (outlineEntity)
+  {
+    const entities::TessellatedEntity &outlineTess =
+        getVectorPrimitivesTessellation().geometry;
+    if (outlineEntity->kind == VisibilityKind::CadFill &&
+        outlineEntity->cadRange && outlineEntity->cadRange->count)
+    {
+      selectionHighlighter.drawFillOutline(outlineTess,
+                                           outlineEntity->cadRange->begin,
+                                           outlineEntity->cadRange->count,
+                                           pixelSize);
+    }
+    else if (outlineEntity->kind == VisibilityKind::CadPoint &&
+             outlineEntity->cadRange && outlineEntity->cadRange->count)
+    {
+      selectionHighlighter.drawPointHighlight(
+          outlineTess, outlineEntity->cadRange->begin,
+          outlineEntity->cadRange->count, pixelSize);
+    }
+    else if (outlineIsLineLike(*outlineEntity))
+    {
+      if (outlineEntity->kind == VisibilityKind::CadStroke &&
+          outlineEntity->cadRange && outlineEntity->cadRange->count)
+      {
+        selectionHighlighter.drawStrokeOutline(
+            outlineTess, outlineEntity->cadRange->begin,
+            outlineEntity->cadRange->count, pixelSize);
+      }
+      else if (outlineEntity->kind == VisibilityKind::CadCurve &&
+               outlineEntity->curve)
+      {
+        selectionHighlighter.drawCurveOutline(*outlineEntity->curve,
+                                              pixelSize);
+      }
+    }
+  }
 
   drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
                            orbitCam.Position, logDepth,

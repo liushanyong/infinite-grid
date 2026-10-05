@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <tuple>
 #include <iostream>
 #include <limits>
 
@@ -972,6 +974,149 @@ void AcGiView::submit(scene::SceneDrawList &drawList,
         };
         backend_->drawTargetPointInstances(pointData);
     }
+}
+
+void AcGiView::appendRibbon(std::vector<rendering::PrimVertex> &vertices,
+                            const glm::dvec3 &startWorld,
+                            const glm::dvec3 &endWorld, float halfWidth,
+                            float u0, float u1, bool centered,
+                            const glm::vec4 &color) const
+{
+    const glm::vec3 start(startWorld - frame_.cameraPos);
+    const glm::vec3 end(endWorld - frame_.cameraPos);
+    const glm::vec3 direction = end - start;
+    if (glm::length(direction) < 1.0e-5f)
+        return;
+    const glm::vec3 side =
+        ribbonSide(direction, frame_.cameraFront, halfWidth);
+    if (centered)
+    {
+        vertices.push_back({start - side, color, {u0, 0.0f}});
+        vertices.push_back({start + side, color, {u0, 1.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({start - side, color, {u0, 0.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({end - side, color, {u1, 0.0f}});
+    }
+    else
+    {
+        vertices.push_back({start, color, {u0, 0.0f}});
+        vertices.push_back({start + side, color, {u0, 1.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({start, color, {u0, 0.0f}});
+        vertices.push_back({end + side, color, {u1, 1.0f}});
+        vertices.push_back({end, color, {u1, 0.0f}});
+    }
+}
+
+void AcGiView::drawRibbonVertices(
+    std::vector<rendering::PrimVertex> &vertices, float edgeSoftness,
+    float layer) const
+{
+    if (!backend_ || vertices.empty())
+        return;
+    const rendering::PolylineRenderData data{
+        .view = frame_.view,
+        .projection = frame_.overlayProjection,
+        .vertices = vertices.data(),
+        .vertexCount = static_cast<uint32_t>(vertices.size()),
+        .logDepth = frame_.logDepth,
+        .edgeSoftness = edgeSoftness,
+        .layer = layer,
+    };
+    backend_->drawPolylines(data);
+    vertices.clear();
+}
+
+void AcGiView::drawLineInstanceBatch(
+    std::vector<rendering::LineInstance> &instances, float edgeSoftness,
+    float layer) const
+{
+    if (!backend_ || instances.empty())
+        return;
+    const rendering::LineInstancesRenderData data{
+        .view = frame_.view,
+        .projection = frame_.overlayProjection,
+        .instances = instances.data(),
+        .instanceCount = static_cast<uint32_t>(instances.size()),
+        .logDepth = frame_.logDepth,
+        .edgeSoftness = edgeSoftness,
+        .layer = layer,
+    };
+    backend_->drawLineInstances(data);
+    instances.clear();
+}
+
+void AcGiView::drawFillTriangles(
+    std::vector<rendering::FillVertex> &vertices, const glm::mat4 &view,
+    const glm::mat4 &projection, bool is3DFace, float layer) const
+{
+    if (!backend_ || vertices.empty())
+        return;
+    const rendering::FilledTrianglesRenderData data{
+        .view = view,
+        .projection = projection,
+        .vertices = vertices.data(),
+        .vertexCount = static_cast<uint32_t>(vertices.size()),
+        .is3DFace = is3DFace,
+        .layer = layer,
+        .logDepth = frame_.logDepth,
+        .material = toSurfaceMaterial(scene::AcGiMaterial{}),
+    };
+    backend_->drawFilledTriangles(data);
+}
+
+void AcGiView::drawFillBoundary(const entities::TessellatedEntity &tess,
+                                size_t begin, size_t count, float halfWidth,
+                                const glm::vec4 &color) const
+{
+    if (!backend_ || count == 0)
+        return;
+    // Shared-edge analysis: a triangle edge used by exactly one triangle is
+    // a boundary edge; edges shared by two stay hidden in wireframe modes.
+    struct FillEdgeKey
+    {
+        double v[6];
+        bool operator<(const FillEdgeKey &o) const
+        {
+            return std::memcmp(v, o.v, sizeof(v)) < 0;
+        }
+    };
+    std::map<FillEdgeKey, int> useCounts;
+    std::map<FillEdgeKey, std::pair<glm::dvec3, glm::dvec3>> edgeEnds;
+    const size_t last = std::min(begin + count, tess.fills.size());
+    for (size_t i = begin; i < last; ++i)
+    {
+        const entities::Triangle &triangle = tess.fills[i];
+        if (!triangle.common.visible)
+            continue;
+        const glm::dvec3 corners[3] = {triangle.a, triangle.b, triangle.c};
+        for (int e = 0; e < 3; ++e)
+        {
+            const glm::dvec3 &p = corners[e];
+            const glm::dvec3 &q = corners[(e + 1) % 3];
+            FillEdgeKey key;
+            const glm::dvec3 *first = &p;
+            const glm::dvec3 *second = &q;
+            if (std::tie(q.x, q.y, q.z) < std::tie(p.x, p.y, p.z))
+                std::swap(first, second);
+            key.v[0] = first->x; key.v[1] = first->y; key.v[2] = first->z;
+            key.v[3] = second->x; key.v[4] = second->y; key.v[5] = second->z;
+            ++useCounts[key];
+            edgeEnds[key] = {*first, *second};
+        }
+    }
+    std::vector<rendering::PrimVertex> vertices;
+    for (const auto &entry : useCounts)
+    {
+        if (entry.second != 1)
+            continue;
+        const auto &ends = edgeEnds[entry.first];
+        appendRibbon(vertices, ends.first, ends.second, halfWidth, 0.0f,
+                     1.0f, true, color);
+    }
+    if (!vertices.empty())
+        drawRibbonVertices(vertices, 0.15f, envLayer("GRID_LINE_LAYER"));
 }
 
 int AcGiView::flushTextRequests()

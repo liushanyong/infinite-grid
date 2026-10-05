@@ -139,6 +139,38 @@ public:
     // of glyphs drawn.
     int flushTextRequests();
 
+    // ---- low-level drawing primitives (selection highlighter, overlays) ----
+
+    // Build one camera-facing ribbon segment between world-space endpoints
+    // (converted to camera-relative here).
+    void appendRibbon(std::vector<rendering::PrimVertex> &vertices,
+                      const glm::dvec3 &startWorld,
+                      const glm::dvec3 &endWorld, float halfWidth, float u0,
+                      float u1, bool centered,
+                      const glm::vec4 &color) const;
+
+    // Submit collected ribbon vertices through the polyline channel and
+    // clear the buffer.
+    void drawRibbonVertices(std::vector<rendering::PrimVertex> &vertices,
+                            float edgeSoftness, float layer) const;
+
+    // Submit prebuilt camera-relative line instances and clear the buffer.
+    void drawLineInstanceBatch(std::vector<rendering::LineInstance> &instances,
+                               float edgeSoftness, float layer) const;
+
+    // Submit fill triangles from prebuilt vertices with an explicit view
+    // (the CAD fill cache stores anchor-relative vertices).
+    void drawFillTriangles(std::vector<rendering::FillVertex> &vertices,
+                           const glm::mat4 &view,
+                           const glm::mat4 &projection, bool is3DFace,
+                           float layer) const;
+
+    // Wireframe-mode fill boundary: emit the single-use triangle edges of
+    // a fill range as camera-facing ribbons (shared edges stay hidden).
+    void drawFillBoundary(const entities::TessellatedEntity &tess,
+                          size_t begin, size_t count, float halfWidth,
+                          const glm::vec4 &color) const;
+
     // CPU sampling of a curve batch command (de Casteljau / de Boor),
     // matching the GPU evaluator's clamped 16-slot windows.
     static std::vector<glm::dvec3> sampleCurveBatch(
