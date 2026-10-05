@@ -130,6 +130,14 @@ public:
     // is applied immediately instead of waiting out the hysteresis.
     void resetDepthSlabs();
 
+    // Fit the view around a world-space bounds (ObjectARX:
+    // AcGsView::zoomExtents).  Uses the current drawable aspect.
+    void zoomExtents(const glm::dvec3 &minimum, const glm::dvec3 &maximum);
+
+    // Place the orbit camera at an explicit target/distance and fit its
+    // depth interval to the same point (autofocus-style framing).
+    void focusOn(const glm::dvec3 &target, double distance);
+
     // Apply the slab policy to one candidate interval: expansion is applied
     // immediately (nothing clips while moving), shrinkage waits until the
     // candidate has been stable for twenty frames.  The stable interval is

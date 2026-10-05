@@ -551,6 +551,19 @@ AcGsView::DepthSlabStabilizer &AcGsView::slabStabilizer(DepthSlab slab)
     return stabilizers[static_cast<int>(slab)];
 }
 
+void AcGsView::zoomExtents(const glm::dvec3 &minimum,
+                             const glm::dvec3 &maximum)
+{
+    // The viewport rectangle of the current frame context.
+    const double aspect =
+        double(frame_.viewportWidth) / double(std::max(1, frame_.viewportHeight));
+    orbitCamera_.fitToBounds(minimum, maximum, aspect);}
+
+void AcGsView::focusOn(const glm::dvec3 &target, double distance)
+{
+    orbitCamera_.setOrbit(target, distance);
+    orbitCamera_.fitDepthToBounds(target, target);}
+
 void AcGsView::resetDepthSlabs()
 {
     for (const DepthSlab slab :

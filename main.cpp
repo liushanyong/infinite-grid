@@ -231,13 +231,6 @@ glm::dvec3 customGridPlaneStartAxisDirection =
 
 void enforceTargetPlaneConstraint();
 
-// Depth-slab scheduling (hysteresis + float32-outward rounding) lives in
-// acgs::AcGsView; the demo keeps its call sites through this forwarder.
-void resetSlabStabilizers()
-{
-  acgsView.resetDepthSlabs();
-}
-
 const char *gridPlaneName(GridPlaneType plane)
 {
     switch (plane)
@@ -299,7 +292,7 @@ void applyGridPlane(GridPlaneType plane)
               << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; origin=("
               << gridPlaneOrigin.x << ", " << gridPlaneOrigin.y << ", "
               << gridPlaneOrigin.z << "))" << std::endl;
-    resetSlabStabilizers();
+    acgsView.resetDepthSlabs();
     if (targetPlaneConstraintEnabled)
         enforceTargetPlaneConstraint();
 }
@@ -2865,7 +2858,7 @@ static double currentDrawableAspect()
 // Shared fit-to-bounds-and-report helper.
 static void fitCameraToBounds(const WorldAabb &bounds, const char *label)
 {
-  orbitCam.fitToBounds(bounds.min, bounds.max, currentDrawableAspect());
+  acgsView.zoomExtents(bounds.min, bounds.max);
   std::cout << label << " center=(" << orbitCam.Target.x << ", "
             << orbitCam.Target.y << ", " << orbitCam.Target.z
             << ") distance=" << orbitCam.Distance
@@ -2887,8 +2880,7 @@ void fitCameraToStressField()
   {
     const glm::dvec3 detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
-    orbitCam.setOrbit(detailCenter, 6000.0);
-    orbitCam.fitDepthToBounds(detailCenter, detailCenter);
+    acgsView.focusOn(detailCenter, 6000.0);
     return;
   }
   fitCameraToBounds(bounds, "Stress-field camera:");
@@ -3010,7 +3002,7 @@ void switchProjectionMode()
 
   orbitCam.setProjectionPreservingFrame(isOrtho, !isOrtho, aspect);
   isOrtho = !isOrtho;
-  resetSlabStabilizers();
+  acgsView.resetDepthSlabs();
 
   std::cout << "Projection: "
             << (isOrtho ? "ORTHOGRAPHIC" : "PERSPECTIVE")
@@ -7081,7 +7073,7 @@ int main(int argc, char *argv[])
     const double tanHalfFov = std::tan(glm::radians(orbitCam.Zoom) * 0.5);
     orbitCam.setTargetDistance(requestedOrthoHalfHeight / tanHalfFov);
   }
-  resetSlabStabilizers();
+  acgsView.resetDepthSlabs();
   SDL_SetWindowTitle(
       window, "grid plane - large-coordinate stress field");
 
@@ -7238,7 +7230,7 @@ int main(int argc, char *argv[])
                 LARGE_COORDINATE_BASE_POINT +
                 LARGE_COORDINATE_DETAIL_OFFSET;
             fitCameraToStressField();
-            resetSlabStabilizers();
+            acgsView.resetDepthSlabs();
             SDL_SetWindowTitle(
                 window, "grid plane - large-coordinate stress field");
           }
@@ -7247,7 +7239,7 @@ int main(int argc, char *argv[])
             cubeWorldPosition = glm::dvec3(0.0);
             orbitCam.clearDepthBounds();
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
-            resetSlabStabilizers();
+            acgsView.resetDepthSlabs();
             SDL_SetWindowTitle(window, "grid plane");
           }
           std::cout << "Camera: "
@@ -7344,7 +7336,7 @@ int main(int argc, char *argv[])
         orbitCam.clearDepthBounds();
         orbitCam.setOrbit(cubeWorldPosition, 15.0);
         switchProjectionMode();
-        resetSlabStabilizers();
+        acgsView.resetDepthSlabs();
         originOrthoScenarioApplied = true;
         std::cout << "Camera test: origin orthographic convergence"
                   << std::endl;
