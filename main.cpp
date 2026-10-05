@@ -12,6 +12,7 @@
 #include "libredwg/include/dwg.h"
 #include "entities/dwg_bridge.h"
 #include "acgi/AcGiTextQueue.h"
+#include "acgi/AcGiView.h"
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -111,26 +112,11 @@ RequestedRenderer resolveRequestedBackend()
 
 std::unique_ptr<rendering::RendererBackend> rendererBackend;
 
-constexpr glm::vec4 kClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
 // Keep CAD content readable even when the authored color is close to the
 // clear color.  A squared RGB distance of 0.04 corresponds to a 0.2 channel
 // delta, which is enough to catch near-black/near-background overlays while
 // avoiding needless color changes for clearly distinct hues.
-static bool colorIsCloseToBackground(const glm::vec4 &color)
-{
-  const glm::vec3 delta = glm::vec3(color) - glm::vec3(kClearColor);
-  return glm::dot(delta, delta) <= 0.04f;
-}
-
-static glm::vec4 contrastAgainstBackground(const glm::vec4 &color)
-{
-  if (!colorIsCloseToBackground(color))
-    return color;
-  return glm::vec4(1.0f - color.r, 1.0f - color.g, 1.0f - color.b,
-                   color.a);
-}
-
 constexpr glm::vec4 kOutlineColor(1.0f, 0.55f, 0.05f, 1.0f);
 
 // Global geometric outline expansion. For centered line ribbons this is the
@@ -142,15 +128,12 @@ static float outlineWidthWorld(float pixelSizeWorld)
     return kOutlineWidthPixels * pixelSizeWorld;
 }
 
-static rendering::RenderModeManager visualStyleManager;
+// The single render gateway every submission goes through.
+acgi::AcGiView &acgiView = acgi::AcGiView::instance();
 
-// Demo hook: set GRID_MESH_LAYER / GRID_FILL_LAYER to move demo objects onto
-// explicit compositing layers (default 0 = everything in one layer).
-static float envLayer(const char *name)
-{
-  const char *value = std::getenv(name);
-  return value ? float(std::atof(value)) : 0.0f;
-}
+// Camera-space projection now lives in the acgi render gateway.
+using CameraSpacePoint = acgi::CameraSpacePoint;
+
 
 static bool debugValidationMeshesEnabled()
 {
@@ -194,21 +177,6 @@ static bool realisticMeshEnabled()
   return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
 }
 
-static rendering::SurfaceMaterial toSurfaceMaterial(
-    const scene::AcGiMaterial &material)
-{
-  rendering::SurfaceMaterial result;
-  result.algorithm = static_cast<rendering::SurfaceAlgorithm>(
-      material.algorithm);
-  result.baseColor = material.baseColor;
-  result.accentColor = material.accentColor;
-  result.metallic = material.metallic;
-  result.roughness = material.roughness;
-  result.transparency = material.transparency;
-  result.lineWidth = material.lineWidth;
-  return result;
-}
-
 static rendering::MeshInstance makeMeshInstance(
     float scale, const glm::vec3 &color, float opacity,
     const rendering::DoubleSingleVec3 &position,
@@ -226,66 +194,6 @@ SDL_Window *window = nullptr;
 
 // Every demo path funnels renderer submissions through this helper.  The
 // protocol keeps instancing compact; only the submitter knows backend details.
-void submitMeshBatch(scene::MeshBatchCommand &command,
-                     const glm::mat4 &view, const glm::mat4 &projection,
-                     const glm::vec4 &logDepth,
-                     const rendering::DoubleSingleVec3 &eye,
-                     float pixelSizeWorld = 0.0f,
-                     float edgeSoftness = 0.15f)
-{
-  if (!rendererBackend || command.instances.empty())
-    return;
-
-  if (command.cadAlgorithm)
-  {
-    const rendering::CadAlgorithmDemoRenderData renderData{
-        .view = view,
-        .projection = projection,
-        .instances = command.instances.data(),
-        .instanceCount = static_cast<uint32_t>(command.instances.size()),
-        .mesh = command.prototype,
-        .renderMode = visualStyleManager.mode(),
-        .cameraPos = eye.high + eye.low,
-        .lightDir = glm::vec3(0.4f, 0.8f, 0.55f),
-        .metallic = command.acgiMaterial.metallic,
-        .roughness = command.acgiMaterial.roughness,
-        .transparency = command.acgiMaterial.transparency,
-        .strokeWidth = command.acgiMaterial.lineWidth,
-        .strokeDensity = 1.0f,
-        .layer = envLayer("GRID_MESH_LAYER"),
-        .logDepth = logDepth,
-        .eye = eye,
-        .material = toSurfaceMaterial(command.acgiMaterial),
-        .edgeHalfWidth = std::max(command.acgiMaterial.lineWidth * 0.5f,
-                                  pixelSizeWorld),
-        .edgeSoftness = edgeSoftness,
-    };
-    rendererBackend->drawCadAlgorithmDemo(renderData);
-    return;
-  }
-
-  const rendering::MeshInstancesRenderData renderData{
-      .view = view,
-      .projection = projection,
-      .instances = command.instances.data(),
-      .instanceCount = static_cast<uint32_t>(command.instances.size()),
-      .mesh = command.prototype,
-      .opaque = command.opaque,
-      .layer = envLayer("GRID_MESH_LAYER"),
-      .logDepth = logDepth,
-      .eye = eye,
-      .diffuseTextureIndex = gMeshTextureIndex,
-      .headlight = meshHeadlight(),
-      .triplanarUv = meshTriplanar(),
-      .realistic = command.realistic,
-      .material = command.material,
-      .edgeHalfWidth = std::max(command.acgiMaterial.lineWidth * 0.5f,
-                                pixelSizeWorld),
-      .edgeSoftness = edgeSoftness,
-  };
-  rendererBackend->drawMeshInstances(renderData);
-}
-
 // All world-space object positions stay double precision on the CPU.
 // The GPU never sees these; only (objWorld - worldRebase().origin()) does.
 glm::dvec3 cubeWorldPosition(0.0);
@@ -652,10 +560,10 @@ bool init()
     const int styleIndex = std::atoi(styleEnv);
     if (styleIndex > 0 && styleIndex < 6)
     {
-      visualStyleManager.set(static_cast<rendering::RenderMode>(styleIndex));
-      rendererBackend->setRenderMode(visualStyleManager.mode());
+      acgiView.visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
+      rendererBackend->setRenderMode(acgiView.visualStyle().mode());
       std::cout << "Visual style: "
-              << rendering::renderModeLabel(visualStyleManager.mode())
+              << rendering::renderModeLabel(acgiView.visualStyle().mode())
               << std::endl;
     }
   }
@@ -714,7 +622,7 @@ bool init()
   {
     const bool bigReady = acgi::textEngine().loadShxBigFont(
         util::resourcePath("fonts/gbcbig.shx").string());
-    std::cout << "SHX big font (bigfont): "
+    std::cout << "SHX big font (gbcbig): "
               << (bigReady ? "loaded" : "failed") << std::endl;
     gShxFontReady = shxRegularReady || bigReady;
   }
@@ -859,7 +767,7 @@ void appendSceneLine(scene::SceneDrawList &drawList,
                      double lineWeight = 2.0)
 {
   scene::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(contrastAgainstBackground(glm::vec4(color, opacity)));
+  draw.subEntityTraits().setColor(acgiView.contrastColor(glm::vec4(color, opacity)));
   draw.subEntityTraits().setLineWeight(lineWeight);
 
   entities::Line line;
@@ -882,7 +790,7 @@ void appendScenePoint(scene::SceneDrawList &drawList,
                       double pointSize)
 {
   scene::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(contrastAgainstBackground(glm::vec4(color, 1.0f)));
+  draw.subEntityTraits().setColor(acgiView.contrastColor(glm::vec4(color, 1.0f)));
   draw.subEntityTraits().setLineWeight(pointSize);
 
   entities::Point point;
@@ -893,407 +801,8 @@ void appendScenePoint(scene::SceneDrawList &drawList,
 // Dynamic overlays stay in the AcGi-lite protocol but are never placed in the
 // immutable CAD draw-list cache.  The submitter preserves their cheap
 // view-space line and point pipelines.
-glm::vec3 ribbonSide(const glm::vec3 &direction, const glm::vec3 &front,
-                     float halfWidth)
-{
-  glm::vec3 sideAxis = glm::cross(direction, front);
-  if (glm::length(sideAxis) < 1.0e-5f)
-    sideAxis = glm::cross(direction, glm::vec3(0.0f, 0.0f, 1.0f));
-  if (glm::length(sideAxis) < 1.0e-5f)
-    sideAxis = glm::cross(direction, glm::vec3(1.0f, 0.0f, 0.0f));
-  return glm::normalize(sideAxis) * halfWidth;
-}
-
-float strokeHalfWidth(const entities::Stroke &stroke, float fallback = 2.0f)
-{
-  return stroke.lineWeight > 0.0
-             ? static_cast<float>(stroke.lineWeight) * 0.5f
-             : fallback;
-}
-
-// Current overlay depth slab, published by render() each frame before any
-// stroke submission.  CAD strokes are frustum-clipped against the slab of
-// the pass that consumes them, so infinite entities (Ray/XLine) emit only
-// their visible span instead of pushing megameter ribbons through the GPU.
-double g_renderSlabNear = 0.0;
-double g_renderSlabFar = 1.0e9;
-
 int currentDrawableWidth();
 int currentDrawableHeight();
-bool clipReferenceSegmentToOrtho(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearPlane, double farPlane, double halfWidth,
-    double halfHeight, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd);
-bool clipReferenceSegmentToPerspective(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearPlane, double farPlane, double tanHalfVertical,
-    double tanHalfHorizontal, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd);
-bool clipSemiInfiniteRayToView(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearDepth, double farDepth, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd, bool flattenToSlabCenter = true);
-
-// Clip one stroke segment to the frustum of the pass that will draw it.
-// Hardware clips at exactly these planes, so the clipped segment renders
-// identically while every emitted camera-relative vertex stays bounded and
-// dash patterns never subdivide off-screen geometry.
-static bool clipStrokeSegmentToView(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearDepth, double farDepth,
-    glm::dvec3 &clippedStart, glm::dvec3 &clippedEnd,
-    bool semiInfiniteRay = false)
-{
-  // Keep a tiny safety band outside the hardware clip planes.  Geometry
-  // that lies exactly on a plane (reference-line endpoints, the debug
-  // frustum wireframe, the grid visible quad) must never be rejected by
-  // floating-point jitter; the band stays pixel-exact because hardware
-  // still clips at the true planes.
-  const double slabEpsilon =
-      std::max(1.0e-6, (farDepth - nearDepth) * 1.0e-6);
-  nearDepth -= slabEpsilon;
-  farDepth += slabEpsilon;
-  const double angularEpsilon = 1.0e-6;
-  if (semiInfiniteRay)
-  {
-    // A Ray must not stop at its tessellation proxy length.  Clip the
-    // analytic half-line directly against the same slab and viewport.
-    return clipSemiInfiniteRayToView(
-        startWorld, endWorld, cameraPosition, cameraRight, cameraUp,
-        cameraFront, nearDepth, farDepth, clippedStart, clippedEnd);
-  }
-  if (useOrthoProjection())
-  {
-    const double halfHeight = orbitCam.orthoSize() * (1.0 + angularEpsilon);
-    return clipReferenceSegmentToOrtho(
-        startWorld, endWorld, cameraPosition, cameraRight, cameraUp,
-        cameraFront, nearDepth, farDepth,
-        halfHeight * (1.0 + angularEpsilon) *
-            (double)currentDrawableWidth() /
-            std::max(1, currentDrawableHeight()),
-        halfHeight, clippedStart, clippedEnd);
-  }
-  const double tanHalfVertical =
-      std::tan(glm::radians(45.0) * 0.5) * (1.0 + angularEpsilon);
-  const double tanHalfHorizontal =
-      tanHalfVertical * (double)currentDrawableWidth() /
-      std::max(1, currentDrawableHeight());
-  return clipReferenceSegmentToPerspective(
-      startWorld, endWorld, cameraPosition, cameraRight, cameraUp,
-      cameraFront, nearDepth, farDepth, tanHalfVertical,
-      tanHalfHorizontal, clippedStart, clippedEnd);
-}
-
-std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve);
-
-void submitAcGiDrawable(scene::SceneDrawList &drawList,
-                         const glm::mat4 &view,
-                         const glm::mat4 &projection,
-                         const glm::mat4 &overlayProjection,
-                         const glm::dvec3 &rebase,
-                         const glm::dvec3 &cameraPosition,
-                         const glm::dvec3 &cameraRight,
-                         const glm::dvec3 &cameraUp,
-                         const glm::dvec3 &cameraFront,
-                         const glm::vec4 &logDepth,
-                         float pixelSizeWorld = 0.0f,
-                         float edgeSoftness = 0.15f,
-                         float pointSize = 2.0f)
-{
-  if (!rendererBackend)
-    return;
-
-  if (drawList.lights())
-    rendererBackend->setRealisticLights(drawList.lights()->data);
-
-  if (drawList.grid())
-    rendererBackend->drawGrid(drawList.grid()->data);
-
-  for (scene::MeshBatchCommand &batch : drawList.meshBatches())
-    submitMeshBatch(batch, view, projection, logDepth,
-                    rendering::encodeDoubleSingle(cameraPosition),
-                    pixelSizeWorld, edgeSoftness);
-
-
-  static std::vector<rendering::PrimVertex> polylineVertices;
-  polylineVertices.clear();
-  static std::vector<rendering::LineInstance> lineInstances;
-  lineInstances.clear();
-  auto appendAcGiRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
-                              const glm::vec4 &color, float halfWidth,
-                              float u0, float u1) {
-    const glm::vec3 direction = rb - ra;
-    if (glm::length(direction) < 1.0e-5f)
-      return;
-    const float minimumHalfWidth =
-        pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
-    halfWidth = std::max(halfWidth, minimumHalfWidth);
-    // The polyline fragment shader treats v=[0,1] as symmetric edges, so the
-    // visible opaque core lies at the quad midpoint.  Emit a centered ribbon;
-    // a one-sided quad would shift every rendered line by half its width.
-    const glm::vec4 strokeColor = contrastAgainstBackground(color);
-    const glm::vec3 side = ribbonSide(direction, cameraFront, halfWidth);
-    polylineVertices.push_back({ra - side, strokeColor, {u0, 0.0f}});
-    polylineVertices.push_back({ra + side, strokeColor, {u0, 1.0f}});
-    polylineVertices.push_back({rb + side, strokeColor, {u1, 1.0f}});
-    polylineVertices.push_back({ra - side, strokeColor, {u0, 0.0f}});
-    polylineVertices.push_back({rb + side, strokeColor, {u1, 1.0f}});
-    polylineVertices.push_back({rb - side, strokeColor, {u1, 0.0f}});
-  };
-  auto appendLineInstance = [&](const glm::vec3 &ra, const glm::vec3 &rb,
-                               const glm::vec4 &color, float halfWidth) {
-    const glm::vec3 direction = rb - ra;
-    if (glm::length(direction) < 1.0e-5f)
-      return;
-    const float minimumHalfWidth =
-        pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
-    halfWidth = std::max(halfWidth, minimumHalfWidth);
-    const glm::vec4 strokeColor = contrastAgainstBackground(color);
-    lineInstances.push_back({
-        glm::vec4(ra, 0.0f),
-        glm::vec4(rb, 1.0f),
-        glm::vec4(glm::vec3(strokeColor), halfWidth),
-        glm::vec4(strokeColor.a, 0.0f, 0.0f, 0.0f),
-    });
-  };
-
-  // Curves were previously hardware PT_LINESTRIPs, which do not give reliable
-  // line AA on D3D11.  Sample on CPU using the same evaluator as picking/ID,
-  // frustum-clip each segment, and reuse the screen-space ribbon pipeline.
-  for (const scene::CurveBatchCommand &curve : drawList.curveBatches())
-  {
-    if (curve.controlPoints.empty() &&
-        curve.algorithm != rendering::CurveAlgorithm::Arc)
-    {
-      continue;
-    }
-    const std::vector<glm::dvec3> points = sampleCurveBatch(curve);
-    if (points.size() < 2)
-      continue;
-    const float halfWidth = std::max(
-        curve.acgiMaterial.lineWidth * 0.5f, pixelSizeWorld);
-    for (size_t i = 0; i + 1 < points.size(); ++i)
-    {
-      glm::dvec3 clippedStart, clippedEnd;
-      if (!clipStrokeSegmentToView(
-              points[i], points[i + 1], cameraPosition,
-              cameraRight, cameraUp, cameraFront,
-              g_renderSlabNear, g_renderSlabFar,
-              clippedStart, clippedEnd, false))
-      {
-        continue;
-      }
-      appendLineInstance(
-          glm::vec3(clippedStart - cameraPosition),
-          glm::vec3(clippedEnd - cameraPosition),
-          curve.acgiMaterial.baseColor, halfWidth);
-    }
-  }
-  auto appendLinePatternSegment = [&](const glm::vec3 &ra,
-                                      const glm::vec3 &rb,
-                                      const entities::Stroke &stroke) {
-    const std::string &type = stroke.common.lineType;
-    const AcGiLineType *lineType = acgiFindLineType(type.c_str());
-    if (!lineType)
-    {
-      appendAcGiRibbon(ra, rb, stroke.common.color, 0.0f, 0.0f, 0.0f);
-      return;
-    }
-    const std::vector<AcGiLineTypeMark> pattern =
-        acgiLineTypeMarks(*lineType);
-
-    const float halfWidth = strokeHalfWidth(stroke);
-    const glm::dvec3 start(ra);
-    const glm::dvec3 end(rb);
-    const double total = glm::length(end - start);
-    if (total < 1.0e-12)
-      return;
-
-    double patternLength = 0.0;
-    for (const auto &mark : pattern)
-      patternLength += mark.length;
-    double distance = 0.0;
-    size_t markIndex = 0;
-    while (distance < total && !pattern.empty())
-    {
-      const auto &mark = pattern[markIndex % pattern.size()];
-      const double markLength = mark.length;
-      const double next = std::min(distance + markLength, total);
-      if (mark.stroke && next > distance)
-      {
-        appendAcGiRibbon(
-            glm::vec3(start + (end - start) * (distance / total)),
-            glm::vec3(start + (end - start) * (next / total)),
-            stroke.common.color, halfWidth,
-            float(distance / total), float(next / total));
-      }
-      distance = next;
-      ++markIndex;
-    }
-  };
-
-  for (const entities::Stroke &stroke : drawList.geometry().strokes)
-  {
-    if (!stroke.common.visible || stroke.points.size() < 2)
-      continue;
-    const float halfWidth = strokeHalfWidth(stroke);
-    const size_t strokeCount = stroke.points.size();
-    const bool patterned = stroke.common.lineType != "ByLayer" &&
-                           stroke.common.lineType != "CONTINUOUS";
-    // Closed strokes also emit the wrap segment back to their first point.
-    const size_t strokeSegmentCount =
-        stroke.closed ? strokeCount : strokeCount - 1;
-    for (size_t i = 0; i < strokeSegmentCount; ++i)
-    {
-      // Frustum-clip in double before emitting the ribbon: infinite
-      // strokes (Ray/XLine) contribute only their visible span.
-      glm::dvec3 clippedStart, clippedEnd;
-      if (!clipStrokeSegmentToView(
-              stroke.points[i], stroke.points[(i + 1) % strokeCount],
-              cameraPosition,
-              cameraRight, cameraUp, cameraFront,
-              g_renderSlabNear, g_renderSlabFar, clippedStart, clippedEnd,
-              stroke.semiInfinite))
-        continue;
-      if (lineDebugEnabled() && stroke.semiInfinite)
-      {
-        std::printf(
-            "[BODY_RAY] cam=(%.6f,%.6f,%.6f) start=(%.6f,%.6f,%.6f) end=(%.6f,%.6f,%.6f) half=%.6f\n",
-            cameraPosition.x, cameraPosition.y, cameraPosition.z,
-            clippedStart.x, clippedStart.y, clippedStart.z,
-            clippedEnd.x, clippedEnd.y, clippedEnd.z,
-            std::max(halfWidth, pixelSizeWorld));
-      }
-      if (patterned)
-      {
-        appendLinePatternSegment(
-            glm::vec3(clippedStart - cameraPosition),
-            glm::vec3(clippedEnd - cameraPosition), stroke);
-      }
-      else
-      {
-        appendLineInstance(
-            glm::vec3(clippedStart - cameraPosition),
-            glm::vec3(clippedEnd - cameraPosition),
-            stroke.common.color, halfWidth);
-      }
-    }
-  }
-
-  if (!lineInstances.empty())
-  {
-    const rendering::LineInstancesRenderData lineData{
-        .view = view,
-        .projection = overlayProjection,
-        .instances = lineInstances.data(),
-        .instanceCount = static_cast<uint32_t>(lineInstances.size()),
-        .logDepth = logDepth,
-        .edgeSoftness = edgeSoftness,
-        .layer = envLayer("GRID_LINE_LAYER"),
-    };
-    rendererBackend->drawLineInstances(lineData);
-  }
-
-  if (!polylineVertices.empty())
-  {
-    if (lineDebugEnabled())
-    {
-      glm::vec2 ndcMin(std::numeric_limits<float>::max());
-      glm::vec2 ndcMax(std::numeric_limits<float>::lowest());
-      for (size_t i = 0; i < polylineVertices.size(); i += 6)
-      {
-        const glm::vec4 projected = overlayProjection * view *
-            glm::vec4(polylineVertices[i].position, 1.0f);
-        const glm::vec2 ndc = glm::vec2(projected) / projected.w;
-        ndcMin = glm::min(ndcMin, ndc);
-        ndcMax = glm::max(ndcMax, ndc);
-      }
-      std::cout << "[LINE_DEBUG] ribbon vertices="
-                << polylineVertices.size()
-                << " ndcMin=(" << ndcMin.x << ", " << ndcMin.y
-                << ") ndcMax=(" << ndcMax.x << ", " << ndcMax.y << ")"
-                << std::endl;
-    }
-    const rendering::PolylineRenderData polylineData{
-        .view = view,
-        .projection = overlayProjection,
-        .vertices = polylineVertices.data(),
-        .vertexCount = static_cast<uint32_t>(polylineVertices.size()),
-        .logDepth = logDepth,
-        .edgeSoftness = edgeSoftness,
-        .layer = envLayer("GRID_LINE_LAYER"),
-    };
-    rendererBackend->drawPolylines(polylineData);
-  }
-
-  static std::vector<rendering::FillVertex> fillVertices;
-  static std::vector<rendering::FillVertex> surfaceFillVertices;
-  fillVertices.clear();
-  surfaceFillVertices.clear();
-  for (const entities::Triangle &triangle : drawList.geometry().fills)
-  {
-    if (!triangle.common.visible)
-      continue;
-    std::vector<rendering::FillVertex> &vertices =
-        triangle.is3DFace ? surfaceFillVertices : fillVertices;
-    const glm::vec4 fillColor = contrastAgainstBackground(triangle.common.color);
-    vertices.push_back({glm::vec3(triangle.a - cameraPosition), fillColor});
-    vertices.push_back({glm::vec3(triangle.b - cameraPosition), fillColor});
-    vertices.push_back({glm::vec3(triangle.c - cameraPosition), fillColor});
-  }
-  for (const bool is3DFace : {false, true})
-  {
-    std::vector<rendering::FillVertex> &vertices =
-        is3DFace ? surfaceFillVertices : fillVertices;
-    if (vertices.empty())
-      continue;
-    const rendering::FilledTrianglesRenderData fillData{
-        .view = view,
-        .projection = projection,
-        .vertices = vertices.data(),
-        .vertexCount = static_cast<uint32_t>(vertices.size()),
-        .is3DFace = is3DFace,
-        .layer = envLayer("GRID_FILL_LAYER"),
-        .logDepth = logDepth,
-        .material = toSurfaceMaterial(scene::AcGiMaterial{}),
-    };
-    rendererBackend->drawFilledTriangles(fillData);
-  }
-
-  static std::vector<rendering::TargetPointInstance> points;
-  points.clear();
-  for (const entities::TessellatedPoint &point : drawList.geometry().points)
-  {
-    if (!point.common.visible)
-      continue;
-    points.push_back({glm::vec3(point.location - cameraPosition),
-                      glm::vec3(contrastAgainstBackground(point.common.color)),
-                      float(point.pointSize)});
-  }
-  if (!points.empty())
-  {
-    const rendering::TargetPointInstancesRenderData pointData{
-        .view = view,
-        .projection = overlayProjection,
-        .instances = points.data(),
-        .instanceCount = static_cast<uint32_t>(points.size()),
-        .pointSize = pointSize,
-        .pixelSizeWorld = pixelSizeWorld,
-        .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
-        .logDepth = logDepth,
-    };
-    rendererBackend->drawTargetPointInstances(pointData);
-  }
-}
 
 struct MeshEntityRecord
 {
@@ -1455,7 +964,7 @@ static bool gpuPickFocusWaiting()
 
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
-  return contrastAgainstBackground(entity.entity.common.color);
+  return acgiView.contrastColor(entity.entity.common.color);
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
@@ -2625,7 +2134,7 @@ cadVisibleFillVertices(const CadEntityRange &range)
     if (!triangle.common.visible)
       continue;
     const glm::vec4 fillColor =
-        contrastAgainstBackground(triangle.common.color);
+        acgiView.contrastColor(triangle.common.color);
     vertices.push_back(
         {glm::vec3(triangle.a - tessellation.anchor), fillColor});
     vertices.push_back(
@@ -2666,7 +2175,6 @@ cadGpuPickFillVertices(const CadEntityRange &range,
   return vertices;
 }
 
-std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve);
 int currentDrawableHeight();
 
 
@@ -2761,7 +2269,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const float minimumHalfWidth =
         pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
-    const glm::vec3 side = ribbonSide(direction, camFront, halfWidth);
+    const glm::vec3 side = acgiView.ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2785,7 +2293,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // stroke ribbons; otherwise the visible curve is easier to see than to
     // pick.
     const float halfWidth = float(pointWorldPerPixel(worldMidpoint));
-    const glm::vec3 side = ribbonSide(direction, camFront, halfWidth);
+    const glm::vec3 side = acgiView.ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2868,7 +2376,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const size_t count = stroke.points.size();
       if (!stroke.common.visible || count < 2)
         continue;
-      const float halfWidth = strokeHalfWidth(stroke);
+      const float halfWidth = acgiView.strokeHalfWidth(stroke);
       const size_t segmentCount =
           stroke.closed ? count : count - 1;
       for (size_t segment = 0; segment < segmentCount; ++segment)
@@ -2876,13 +2384,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         // The scene ID pass and the 1x1 pick pass both hardware-clip at
         // the overlay slab, so clipping the soup there is pixel-exact.
         glm::dvec3 clippedStart, clippedEnd;
-        if (!clipStrokeSegmentToView(
+        if (!acgiView.clipStrokeSegment(
                 stroke.points[segment],
                 stroke.points[(segment + 1) % count],
-                cameraPos, cameraRightD, cameraUpD, cameraFront,
-                g_renderSlabNear, g_renderSlabFar,
-                clippedStart, clippedEnd,
-                stroke.semiInfinite))
+                clippedStart, clippedEnd, stroke.semiInfinite))
           continue;
         appendPickRibbon(
             glm::vec3(clippedStart - cameraPos),
@@ -2919,7 +2424,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {VisibilityKind::CadCurve, nullptr, nullptr, candidate.curve});
     const glm::vec4 idColor = encodeGpuPickId(objectId);
     gpuPickVertices.clear();
-    const std::vector<glm::dvec3> points = sampleCurveBatch(*candidate.curve);
+    const std::vector<glm::dvec3> points = acgi::AcGiView::sampleCurveBatch(*candidate.curve);
     for (size_t i = 0; i + 1 < points.size(); ++i)
       appendCenteredPickRibbon(
           glm::vec3(points[i] - cameraPos),
@@ -3002,9 +2507,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         .vertexCount =
             static_cast<uint32_t>(visibleFillVertices.size()),
         .is3DFace = false,
-        .layer = envLayer("GRID_FILL_LAYER"),
+        .layer = acgi::envLayer("GRID_FILL_LAYER"),
         .logDepth = logDepth,
-        .material = toSurfaceMaterial(scene::AcGiMaterial{}),
+        .material = acgi::toSurfaceMaterial(scene::AcGiMaterial{}),
     };
     rendererBackend->drawFilledTriangles(cadFillData);
   }
@@ -3050,7 +2555,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           continue;
         if (!hasColor)
         {
-          rangeColor = contrastAgainstBackground(triangle.common.color);
+          rangeColor = acgiView.contrastColor(triangle.common.color);
           hasColor = true;
         }
         const glm::dvec3 corners[3] = {triangle.a, triangle.b, triangle.c};
@@ -3096,7 +2601,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
               static_cast<uint32_t>(wireBoundaryVertices.size()),
           .logDepth = logDepth,
           .edgeSoftness = 0.15f,
-          .layer = envLayer("GRID_LINE_LAYER"),
+          .layer = acgi::envLayer("GRID_LINE_LAYER"),
       };
       rendererBackend->drawPolylines(boundaryData);
     }
@@ -3178,7 +2683,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           rendererBackend->gpuPickQueueStats();
       std::cout << "[PICK_QUEUE] style="
                 << rendering::renderModeLabel(
-                       visualStyleManager.mode())
+                       acgiView.visualStyle().mode())
                 << " meshes=" << stats.queuedMeshes
                 << " edges=" << stats.queuedEdges
                 << " triangles=" << stats.queuedTriangles
@@ -3188,9 +2693,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
   }
 
-  submitAcGiDrawable(cadDrawList, view, projection, overlayProjection,
-                     rebase, cameraPos, cameraRightD, cameraUpD, cameraFront,
-                     logDepth, pixelSizeWorld, 2.0f, 7.0f);
+  acgiView.submit(cadDrawList, {nullptr, pixelSizeWorld, 2.0f, 7.0f});
 
   for (const VisibilityCandidate *candidate : visibleCad)
   {
@@ -3204,10 +2707,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     scene::SceneDrawList meshDrawList;
     appendMeshEntityToScene(mesh, meshDrawList);
-    for (scene::MeshBatchCommand &batch : meshDrawList.meshBatches())
-      submitMeshBatch(batch, view, projection, logDepth,
-                      rendering::encodeDoubleSingle(rebase),
-                      pixelSizeWorld);
+    const rendering::DoubleSingleVec3 meshEye =
+        rendering::encodeDoubleSingle(rebase);
+    acgiView.submit(meshDrawList,
+                    {nullptr, pixelSizeWorld, 0.0f, 0.0f, &meshEye});
     queueGpuMeshEntity(&mesh);
   }
 }
@@ -3300,9 +2803,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       batch.instances = std::move(instances);
       cadDrawList.meshBatches().push_back(std::move(batch));
     }
-    submitAcGiDrawable(cadDrawList, view, projection, projection,
-                       rebaseOrigin, cameraPos, orbitCam.Right, orbitCam.Up,
-                       cameraFront, logDepth, pixelSizeWorld);
+    acgiView.submit(cadDrawList, {&projection, pixelSizeWorld});
     return;
   }
   // CAD and PBR meshes share the global far-to-near painter order. Depth
@@ -3374,9 +2875,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         batch.instances = std::move(group.instances);
         meshDrawList.meshBatches().push_back(std::move(batch));
     }
-  submitAcGiDrawable(meshDrawList, view, projection, projection,
-                     rebaseOrigin, cameraPos, orbitCam.Right, orbitCam.Up,
-                     cameraFront, logDepth, pixelSizeWorld);
+  acgiView.submit(meshDrawList, {&projection, pixelSizeWorld});
 }
 
 int stressObjectCount()
@@ -3789,13 +3288,6 @@ glm::vec3 anchoredNdcLine(const glm::dvec3 &line)
                    -(line.x * anchor.x + line.y * anchor.y));
 }
 
-struct CameraSpacePoint
-{
-  double x;
-  double y;
-  double depth;
-};
-
 struct CameraSpaceAabb
 {
   double minX;
@@ -3805,23 +3297,6 @@ struct CameraSpaceAabb
   double minDepth;
   double maxDepth;
 };
-
-// Equivalent to transforming by the inverse view matrix, but evaluated in
-// double precision from the camera basis.  This is important for the
-// rebased large-coordinate scene: converting an absolute world position
-// through a float mat4 would lose precision before the depth bounds are
-// calculated.
-CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
-                               const glm::dvec3 &cameraPosition,
-                               const glm::dvec3 &cameraRight,
-                               const glm::dvec3 &cameraUp,
-                               const glm::dvec3 &cameraFront)
-{
-  const glm::dvec3 delta = worldPosition - cameraPosition;
-  return {glm::dot(delta, cameraRight),
-          glm::dot(delta, cameraUp),
-          glm::dot(delta, cameraFront)};
-}
 
 // The exact camera-space bounds of an axis-aligned box.  The support radius
 // along each camera basis vector is dot(abs(basis), halfExtent); summing all
@@ -4142,155 +3617,15 @@ bool rayIntersectsAabb(const PickRay &ray,
 }
 
 
-std::vector<glm::dvec3> sampleCurveBatch(const scene::CurveBatchCommand &curve)
-{
-    std::vector<glm::dvec3> result;
-    const int samples = std::clamp(static_cast<int>(curve.sampleCount), 2, 512);
-    if (curve.algorithm == rendering::CurveAlgorithm::Arc)
-    {
-        // CurveBatchCommand::axisU/axisV are unit directions; the visible
-        // curve shader applies radius.  CPU sampling/ID geometry must apply
-        // the same radius or an analytic Arc collapses to a point-sized ID
-        // trace and disappears from the full-scene ID buffer.
-        const double radius = std::max(0.0, curve.radius);
-        result.reserve(samples);
-        for (int i = 0; i < samples; ++i)
-        {
-            const double t = static_cast<double>(i) / (samples - 1);
-            const double angle = curve.startAngle + curve.sweep * t;
-            result.push_back(curve.center +
-                             curve.axisU * (radius * std::cos(angle)) +
-                             curve.axisV * (radius * std::sin(angle)));
-        }
-        return result;
-    }
-
-        // Match the GPU shader's CAD_CURVE_MAX_CP capacity so CPU picking,
-    // ID geometry, and visible rendering evaluate the same curve.  BSpline/
-    // NURBS need one spare slot for the clamped knot vector; Bezier can use
-    // all 16 control-point slots.
-    const size_t controlCount =
-        curve.algorithm == rendering::CurveAlgorithm::Bezier
-            ? curve.controlPoints.size()
-            : std::min(curve.controlPoints.size(), size_t(16 - 1));
-    if (controlCount < 2)
-        return result;
-
-    if (curve.algorithm == rendering::CurveAlgorithm::Bezier)
-    {
-        std::vector<glm::dvec4> points;
-        points.reserve(controlCount);
-        for (size_t i = 0; i < controlCount; ++i)
-        {
-            const double weight = i < curve.weights.size() ? curve.weights[i] : 1.0;
-            points.push_back(glm::dvec4(curve.controlPoints[i] * weight, weight));
-        }
-
-        result.reserve(samples);
-        for (int sample = 0; sample < samples; ++sample)
-        {
-            const double t = static_cast<double>(sample) / (samples - 1);
-            std::vector<glm::dvec4> value = points;
-            while (value.size() > 1)
-            {
-                for (size_t i = 0; i + 1 < value.size(); ++i)
-                    value[i] = glm::mix(value[i], value[i + 1], t);
-                value.pop_back();
-            }
-            const glm::dvec4 &homogeneous = value.front();
-            result.push_back(glm::dvec3(homogeneous) /
-                             std::max(1.0e-12, homogeneous.w));
-        }
-        return result;
-    }
-
-    const int degree = std::clamp(curve.degree, 1, 3);
-    if (controlCount < static_cast<size_t>(degree) + 1)
-        return result;
-
-    std::vector<double> knots = curve.knots;
-    if (knots.size() < controlCount + degree + 1)
-    {
-        knots.clear();
-        knots.reserve(controlCount + degree + 1);
-        const size_t innerCount = controlCount - degree - 1;
-        for (size_t i = 0; i <= degree; ++i)
-            knots.push_back(0.0);
-        for (size_t i = 1; i <= innerCount; ++i)
-            knots.push_back(static_cast<double>(i) / (innerCount + 1));
-        for (size_t i = 0; i <= degree; ++i)
-            knots.push_back(1.0);
-    }
-
-    auto findSpan = [&](double t) {
-        const size_t firstSpan = static_cast<size_t>(degree);
-        if (controlCount < firstSpan + 1)
-            return firstSpan;
-        // Standard knot-span convention: span s covers
-        // [knots[s], knots[s+1]) and uses cp[s-degree..s]; valid spans
-        // are [degree, controlCount-1].
-        // Match the shader: the final knot is at controlCount + degree,
-        // not controlCount - 1.  The old test collapsed interior samples
-        // into the last span for clamped knot vectors.
-        const size_t lastKnotIndex = std::min(
-            controlCount + static_cast<size_t>(degree), knots.size() - 1);
-        // Keep span + degree inside the 16-entry knot window shared with the
-        // GPU evaluation; mirrors the span clamp in cad_bspline/cad_nurbs.
-        const size_t lastSpan =
-            std::min(controlCount - 1, size_t(std::max(0, 15 - degree)));
-        if (t >= knots[lastKnotIndex])
-            return lastSpan;
-        if (t <= knots[firstSpan])
-            return firstSpan;
-        for (size_t span = firstSpan; span < lastSpan; ++span)
-        {
-            if (t < knots[span + 1])
-                return span;
-        }
-        return lastSpan;
-    };
-
-    result.reserve(samples);
-    for (int sample = 0; sample < samples; ++sample)
-    {
-        const double t = static_cast<double>(sample) / (samples - 1);
-        const size_t span = findSpan(t);
-        std::vector<glm::dvec4> points(degree + 1);
-        for (int i = 0; i <= degree; ++i)
-        {
-            const size_t index = span - degree + i;
-            const double weight = index < curve.weights.size() ? curve.weights[index] : 1.0;
-            points[i] = glm::dvec4(curve.controlPoints[index] * weight, weight);
-        }
-        for (int r = 1; r <= degree; ++r)
-        {
-            for (int j = degree; j >= r; --j)
-            {
-                const size_t index = span - degree + j;
-                const double denominator = knots[index + degree - r + 1] -
-                                           knots[index];
-                const double alpha = denominator > 1.0e-12
-                                         ? (t - knots[index]) / denominator
-                                         : 0.0;
-                points[j] = (1.0 - alpha) * points[j - 1] + alpha * points[j];
-            }
-        }
-        const glm::dvec4 &homogeneous = points[degree];
-        result.push_back(glm::dvec3(homogeneous) /
-                         std::max(1.0e-12, homogeneous.w));
-    }
-    return result;
-}
-
 VisibilityCandidate makeCurveCandidate(const scene::CurveBatchCommand &curve)
 {
     VisibilityCandidate candidate;
     candidate.kind = VisibilityKind::CadCurve;
     candidate.curve = &curve;
-    candidate.overlayColor = contrastAgainstBackground(curve.acgiMaterial.baseColor);
+    candidate.overlayColor = acgiView.contrastColor(curve.acgiMaterial.baseColor);
     candidate.overlayPointSize = 2.0f;
 
-    const std::vector<glm::dvec3> points = sampleCurveBatch(curve);
+    const std::vector<glm::dvec3> points = acgi::AcGiView::sampleCurveBatch(curve);
     if (points.empty())
         return candidate;
 
@@ -4714,7 +4049,7 @@ double cadStrokePickTolerance(const PickRay &ray,
                               const entities::Stroke &stroke,
                               const glm::dvec3 &worldPoint)
 {
-    const double renderedHalfWidth = strokeHalfWidth(stroke);
+    const double renderedHalfWidth = acgiView.strokeHalfWidth(stroke);
     return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
 }
 
@@ -5186,7 +4521,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             if (!candidate->curve)
                 continue;
             const std::vector<glm::dvec3> points =
-                sampleCurveBatch(*candidate->curve);
+                acgi::AcGiView::sampleCurveBatch(*candidate->curve);
             for (size_t i = 0; i + 1 < points.size(); ++i)
             {
                 double hitDepth = 0.0;
@@ -5357,7 +4692,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         pickEntity->curve)
     {
         const std::vector<glm::dvec3> points =
-            sampleCurveBatch(*pickEntity->curve);
+            acgi::AcGiView::sampleCurveBatch(*pickEntity->curve);
         bool hit = false;
         double bestDepth = std::numeric_limits<double>::infinity();
         for (size_t i = 0; i + 1 < points.size(); ++i)
@@ -6015,7 +5350,7 @@ VisibilityCandidate makeCadRangeCandidate(
           include(stroke.points.front() + direction / length *
                       kSemiInfiniteClassificationLength);
       }
-      candidate.overlayColor = contrastAgainstBackground(stroke.common.color);
+      candidate.overlayColor = acgiView.contrastColor(stroke.common.color);
       candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
     }
   }
@@ -6027,7 +5362,7 @@ VisibilityCandidate makeCadRangeCandidate(
       include(fill.a);
       include(fill.b);
       include(fill.c);
-      candidate.overlayColor = contrastAgainstBackground(fill.common.color);
+      candidate.overlayColor = acgiView.contrastColor(fill.common.color);
     }
   }
   else
@@ -6037,7 +5372,7 @@ VisibilityCandidate makeCadRangeCandidate(
       const entities::TessellatedPoint &point =
           tessellation.geometry.points[i];
       include(point.location);
-      candidate.overlayColor = contrastAgainstBackground(point.common.color);
+      candidate.overlayColor = acgiView.contrastColor(point.common.color);
       candidate.overlayPointSize = float(point.pointSize);
     }
   }
@@ -6150,9 +5485,9 @@ void includeSegmentCameraDepth(const glm::dvec3 &startWorldPosition,
                                double &minDepth,
                                double &maxDepth)
 {
-  const CameraSpacePoint p0 = toCameraSpace(
+  const CameraSpacePoint p0 = acgi::toCameraSpace(
       startWorldPosition, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const CameraSpacePoint p1 = toCameraSpace(
+  const CameraSpacePoint p1 = acgi::toCameraSpace(
       endWorldPosition, cameraPosition, cameraRight, cameraUp, cameraFront);
 
   const double dx = p1.x - p0.x;
@@ -6259,214 +5594,6 @@ bool includeSegmentPerspectiveDepth(
 // a + b * t >= 0.  Keeping the interpolation parameter in double lets the
 // caller draw only the visible portion of a very long line; each endpoint is
 // then close enough to the frame's rebase origin for the float32 GPU path.
-template <size_t N>
-bool clipWorldSegmentToHalfSpaces(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const CameraSpacePoint &startCamera,
-    const CameraSpacePoint &endCamera,
-    const double (&constraints)[N][2],
-    glm::dvec3 &clippedStart, glm::dvec3 &clippedEnd)
-{
-  const glm::dvec3 deltaWorld = endWorld - startWorld;
-  const double dx = endCamera.x - startCamera.x;
-  const double dy = endCamera.y - startCamera.y;
-  const double dz = endCamera.depth - startCamera.depth;
-
-  double tEnter = 0.0;
-  double tExit = 1.0;
-  for (const auto &constraint : constraints)
-  {
-    const double a = constraint[0];
-    const double b = constraint[1];
-    if (a < 0.0)
-    {
-      if (b <= 0.0)
-        return false;
-      tEnter = std::max(tEnter, -a / b);
-    }
-    else if (b < 0.0)
-    {
-      tExit = std::min(tExit, a / -b);
-    }
-  }
-
-  if (tEnter > tExit)
-    return false;
-
-  clippedStart = startWorld + deltaWorld * tEnter;
-  clippedEnd = startWorld + deltaWorld * tExit;
-  return true;
-}
-
-bool clipReferenceSegmentToOrtho(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearPlane, double farPlane, double halfWidth,
-    double halfHeight, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd)
-{
-  const CameraSpacePoint start = toCameraSpace(
-      startWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const CameraSpacePoint end = toCameraSpace(
-      endWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const double dx = end.x - start.x;
-  const double dy = end.y - start.y;
-  const double dz = end.depth - start.depth;
-
-  const double constraints[6][2] = {
-      {start.depth - nearPlane, dz},
-      {farPlane - start.depth, -dz},
-      {start.x + halfWidth, dx},
-      {halfWidth - start.x, -dx},
-      {start.y + halfHeight, dy},
-      {halfHeight - start.y, -dy},
-  };
-  return clipWorldSegmentToHalfSpaces(startWorld, endWorld, start, end,
-                                      constraints, clippedStart,
-                                      clippedEnd);
-}
-
-bool clipReferenceSegmentToPerspective(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearPlane, double farPlane, double tanHalfVertical,
-    double tanHalfHorizontal, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd)
-{
-  const CameraSpacePoint start = toCameraSpace(
-      startWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const CameraSpacePoint end = toCameraSpace(
-      endWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const double dx = end.x - start.x;
-  const double dy = end.y - start.y;
-  const double dz = end.depth - start.depth;
-
-  const double constraints[6][2] = {
-      {start.depth - nearPlane, dz},
-      {farPlane - start.depth, -dz},
-      {start.x + start.depth * tanHalfHorizontal,
-       dx + dz * tanHalfHorizontal},
-      {-start.x + start.depth * tanHalfHorizontal,
-       -dx + dz * tanHalfHorizontal},
-      {start.y + start.depth * tanHalfVertical,
-       dy + dz * tanHalfVertical},
-      {-start.y + start.depth * tanHalfVertical,
-       -dy + dz * tanHalfVertical},
-  };
-  return clipWorldSegmentToHalfSpaces(startWorld, endWorld, start, end,
-                                      constraints, clippedStart,
-                                      clippedEnd);
-}
-
-// Clip a semi-infinite world ray (points[0] toward points[1]) directly to the
-// camera frustum.  This avoids both an arbitrary tessellation endpoint and a
-// huge proxy segment: the visible span is defined by the same near/far and
-// screen planes that the GPU uses.  All interval math remains in double.
-bool clipSemiInfiniteRayToView(
-    const glm::dvec3 &startWorld, const glm::dvec3 &endWorld,
-    const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-    double nearPlane, double farPlane, glm::dvec3 &clippedStart,
-    glm::dvec3 &clippedEnd, bool flattenToSlabCenter)
-{
-  const CameraSpacePoint start = toCameraSpace(
-      startWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
-  const CameraSpacePoint end = toCameraSpace(
-      endWorld, cameraPosition, cameraRight, cameraUp, cameraFront);
-
-  const glm::dvec3 directionWorld = endWorld - startWorld;
-  const double directionLength = glm::length(directionWorld);
-  if (directionLength <= 1.0e-18)
-    return false;
-
-  const glm::dvec3 direction = directionWorld / directionLength;
-  const double dx = (end.x - start.x) / directionLength;
-  const double dy = (end.y - start.y) / directionLength;
-  const double dz = (end.depth - start.depth) / directionLength;
-
-  double tEnter = 0.0;
-  double tExit = std::numeric_limits<double>::infinity();
-  bool rejected = false;
-  auto accumulate = [&](double value, double slope) {
-    // value + slope * t >= 0
-    if (slope > 1.0e-15)
-      tEnter = std::max(tEnter, -value / slope);
-    else if (slope < -1.0e-15)
-      tExit = std::min(tExit, -value / slope);
-    else if (value < 0.0)
-      rejected = true;
-  };
-
-  if (useOrthoProjection())
-  {
-    // In orthographic view an infinite CAD ray is a screen overlay: lateral
-    // position is independent of camera depth.  Clip it to the viewport sides
-    // only, then place the visible span at the stable ortho slab center.  If
-    // it were clipped by the object slab too, a grazing ray could shorten
-    // while OrthoSize grows because the slab changes independently of the
-    // screen rectangle.
-    const double halfHeight = orbitCam.orthoSize();
-    const double halfWidth = halfHeight *
-        (double)currentDrawableWidth() /
-        std::max(1, currentDrawableHeight());
-    accumulate(start.x + halfWidth, dx);
-    accumulate(halfWidth - start.x, -dx);
-    accumulate(start.y + halfHeight, dy);
-    accumulate(halfHeight - start.y, -dy);
-  }
-  else
-  {
-    const double tanHalfVertical =
-        std::tan(glm::radians(45.0) * 0.5);
-    const double tanHalfHorizontal = tanHalfVertical *
-        (double)currentDrawableWidth() /
-        std::max(1, currentDrawableHeight());
-    accumulate(start.depth - nearPlane, dz);
-    accumulate(farPlane - start.depth, -dz);
-    accumulate(start.x + start.depth * tanHalfHorizontal,
-               dx + dz * tanHalfHorizontal);
-    accumulate(-start.x + start.depth * tanHalfHorizontal,
-               -dx + dz * tanHalfHorizontal);
-    accumulate(start.y + start.depth * tanHalfVertical,
-               dy + dz * tanHalfVertical);
-    accumulate(-start.y + start.depth * tanHalfVertical,
-               -dy + dz * tanHalfVertical);
-  }
-
-  if (rejected || !std::isfinite(tExit) || tEnter > tExit)
-    return false;
-
-  clippedStart = startWorld + direction * tEnter;
-  clippedEnd = startWorld + direction * tExit;
-
-  if (flattenToSlabCenter && useOrthoProjection())
-  {
-    // Moving a point along Front does not move its ortho projection, but it
-    // puts the emitted ribbon safely inside the hardware depth range.
-    const double slabCenter = std::max(0.001,
-        glm::length(orbitCam.Position - orbitCam.Target));
-    const double depthMargin =
-        std::max(1.0e-3, (farPlane - nearPlane) * 1.0e-3);
-    const double minimumDepth = nearPlane + depthMargin;
-    const double maximumDepth = farPlane - depthMargin;
-    if (minimumDepth > maximumDepth)
-        return false;
-    const double renderDepth =
-        glm::clamp(slabCenter, minimumDepth, maximumDepth);
-
-    auto flattenDepth = [&](const glm::dvec3 &worldPoint) {
-      const double depth = glm::dot(worldPoint - cameraPosition, cameraFront);
-      return worldPoint + cameraFront * (renderDepth - depth);
-    };
-    clippedStart = flattenDepth(clippedStart);
-    clippedEnd = flattenDepth(clippedEnd);
-  }
-
-  return true;
-}
-
 // Clip a world-space polygon against one camera-depth plane.  Camera depth
 // uses the same +Z-forward convention as the depth slab.  This keeps the
 // debug wireframe aligned with what the grid shader actually accepts:
@@ -6552,7 +5679,7 @@ static void appendOutlineRibbon(
     if (glm::length(direction) < 1.0e-5f)
         return;
 
-    const glm::vec3 side = ribbonSide(direction, front, halfWidth);
+    const glm::vec3 side = acgiView.ribbonSide(direction, front, halfWidth);
     if (centered)
     {
         vertices.push_back({start - side, color, {u0, 0.0f}});
@@ -6852,7 +5979,7 @@ static void drawLineLikeOutline(const glm::mat4 &view,
             // outline half-width. The full width grows by two copies of
             // kOutlineWidthPixels.
             const float sourceHalfWidth =
-                std::max(strokeHalfWidth(stroke), pixelSizeWorld);
+                std::max(acgiView.strokeHalfWidth(stroke), pixelSizeWorld);
             const float halfWidth = sourceHalfWidth +
                 outlineWidthWorld(pixelSizeWorld);
             const size_t segmentCount = stroke.closed ? pointCount : pointCount - 1;
@@ -6863,10 +5990,8 @@ static void drawLineLikeOutline(const glm::mat4 &view,
                 // stroke.  In particular a semi-infinite Ray must not draw an
                 // outline around its finite tessellation proxy only.
                 glm::dvec3 clippedStart, clippedEnd;
-                if (!clipStrokeSegmentToView(
-                        stroke.points[j], stroke.points[next], cameraPos,
-                        cameraRight, cameraUp, cameraFront,
-                        g_renderSlabNear, g_renderSlabFar,
+                if (!acgiView.clipStrokeSegment(
+                        stroke.points[j], stroke.points[next],
                         clippedStart, clippedEnd, stroke.semiInfinite))
                 {
                     continue;
@@ -6897,7 +6022,7 @@ static void drawLineLikeOutline(const glm::mat4 &view,
              outlineEntity->curve)
     {
         const std::vector<glm::dvec3> points =
-            sampleCurveBatch(*outlineEntity->curve);
+            acgi::AcGiView::sampleCurveBatch(*outlineEntity->curve);
         const size_t segmentCount = points.size() > 1 ? points.size() - 1 : 0;
         const float halfWidth =
             std::max(outlineEntity->curve->acgiMaterial.lineWidth * 0.5f,
@@ -6950,7 +6075,7 @@ void render()
   if (!rendererBackend)
     return;
 
-  if (!rendererBackend->beginFrame(kClearColor))
+  if (!rendererBackend->beginFrame(acgi::kClearColor))
     return;
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
@@ -7148,7 +6273,7 @@ void render()
     // because orthographic geometry can straddle the camera plane.
     // Clamping near to zero would hide the lower half of the center cube.
     const CameraSpacePoint targetCamera =
-        toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
+        acgi::toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
     const double targetDepth = targetCamera.depth;
 
     const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
@@ -7288,14 +6413,13 @@ void render()
             if (stroke.semiInfinite)
             {
               glm::dvec3 clippedStart, clippedEnd;
-              if (!clipSemiInfiniteRayToView(
-                      stroke.points.front(), stroke.points.back(), cameraPos,
-                      right, up, front, 0.0, 0.0, clippedStart, clippedEnd,
-                      false))
+              if (!acgiView.clipSemiInfiniteRay(
+                      stroke.points.front(), stroke.points.back(), 0.0, 0.0,
+                      clippedStart, clippedEnd, false))
                 continue;
-              const CameraSpacePoint a = toCameraSpace(
+              const CameraSpacePoint a = acgi::toCameraSpace(
                   clippedStart, cameraPos, right, up, front);
-              const CameraSpacePoint b = toCameraSpace(
+              const CameraSpacePoint b = acgi::toCameraSpace(
                   clippedEnd, cameraPos, right, up, front);
               unionBounds({std::min(a.x, b.x), std::max(a.x, b.x),
                            std::min(a.y, b.y), std::max(a.y, b.y),
@@ -7306,7 +6430,7 @@ void render()
             {
               for (const glm::dvec3 &point : stroke.points)
               {
-                const CameraSpacePoint c = toCameraSpace(
+                const CameraSpacePoint c = acgi::toCameraSpace(
                     point, cameraPos, right, up, front);
                 unionBounds({c.x, c.x, c.y, c.y, c.depth, c.depth});
               }
@@ -7381,7 +6505,7 @@ void render()
     for (const acgi::TextRequest &request : acgi::textRequests())
     {
       const CameraSpacePoint center =
-          toCameraSpace(request.position, cameraPos, right, up, front);
+          acgi::toCameraSpace(request.position, cameraPos, right, up, front);
       const double extent =
           double(request.message.size()) * request.height +
           request.height * 2.0;
@@ -7455,7 +6579,7 @@ void render()
     }
 
     const CameraSpacePoint targetCamera =
-        toCameraSpace(orbitCam.Target, cameraPos, right, up, frontVec);
+        acgi::toCameraSpace(orbitCam.Target, cameraPos, right, up, frontVec);
     double overlayMinDepth = targetCamera.depth;
     double overlayMaxDepth = targetCamera.depth;
     double objectMinDepth = targetCamera.depth;
@@ -7551,8 +6675,8 @@ void render()
     // the exact perspective side frusta.  It is a non-depth-writing overlay
     // and must not consume the depth precision reserved for solid geometry.
     includeSegmentPerspectiveDepth(
-        toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
-        toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
+        acgi::toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
+        acgi::toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
         kNearDepthFloor, tanHalfVertical, tanHalfHorizontal,
         overlayMinDepth, overlayMaxDepth);
 
@@ -7647,9 +6771,10 @@ void render()
     logDepth = glm::vec4(1.0f, depthNear, depthFar, 0.0f);
   }
 
-  // Publish this frame's slabs for stroke frustum clipping.
-  g_renderSlabNear = overlayNear;
-  g_renderSlabFar = overlayFar;
+  // Publish this frame's overlay slab for stroke frustum clipping; the
+  // full viewport context is pushed once the frame's locals exist.
+  acgiView.mutableFrame().slabNear = overlayNear;
+  acgiView.mutableFrame().slabFar = overlayFar;
 
   logSlabIfChanged(useOrthoProjection(), activeNear, activeFar,
                    overlayNear, overlayFar);
@@ -7797,20 +6922,18 @@ void render()
   const glm::dvec3 cameraUp(orbitCam.Up);
   if (useOrthoProjection())
   {
-    referenceLineVisible = clipReferenceSegmentToOrtho(
-        glm::dvec3(0.0), worldLineEnd, cameraPos, cameraRight, cameraUp,
-        frontVec, activeNear, activeFar,
+    referenceLineVisible = acgiView.clipSegmentToOrtho(
+        glm::dvec3(0.0), worldLineEnd, activeNear, activeFar,
         orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
         referenceLineStart, referenceLineEnd);
   }
   else
   {
     const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
-    referenceLineVisible = clipReferenceSegmentToPerspective(
-        glm::dvec3(0.0), worldLineEnd, cameraPos, cameraRight, cameraUp,
-        frontVec, overlayNear, overlayFar, tanHalfVertical,
-        tanHalfVertical * (double)aspect, referenceLineStart,
-        referenceLineEnd);
+    referenceLineVisible = acgiView.clipSegmentToPerspective(
+        glm::dvec3(0.0), worldLineEnd, overlayNear, overlayFar,
+        tanHalfVertical, tanHalfVertical * (double)aspect,
+        referenceLineStart, referenceLineEnd);
   }
 
   if (cameraDebugEnabled())
@@ -8234,9 +7357,34 @@ void render()
     appendSceneLine(sceneOverlay, referenceLineStart, referenceLineEnd,
                     glm::vec3(0.15f, 1.0f, 0.25f), 0.9f);
   }
-  submitAcGiDrawable(sceneOverlay, viewRte, projection, overlayProjection,
-                      orbitCam.Position, cameraPos, cameraRight, cameraUp,
-                      frontVec, logDepth, pixelSize);
+  // Push the complete per-frame viewport context for every acgi
+  // submission this frame (submit, text flush, outline primitives).
+  {
+    acgi::ViewFrameContext ctx;
+    ctx.view = viewRte;
+    ctx.projection = projection;
+    ctx.overlayProjection = overlayProjection;
+    ctx.cameraPos = cameraPos;
+    ctx.cameraRight = cameraRight;
+    ctx.cameraUp = cameraUp;
+    ctx.cameraFront = frontVec;
+    ctx.logDepth = logDepth;
+    ctx.slabNear = overlayNear;
+    ctx.slabFar = overlayFar;
+    ctx.viewportWidth = currentDrawableWidth();
+    ctx.viewportHeight = currentDrawableHeight();
+    ctx.ortho = useOrthoProjection();
+    ctx.orthoSize = orbitCam.orthoSize();
+    ctx.orbitDistance =
+        glm::length(orbitCam.Position - orbitCam.Target);
+    ctx.pixelSizeWorld = pixelSize;
+    ctx.meshTextureIndex = gMeshTextureIndex;
+    ctx.meshHeadlight = meshHeadlight();
+    ctx.meshTriplanar = meshTriplanar();
+    acgiView.setFrameContext(ctx);
+  }
+
+  acgiView.submit(sceneOverlay, {nullptr, pixelSize});
 
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
@@ -8263,32 +7411,9 @@ void render()
   // first use).  Sources: Text/MText entities and the standalone demo
   // string, both registered in the request queue (which also feeds the
   // content bounds so the depth slab covers the glyphs).
-  if (gSdfFontReady && rendererBackend)
-  {
-    constexpr glm::mat4 identityView(1.0f);
-    // Frustum culling: skip text whose oriented bounding rectangle lies
-    // entirely outside the ortho viewport (perspective keeps drawing —
-    // its frustum test hooks in at the same call when needed).
-    const double orthoHalfHeight = useOrthoProjection()
-                                       ? orbitCam.orthoSize()
-                                       : std::numeric_limits<double>::max();
-    const double orthoHalfWidth =
-        orthoHalfHeight * double(currentDrawableWidth()) /
-        std::max(1, currentDrawableHeight());
-    for (const acgi::TextRequest &request : acgi::textRequests())
-    {
-      if (useOrthoProjection() &&
-          !acgi::textEngine().intersectsOrthoViewport(
-              request, cameraPos, cameraRight, cameraUp, frontVec,
-              orthoHalfWidth, orthoHalfHeight))
-      {
-        continue;
-      }
-      acgi::textEngine().drawText(*rendererBackend, identityView,
-                                  projection, cameraPos, cameraRight,
-                                  cameraUp, frontVec, request);
-    }
-  }
+  // The AcGi view flushes queued text requests into SDF glyph quads,
+  // including the ortho viewport cull.
+  acgiView.flushTextRequests();
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -8382,9 +7507,7 @@ void render()
     }
   }
 
-  submitAcGiDrawable(sceneOverlay, viewRte, projection, overlayProjection,
-                      orbitCam.Position, cameraPos, cameraRight, cameraUp,
-                      frontVec, logDepth, pixelSize);
+  acgiView.submit(sceneOverlay, {nullptr, pixelSize});
 
   static bool screenshotRequested = false;
   if (!screenshotRequested && lineDebugEnabled())
@@ -8647,11 +7770,11 @@ int main(int argc, char *argv[])
         // V -- cycle the visual style through all render modes.
         if (evt.key.key == SDLK_V)
         {
-          visualStyleManager.cycle();
+          acgiView.visualStyle().cycle();
           if (rendererBackend)
-            rendererBackend->setRenderMode(visualStyleManager.mode());
+            rendererBackend->setRenderMode(acgiView.visualStyle().mode());
           std::cout << "Visual style: "
-                    << rendering::renderModeLabel(visualStyleManager.mode())
+                    << rendering::renderModeLabel(acgiView.visualStyle().mode())
                     << std::endl;
         }
         if (evt.key.scancode == SDL_SCANCODE_L)

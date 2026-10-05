@@ -107,6 +107,7 @@ set(WINDOW_SOURCES
     lib/text/text_font.cpp
     lib/text/shx_parser.cpp
     lib/acgi/AcGiTextEngine.cpp
+    lib/acgi/AcGiView.cpp
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})
