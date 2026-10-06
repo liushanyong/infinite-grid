@@ -17,6 +17,9 @@
 #include "brep/BRepBoolean.h"
 #include "brep/BRepBlend.h"
 #include "brep/BRepRayCast.h"
+#include "brep/BRepSweep.h"
+#include "brep/BRepHistory.h"
+#include "brep/StepWriter.h"
 
 namespace brep
 {
@@ -336,7 +339,7 @@ inline int runKernelSelfTest()
                 partnerDetected = true;
         check(partnerDetected, "broken radial pairing detected");
 
-        // ---- milestone 4: chamfer / thicken / fillet / raycast ----
+        // ---- milestone 6: sweep / loft / history / STEP ----
         auto findEdgeByPoints = [](Body *b, const AcGePoint3d &pa,
                                    const AcGePoint3d &pb) -> Edge * {
             for (Face *f = b->shell->firstFace; f != nullptr;
@@ -366,6 +369,208 @@ inline int runKernelSelfTest()
             return count;
         };
 
+        {
+            Arena swArena;
+            // Meridian rectangle rho in [1,2], z in [0,1], CCW around
+            // theta-hat = z x x-hat = +y.
+            const AcGePoint3d profile[4] = {
+                {1.0, 0.0, 0.0}, {1.0, 0.0, 1.0},
+                {2.0, 0.0, 1.0}, {2.0, 0.0, 0.0}};
+            const double pi = 3.14159265358979323846;
+            Body *ring = sweepAroundAxis(swArena, profile, 4,
+                                         {0.0, 0.0, 0.0},
+                                         {0.0, 0.0, 1.0}, pi / 2.0);
+            check(ring != nullptr, "sweep around axis succeeds");
+            if (ring != nullptr)
+            {
+                // Pappus: 1 * 1.5 * (pi/2) = 3*pi/4.
+                const double swVol = signedVolume(ring->shell);
+                std::fprintf(report, "sweep volume=%.9f faces=%d\n",
+                             swVol, countFaces(ring));
+                check(std::abs(swVol - 0.75 * pi) < 1.0e-6,
+                      "sweep volume satisfies Pappus (3*pi/4)");
+                check(validate(ring).empty(), "sweep validates clean");
+                check(countFaces(ring) == 6,
+                      "sweep has 2 caps + 2 cylinders + 2 sectors");
+            }
+            Body *full = sweepAroundAxis(swArena, profile, 4,
+                                         {0.0, 0.0, 0.0},
+                                         {0.0, 0.0, 1.0}, pi / 2.0);
+            (void)full;
+        }
+
+        {
+            Arena loArena;
+            const AcGePoint3d profileA[4] = {
+                {0.0, 0.0, 0.0}, {10.0, 0.0, 0.0},
+                {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+            const AcGePoint3d profileB[4] = {
+                {2.5, 2.5, 10.0}, {7.5, 2.5, 10.0},
+                {7.5, 7.5, 10.0}, {2.5, 7.5, 10.0}};
+            AcGeVector3d loftNormal;
+            Body *frustum = loftProfiles(loArena, profileA, profileB, 4,
+                                         loftNormal);
+            check(frustum != nullptr, "loft succeeds");
+            if (frustum != nullptr)
+            {
+                // Truncated pyramid: h/3*(A1 + A2 + sqrt(A1*A2)) =
+                // 10/3*(100 + 25 + 50) = 1750/3.
+                const double loVol = signedVolume(frustum->shell);
+                std::fprintf(report, "loft volume=%.9f faces=%d\n",
+                             loVol, countFaces(frustum));
+                check(std::abs(loVol - 1750.0 / 3.0) < 1.0e-6,
+                      "loft volume is the prismatoid formula value");
+                check(validate(frustum).empty(),
+                      "loft validates clean");
+                check(countFaces(frustum) == 6, "loft has 6 faces");
+            }
+        }
+
+        {
+            Arena hiArena;
+            std::vector<FeatureRecord> journal;
+            FeatureRecord boxRecord;
+            boxRecord.kind = FeatureKind::MakeBox;
+            boxRecord.point = {0.0, 0.0, 0.0};
+            boxRecord.sizeA = 10.0;
+            journal.push_back(boxRecord);
+
+            FeatureRecord chamferRecord;
+            chamferRecord.kind = FeatureKind::ChamferEdge;
+            chamferRecord.lhs = 0;
+            chamferRecord.point = {10.0, 0.0, 10.0};
+            chamferRecord.point2 = {10.0, 0.0, 0.0};
+            chamferRecord.sizeA = 1.0;
+            journal.push_back(chamferRecord);
+
+            Body *replayed = replayFeatures(hiArena, journal);
+            check(replayed != nullptr, "history replay succeeds");
+            if (replayed != nullptr)
+            {
+                const double hiVol = signedVolume(replayed->shell);
+                std::fprintf(report, "history replay volume=%.6f\n",
+                             hiVol);
+                check(std::abs(hiVol - 995.0) < 1.0e-6,
+                      "replayed journal reproduces chamfer (995)");
+                check(validate(replayed).empty(),
+                      "replayed body validates clean");
+            }
+
+            // Undo = truncate + replay.
+            journal.pop_back();
+            Body *undone = replayFeatures(hiArena, journal);
+            check(undone != nullptr && std::abs(signedVolume(
+                                           undone->shell) -
+                                       1000.0) < 1.0e-6,
+                  "journal undo returns the bare box");
+
+            FeatureRecord secondBox;
+            secondBox.kind = FeatureKind::MakeBox;
+            secondBox.point = {5.0, 2.0, 3.0};
+            secondBox.sizeA = 10.0;
+            journal.push_back(secondBox);
+            FeatureRecord cut;
+            cut.kind = FeatureKind::BooleanOp;
+            cut.lhs = 0;
+            cut.rhs = 1;
+            cut.boolOp = BoolOp::Subtract;
+            journal.push_back(cut);
+            Body *cutBody = replayFeatures(hiArena, journal);
+            check(cutBody != nullptr &&
+                      std::abs(signedVolume(cutBody->shell) - 720.0) <
+                          1.0e-6,
+                  "journal boolean subtract replays to 720");
+        }
+
+        {
+            // STEP export: structure counts must mirror the topology.
+            Arena stArena;
+            Body *box = makeBox(stArena, {0.0, 0.0, 0.0}, 10.0);
+            Edge *target = findEdgeByPoints(
+                box, {10.0, 0.0, 10.0}, {10.0, 0.0, 0.0});
+            Body *ch = chamferEdge(box, target, 1.0);
+            Body *fr = filletEdge(box, target, 2.0);
+            check(ch != nullptr && fr != nullptr,
+                  "step export bodies built");
+            auto countTopology = [](const Body *b, int &vertices,
+                                    int &edges, int &faces) {
+                vertices = edges = faces = 0;
+                std::map<const void *, bool> vseen, eseen;
+                for (const Face *f = b->shell->firstFace; f != nullptr;
+                     f = f->next)
+                {
+                    ++faces;
+                    const CoEdge *ce = f->outerLoop->first;
+                    do {
+                        vseen[ce->edge->start] = true;
+                        vseen[ce->edge->end] = true;
+                        eseen[ce->edge] = true;
+                        ce = ce->next;
+                    } while (ce != f->outerLoop->first);
+                }
+                vertices = int(vseen.size());
+                edges = int(eseen.size());
+            };
+            auto countInFile = [](const char *path, const char *needle) {
+                FILE *f = std::fopen(path, "rb");
+                if (f == nullptr)
+                    return -1;
+                std::string contents;
+                char buffer[4096];
+                std::size_t got;
+                while ((got = std::fread(buffer, 1, sizeof(buffer), f)) >
+                       0)
+                    contents.append(buffer, got);
+                std::fclose(f);
+                int count = 0;
+                std::size_t pos = 0;
+                while ((pos = contents.find(needle, pos)) !=
+                       std::string::npos)
+                {
+                    ++count;
+                    pos += 1;
+                }
+                return count;
+            };
+
+            int vtx = 0, eds = 0, fcs = 0;
+            countTopology(ch, vtx, eds, fcs);
+            const int chamferEntities =
+                writeStepBody(ch, "step_chamfer.step");
+            check(chamferEntities > 0, "chamfer STEP export succeeds");
+            check(countInFile("step_chamfer.step", "ADVANCED_FACE(") ==
+                      fcs,
+                  "chamfer STEP has one ADVANCED_FACE per face");
+            check(countInFile("step_chamfer.step", "EDGE_CURVE(") == eds,
+                  "chamfer STEP has one EDGE_CURVE per edge");
+            check(countInFile("step_chamfer.step", "VERTEX_POINT(") ==
+                      vtx,
+                  "chamfer STEP has one VERTEX_POINT per vertex");
+            check(countInFile("step_chamfer.step",
+                              "MANIFOLD_SOLID_BREP(") == 1,
+                  "chamfer STEP has one solid");
+            std::fprintf(report,
+                         "step chamfer entities=%d faces=%d edges=%d "
+                         "vertices=%d\n",
+                         chamferEntities, fcs, eds, vtx);
+
+            countTopology(fr, vtx, eds, fcs);
+            const int filletEntities =
+                writeStepBody(fr, "step_fillet.step");
+            check(filletEntities > 0, "fillet STEP export succeeds");
+            check(countInFile("step_fillet.step", "ADVANCED_FACE(") ==
+                      fcs,
+                  "fillet STEP has one ADVANCED_FACE per face");
+            check(countInFile("step_fillet.step", "EDGE_CURVE(") == eds,
+                  "fillet STEP has one EDGE_CURVE per edge");
+            check(countInFile("step_fillet.step", "CIRCLE(") == 2,
+                  "fillet STEP carries both arc edges as CIRCLEs");
+            check(countInFile("step_fillet.step",
+                              "CYLINDRICAL_SURFACE(") == 1,
+                  "fillet STEP carries the cylinder surface");
+        }
+
+        // ---- milestone 4: chamfer / thicken / fillet / raycast ----
         {
             Arena chArena;
             Body *box = makeBox(chArena, {0.0, 0.0, 0.0}, 10.0);

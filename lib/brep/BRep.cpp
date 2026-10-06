@@ -62,9 +62,16 @@ double signedVolume(const Shell *shell)
             // The patch's arc sides carry the angular span in their
             // canonical geometry (CCW from startAngle to endAngle,
             // traversal-independent); the straight side parallel to the
-            // axis gives L.
+            // axis gives L.  The analytic term assumes the centrifugal
+            // radial direction as the outward normal; an inward-facing
+            // patch (a bore wall) flips the sign, detected by testing
+            // one straight side's traversal against the ring centroid.
             const AcGeCircArc3d *arcSeen = nullptr;
+            const Edge *straightEdge = nullptr;
+            bool straightForward = true;
             double axialLength = 0.0;
+            AcGeVector3d centroid{0.0, 0.0, 0.0};
+            int ringCount = 0;
             const CoEdge *coedge = first;
             int guard = 0;
             while (guard++ < 256)
@@ -80,13 +87,64 @@ double signedVolume(const Shell *shell)
                     axialLength = std::max(axialLength,
                                            edge->start->point.distanceTo(
                                                edge->end->point));
+                    if (straightEdge == nullptr)
+                    {
+                        straightEdge = edge;
+                        straightForward = coedge->forward;
+                    }
                 }
+                const AcGePoint3d &start = coedge->forward
+                    ? edge->start->point
+                    : edge->end->point;
+                centroid = centroid + AcGeVector3d(start.x, start.y,
+                                                   start.z);
+                ++ringCount;
                 coedge = coedge->next;
                 if (coedge == first)
                     break;
             }
             if (arcSeen == nullptr || axialLength <= 0.0)
                 continue; // not the expected two-arc patch shape
+
+            double radialSign = 1.0;
+            if (straightEdge != nullptr)
+            {
+                const AcGePoint3d &sPoint = straightEdge->start->point;
+                const AcGePoint3d &ePoint = straightEdge->end->point;
+                const AcGePoint3d mid(
+                    0.5 * (sPoint.x + ePoint.x),
+                    0.5 * (sPoint.y + ePoint.y),
+                    0.5 * (sPoint.z + ePoint.z));
+                const AcGeVector3d delta = mid - face->cylinder.origin;
+                const AcGeVector3d &axis = face->cylinder.axis;
+                AcGeVector3d radial =
+                    delta - axis * delta.dotProduct(axis);
+                {
+                    const double len = std::sqrt(radial.x * radial.x +
+                                                 radial.y * radial.y +
+                                                 radial.z * radial.z);
+                    if (len > 1.0e-12)
+                        radial = AcGeVector3d(radial.x / len,
+                                              radial.y / len,
+                                              radial.z / len);
+                    else
+                        radial = AcGeVector3d(0.0, 0.0, 0.0);
+                }
+                AcGeVector3d t = straightForward ? ePoint - sPoint
+                                                 : sPoint - ePoint;
+                {
+                    const double len = t.length();
+                    if (len > 1.0e-12)
+                        t = AcGeVector3d(t.x / len, t.y / len,
+                                         t.z / len);
+                }
+                const AcGeVector3d inward = radial.crossProduct(t);
+                centroid = centroid * (1.0 / double(ringCount));
+                const AcGeVector3d toCentroid =
+                    centroid - AcGeVector3d(mid.x, mid.y, mid.z);
+                radialSign = inward.dotProduct(toCentroid) > 0.0 ? 1.0
+                                                                 : -1.0;
+            }
 
             const AcGeCircArc3d &arc = *arcSeen;
             const AcGeVector3d u = arc.referenceAxis();
@@ -99,7 +157,7 @@ double signedVolume(const Shell *shell)
             const double intW = -(std::cos(phi0 + dphi) - std::cos(phi0));
             const AcGeVector3d integralN = u * intU + w * intW;
             const AcGeVector3d c(arc.center.x, arc.center.y, arc.center.z);
-            volume += arc.radius * axialLength *
+            volume += radialSign * arc.radius * axialLength *
                       (c.dotProduct(integralN) + arc.radius * dphi) / 3.0;
             continue;
         }
