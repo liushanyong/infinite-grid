@@ -10,6 +10,7 @@
 #include "libredwg/include/dwg.h"
 #include "acdb/AcDbDwgBridge.h"
 #include "acdb/AcDbTransform.h"
+#include "brep/KernelSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionHighlighter.h"
@@ -6937,6 +6938,17 @@ void render()
 int main(int argc, char *argv[])
 {
   SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
+
+  // Hidden kernel self-test: GRID_SELFTEST=kernel runs the geom2d
+  // + brep unit tests, writes kernel_selftest.log, exits nonzero
+  // on failure.
+  if (const char *selfTest = std::getenv("GRID_SELFTEST");
+      selfTest && std::strcmp(selfTest, "kernel") == 0)
+  {
+    const int kernelFails = brep::runKernelSelfTest();
+    return kernelFails == 0 ? 0 : 1;
+  }
+
 
   if (!init())
   {

@@ -109,6 +109,7 @@ set(WINDOW_SOURCES
     lib/acgi/AcGiTextEngine.cpp
     lib/acgs/AcGsView.cpp
     lib/acdb/AcDbDatabase.cpp
+    lib/brep/BRep.cpp
     lib/acdb/AcDbTransaction.cpp
     lib/acgs/AcGsSelectionHighlighter.cpp
     lib/acgs/AcGsSelectionManager.cpp

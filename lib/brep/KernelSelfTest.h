@@ -25,7 +25,6 @@ inline int runKernelSelfTest()
     FILE *report = std::fopen("kernel_selftest.log", "w");
     if (report == nullptr)
         return 99;
-    std::fprintf(report, "[ST] enter\n");
     int fails = 0;
     auto check = [&](bool condition, const char *what) {
         if (!condition)
@@ -35,7 +34,6 @@ inline int runKernelSelfTest()
         }
     };
 
-    std::fprintf(report, "[ST] geom2d start\n");
     // ---------------- geom2d (milestone 1 tail) ----------------
     {
         using namespace ge;
@@ -77,12 +75,15 @@ inline int runKernelSelfTest()
               "arc-arc filters to both spans");
     }
 
-    std::fprintf(report, "[ST] brep start\n");
     // ---------------- brep (milestone 2) ----------------
     {
         Arena arena;
+        std::fflush(report);
         Body *box = makeBox(arena, {0.0, 0.0, 0.0}, 10.0);
+        std::fflush(report);
+        std::fflush(report);
         const double volume = signedVolume(box->shell);
+        std::fflush(report);
         {
             int fi = 0;
             for (const Face *f = box->shell->firstFace; f;
@@ -144,7 +145,6 @@ inline int runKernelSelfTest()
                     const double triDet =
                         v0v.crossProduct(pv3).dotProduct(cv3) / 6.0;
                     faceVol += triDet;
-                    std::fprintf(report, "   tri det=%.4f\n", triDet);
                     pc = ce;
                     ce = ce->next;
                 }
@@ -169,7 +169,9 @@ inline int runKernelSelfTest()
                 ++fi;
             }
         }
+        std::fflush(report);
         check(validate(box).empty(), "clean box validates with no issues");
+        std::fflush(report);
 
         // Inside-out detection: an inside-out shell has every
         // coedge traversing its edge backwards (all face rings run
@@ -178,20 +180,61 @@ inline int runKernelSelfTest()
         // flips negative.
         Arena inwardArena;
         Body *inward = makeBox(inwardArena, {0.0, 0.0, 0.0}, 10.0);
-        for (const Face *face = inward->shell->firstFace; face;
+        for (Face *face = inward->shell->firstFace; face;
              face = face->next)
-            for (const CoEdge *ce = face->outerLoop->first;;)
-            {
-                const_cast<CoEdge *>(ce)->forward =
-                    !ce->forward;
-                ce = ce->next;
-                if (ce == face->outerLoop->first)
-                    break;
+        {
+                Loop *loop = face->outerLoop;
+                std::vector<CoEdge *> ring;
+                CoEdge *c = loop->first;
+                do {
+                    ring.push_back(c);
+                    c = c->next;
+                } while (c != loop->first);
+                const std::size_t n = ring.size();
+                for (std::size_t i = 0; i < n; ++i)
+                {
+                    ring[i]->next =
+                        ring[(i + n - 1) % n];
+                    ring[i]->prev = ring[(i + 1) % n];
+                    ring[i]->forward = !ring[i]->forward;
+                }
+                loop->first = ring[0];
             }
         std::fprintf(report, "flipped-first-fwd=%d\n",
                      int(inward->shell->firstFace->outerLoop->first->forward));
         std::fprintf(report, "inward volume=%.4f\n",
                      signedVolume(inward->shell));
+        {
+            int fi = 0;
+            for (const Face *f = inward->shell->firstFace; f;
+                 f = f->next, ++fi)
+            {
+                const CoEdge *first = f->outerLoop->first;
+                const AcGePoint3d v0 = first->forward
+                    ? first->edge->start->point
+                    : first->edge->end->point;
+                const AcGeVector3d v0v(v0.x, v0.y, v0.z);
+                double fv = 0.0;
+                const CoEdge *pc = first;
+                const CoEdge *ce = first->next;
+                while (ce != first)
+                {
+                    const AcGePoint3d pv = pc->forward
+                        ? pc->edge->end->point : pc->edge->start->point;
+                    const AcGePoint3d cv = ce->forward
+                        ? ce->edge->end->point : ce->edge->start->point;
+                    const AcGeVector3d pv3(pv.x, pv.y, pv.z);
+                    const AcGeVector3d cv3(cv.x, cv.y, cv.z);
+                    fv += v0v.crossProduct(pv3).dotProduct(cv3) / 6.0;
+                    pc = ce;
+                    ce = ce->next;
+                }
+                std::fprintf(stderr, "inward face[%d] vol=%.4f\n", fi, fv);
+                ++fi;
+            }
+        }
+        std::fprintf(report, "POST fwd=%d\n",
+                     int(inward->shell->firstFace->outerLoop->first->forward));
         bool inwardDetected = false;
         for (const ValidateIssue &issue : validate(inward))
             if (issue.error == ValidateError::kShellInward)

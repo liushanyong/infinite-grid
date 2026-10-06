@@ -64,7 +64,11 @@ inline bool edgeAt(Builder &builder,
     if (found != edgeMap.end())
     {
         outEdge = found->second.first;
-        forward = found->second.second;
+        // Direction is relative to the CALLER's ring: the stored flag
+        // only records the creation-time order.  Vertices are deduped
+        // objects, so pointer comparison against the caller's start is
+        // exact.
+        forward = outEdge->start == a;
         return true;
     }
     outEdge = builder.createEdge(a, b);
@@ -139,6 +143,7 @@ inline Face *makePlanarFaceFromCorners(
             forward = true;
         traversal.push_back(forward ? edge->coedge[0] : edge->coedge[1]);
     }
+
 
     Face *face = builder.createFace(shell, {corners[0], n});
     face->outerLoop = builder.createLoop(face, traversal.data(),
