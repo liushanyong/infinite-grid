@@ -21,8 +21,10 @@
 #include <vector>
 
 #include "acgs/AcGsOrbitCamera.h"
+#include "acdb/AcDbViewportTable.h"
 #include "rendering/RenderMode.h"
 #include "acgs/model/AcGsModel.h"
+#include "acgi/AcGiTextQueue.h"
 
 namespace acdb
 {
@@ -105,7 +107,17 @@ struct ViewFrameContext
 class AcGsView
 {
 public:
-    static AcGsView &instance();
+    // ObjectARX AcGsView is a first-class citizen created through the
+    // AcGsManager factory, not a singleton — the former instance()
+    // became AcGsManager's default (active) view.
+    AcGsView()
+        : orbitCamera_(glm::vec3(0.0f), 15.0f, -45.0f, 20.0f)
+    {
+    }
+    explicit AcGsView(const AcGsOrbitCamera &camera)
+        : orbitCamera_(camera)
+    {
+    }
 
     // View camera state (ObjectARX: AcGsView::setView/setEye/setTarget).
     // The demo keeps calling it through the orbitCamera() alias.
@@ -149,8 +161,6 @@ public:
                             double candidateFar, double &outNear,
                             double &outFar);
 
-    void attach(rendering::RendererBackend *backend);
-    rendering::RendererBackend *backend() const { return backend_; }
 
     void setFrameContext(const ViewFrameContext &context) { frame_ = context; }
     const ViewFrameContext &frame() const { return frame_; }
@@ -158,6 +168,31 @@ public:
 
     // Visual style state (ObjectARX: AcGiVisualStyle); the V key cycles it.
     rendering::RenderModeManager &visualStyle() { return visualStyle_; }
+
+    // ---- document binding (ObjectARX: AcDbViewportTableRecord ↔ view) ----
+
+    // The VPORT record this view works on; empty means the default
+    // "*Active" record.  The bidirectional transfer mirrors ARX's
+    // DB↔GS parameter sync: zoom/pan write-back lands the camera in
+    // the record, apply restores a record into the camera.
+    const std::string &viewportRecordName() const
+    {
+        return viewportRecordName_;
+    }
+    void setViewportRecordName(std::string name)
+    {
+        viewportRecordName_ = std::move(name);
+    }
+
+    // Camera ← record.  Restores target/direction/height/lens and the
+    // perspective toggle.  Twist is ignored (the turntable camera keeps
+    // no roll); grid bounds are not applied.
+    void applyViewportRecord(const acdb::AcDbViewportTableRecord &record);
+
+    // Camera → record.  Writes target/direction/height/lens/perspective;
+    // twist always 0.  Cheap enough to run every frame (a few doubles).
+    void writeToViewportRecord(
+        acdb::AcDbViewportTableRecord &record) const;
 
     // Per-submission sizing overrides; 0 = take the value from the frame
     // context.  overlayProjection, when set, replaces the frame's overlay
@@ -181,6 +216,11 @@ public:
     // Flush the queued text requests as SDF glyph quads; returns the number
     // of glyphs drawn.
     int flushTextRequests();
+    // Draws ONE queued text request through the SDF glyph path with an
+    // optional color override (selection highlight redraws the picked
+    // text in the highlight color; no override draws the request color).
+    int drawTextRequest(const acgi::TextRequest &request,
+                        const glm::vec4 &colorOverride);
 
     // ---- low-level drawing primitives (selection highlighter, overlays) ----
 
@@ -264,20 +304,15 @@ public:
         glm::dvec3 &clippedEnd) const;
 
 private:
-    AcGsView()
-        : orbitCamera_(glm::vec3(0.0f), 15.0f, -45.0f, 20.0f)
-    {
-    }
-
-    void submitMeshBatch(acgs::MeshBatchCommand &command,
-                         const rendering::DoubleSingleVec3 &eye,
-                         const SubmitOptions &options);
-
-    rendering::RendererBackend *backend_ = nullptr;
     ViewFrameContext frame_;
     AcGsOrbitCamera orbitCamera_;
     bool orthoMode_ = false;
     rendering::RenderModeManager visualStyle_;
+    std::string viewportRecordName_;
+
+    void submitMeshBatch(acgs::MeshBatchCommand &command,
+                         const rendering::DoubleSingleVec3 &eye,
+                         const SubmitOptions &options);
 
     struct DepthSlabStabilizer;
     DepthSlabStabilizer &slabStabilizer(DepthSlab slab);

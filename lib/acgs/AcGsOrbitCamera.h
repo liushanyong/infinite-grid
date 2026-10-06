@@ -190,6 +190,29 @@ public:
     syncDerivedState();
   }
 
+  // ObjectARX: AcDbViewportTableRecord::setViewDirection — rebuild the
+  // turntable rotation from a gaze direction (camera -> target), keeping
+  // the roll level with WorldUp.  The turntable stores the camera's eye
+  // direction (the gaze's negation), so the elevation convention flips.
+  void setViewDirection(const glm::dvec3 &direction)
+  {
+    if (glm::length(direction) < 1e-12)
+      return;
+    constexpr double kPi = 3.14159265358979323846;
+    const glm::dvec3 front = glm::normalize(direction);
+    const double pitchRadians = std::asin(
+        glm::clamp(-front.z, -1.0, 1.0));
+    double yawRadians = 0.0;
+    if (std::abs(front.x) > 1e-9 || std::abs(front.y) > 1e-9)
+      yawRadians = std::atan2(-front.x, front.y);
+    const glm::dquat qYaw =
+        glm::angleAxis(yawRadians, glm::dvec3(0.0, 0.0, 1.0));
+    const glm::dquat qPitch = glm::angleAxis(
+        kPi * 0.5 - pitchRadians, glm::dvec3(1.0, 0.0, 0.0));
+    Rotation = glm::normalize(qYaw * qPitch);
+    syncDerivedState();
+  }
+
   void setTargetDistance(double newDistance)
   {
     Distance = std::max(0.001, newDistance);

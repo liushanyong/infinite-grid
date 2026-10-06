@@ -5,7 +5,7 @@
 // registry shared between the visible pass and the GPU ID pass, the
 // 1x1-pick request lifecycle, and the bounded-chunk triangle-soup queue.
 //
-// Entity identity is type-erased (kind tag + three opaque pointers): the
+// Entity identity is type-erased (kind tag + opaque pointers): the
 // application maps its own entity records to and from AcGsPickEntity, so
 // the manager never depends on demo-level scene types.
 
@@ -36,12 +36,36 @@ struct AcGsPickEntity
     const void *mesh = nullptr;
     const void *range = nullptr;
     const void *curve = nullptr;
+    const void *text = nullptr;
 
     bool operator==(const AcGsPickEntity &other) const = default;
 };
 
 // Encode an entity id into the RGBA color the GPU ID pass writes.
 glm::vec4 encodeGpuPickId(std::uint32_t id);
+
+// Identity hash for the reverse entity->id lookup: the queue path
+// re-registers the same scene entities every frame, and ids must stay
+// stable across frames (the selection-outline uniform and the unified
+// pixel read resolve against the standing registry).
+struct AcGsPickEntityHash
+{
+    std::size_t operator()(const AcGsPickEntity &entity) const
+    {
+        std::size_t hash = 0xcbf29ce484222325ull;
+        auto mix = [&hash](std::uintptr_t value)
+        {
+            hash ^= value + 0x9e3779b97f4a7c15ull +
+                    (hash << 6) + (hash >> 2);
+        };
+        mix(entity.kind);
+        mix(reinterpret_cast<std::uintptr_t>(entity.mesh));
+        mix(reinterpret_cast<std::uintptr_t>(entity.range));
+        mix(reinterpret_cast<std::uintptr_t>(entity.curve));
+        mix(reinterpret_cast<std::uintptr_t>(entity.text));
+        return hash;
+    }
+};
 
 class AcGsSelectionManager
 {
@@ -80,7 +104,7 @@ public:
     const AcGsPickEntity *find(std::uint32_t id) const;
     std::uint32_t findIdFor(const AcGsPickEntity &entity) const;
     // The full-scene ID pass rebuilds the registry every request frame.
-    void clearRegistry() { registry_.clear(); }
+    void clearRegistry() { registry_.clear(); idByEntity_.clear(); }
     std::size_t registrySize() const { return registry_.size(); }
     std::uint32_t nextIdCounter() const { return nextEntityId_; }
     template <typename Fn> void forEach(Fn &&fn) const
@@ -106,8 +130,7 @@ public:
     // Submits |vertices| to the backend's GPU triangle-pick queue in
     // bounded chunks (the queue's per-request triangle capacity); no-op
     // unless |active| and the soup has at least one triangle.
-    void queueSoupChunks(rendering::RendererBackend &backend,
-                         const std::vector<rendering::FillVertex> &vertices,
+    void queueSoupChunks(const std::vector<rendering::FillVertex> &vertices,
                          const glm::mat4 &view,
                          const glm::mat4 &pickProjection,
                          const glm::vec4 &logDepth, std::uint32_t objectId,
@@ -122,6 +145,9 @@ private:
     AcGsSelectionManager() = default;
 
     std::unordered_map<std::uint32_t, AcGsPickEntity> registry_;
+    std::unordered_map<AcGsPickEntity, std::uint32_t,
+                      AcGsPickEntityHash>
+        idByEntity_;
     std::uint32_t nextEntityId_ = 2;
     FocusState focus_;
 };

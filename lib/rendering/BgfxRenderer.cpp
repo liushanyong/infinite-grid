@@ -209,9 +209,21 @@ constexpr bgfx::ViewId kViewGpuPickBlit = 7;
 constexpr bgfx::ViewId kViewPresent = 8;
 constexpr bgfx::ViewId kViewGpuPickDebug = 9;
 constexpr bgfx::ViewId kViewGpuPickDebugBlit = 10;
-constexpr bgfx::ViewId kViewGpuPickDebugPresent = 11;
+// Own view id ABOVE kViewText (12) and kViewSelectionOutline (14): the
+// ID debug square is an inspection overlay, so it must composite over
+// every scene pass. At 11 the SDF glyph pass (12) drew the live glyphs
+// on top of the presented ID texture -- texts appeared twice.
+constexpr bgfx::ViewId kViewGpuPickDebugPresent = 15;
+// The unified-pick pixel sample blits from the full-scene ID texture.
+// It must execute AFTER the debug pass (view 9) renders the current
+// frame, or the readback captures the previous registry generation.
+constexpr bgfx::ViewId kViewGpuPickPixelBlit = 16;
 constexpr bgfx::ViewId kViewText = 12;
-constexpr bgfx::ViewId kViewSelectionOutline = 12;
+// Own view id: sharing 12 with kViewText made the outline fullscreen
+// quad execute with the text view transform (both passes configure
+// the same bgfx view; the last configuration wins and BOTH draw call
+// sets run), splattering the sampled ID texture over the scene.
+constexpr bgfx::ViewId kViewSelectionOutline = 14;
 constexpr uint32_t kGpuPickDebugSize = 512;
 
 bool gpuPickDebugEnabled()
@@ -956,6 +968,9 @@ void BgfxRenderer::shutdown()
     }
 
     destroySceneFrameBuffer();
+    if (bgfx::isValid(m_pipFrameBuffer))
+        bgfx::destroy(m_pipFrameBuffer);
+    m_pipFrameBuffer = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_gridProgram))
         bgfx::destroy(m_gridProgram);
     m_gridProgram = BGFX_INVALID_HANDLE;
@@ -1067,6 +1082,9 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_presentQuadBuffer);
     m_presentQuadBuffer = BGFX_INVALID_HANDLE;
     destroySceneFrameBuffer();
+    if (bgfx::isValid(m_pipFrameBuffer))
+        bgfx::destroy(m_pipFrameBuffer);
+    m_pipFrameBuffer = BGFX_INVALID_HANDLE;
 
     destroyUniform(m_cubeRelativePositionLow);
     destroyUniform(m_eyeHigh);
@@ -1144,6 +1162,9 @@ void BgfxRenderer::shutdown()
 
     destroyGpuPickResources();
     destroySceneFrameBuffer();
+    if (bgfx::isValid(m_pipFrameBuffer))
+        bgfx::destroy(m_pipFrameBuffer);
+    m_pipFrameBuffer = BGFX_INVALID_HANDLE;
 
     bgfx::shutdown();
     m_initialized = false;
@@ -1192,6 +1213,104 @@ void BgfxRenderer::destroySceneFrameBuffer()
     if (bgfx::isValid(m_sceneFrameBuffer))
         bgfx::destroy(m_sceneFrameBuffer);
     m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
+}
+
+// ---- picture-in-picture secondary scene target (GRID_PIP) ----
+// kViewPipComposite executes after kViewPresent (bgfx view order), so the
+// inset composites over the resolved main image every frame; the pip
+// scene itself re-renders only on claimed frames (time-share).
+constexpr bgfx::ViewId kViewPipComposite = 13;
+
+bool BgfxRenderer::beginPipScene()
+{
+    if (!m_initialized || !bgfx::isValid(m_sceneFrameBuffer))
+        return false;
+    const uint32_t width = std::max<uint32_t>(m_width / 4, 1);
+    const uint32_t height = std::max<uint32_t>(m_height / 4, 1);
+    if (width != m_pipWidth || height != m_pipHeight ||
+        !bgfx::isValid(m_pipFrameBuffer))
+    {
+        if (bgfx::isValid(m_pipFrameBuffer))
+            bgfx::destroy(m_pipFrameBuffer);
+        const uint64_t colorFlags = BGFX_TEXTURE_RT |
+                                    BGFX_SAMPLER_U_CLAMP |
+                                    BGFX_SAMPLER_V_CLAMP;
+        const uint64_t depthFlags = BGFX_TEXTURE_RT_WRITE_ONLY;
+        bgfx::TextureHandle textures[2] = {
+            bgfx::createTexture2D(width, height, false, 1,
+                                  bgfx::TextureFormat::BGRA8, colorFlags),
+            bgfx::createTexture2D(width, height, false, 1,
+                                  bgfx::TextureFormat::D24S8, depthFlags)};
+        if (!bgfx::isValid(textures[0]) || !bgfx::isValid(textures[1]))
+        {
+            if (bgfx::isValid(textures[0]))
+                bgfx::destroy(textures[0]);
+            if (bgfx::isValid(textures[1]))
+                bgfx::destroy(textures[1]);
+            return false;
+        }
+        m_pipFrameBuffer = bgfx::createFrameBuffer(2, textures, true);
+        m_pipWidth = width;
+        m_pipHeight = height;
+    }
+    if (!bgfx::isValid(m_pipFrameBuffer))
+        return false;
+    for (const bgfx::ViewId view :
+         {kViewBackground, kViewDepthPrepass, kViewSolidFill,
+          kViewEdges, kViewWire, kViewOverlay})
+    {
+        bgfx::setViewFrameBuffer(view, m_pipFrameBuffer);
+        bgfx::setViewRect(view, 0, 0, uint16_t(m_pipWidth),
+                          uint16_t(m_pipHeight));
+    }
+    bgfx::setViewClear(kViewBackground,
+                       BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH |
+                           BGFX_CLEAR_STENCIL,
+                       m_clearColorPacked, 1.0f, 0);
+    return true;
+}
+
+void BgfxRenderer::endPipScene()
+{
+    if (!bgfx::isValid(m_sceneFrameBuffer))
+        return;
+    for (const bgfx::ViewId view :
+         {kViewBackground, kViewDepthPrepass, kViewSolidFill,
+          kViewEdges, kViewWire, kViewOverlay})
+    {
+        bgfx::setViewFrameBuffer(view, m_sceneFrameBuffer);
+        bgfx::setViewRect(view, 0, 0, uint16_t(m_width),
+                          uint16_t(m_height));
+    }
+}
+
+void BgfxRenderer::compositePip()
+{
+    if (!bgfx::isValid(m_pipFrameBuffer) ||
+        !bgfx::isValid(m_presentProgram) ||
+        !bgfx::isValid(m_presentQuadBuffer))
+        return;
+    const bgfx::TextureHandle pipColor =
+        bgfx::getTexture(m_pipFrameBuffer);
+    if (!bgfx::isValid(pipColor))
+        return;
+    const uint32_t width = std::max<uint32_t>(m_width / 4, 1);
+    const uint32_t height = std::max<uint32_t>(m_height / 4, 1);
+    const uint32_t x = m_width > width + 16 ? m_width - width - 16 : 0;
+    const uint32_t y = 16;
+    bgfx::setViewFrameBuffer(kViewPipComposite, BGFX_INVALID_HANDLE);
+    bgfx::setViewClear(kViewPipComposite, BGFX_CLEAR_NONE);
+    bgfx::setViewRect(kViewPipComposite, uint16_t(x), uint16_t(y),
+                      uint16_t(width), uint16_t(height));
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    const std::array<float, 4> presentParams = {0.0f,
+                                                1.0f / float(width),
+                                                1.0f / float(height),
+                                                0.0f};
+    bgfx::setUniform(m_presentParams, presentParams.data());
+    bgfx::setTexture(0, m_presentSampler, pipColor);
+    bgfx::setVertexBuffer(0, m_presentQuadBuffer);
+    bgfx::submit(kViewPipComposite, m_presentProgram);
 }
 
 bool BgfxRenderer::createGpuPickResources()
@@ -1428,6 +1547,9 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
         m_width = static_cast<uint16_t>(width);
         m_height = static_cast<uint16_t>(height);
         destroySceneFrameBuffer();
+    if (bgfx::isValid(m_pipFrameBuffer))
+        bgfx::destroy(m_pipFrameBuffer);
+    m_pipFrameBuffer = BGFX_INVALID_HANDLE;
         if (!createSceneFrameBuffer())
             return false;
         if ((m_gpuPickDebugVisible || m_gpuPickSceneDebug || m_gpuPickScenePassEnabled ||
@@ -1441,10 +1563,11 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
     const auto channel = [](float value) {
         return uint32_t(std::clamp(value, 0.0f, 1.0f) * 255.0f);
     };
-    const uint32_t rgba = channel(clearColor.r) << 24 |
+    m_clearColorPacked = channel(clearColor.r) << 24 |
                           channel(clearColor.g) << 16 |
                           channel(clearColor.b) << 8 |
                           channel(clearColor.a);
+    const uint32_t rgba = m_clearColorPacked;
 
     bgfx::setViewName(kViewBackground, "CAD Background");
     bgfx::setViewName(kViewDepthPrepass, "CAD Hidden-Line Depth");
@@ -2987,7 +3110,8 @@ bool BgfxRenderer::gpuPickInstanceIsCandidate(
 }
 
 bool BgfxRenderer::gpuPickVerticesAreCandidate(
-    const FillVertex *vertices, uint32_t vertexCount) const
+    const FillVertex *vertices, uint32_t vertexCount,
+    const glm::mat4 &view) const
 {
     if (!vertices || vertexCount == 0)
         return false;
@@ -3004,8 +3128,12 @@ bool BgfxRenderer::gpuPickVerticesAreCandidate(
                                           vertices[i].position - center));
     const float radius = std::sqrt(radiusSquared) * 1.5f;
 
-    const glm::vec4 clip = m_gpuPickRequest.projection *
-        m_gpuPickRequest.view * glm::vec4(center, 1.0f);
+    // |view| is the SOUP's submission view (e.g. cadAnchorView for the
+    // anchor-relative CAD soups, viewRte for camera-relative ones). The
+    // request view alone would drop the anchor offset and reject every
+    // CAD soup once the camera closes in on the content.
+    const glm::vec4 clip = m_gpuPickRequest.projection * view *
+                         glm::vec4(center, 1.0f);
     if (!(clip.w > std::numeric_limits<float>::epsilon()))
         return false;
 
@@ -3042,6 +3170,30 @@ bool BgfxRenderer::gpuPickCachedVerticesAreCandidate(
            std::abs(delta.y) <= radiusNdcY;
 }
 
+uint32_t BgfxRenderer::requestGpuPickPixel(float ndcX, float ndcY)
+{
+    if (!m_initialized || !bgfx::isValid(m_gpuPickProgram) ||
+        !bgfx::isValid(m_gpuPickDebugFrameBuffer) ||
+        !bgfx::isValid(m_gpuPickReadback))
+    {
+        return 0;
+    }
+    // The full-scene texture is the single ID source: this only records
+    // the texel to sample; renderGpuPickPass blits it after the scene
+    // pass has rendered the current frame.
+    m_gpuPickPrimitives.clear();
+    m_gpuPickActive = true;
+    m_pixelReadPending = true;
+    m_pixelReadNdcX = ndcX;
+    m_pixelReadNdcY = ndcY;
+    m_pixelReadToken = m_gpuPickNextToken++;
+    m_gpuPickLastResult.ready = false;
+    m_gpuPickLastResult.hit = false;
+    m_gpuPickLastResult.requestToken = m_pixelReadToken;
+    m_gpuPickLastResult.objectId = 0;
+    m_gpuPickLastResult.faceIndex = 0;
+    return m_pixelReadToken;
+}
 uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 {
     if (!m_initialized || !bgfx::isValid(m_gpuPickProgram))
@@ -3061,11 +3213,14 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
     m_gpuPickQueueStats.meshCapacity = kMaxGpuPickInstances;
     m_gpuPickQueueStats.triangleCapacity = kMaxGpuPickTriangleBatches;
     m_gpuPickActive = true;
-    m_gpuPickLastResult.ready = false;
-    m_gpuPickLastResult.hit = false;
-    m_gpuPickLastResult.requestToken = m_gpuPickNextToken++;
-    m_gpuPickLastResult.objectId = 0;
-    m_gpuPickLastResult.faceIndex = 0;
+    if (!m_pixelReadPending)
+    {
+        m_gpuPickLastResult.ready = false;
+        m_gpuPickLastResult.hit = false;
+        m_gpuPickLastResult.requestToken = m_gpuPickNextToken++;
+        m_gpuPickLastResult.objectId = 0;
+        m_gpuPickLastResult.faceIndex = 0;
+    }
     return m_gpuPickLastResult.requestToken;
 }
 
@@ -3154,7 +3309,7 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
     if (transient)
     {
         if (!(m_gpuPickSceneDebug || m_gpuPickScenePassEnabled) &&
-            !gpuPickVerticesAreCandidate(vertices, vertexCount))
+            !gpuPickVerticesAreCandidate(vertices, vertexCount, view))
             return;
 
         GpuPickPrimitive &primitive = m_gpuPickPrimitives.emplace_back();
@@ -3169,6 +3324,19 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         return;
     }
 
+    // Defense in depth: pick ids churn on every registry rebuild, so any
+    // id-keyed cache entry is dead once the registry clears. Cap the map
+    // and drop the (now-invalid) buffers instead of growing without bound.
+    constexpr size_t kMaxCachedPickGeometries = 4096;
+    if (m_gpuPickTriangleGeometry.size() >= kMaxCachedPickGeometries)
+    {
+        for (auto &entry : m_gpuPickTriangleGeometry)
+        {
+            if (bgfx::isValid(entry.second.buffer))
+                bgfx::destroy(entry.second.buffer);
+        }
+        m_gpuPickTriangleGeometry.clear();
+    }
     auto [geometryIt, inserted] =
         m_gpuPickTriangleGeometry.try_emplace(geometryKey);
     if (inserted)
@@ -3230,6 +3398,7 @@ void BgfxRenderer::cancelGpuPick()
 {
     m_gpuPickActive = false;
     m_gpuPickReadPending = false;
+    m_pixelReadPending = false;
     m_gpuPickPrimitives.clear();
     m_gpuPickQueueStats = {};
 }
@@ -3257,6 +3426,26 @@ void BgfxRenderer::renderGpuPickPass()
         m_gpuPickRequest.ndcX == 0.0 && m_gpuPickRequest.ndcY == 0.0)
     {
         renderGpuPickDebugPass(projectionForDirect3D(m_gpuPickRequest.projection));
+        // Unified picking: the full-scene ID texture just rendered with
+        // the current registry -- sample the click texel from it.
+        if (m_pixelReadPending && !m_gpuPickReadPending)
+        {
+            const uint16_t texelX = std::clamp(
+                uint16_t((m_pixelReadNdcX * 0.5f + 0.5f) *
+                             float(m_gpuPickDebugWidth)),
+                uint16_t(0), uint16_t(m_gpuPickDebugWidth - 1));
+            const uint16_t texelY = std::clamp(
+                uint16_t((0.5f - m_pixelReadNdcY * 0.5f) *
+                             float(m_gpuPickDebugHeight)),
+                uint16_t(0), uint16_t(m_gpuPickDebugHeight - 1));
+            bgfx::blit(kViewGpuPickPixelBlit, m_gpuPickReadback, 0, 0,
+                       bgfx::getTexture(m_gpuPickDebugFrameBuffer),
+                       texelX, texelY, 1, 1);
+            bgfx::touch(kViewGpuPickPixelBlit);
+            m_gpuPickReadPending = true;
+            m_gpuPickReadFrame = bgfx::readTexture(
+                m_gpuPickReadback, m_gpuPickReadbackData.data());
+        }
         return;
     }
 
@@ -3708,6 +3897,9 @@ void BgfxRenderer::completeGpuPickReadback()
     m_gpuPickLastResult.hit = packed != 0xffffffffu && packed != 0;
     m_gpuPickLastResult.objectId = m_gpuPickLastResult.hit ? packed : 0;
     m_gpuPickLastResult.faceIndex = 0;
+    if (m_pixelReadPending)
+        m_gpuPickLastResult.requestToken = m_pixelReadToken;
+    m_pixelReadPending = false;
     m_gpuPickActive = false;
 }
 

@@ -100,7 +100,7 @@ void AcGsSelectionHighlighter::drawFillOutline(
     // are drawn twice as wide so the solid reads as boldly selected as a
     // planar fill.
     const float silhouetteWidth = 2.0f * outlineWidth;
-    const ViewFrameContext &frame = view_.frame();
+    const ViewFrameContext &frame = view_->frame();
     const bool ortho = frame.ortho;
     auto facesCamera = [&](const BoundaryUse &use) {
         if (ortho)
@@ -112,7 +112,7 @@ void AcGsSelectionHighlighter::drawFillOutline(
         (void)key;
         if (uses.size() == 1)
         {
-            view_.appendRibbon(outlineVertices, uses.front().start,
+            view_->appendRibbon(outlineVertices, uses.front().start,
                                uses.front().end, outlineWidth, 0.0f, 1.0f,
                                true, kOutlineColor);
         }
@@ -123,13 +123,13 @@ void AcGsSelectionHighlighter::drawFillOutline(
             const BoundaryUse &second = uses.back();
             if (facesCamera(first) == facesCamera(second))
                 continue; // both sides face the same way: interior edge
-            view_.appendRibbon(outlineVertices, first.start, first.end,
+            view_->appendRibbon(outlineVertices, first.start, first.end,
                                silhouetteWidth, 0.0f, 1.0f, true,
                                kOutlineColor);
         }
     }
 
-    view_.drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
+    view_->drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
 }
 
 void AcGsSelectionHighlighter::drawPointHighlight(
@@ -140,7 +140,7 @@ void AcGsSelectionHighlighter::drawPointHighlight(
         return;
     const size_t last = std::min(begin + count, tess.points.size());
 
-    const ViewFrameContext &frame = view_.frame();
+    const ViewFrameContext &frame = view_->frame();
     auto worldPerPixel = [&](const glm::dvec3 &worldPoint) {
         if (frame.ortho)
             return 2.0 * frame.orthoSize / double(frame.viewportHeight);
@@ -200,7 +200,7 @@ void AcGsSelectionHighlighter::drawPointHighlight(
         }
     }
 
-    view_.drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
+    view_->drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
 }
 
 void AcGsSelectionHighlighter::drawStrokeOutline(
@@ -222,7 +222,7 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
         // outline half-width. The full width grows by two copies of
         // kOutlineWidthPixels.
         const float sourceHalfWidth =
-            std::max(view_.strokeHalfWidth(stroke), pixelSizeWorld);
+            std::max(view_->strokeHalfWidth(stroke), pixelSizeWorld);
         const float halfWidth =
             sourceHalfWidth + outlineWidthWorld(pixelSizeWorld);
         const size_t segmentCount =
@@ -234,7 +234,7 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
             // stroke.  In particular a semi-infinite Ray must not draw an
             // outline around its finite tessellation proxy only.
             glm::dvec3 clippedStart, clippedEnd;
-            if (!view_.clipStrokeSegment(stroke.points[j],
+            if (!view_->clipStrokeSegment(stroke.points[j],
                                          stroke.points[next], clippedStart,
                                          clippedEnd, stroke.semiInfinite))
             {
@@ -242,7 +242,7 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
             }
             if (lineDebugEnabled() && stroke.semiInfinite)
             {
-                const ViewFrameContext &frame = view_.frame();
+                const ViewFrameContext &frame = view_->frame();
                 std::printf(
                     "[OUTLINE_RAY] cam=(%.6f,%.6f,%.6f) start=(%.6f,%.6f,"
                     "%.6f) end=(%.6f,%.6f,%.6f) half=%.6f\n",
@@ -255,9 +255,9 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
             // body in perspective, especially for long semi-infinite rays.
             // Keep outline and body on the same centerline/expansion path.
             outlineLineInstances.push_back({
-                glm::vec4(glm::vec3(clippedStart - view_.frame().cameraPos),
+                glm::vec4(glm::vec3(clippedStart - view_->frame().cameraPos),
                           0.0f),
-                glm::vec4(glm::vec3(clippedEnd - view_.frame().cameraPos),
+                glm::vec4(glm::vec3(clippedEnd - view_->frame().cameraPos),
                           1.0f),
                 glm::vec4(glm::vec3(kOutlineColor), halfWidth),
                 glm::vec4(kOutlineColor.a, 0.0f, 0.0f, 0.0f),
@@ -265,7 +265,7 @@ void AcGsSelectionHighlighter::drawStrokeOutline(
         }
     }
 
-    view_.drawLineInstanceBatch(outlineLineInstances, 2.0f, 0.0f);
+    view_->drawLineInstanceBatch(outlineLineInstances, 2.0f, 0.0f);
 }
 
 void AcGsSelectionHighlighter::drawCurveOutline(
@@ -282,14 +282,14 @@ void AcGsSelectionHighlighter::drawCurveOutline(
     outlineVertices.clear();
     for (size_t i = 0; i < segmentCount; ++i)
     {
-        view_.appendRibbon(outlineVertices, points[i], points[i + 1],
+        view_->appendRibbon(outlineVertices, points[i], points[i + 1],
                            halfWidth,
                            float(i) / float(std::max<size_t>(segmentCount, 1)),
                            float(i + 1) /
                                float(std::max<size_t>(segmentCount, 1)),
                            true, kOutlineColor);
     }
-    view_.drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
+    view_->drawRibbonVertices(outlineVertices, 0.15f, 1.0f);
 }
 
 } // namespace acgs

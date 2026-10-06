@@ -11,7 +11,7 @@
 
 #include "AcGiTextEngine.h"
 
-#include "rendering/RendererBackend.h"
+
 
 #include <algorithm>
 #include <array>
@@ -61,16 +61,17 @@ const rendering::LoadedFont &TextEngine::shxFontFor(
     return shxRegularFont_;
 }
 
-int TextEngine::drawText(rendering::RendererBackend &backend,
-                         const glm::mat4 &view, const glm::mat4 &projection,
-                         const glm::dvec3 &cameraPos,
-                         const glm::dvec3 &cameraRight,
-                         const glm::dvec3 &cameraUp,
-                         const glm::dvec3 &cameraFront,
-                         const TextRequest &request)
+// Shared layout walk: the single source of glyph placement for BOTH the
+// visible SDF pass and the GPU pick pass, so the ID texture matches the
+// visible glyphs pixel for pixel.
+std::vector<TextEngine::GlyphPlacement> TextEngine::layoutGlyphs(
+    const TextRequest &request,
+    const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
+    const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront)
 {
+    std::vector<GlyphPlacement> placements;
     if (!sdfReady())
-        return 0;
+        return placements;
 
     glm::dvec3 textRight;
     glm::dvec3 textUp;
@@ -102,7 +103,6 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
     // decode to codepoints so CJK text resolves through the font's cmap.
     glm::dvec3 lineOrigin = request.position;
     double penX = 0.0;
-    int glyphsDrawn = 0;
 
     auto nextCodepoint = [](const std::string &text, size_t &i) -> uint32_t {
         const unsigned char lead = text[i];
@@ -145,38 +145,70 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
             continue;
         }
 
+        const glm::dvec3 quadLeftEdge =
+            lineOrigin +
+            textRight * ((penX + glyph.left) * emToWorld) +
+            textUp * ((glyph.top - glyph.height) * emToWorld);
+        const glm::dvec3 quadWidth =
+            textRight * (glyph.width * emToWorld);
+        const glm::dvec3 quadHeight =
+            textUp * (glyph.height * emToWorld);
+        GlyphPlacement placement;
+        placement.codepoint = character;
+        placement.corners = {quadLeftEdge,
+                             quadLeftEdge + quadWidth,
+                             quadLeftEdge + quadWidth + quadHeight,
+                             quadLeftEdge + quadHeight};
+        placements.push_back(std::move(placement));
+        penX += glyph.advanceX;
+    }
+    return placements;
+}
+
+int TextEngine::drawText(TextDevice &device,
+                         const glm::mat4 &view, const glm::mat4 &projection,
+                         const glm::dvec3 &cameraPos,
+                         const glm::dvec3 &cameraRight,
+                         const glm::dvec3 &cameraUp,
+                         const glm::dvec3 &cameraFront,
+                         const TextRequest &request)
+{
+    const std::vector<GlyphPlacement> placements =
+        layoutGlyphs(request, cameraPos, cameraRight, cameraUp,
+                     cameraFront);
+
+    int glyphsDrawn = 0;
+    for (const GlyphPlacement &placement : placements)
+    {
+        const rendering::GlyphSdfRaster &glyph =
+            sdfFont_.glyphSdf(placement.codepoint);
+
         // Lazily upload this glyph's distance field.
         uint32_t textureId = 0;
-        if (const auto it = glyphTextureIds_.find(character);
+        if (const auto it = glyphTextureIds_.find(placement.codepoint);
             it != glyphTextureIds_.end())
         {
             textureId = it->second;
         }
         else
         {
-            textureId = backend.uploadGlyphSdf(glyph.sdf.data(), glyph.width,
+            textureId = device.uploadGlyphSdf(glyph.sdf.data(), glyph.width,
                                                glyph.height);
-            glyphTextureIds_[character] = textureId;
+            glyphTextureIds_[placement.codepoint] = textureId;
         }
 
         if (textureId != 0)
         {
-            const glm::dvec3 quadLeftEdge =
-                lineOrigin +
-                textRight * ((penX + glyph.left) * emToWorld) +
-                textUp * ((glyph.top - glyph.height) * emToWorld);
-            const glm::dvec3 quadWidth =
-                textRight * (glyph.width * emToWorld);
-            const glm::dvec3 quadHeight =
-                textUp * (glyph.height * emToWorld);
             auto pushVertex = [&](double cornerU, double cornerV, float u,
                                   float v) {
                 // Transform into VIEW space with the camera basis so the
                 // identity view passed to the renderer places the quad
                 // exactly where the world position appears on screen.
-                const glm::dvec3 relative =
-                    quadLeftEdge + quadWidth * cornerU +
-                    quadHeight * cornerV - cameraPos;
+                const glm::dvec3 corner =
+                    placement.corners[0] +
+                    (placement.corners[1] - placement.corners[0]) * cornerU +
+                    (placement.corners[3] - placement.corners[0]) * cornerV;
+                const glm::dvec3 relative = corner - cameraPos;
                 return std::array<float, 9>{
                     float(glm::dot(relative, cameraRight)),
                     float(glm::dot(relative, cameraUp)),
@@ -200,15 +232,13 @@ int TextEngine::drawText(rendering::RendererBackend &backend,
             std::memcpy(vertices + 36, v11.data(), sizeof(v11));
             std::memcpy(vertices + 45, v01.data(), sizeof(v01));
             constexpr glm::mat4 identityView(1.0f);
-            backend.drawSdfGlyphQuad(identityView, projection, textureId,
+            device.drawSdfGlyphQuad(identityView, projection, textureId,
                                      vertices);
             ++glyphsDrawn;
         }
-        penX += glyph.advanceX;
     }
     return glyphsDrawn;
 }
-
 bool TextEngine::intersectsOrthoViewport(
     const TextRequest &request, const glm::dvec3 &cameraPos,
     const glm::dvec3 &cameraRight, const glm::dvec3 &cameraUp,

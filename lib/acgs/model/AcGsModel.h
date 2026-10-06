@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "acdb/AcDbTessellate.h"
-#include "rendering/RendererBackend.h"
+#include "rendering/RenderTypes.h"
 #include "acgs/model/DrawContext.h"
 
 namespace acgs

@@ -108,6 +108,7 @@ set(WINDOW_SOURCES
     lib/text/shx_parser.cpp
     lib/acgi/AcGiTextEngine.cpp
     lib/acgs/AcGsView.cpp
+    lib/acgs/AcGsManager.cpp
     lib/acdb/AcDbDatabase.cpp
     lib/acdb/AcDbStore.cpp
     lib/brep/BRep.cpp

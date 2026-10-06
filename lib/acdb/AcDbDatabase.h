@@ -18,8 +18,10 @@
 #include <string>
 #include <unordered_map>
 
+#include "acdb/AcDbDictionary.h"
 #include "acdb/AcDbEntities.h"
 #include "acdb/AcDbTransaction.h"
+#include "acdb/AcDbViewportTable.h"
 
 namespace acdb
 {
@@ -27,6 +29,33 @@ namespace acdb
 // ObjectARX: ACDB_MODEL_SPACE.
 inline constexpr const char *kModelSpaceName = "*Model_Space";
 inline constexpr const char *kPaperSpaceName = "*Paper_Space";
+
+class AcDbDatabase;
+
+// ---- AcDbDatabaseReactor: mutation notifications (ObjectARX reactor) ----
+//
+// Minimal ARX-faithful lifecycle slice: append / erase / unerase /
+// remove, fired after the mutation has committed.  The in-memory
+// graphics mirror (acgs::DocumentSceneBridge) subscribes so ECS
+// entities stay in step with document residents.  Scope notes: load-time
+// bulk inserts (insertLoadedEntity / insertNonGraphicalObject) stay
+// silent — a fresh load mirrors in bulk through the bridge's open();
+// undo replays fire through the same notifications; non-graphical NOD
+// mutations do not notify yet.
+class AcDbDatabaseReactor
+{
+public:
+    virtual ~AcDbDatabaseReactor() = default;
+
+    virtual void objectAppended(const AcDbDatabase &database,
+                                AcDbHandle handle);
+    virtual void objectErased(const AcDbDatabase &database,
+                              AcDbHandle handle);
+    virtual void objectUnerased(const AcDbDatabase &database,
+                                AcDbHandle handle);
+    virtual void objectRemoved(const AcDbDatabase &database,
+                               AcDbHandle handle);
+};
 
 class AcDbLayerTable
 {
@@ -111,6 +140,10 @@ public:
     // record without a real handle is dropped on save).
     AcDbHandle allocateHandle();
 
+    // ---- reactors (ObjectARX AcDbDatabase::addReactor) ----
+    void addReactor(AcDbDatabaseReactor *reactor);
+    void removeReactor(AcDbDatabaseReactor *reactor);
+
     // Store/import introspection: the next handle allocateHandle would
     // return (persisted in the meta table so a load never collides).
     std::uint64_t nextHandleValue() const { return nextHandle_.value; }
@@ -124,6 +157,20 @@ public:
     const AcDbTextStyleTable &textStyleTable() const { return textStyleTable_; }
     AcDbBlockTable &blockTable() { return blockTable_; }
     const AcDbBlockTable &blockTable() const { return blockTable_; }
+
+    // ---- viewports / named views (ObjectARX VPORT / VIEW tables) ----
+    // Persistent viewport configuration: acgs::AcGsView is the live
+    // session state of one record (bidirectional parameter transfer in
+    // AcGsView::applyViewportRecord / writeToViewportRecord).
+    AcDbViewportTable &viewportTable() { return viewportTable_; }
+    const AcDbViewportTable &viewportTable() const { return viewportTable_; }
+    AcDbViewTable &viewTable() { return viewTable_; }
+    const AcDbViewTable &viewTable() const { return viewTable_; }
+
+    // Active viewport number (ObjectARX CVPORT, stored in the database
+    // header): 1 = the single default viewport.
+    int cvport() const { return cvport_; }
+    void setCvport(int number) { cvport_ = number > 0 ? number : 1; }
 
     // Model space is the record stored in the block table under
     // kModelSpaceName — not a copy — so membership edits via either
@@ -161,6 +208,7 @@ public:
         captureBefore(inserted);
         entities_.emplace(inserted, std::move(stored));
         modelSpace().appendEntityHandle(inserted);
+        notifyAppended(inserted);
         return inserted;
     }
 
@@ -233,6 +281,77 @@ public:
     AcGeMatrix3d referenceTransform(
         const AcDbBlockReference &reference) const;
 
+    // ---- Named Objects Dictionary (ObjectARX NOD subtree) ----
+
+    // The NOD root (created by the constructor alongside the standard
+    // ACAD_GROUP / ACAD_MLINESTYLE / ACAD_LAYOUT child dictionaries).
+    AcDbHandle namedObjectsDictionary() const
+    {
+        return namedObjectsHandle_;
+    }
+    AcDbDictionary *namedObjectsDictionaryMutable();
+    const AcDbDictionary *namedObjectsDictionaryObject() const;
+
+    const AcDbNonGraphicalObject *getNonGraphicalObject(
+        AcDbHandle handle) const;
+    AcDbNonGraphicalObject *getNonGraphicalObjectMutable(
+        AcDbHandle handle);
+    std::size_t nonGraphicalObjectCount() const
+    {
+        return nonGraphicalObjects_.size();
+    }
+
+    // CoreDB getDictionary(key, createIfNotFound): resolves a '/'
+    // separated path of dictionary names from the NOD root, creating
+    // missing levels when asked.  Returns kNullHandle on a missing
+    // path (createIfNotFound=false) or when an intermediate entry is
+    // not a dictionary.
+    AcDbHandle getDictionary(const std::string &path,
+                             bool createIfNotFound = true);
+
+    // Creates a dictionary entry under |parentDictionaryHandle| and
+    // returns the new dictionary's handle (kNullHandle when the parent
+    // is not a dictionary or the name is taken).
+    AcDbHandle createSubDictionary(AcDbHandle parentDictionaryHandle,
+                                   const std::string &name);
+
+    // Creates an xrecord entry under |parentDictionaryHandle| and
+    // returns the xrecord's handle.
+    AcDbHandle createXRecord(AcDbHandle parentDictionaryHandle,
+                             const std::string &name);
+
+    template <typename Fn> void forEachNonGraphicalObject(Fn &&fn) const
+    {
+        for (const auto &[handle, object] : nonGraphicalObjects_)
+            fn(handle, object);
+    }
+
+    // Store/import path: inserts a fully formed non-graphical object
+    // under a known handle (no allocation, no NOD entry — the parent
+    // dictionary rows restore the entries themselves).
+    bool insertNonGraphicalObject(AcDbHandle handle,
+                                  AcDbNonGraphicalObject object)
+    {
+        if (!handle.isValid() || nonGraphicalObjects_.count(handle) != 0)
+            return false;
+        nonGraphicalObjects_.emplace(handle, std::move(object));
+        return true;
+    }
+
+    // Store/import path: repoints the NOD root at the persisted handle.
+    void restoreNamedObjectsDictionary(AcDbHandle handle)
+    {
+        namedObjectsHandle_ = handle;
+    }
+
+    // Store/import path: drops the constructor-created default NOD
+    // subtree so the persisted rows can take their original handles.
+    void clearNonGraphicalObjects()
+    {
+        nonGraphicalObjects_.clear();
+        namedObjectsHandle_ = {};
+    }
+
     // Depth-first expansion of a block record into leaf-entity instances
     // (ObjectARX: the Gs replay of block contents).  |fn| receives the
     // composed world transform, the member handle, and its payload for
@@ -272,6 +391,8 @@ private:
             const AcDbEntityVariant *payload = getEntity(memberHandle);
             if (payload == nullptr)
                 continue;
+            if (isErased(memberHandle))
+                continue; // erased members leave the instance picture
             if (const auto *reference =
                     std::get_if<AcDbBlockReference>(payload))
             {
@@ -313,6 +434,11 @@ private:
     void storeEntityState(AcDbHandle handle,
                           std::optional<AcDbEntityVariant> &slot) const;
 
+    void notifyAppended(AcDbHandle handle);
+    void notifyErased(AcDbHandle handle);
+    void notifyUnerased(AcDbHandle handle);
+    void notifyRemoved(AcDbHandle handle);
+
 public:
 
 private:
@@ -324,9 +450,21 @@ private:
     AcDbLinetypeTable linetypeTable_;
     AcDbTextStyleTable textStyleTable_;
     AcDbBlockTable blockTable_;
+    AcDbViewportTable viewportTable_;
+    AcDbViewTable viewTable_;
+    int cvport_ = 1;
 
     std::unordered_map<AcDbHandle, AcDbEntityVariant> entities_;
     std::unordered_map<AcDbHandle, bool> erased_;
+
+    // ---- Named Objects Dictionary subtree ----
+    // The NOD root plus every dictionary / xrecord hanging under it.
+    // Same bookkeeping split as entities: a flat handle-keyed store
+    // here, name->handle entries inside each AcDbDictionary.
+    AcDbHandle namedObjectsHandle_{};
+    std::unordered_map<AcDbHandle, AcDbNonGraphicalObject>
+        nonGraphicalObjects_;
+    std::vector<AcDbDatabaseReactor *> reactors_;
     AcDbTransaction transaction_;
 
     static constexpr std::size_t kMaxInsertDepth = 32;

@@ -40,7 +40,10 @@ inline float outlineWidthWorld(float pixelSizeWorld)
 class AcGsSelectionHighlighter
 {
 public:
-    explicit AcGsSelectionHighlighter(AcGsView &view) : view_(view) {}
+    explicit AcGsSelectionHighlighter(AcGsView &view) : view_(&view) {}
+
+    // Follows the active viewport (AcGsManager view switches rebind it).
+    void setView(AcGsView &view) { view_ = &view; }
 
     void drawFillOutline(const acdb::TessellatedEntity &tess,
                          size_t begin, size_t count, float pixelSizeWorld);
@@ -56,7 +59,7 @@ public:
                           float pixelSizeWorld);
 
 private:
-    AcGsView &view_;
+    AcGsView *view_;
 };
 
 } // namespace acgs

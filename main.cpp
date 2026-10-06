@@ -16,6 +16,7 @@
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionHighlighter.h"
 #include "acgs/AcGsSelectionManager.h"
+#include "acgs/DocumentSceneBridge.h"
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -23,6 +24,7 @@
 #include "acgs/model/AcGsModel.h"
 #include "acgs/model/AcGsDocumentReplayer.h"
 #include "ge/gebvh.h"
+#include "rendering/RenderTypes.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
@@ -54,12 +56,17 @@ constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
 
 // The AcGs view owns the camera, projection mode, and every renderer
-// submission; demo code reaches it through this reference.
-acgs::AcGsView &acgsView = acgs::AcGsView::instance();
+// submission.  ObjectARX: AcGsView is a first-class citizen owned by
+// AcGsManager — this accessor rebinds to the active viewport, so the
+// legacy acgsView call sites below always act on the CVPORT view.
+static acgs::AcGsView &acgsView()
+{
+  return *acgs::acgsGetManager()->activeView();
+}
 
 bool &useOrthoProjection()
 {
-    return acgsView.orthoMode();
+    return acgsView().orthoMode();
 }
 
 WorldRebase &worldRebase()
@@ -68,57 +75,6 @@ WorldRebase &worldRebase()
     return instance;
 }
 
-struct RequestedRenderer
-{
-  rendering::BackendType type = rendering::BackendType::Bgfx;
-  rendering::GraphicsApi api = rendering::GraphicsApi::Vulkan;//Auto;//
-};
-
-RequestedRenderer resolveRequestedBackend()
-{
-  const char *backend = std::getenv("WINDOW_RENDERER");
-  if (!backend)
-    return {};
-
-  const std::string_view backendName(backend);
-  RequestedRenderer requested;
-  if (backendName == "bgfx")
-  {
-    requested.api = rendering::GraphicsApi::Auto;
-  }
-  else if (backendName == "bgfx-d3d11" || backendName == "dx11")
-  {
-    requested.api = rendering::GraphicsApi::Direct3D11;
-  }
-  else if (backendName == "bgfx-d3d12" || backendName == "dx12")
-  {
-    requested.api = rendering::GraphicsApi::Direct3D12;
-  }
-  else if (backendName == "bgfx-opengl" || backendName == "opengl" ||
-           backendName == "gl")
-  {
-    requested.api = rendering::GraphicsApi::OpenGL;
-  }
-  else if (backendName == "bgfx-vulkan" || backendName == "vulkan" ||
-           backendName == "vk")
-  {
-    requested.api = rendering::GraphicsApi::Vulkan;
-  }
-  else if (backendName == "bgfx-webgpu" || backendName == "webgpu")
-  {
-    requested.type = rendering::BackendType::WebGpu;
-    requested.api = rendering::GraphicsApi::WebGPU;
-  }
-  else
-  {
-    std::cerr << "Unknown WINDOW_RENDERER value '" << backendName
-              << "'. Supported: bgfx, dx11, dx12, webgpu, gl, vk."
-              << std::endl;
-  }
-  return requested;
-}
-
-std::unique_ptr<rendering::RendererBackend> rendererBackend;
 
 
 // Keep CAD content readable even when the authored color is close to the
@@ -127,10 +83,7 @@ std::unique_ptr<rendering::RendererBackend> rendererBackend;
 // avoiding needless color changes for clearly distinct hues.
 // The single render gateway every submission goes through.
 // Legacy alias kept for the submission call sites below.
-acgs::AcGsView &acgiView = acgsView;
-
-// Selection highlight drawing (the selection state itself stays here).
-static acgs::AcGsSelectionHighlighter selectionHighlighter(acgiView);
+static acgs::AcGsSelectionHighlighter selectionHighlighter(acgsView());
 
 // Camera-space projection now lives in the acgi render gateway.
 using CameraSpacePoint = acgs::CameraSpacePoint;
@@ -297,7 +250,7 @@ void applyGridPlane(GridPlaneType plane)
               << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; origin=("
               << gridPlaneOrigin.x << ", " << gridPlaneOrigin.y << ", "
               << gridPlaneOrigin.z << "))" << std::endl;
-    acgsView.resetDepthSlabs();
+    acgsView().resetDepthSlabs();
     if (targetPlaneConstraintEnabled)
         enforceTargetPlaneConstraint();
 }
@@ -348,7 +301,7 @@ const glm::dvec3 LARGE_COORDINATE_BASE_POINT(1e7, 0.0, 1e7);
 const glm::dvec3 LARGE_COORDINATE_DETAIL_OFFSET(1536.0, 0.0, -1024.0);
 
 // The view owns the orbit camera; demo code keeps the orbitCam alias.
-AcGsOrbitCamera &orbitCam = acgsView.orbitCamera();
+AcGsOrbitCamera &orbitCam = acgsView().orbitCamera();
 
 // An orbit drag locks its pivot when it starts.  Until this demo has a
 // selection system, use the same fallback as OpenCADStudio: the camera target.
@@ -414,21 +367,17 @@ bool init()
     return false;
   }
 
-  const auto requestedRenderer = resolveRequestedBackend();
-  rendererBackend = rendering::createRenderer(
-      requestedRenderer.type, requestedRenderer.api);
-  acgsView.attach(rendererBackend.get());
-
-  if (!rendererBackend->configureSDL())
+  acgs::AcGsManager *gsManager = acgs::acgsGetManager();
+  std::string deviceError;
+  if (!gsManager->prepareDevice(&deviceError))
   {
-    std::cerr << "Failed to configure render backend: "
-              << rendererBackend->name() << std::endl;
+    std::cerr << deviceError << std::endl;
     close();
     return false;
   }
 
   window = SDL_CreateWindow("grid plane", SCREEN_WIDTH, SCREEN_HEIGHT,
-                            rendererBackend->windowFlags());
+                            gsManager->deviceWindowFlags());
   if (!window)
   {
     std::cerr << "SDL_CreateWindow Error: " << SDL_GetError() << std::endl;
@@ -438,16 +387,15 @@ bool init()
   SDL_SetWindowTitle(
       window, "grid plane - XY  [1]XY [2]XZ [3]YZ [4]CUSTOM");
 
-  if (!rendererBackend->initialize(window))
+  if (!gsManager->initializeDevice(window, &deviceError))
   {
-    std::cerr << "Failed to initialize render backend: "
-              << rendererBackend->name() << std::endl;
+    std::cerr << deviceError << std::endl;
     close();
     return false;
   }
 
-  std::cout << "Renderer backend: " << rendererBackend->name()
-            << " (" << rendererBackend->graphicsApiName() << ")"
+  std::cout << "Renderer backend: " << gsManager->deviceName()
+            << " (" << gsManager->deviceApiName() << ")"
             << std::endl;
 
   // Optional startup visual style (0=Wireframe2D .. 5=DepthBuffer), used by
@@ -457,10 +405,10 @@ bool init()
     const int styleIndex = std::atoi(styleEnv);
     if (styleIndex > 0 && styleIndex < 6)
     {
-      acgsView.visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
-      rendererBackend->setRenderMode(acgsView.visualStyle().mode());
+      acgsView().visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
+      gsManager->syncActiveRenderMode();
       std::cout << "Visual style: "
-              << rendering::renderModeLabel(acgsView.visualStyle().mode())
+              << rendering::renderModeLabel(acgsView().visualStyle().mode())
               << std::endl;
     }
   }
@@ -476,7 +424,7 @@ bool init()
   }
   if (!meshTexturePath.empty())
   {
-    gMeshTextureIndex = rendererBackend->loadMeshTexture(meshTexturePath);
+    gMeshTextureIndex = gsManager->loadMeshTexture(meshTexturePath);
     std::cout << "Mesh texture: " << meshTexturePath
               << " (index=" << gMeshTextureIndex << ")" << std::endl;
   }
@@ -539,9 +487,7 @@ bool init()
 
 void close()
 {
-  if (rendererBackend)
-    rendererBackend->shutdown();
-  rendererBackend.reset();
+  acgs::acgsGetManager()->shutdownDevice();
   if (window)
     SDL_DestroyWindow(window);
   window = nullptr;
@@ -664,7 +610,7 @@ void appendSceneLine(acgs::AcGsModel &drawList,
                      double lineWeight = 2.0)
 {
   acgs::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, opacity)));
+  draw.subEntityTraits().setColor(acgsView().contrastColor(glm::vec4(color, opacity)));
   draw.subEntityTraits().setLineWeight(lineWeight);
 
   acdb::AcDbLine line;
@@ -687,7 +633,7 @@ void appendScenePoint(acgs::AcGsModel &drawList,
                       double pointSize)
 {
   acgs::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgsView.contrastColor(glm::vec4(color, 1.0f)));
+  draw.subEntityTraits().setColor(acgsView().contrastColor(glm::vec4(color, 1.0f)));
   draw.subEntityTraits().setLineWeight(pointSize);
 
   acdb::AcDbPoint point;
@@ -729,7 +675,8 @@ enum class VisibilityKind
   CadStroke,
   CadFill,
   CadPoint,
-  CadCurve
+  CadCurve,
+  CadText
 };
 
 
@@ -739,12 +686,14 @@ struct GpuPickEntity
   const MeshEntityRecord *mesh = nullptr;
   const acgs::AcGsEntityRange *cadRange = nullptr;
   const acgs::CurveBatchCommand *curve = nullptr;
+  const acgi::TextRequest *text = nullptr;
 
   bool operator==(const GpuPickEntity &other) const
   {
     return kind == other.kind && mesh == other.mesh &&
            cadRange == other.cadRange &&
-           curve == other.curve;
+           curve == other.curve &&
+           text == other.text;
   }
 };
 
@@ -759,7 +708,7 @@ static acgs::AcGsSelectionManager &gpuPickManager()
 static acgs::AcGsPickEntity toPickEntity(const GpuPickEntity &entity)
 {
   return {uint32_t(entity.kind), entity.mesh, entity.cadRange,
-          entity.curve};
+          entity.curve, entity.text};
 }
 
 static bool gpuPickEnabled()
@@ -784,6 +733,7 @@ static const GpuPickEntity *findGpuPickEntity(uint32_t id)
       static_cast<const acgs::AcGsEntityRange *>(found->range);
   converted.curve =
       static_cast<const acgs::CurveBatchCommand *>(found->curve);
+  converted.text = static_cast<const acgi::TextRequest *>(found->text);
   return &converted;
 }
 
@@ -798,6 +748,18 @@ bool gpuPickSceneDebugQueueActive = false;
 std::optional<GpuPickEntity> outlineEntity;
 bool outlineLockTest = false;
 bool outlineAllTest = false;
+// Startup override for automated validation: GRID_OUTLINE_ALL=1 enables
+// the full-scene selection-outline overlay without a key press.
+const bool outlineAllAtStartup = [] {
+  const char *value = std::getenv("GRID_OUTLINE_ALL");
+  return value != nullptr && std::strcmp(value, "0") != 0;
+}();
+// Startup override for automated validation: GRID_ID_VISIBLE=1 presents
+// the full-scene GPU ID debug square without a key press.
+const bool idVisibleAtStartup = [] {
+  const char *value = std::getenv("GRID_ID_VISIBLE");
+  return value != nullptr && std::strcmp(value, "0") != 0;
+}();
 uint32_t lockedOutlineId = 0;
 
 static uint64_t hashGpuPickSceneBytes(uint64_t hash, const void *data,
@@ -820,7 +782,7 @@ static bool gpuPickFocusWaiting()
 
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
-  return acgsView.contrastColor(entity.entity.common.color);
+  return acgsView().contrastColor(entity.entity.common.color);
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
@@ -865,7 +827,7 @@ static rendering::MeshInstance &cachedMeshInstance(
 static void queueGpuMeshEntity(const MeshEntityRecord &entity,
                                uint32_t objectId)
 {
-  if (!rendererBackend ||
+  if (!acgs::acgsGetManager()->deviceReady() ||
       !(gpuPickFocusWaiting() || gpuPickSceneDebugQueueActive) ||
       !meshEntityVisible(entity) || objectId == 0)
     return;
@@ -875,7 +837,7 @@ static void queueGpuMeshEntity(const MeshEntityRecord &entity,
   const glm::vec4 color = meshEntityColor(entity);
   const rendering::MeshInstance instance = makeMeshInstance(
       entity.size, glm::vec3(color), color.a, objectPosition);
-  rendererBackend->queueGpuMeshPick(instance, entity.mesh, objectId);
+  acgs::acgsGetManager()->queueGpuMeshPick(instance, entity.mesh, objectId);
 }
 
 static void queueGpuMeshEntity(const MeshEntityRecord *entity)
@@ -1118,6 +1080,47 @@ static acdb::AcDbDatabase &acdbDocument()
   return document;
 }
 
+// The in-memory ECS mirror of the demo document ("SQLite 管理 AcDbHandle
+// 管文件，ECS 管理 AcDbObjectId 管内存"): one SceneStore +
+// DocumentSceneBridge pair bound to acdbDocument() for the process
+// lifetime.  First access attaches the reactor; open() bulk-mirrors
+// whatever is already resident.  Every later document mutation lands in
+// the mirror through the reactor on its own.
+static acgs::SceneStore &demoSceneStore()
+{
+  static acgs::SceneStore store;
+  return store;
+}
+
+static acgs::DocumentSceneBridge &demoSceneBridge()
+{
+  static acgs::DocumentSceneBridge bridge(acdbDocument(),
+                                          demoSceneStore());
+  return bridge;
+}
+
+// Attaches the mirror and absorbs pre-existing residents (idempotent).
+static void openDemoScene()
+{
+  demoSceneBridge().open();
+}
+
+// Per-frame mirror watcher: one stdout line whenever the mirror revision
+// moves (a document mutation landed).  Doubles as the low-cost consumer
+// proving the bridge is live in the demo loop.
+static void reportDemoSceneMirror()
+{
+  static std::uint64_t reportedRevision = 0;
+  const acgs::SceneStore &store = demoSceneStore();
+  const std::uint64_t revision = store.revision();
+  if (revision == reportedRevision)
+    return;
+  reportedRevision = revision;
+  std::cout << "scene mirror: revision=" << revision
+            << " entities=" << store.count()
+            << " dirty=" << store.dirtyCount() << std::endl;
+}
+
 
 
 // Renders one block record's model-space instances through the shared
@@ -1208,6 +1211,10 @@ static void buildDemoDocument()
   // Author exactly once; the tessellation cache may rebuild many
   // times but the document only ever receives one copy.
   static const bool authored = []() -> bool {
+    // Attach the ECS mirror before authoring: the reactor observes every
+    // add below, and open() absorbs anything resident already (DWG
+    // import, builder reruns).
+    openDemoScene();
     acdb::AcDbDatabase &document = acdbDocument();
     const glm::dvec3 cadAnchor = demoCadAnchor();
     const glm::dvec3 demoAnchor = demoAnchorPoint();
@@ -1866,30 +1873,36 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
 const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 {
-  static constexpr std::uint64_t cadDemoRevision = 5;
+  // The revision rides the ECS mirror (demoSceneStore): every document
+  // mutation lands in the mirror through the DocumentSceneBridge and
+  // bumps its generation, so the draw list rebuilds exactly when the
+  // document changed.  This is the dirty-document notification the
+  // former constant cadDemoRevision always promised.
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
   const acgs::DrawListKey key{
-      cadDemoRevision, cadDemoTraitsVersion,
+      demoSceneStore().revision(), cadDemoTraitsVersion,
       vectorPrimitivesAnchor(), cadDemoToleranceBucket};
   static acgs::DrawListCache cache;
   return cache.get(key, buildVectorPrimitivesTessellation);
 }
 
-static uint64_t cadGpuPickGeometryKey(const acgs::AcGsEntityRange *range,
-                                      size_t chunkIndex,
-                                      uint32_t objectId)
-{
-  const uint64_t pointer =
-      static_cast<uint64_t>(reinterpret_cast<uintptr_t>(range));
-  return pointer * 0x9e3779b97f4a7c15ULL +
-         (static_cast<uint64_t>(objectId) << 32) +
-         static_cast<uint64_t>(chunkIndex);
-}
 
-// CAD fill tessellation is immutable.  Cache each entity's pick soup in
-// anchor-relative coordinates so repeated GPU pick requests reuse the same
-// renderer-side vertex buffer instead of rebuilding large-coordinate copies.
+
+int currentDrawableHeight();
+
+
+struct CadPairedBandPoints
+{
+    const acdb::Stroke *left = nullptr;
+    const acdb::Stroke *right = nullptr;
+    size_t segmentCount = 0;
+};
+
+bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
+                         const acdb::TessellatedEntity &tess,
+                         CadPairedBandPoints &band);
+
 // The anchor-relative frame is camera-independent, so the cached buffers stay
 // valid; cadAnchorView supplies the camera-dependent translation.
 // Visible CAD fills are immutable once tessellated.  Cache the renderer-side
@@ -1915,7 +1928,7 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
     if (!triangle.common.visible)
       continue;
     const glm::vec4 fillColor =
-        acgsView.contrastColor(triangle.common.color);
+        acgsView().contrastColor(triangle.common.color);
     vertices.push_back(
         {glm::vec3(triangle.a - tessellation.anchor), fillColor});
     vertices.push_back(
@@ -1925,50 +1938,6 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
   }
   return vertices;
 }
-
-static const std::vector<rendering::FillVertex> &
-cadGpuPickFillVertices(const acgs::AcGsEntityRange &range,
-                       const glm::vec4 &idColor, uint32_t objectId)
-{
-  static std::map<std::pair<const acgs::AcGsEntityRange *, uint32_t>,
-                  std::vector<rendering::FillVertex>>
-      cache;
-  auto [it, inserted] = cache.try_emplace({&range, objectId});
-  if (!inserted)
-    return it->second;
-
-  const VectorPrimitivesTessellation &tessellation =
-      getVectorPrimitivesTessellation();
-  std::vector<rendering::FillVertex> &vertices = it->second;
-  vertices.reserve(range.count * 3);
-  for (size_t i = range.begin; i < range.begin + range.count; ++i)
-  {
-    const acdb::Triangle &triangle = tessellation.geometry.fills[i];
-    if (!triangle.common.visible)
-      continue;
-    vertices.push_back(
-        {glm::vec3(triangle.a - tessellation.anchor), idColor});
-    vertices.push_back(
-        {glm::vec3(triangle.b - tessellation.anchor), idColor});
-    vertices.push_back(
-        {glm::vec3(triangle.c - tessellation.anchor), idColor});
-  }
-  return vertices;
-}
-
-int currentDrawableHeight();
-
-
-struct CadPairedBandPoints
-{
-    const acdb::Stroke *left = nullptr;
-    const acdb::Stroke *right = nullptr;
-    size_t segmentCount = 0;
-};
-
-bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
-                         const acdb::TessellatedEntity &tess,
-                         CadPairedBandPoints &band);
 
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
@@ -2013,14 +1982,13 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const acdb::TessellatedEntity &tess = tessellation.geometry;
   static std::vector<rendering::FillVertex> gpuPickVertices;
   const bool gpuPickQueueActive =
-      rendererBackend && gpuPickEnabled() &&
+      acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
       (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive);
-  const rendering::RenderModeFlags renderFlags = rendererBackend
-      ? rendererBackend->renderModeFlags()
+  const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
+      ? acgs::acgsGetManager()->deviceRenderModeFlags()
       : rendering::RenderModeFlags{};
-  const bool queueSolidFillPicks = renderFlags.show2dSolidFills;
   auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId) {
-    gpuPickManager().queueSoupChunks(*rendererBackend, gpuPickVertices,
+    gpuPickManager().queueSoupChunks(gpuPickVertices,
                                      view, pickProjection, logDepth,
                                      objectId, gpuPickQueueActive);
   };
@@ -2034,7 +2002,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const float minimumHalfWidth =
         pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
-    const glm::vec3 side = acgsView.ribbonSide(direction, camFront, halfWidth);
+    const glm::vec3 side = acgsView().ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2058,7 +2026,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // stroke ribbons; otherwise the visible curve is easier to see than to
     // pick.
     const float halfWidth = float(pointWorldPerPixel(worldMidpoint));
-    const glm::vec3 side = acgsView.ribbonSide(direction, camFront, halfWidth);
+    const glm::vec3 side = acgsView().ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -2084,22 +2052,42 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
-    const std::vector<rendering::FillVertex> &pickVertices =
-        cadGpuPickFillVertices(range, idColor, objectId);
+    // Fully transient (the strokes/points convention): the pick id is
+    // re-assigned on every registry rebuild, so any id-keyed cache
+    // (CPU soup or GPU vertex buffer) grows without bound under the
+    // continuous full-scene pass and eventually exhausts bgfx buffers
+    // -- fills silently vanished from the ID view when that happened.
     // CAD surfaces participate in occlusion. Transparent CAD fills behave like
     // transparent meshes: they are visible through, but still receive picks.
     const uint8_t fillOcclusionRank =
         range.count && tess.fills[range.begin].common.color.a >= 0.999f ? 0 : 1;
     constexpr size_t kMaxPickChunkVertices = 3 * 21000;
-    for (size_t chunk = 0, first = 0; first < pickVertices.size();
-         ++chunk, first += kMaxPickChunkVertices)
+    for (size_t consumed = 0; consumed < range.count;)
     {
-      const size_t count = std::min(kMaxPickChunkVertices,
-                                    pickVertices.size() - first);
-      rendererBackend->queueGpuTrianglePick(
-          cadGpuPickGeometryKey(&range, chunk, objectId),
-          pickVertices.data() + first, uint32_t(count), cadAnchorView,
-          projection, logDepth, objectId, fillOcclusionRank);
+      const size_t triangleCount =
+          std::min(range.count - consumed, kMaxPickChunkVertices / 3);
+      gpuPickVertices.clear();
+      for (size_t i = range.begin + consumed;
+           i < range.begin + consumed + triangleCount; ++i)
+      {
+        const acdb::Triangle &triangle = tess.fills[i];
+        if (!triangle.common.visible)
+          continue;
+        gpuPickVertices.push_back(
+            {glm::vec3(triangle.a - tessellation.anchor), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(triangle.b - tessellation.anchor), idColor});
+        gpuPickVertices.push_back(
+            {glm::vec3(triangle.c - tessellation.anchor), idColor});
+      }
+      if (!gpuPickVertices.empty())
+      {
+        acgs::acgsGetManager()->queueGpuTrianglePick(
+            0, gpuPickVertices.data(), uint32_t(gpuPickVertices.size()),
+            cadAnchorView, projection, logDepth, objectId,
+            fillOcclusionRank);
+      }
+      consumed += triangleCount;
     }
   };
   auto queueCadStroke = [&](const VisibilityCandidate &candidate) {
@@ -2141,7 +2129,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const size_t count = stroke.points.size();
       if (!stroke.common.visible || count < 2)
         continue;
-      const float halfWidth = acgsView.strokeHalfWidth(stroke);
+      const float halfWidth = acgsView().strokeHalfWidth(stroke);
       const size_t segmentCount =
           stroke.closed ? count : count - 1;
       for (size_t segment = 0; segment < segmentCount; ++segment)
@@ -2149,7 +2137,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         // The scene ID pass and the 1x1 pick pass both hardware-clip at
         // the overlay slab, so clipping the soup there is pixel-exact.
         glm::dvec3 clippedStart, clippedEnd;
-        if (!acgsView.clipStrokeSegment(
+        if (!acgsView().clipStrokeSegment(
                 stroke.points[segment],
                 stroke.points[(segment + 1) % count],
                 clippedStart, clippedEnd, stroke.semiInfinite))
@@ -2276,7 +2264,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         .logDepth = logDepth,
         .material = acgs::toSurfaceMaterial(acgs::AcGiMaterial{}),
     };
-    acgsView.drawFillTriangles(visibleFillVertices, cadAnchorView,
+    acgsView().drawFillTriangles(visibleFillVertices, cadAnchorView,
                                projection, false,
                                acgs::envLayer("GRID_FILL_LAYER"));
   }
@@ -2285,8 +2273,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   // entities (Solid, Rectangle, Hatch, CircleFill) vanish.  Draw their
   // per-range boundary edges (edges used by a single triangle, the same
   // shared-edge rule as the selection outline) as colored ribbons instead.
-  const rendering::RenderModeFlags fillRenderFlags = rendererBackend
-      ? rendererBackend->renderModeFlags()
+  const rendering::RenderModeFlags fillRenderFlags = acgs::acgsGetManager()->deviceReady()
+      ? acgs::acgsGetManager()->deviceRenderModeFlags()
       : rendering::RenderModeFlags{};
   if (!fillRenderFlags.show2dSolidFills && !fillRenderFlags.face3dFill &&
       !fillRenderFlags.hiddenLine)
@@ -2308,13 +2296,13 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           continue;
         if (!hasColor)
         {
-          rangeColor = acgsView.contrastColor(triangle.common.color);
+          rangeColor = acgsView().contrastColor(triangle.common.color);
           hasColor = true;
         }
       }
       if (!hasColor)
         continue;
-      acgsView.drawFillBoundary(
+      acgsView().drawFillBoundary(
           tess, range.begin, range.count,
           0.5f * acgs::outlineWidthWorld(pixelSizeWorld), rangeColor);
     }
@@ -2349,8 +2337,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   {
     for (const VisibilityCandidate *candidate : visibleCad)
     {
-      if (candidate && candidate->kind == VisibilityKind::CadFill &&
-          queueSolidFillPicks)
+      // Pickability is style-independent (AutoCAD semantics): a fill is
+      // selectable even in styles that do not draw it (Wireframe3D), so
+      // no show2dSolidFills gate here.
+      if (candidate && candidate->kind == VisibilityKind::CadFill)
         queueCadFill(*candidate);
     }
     for (const VisibilityCandidate *candidate : visibleCad)
@@ -2393,10 +2383,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     {
       lastPickStatsLog = now;
       const rendering::GpuPickQueueStats stats =
-          rendererBackend->gpuPickQueueStats();
+          acgs::acgsGetManager()->gpuPickQueueStats();
       std::cout << "[PICK_QUEUE] style="
                 << rendering::renderModeLabel(
-                       acgsView.visualStyle().mode())
+                       acgsView().visualStyle().mode())
                 << " meshes=" << stats.queuedMeshes
                 << " edges=" << stats.queuedEdges
                 << " triangles=" << stats.queuedTriangles
@@ -2406,7 +2396,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     }
   }
 
-  acgsView.submit(cadDrawList, {nullptr, pixelSizeWorld, 2.0f, 7.0f});
+  acgsView().submit(cadDrawList, {nullptr, pixelSizeWorld, 2.0f, 7.0f});
 
   for (const VisibilityCandidate *candidate : visibleCad)
   {
@@ -2422,7 +2412,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     appendMeshEntityToScene(mesh, meshDrawList);
     const rendering::DoubleSingleVec3 meshEye =
         rendering::encodeDoubleSingle(rebase);
-    acgsView.submit(meshDrawList,
+    acgsView().submit(meshDrawList,
                     {nullptr, pixelSizeWorld, 0.0f, 0.0f, &meshEye});
     queueGpuMeshEntity(&mesh);
   }
@@ -2516,7 +2506,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       batch.instances = std::move(instances);
       cadDrawList.meshBatches().push_back(std::move(batch));
     }
-    acgsView.submit(cadDrawList, {&projection, pixelSizeWorld});
+    acgsView().submit(cadDrawList, {&projection, pixelSizeWorld});
     return;
   }
   // CAD and PBR meshes share the global far-to-near painter order. Depth
@@ -2588,7 +2578,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         batch.instances = std::move(group.instances);
         meshDrawList.meshBatches().push_back(std::move(batch));
     }
-  acgsView.submit(meshDrawList, {&projection, pixelSizeWorld});
+  acgsView().submit(meshDrawList, {&projection, pixelSizeWorld});
 }
 
 int stressObjectCount()
@@ -2787,7 +2777,7 @@ static double currentDrawableAspect()
 // Shared fit-to-bounds-and-report helper.
 static void fitCameraToBounds(const WorldAabb &bounds, const char *label)
 {
-  acgsView.zoomExtents(bounds.min, bounds.max);
+  acgsView().zoomExtents(bounds.min, bounds.max);
   std::cout << label << " center=(" << orbitCam.Target.x << ", "
             << orbitCam.Target.y << ", " << orbitCam.Target.z
             << ") distance=" << orbitCam.Distance
@@ -2809,7 +2799,7 @@ void fitCameraToStressField()
   {
     const glm::dvec3 detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
-    acgsView.focusOn(detailCenter, 6000.0);
+    acgsView().focusOn(detailCenter, 6000.0);
     return;
   }
   fitCameraToBounds(bounds, "Stress-field camera:");
@@ -2931,7 +2921,7 @@ void switchProjectionMode()
 
   orbitCam.setProjectionPreservingFrame(isOrtho, !isOrtho, aspect);
   isOrtho = !isOrtho;
-  acgsView.resetDepthSlabs();
+  acgsView().resetDepthSlabs();
 
   std::cout << "Projection: "
             << (isOrtho ? "ORTHOGRAPHIC" : "PERSPECTIVE")
@@ -3345,7 +3335,7 @@ VisibilityCandidate makeCurveCandidate(const acgs::CurveBatchCommand &curve)
     VisibilityCandidate candidate;
     candidate.kind = VisibilityKind::CadCurve;
     candidate.curve = &curve;
-    candidate.overlayColor = acgsView.contrastColor(curve.acgiMaterial.baseColor);
+    candidate.overlayColor = acgsView().contrastColor(curve.acgiMaterial.baseColor);
     candidate.overlayPointSize = 2.0f;
 
     const std::vector<glm::dvec3> points = acgs::AcGsView::sampleCurveBatch(curve);
@@ -3688,8 +3678,8 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     double best = std::numeric_limits<double>::infinity();
     const PickRay localRay{origin, direction};
 
-    const rendering::RenderModeFlags renderFlags = rendererBackend
-        ? rendererBackend->renderModeFlags()
+    const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
+        ? acgs::acgsGetManager()->deviceRenderModeFlags()
         : rendering::RenderModeFlags{};
     const bool pickFeatureEdges = !renderFlags.meshFill && renderFlags.show3dEdges;
 
@@ -3772,7 +3762,7 @@ double cadStrokePickTolerance(const PickRay &ray,
                               const acdb::Stroke &stroke,
                               const glm::dvec3 &worldPoint)
 {
-    const double renderedHalfWidth = acgsView.strokeHalfWidth(stroke);
+    const double renderedHalfWidth = acgsView().strokeHalfWidth(stroke);
     return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
 }
 
@@ -4346,6 +4336,55 @@ std::optional<AutofocusResult> autofocusAtNdc(
 // The GPU pass only identifies an entity.  Refine against its CPU geometry so
 // every hit point still comes from the same exact primitive tests used by the
 // fallback picker.
+// Text pick frame: the oriented block rectangle of a text request, with
+// the same metrics the ortho viewport cull uses (longest line x line count
+// in the entity plane).  Shared by the GPU pick soup and the CPU
+// refinement so both sides address the identical rectangle.
+struct TextBlockFrame
+{
+  glm::dvec3 right{1.0, 0.0, 0.0};
+  glm::dvec3 up{0.0, 1.0, 0.0};
+  glm::dvec3 normal{0.0, 0.0, 1.0};
+  double width = 1.0;
+  double height = 1.0;
+};
+
+static TextBlockFrame textBlockFrame(const acgi::TextRequest &request)
+{
+  TextBlockFrame frame;
+  frame.right = request.direction;
+  if (glm::dot(frame.right, frame.right) < 1.0e-18)
+    frame.right = glm::dvec3(1.0, 0.0, 0.0);
+  frame.right = glm::normalize(frame.right);
+  frame.normal = glm::normalize(request.normal);
+  frame.up = glm::cross(frame.normal, frame.right);
+  if (glm::dot(frame.up, frame.up) < 1.0e-18)
+    frame.up = glm::dvec3(0.0, 0.0, 1.0);
+  frame.up = glm::normalize(frame.up);
+
+  size_t lineCount = 1;
+  double longest = 0.0;
+  size_t current = 0;
+  for (char character : request.message)
+  {
+    if (character == 10) // newline
+    {
+      ++lineCount;
+      longest = std::max(longest, double(current));
+      current = 0;
+    }
+    else
+    {
+      ++current;
+    }
+  }
+  longest = std::max(longest, double(current));
+  frame.width = std::max(longest * request.height * request.xScale,
+                         request.height);
+  frame.height = request.height * double(lineCount);
+  return frame;
+}
+
 std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                                 double ndcX, double ndcY)
 {
@@ -4418,6 +4457,45 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         if (!entityNameIsInfinite(pickEntity->curve->name))
             orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
         return AutofocusResult{pickEntity->curve->name, hitPivot, viewDepth};
+    }
+
+    if (pickEntity && pickEntity->kind == VisibilityKind::CadText &&
+        pickEntity->text)
+    {
+      // Glyphs pick as one block: refine the GPU hit against the text's
+      // plane and block rectangle (the same frame the ID quads used).
+      const acgi::TextRequest &request = *pickEntity->text;
+      const TextBlockFrame frame = textBlockFrame(request);
+      const double denom = glm::dot(ray.direction, frame.normal);
+      double hitDepth = 0.0;
+      bool hit = false;
+      if (std::abs(denom) > 1.0e-12)
+      {
+        const double t =
+            glm::dot(request.position - ray.origin, frame.normal) / denom;
+        if (t > 0.0)
+        {
+          const glm::dvec3 local =
+              ray.origin + ray.direction * t - request.position;
+          const double u = glm::dot(local, frame.right);
+          const double v = glm::dot(local, frame.up);
+          const double margin = request.height * 0.25;
+          if (-margin <= u && u <= frame.width + margin &&
+              -margin <= v && v <= frame.height + margin)
+          {
+            hit = true;
+            hitDepth = t;
+          }
+        }
+      }
+      if (!hit)
+        return std::nullopt;
+      const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
+      const double viewDepth =
+          glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+      if (!entityNameIsInfinite(request.message))
+        orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+      return AutofocusResult{request.message, hitPivot, viewDepth};
     }
 
     if (!pickEntity || !pickEntity->cadRange)
@@ -4565,6 +4643,7 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
     const std::string &name)
 {
   thread_local GpuPickEntity converted;
+  converted.text = nullptr;
   const GpuPickEntity *result = nullptr;
   gpuPickManager().forEach(
       [&](std::uint32_t, const acgs::AcGsPickEntity &registered) {
@@ -4603,6 +4682,18 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
           converted.curve =
               static_cast<const acgs::CurveBatchCommand *>(
                   registered.curve);
+          result = &converted;
+        }
+        else if (registered.text &&
+                 static_cast<const acgi::TextRequest *>(registered.text)
+                         ->message == name)
+        {
+          converted.kind = VisibilityKind(registered.kind);
+          converted.mesh = nullptr;
+          converted.cadRange = nullptr;
+          converted.curve = nullptr;
+          converted.text =
+              static_cast<const acgi::TextRequest *>(registered.text);
           result = &converted;
         }
       });
@@ -5087,7 +5178,7 @@ VisibilityCandidate makeCadRangeCandidate(
           include(stroke.points.front() + direction / length *
                       kSemiInfiniteClassificationLength);
       }
-      candidate.overlayColor = acgsView.contrastColor(stroke.common.color);
+      candidate.overlayColor = acgsView().contrastColor(stroke.common.color);
       candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
     }
   }
@@ -5099,7 +5190,7 @@ VisibilityCandidate makeCadRangeCandidate(
       include(fill.a);
       include(fill.b);
       include(fill.c);
-      candidate.overlayColor = acgsView.contrastColor(fill.common.color);
+      candidate.overlayColor = acgsView().contrastColor(fill.common.color);
     }
   }
   else
@@ -5109,7 +5200,7 @@ VisibilityCandidate makeCadRangeCandidate(
       const acdb::TessellatedPoint &point =
           tessellation.geometry.points[i];
       include(point.location);
-      candidate.overlayColor = acgsView.contrastColor(point.common.color);
+      candidate.overlayColor = acgsView().contrastColor(point.common.color);
       candidate.overlayPointSize = float(point.pointSize);
     }
   }
@@ -5404,21 +5495,52 @@ bool outlineUsesGeometry(const GpuPickEntity &entity)
 {
     return outlineIsLineLike(entity) ||
            entity.kind == VisibilityKind::CadFill ||
-           entity.kind == VisibilityKind::CadPoint;
+           entity.kind == VisibilityKind::CadPoint ||
+           entity.kind == VisibilityKind::CadText;
 }
 
 void render()
 {
-  if (!rendererBackend)
+  if (!acgs::acgsGetManager()->deviceReady())
     return;
+  if (outlineAllAtStartup && !outlineAllTest)
+  {
+    outlineAllTest = true;
+    acgs::acgsGetManager()->setSelectionOutlineAll(true);
+  }  if (idVisibleAtStartup)
+  {
+    static bool s_idVisibleApplied = false;
+    if (!s_idVisibleApplied)
+    {
+      s_idVisibleApplied = true;
+      acgs::acgsGetManager()->setGpuPickDebugVisible(true);
+    }
+  }
 
-  if (!rendererBackend->beginFrame(acgs::kClearColor))
+  // ECS mirror watcher: surface document mutations that landed since the
+  // last frame (reactor -> Dirty -> revision).
+  reportDemoSceneMirror();
+
+  // ARX zoom/pan write-back: the live camera lands in its viewport
+  // record every frame (a few doubles; the record is drawing data).
+  {
+    acdb::AcDbDatabase &document = acdbDocument();
+    const std::string &recordName = acgsView().viewportRecordName();
+    const char *bound = !recordName.empty()
+                            ? recordName.c_str()
+                            : acdb::kActiveViewportName;
+    if (document.viewportTable().contains(bound))
+      acgsView().writeToViewportRecord(
+          *document.viewportTable().getMutable(bound));
+  }
+
+  if (!acgs::acgsGetManager()->beginFrame())
     return;
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
     const rendering::GpuPickQueueStats queueStats =
-        rendererBackend->gpuPickQueueStats();
+        acgs::acgsGetManager()->gpuPickQueueStats();
     if (queueStats.capacityExceeded())
     {
       gpuPickFocus.waitingResult = false;
@@ -5442,7 +5564,7 @@ void render()
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
-    const rendering::GpuPickResult gpuResult = rendererBackend->pollGpuPick();
+    const rendering::GpuPickResult gpuResult = acgs::acgsGetManager()->pollGpuPick();
     const bool resultMatches = gpuResult.ready &&
         gpuResult.requestToken == gpuPickFocus.requestToken;
     ++gpuPickFocus.pendingFrames;
@@ -5463,7 +5585,7 @@ void render()
       {
         // Stop the renderer from re-submitting the stalled pick every frame;
         // a stuck Vulkan readback otherwise loops until the next request.
-        rendererBackend->cancelGpuPick();
+        acgs::acgsGetManager()->cancelGpuPick();
       }
       std::optional<AutofocusResult> selectedEntity;
       if (resultMatches)
@@ -5495,6 +5617,7 @@ void render()
             case VisibilityKind::CadCurve: kindName = "CadCurve"; break;
             case VisibilityKind::MeshObject: kindName = "MeshObject"; break;
             case VisibilityKind::CadMesh: kindName = "CadMesh"; break;
+            case VisibilityKind::CadText: kindName = "CadText"; break;
             default: break;
             }
             std::printf("[PICK_DEBUG] entity kind=%s range=%p count=%zu mesh=%p",
@@ -5756,7 +5879,7 @@ void render()
             if (stroke.semiInfinite)
             {
               glm::dvec3 clippedStart, clippedEnd;
-              if (!acgsView.clipSemiInfiniteRay(
+              if (!acgsView().clipSemiInfiniteRay(
                       stroke.points.front(), stroke.points.back(), 0.0, 0.0,
                       clippedStart, clippedEnd, false))
                 continue;
@@ -5871,7 +5994,7 @@ void render()
     double stableOrthoFar = 0.0;
     double near = 0.0;
     double far = 0.0;
-    acgsView.stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Ortho,
+    acgsView().stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Ortho,
                                 slabCenterDepth - slabRadius,
                                 slabCenterDepth + slabRadius, near, far);
 
@@ -6051,7 +6174,7 @@ void render()
                  candidateObjectNear + kMinPerspectiveSpan));
     double near = 0.0;
     double far = 0.0;
-    acgsView.stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Perspective,
+    acgsView().stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Perspective,
                                       candidateObjectNear,
                                       candidateObjectFar, near, far);
 
@@ -6075,7 +6198,7 @@ void render()
                  kNearDepthFloor + kMinPerspectiveSpan));
     double stableOverlayNear = 0.0;
     double stableOverlayFar = 0.0;
-    acgsView.stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Overlay,
+    acgsView().stabilizeDepthSlab(acgs::AcGsView::DepthSlab::Overlay,
                                 (double)kNearDepthFloor, candidateOverlayFar,
                                 stableOverlayNear, stableOverlayFar);
     overlayNear = stableOverlayNear;
@@ -6113,8 +6236,8 @@ void render()
 
   // Publish this frame's overlay slab for stroke frustum clipping; the
   // full viewport context is pushed once the frame's locals exist.
-  acgsView.mutableFrame().slabNear = overlayNear;
-  acgsView.mutableFrame().slabFar = overlayFar;
+  acgsView().mutableFrame().slabNear = overlayNear;
+  acgsView().mutableFrame().slabFar = overlayFar;
 
   logSlabIfChanged(useOrthoProjection(), activeNear, activeFar,
                    overlayNear, overlayFar);
@@ -6182,29 +6305,25 @@ void render()
       !lastSceneIdSignatureValid || sceneIdSignature != lastSceneIdSignature;
   lastSceneIdSignature = sceneIdSignature;
   lastSceneIdSignatureValid = true;
-  bool gpuSceneIdPassRequested = gpuPickSceneDebug || outlineAllTest;
+  // Unified picking: the full-scene ID pass runs every idle frame and is
+  // the SINGLE ID source for the K/I views, the outline overlay, and
+  // cursor picking (pixel reads).  It freezes while a pick result is in
+  // flight so the texture and the id registry stay consistent.
+  bool gpuSceneIdPassRequested = gpuPickEnabled();
   if (outlineEntity.has_value() && sceneIdSignatureChanged)
     gpuSceneIdPassRequested = true;
-  if (rendererBackend)
-    rendererBackend->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
+  if (acgs::acgsGetManager()->deviceReady())
+    acgs::acgsGetManager()->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
   if (gpuPickEnabled() && gpuPickFocus.pendingNdc)
   {
-    const rendering::GpuPickRequest request{
-        .view = viewRte,
-        .projection = overlayProjection,
-        .eye = rendering::encodeDoubleSingle(orbitCam.Position),
-        .ndcX = gpuPickFocus.ndcX,
-        .ndcY = gpuPickFocus.ndcY,
-        .nearDepth = activeNear,
-        .farDepth = activeFar,
-        .logDepth = logDepth,
-    };
-    // Freeze the pose the 1x1 ID pass will render with; the result handler
-    // rebuilds its refinement ray from this exact basis.
+    // Freeze the pose the CPU fallback refines with; the GPU path samples
+    // the always-on full-scene ID texture (no per-click re-render).
     gpuPickFocus.camera = GpuPickCameraBasis{
         orbitCam.Position, orbitCam.Front, orbitCam.Right, orbitCam.Up,
         useOrthoProjection(), orbitCam.orthoSize()};
-    const uint32_t requestToken = rendererBackend->requestGpuPick(request);
+    const uint32_t requestToken =
+        acgs::acgsGetManager()->requestGpuPickPixel(gpuPickFocus.ndcX,
+                                                    gpuPickFocus.ndcY);
     if (requestToken != 0)
     {
       if (pickDebugEnabled())
@@ -6213,7 +6332,8 @@ void render()
                     requestToken, gpuPickFocus.ndcX, gpuPickFocus.ndcY);
         std::puts("");
       }
-      gpuPickManager().clearRegistry();
+      // No clearRegistry: the pixel read samples the standing
+      // full-scene texture, whose ids live in the standing registry.
       gpuPickFocus.requestToken = requestToken;
       gpuPickFocus.pendingFrames = 0;
       gpuPickFocus.pendingNdc = false;
@@ -6227,7 +6347,7 @@ void render()
     }
   }
 
-  if (gpuSceneIdPassRequested && rendererBackend && gpuPickEnabled() &&
+  if (gpuSceneIdPassRequested && acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
       !gpuPickFocus.pendingNdc && !gpuPickFocus.waitingResult)
   {
     const rendering::GpuPickRequest sceneRequest{
@@ -6247,20 +6367,26 @@ void render()
     if (outlineEntity)
       cachedOutlineObjectId =
           findGpuPickObjectIdForEntity(*outlineEntity);
-    rendererBackend->setSelectionOutlineId(
+    acgs::acgsGetManager()->setSelectionOutlineId(
         outlineEntity && !outlineUsesGeometry(*outlineEntity)
             ? cachedOutlineObjectId
             : 0);
     gpuPickSceneDebugQueueActive =
-        rendererBackend->requestGpuPick(sceneRequest) != 0;
-    gpuPickManager().clearRegistry();
+        acgs::acgsGetManager()->requestGpuPick(sceneRequest) != 0;
+    // No clearRegistry here either: ids are keyed by entity identity
+    // and must stay STABLE across frames -- the selection-outline
+    // uniform and the pixel read both resolve against the standing
+    // registry.  A per-frame rebuild shifts every id and made the
+    // outline flicker across unrelated meshes.  Entities that leave
+    // the view keep a harmless stale entry; returning entities
+    // re-register under the same id.
   }
 
   const glm::dvec3 cameraRight(orbitCam.Right);
   const glm::dvec3 cameraUp(orbitCam.Up);
   if (useOrthoProjection())
   {
-    referenceLineVisible = acgsView.clipSegmentToOrtho(
+    referenceLineVisible = acgsView().clipSegmentToOrtho(
         glm::dvec3(0.0), worldLineEnd, activeNear, activeFar,
         orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
         referenceLineStart, referenceLineEnd);
@@ -6268,7 +6394,7 @@ void render()
   else
   {
     const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
-    referenceLineVisible = acgsView.clipSegmentToPerspective(
+    referenceLineVisible = acgsView().clipSegmentToPerspective(
         glm::dvec3(0.0), worldLineEnd, overlayNear, overlayFar,
         tanHalfVertical, tanHalfVertical * (double)aspect,
         referenceLineStart, referenceLineEnd);
@@ -6719,10 +6845,10 @@ void render()
     ctx.meshTextureIndex = gMeshTextureIndex;
     ctx.meshHeadlight = meshHeadlight();
     ctx.meshTriplanar = meshTriplanar();
-    acgsView.setFrameContext(ctx);
+    acgsView().setFrameContext(ctx);
   }
 
-  acgsView.submit(sceneOverlay, {nullptr, pixelSize});
+  acgsView().submit(sceneOverlay, {nullptr, pixelSize});
 
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
@@ -6781,7 +6907,112 @@ void render()
   // content bounds so the depth slab covers the glyphs).
   // The AcGi view flushes queued text requests into SDF glyph quads,
   // including the ortho viewport cull.
-  acgsView.flushTextRequests();
+  // Text pick pass: each queued text request joins the GPU ID pass as
+  // PER-GLYPH quads from the same layout walk the visible SDF pass uses
+  // (layoutGlyphs), so the ID texture matches the visible glyphs pixel
+  // for pixel.  Camera-relative positions with the rotation-only view,
+  // matching the ID-pass eye convention; double-sided windings so text
+  // picks from both facings.
+  static const bool textPickEnabled = [] {
+    const char *value = std::getenv("GRID_TEXT_PICK");
+    return value == nullptr || std::strcmp(value, "0") != 0;
+  }();
+  if (textPickEnabled && gpuPickEnabled() &&
+      (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive))
+  {
+    for (const acgi::TextRequest &request : acgi::textRequests())
+    {
+      const std::vector<acgi::TextEngine::GlyphPlacement> placements =
+          acgi::textEngine().layoutGlyphs(request, cameraPos, cameraRight,
+                                          cameraUp, frontVec);
+      if (placements.empty())
+        continue;
+      const uint32_t objectId = registerGpuPickEntity(
+          {VisibilityKind::CadText, nullptr, nullptr, nullptr, &request});
+      const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+      static std::vector<rendering::FillVertex> textPickVertices;
+      textPickVertices.clear();
+      glm::dvec3 layoutCenter(0.0);
+      for (const acgi::TextEngine::GlyphPlacement &placement : placements)
+      {
+        for (const glm::dvec3 &worldCorner : placement.corners)
+          layoutCenter += worldCorner;
+        glm::vec3 corner[4];
+        for (int i = 0; i < 4; ++i)
+          corner[i] = glm::vec3(placement.corners[i] - cameraPos);
+        for (const int index : {0, 1, 2, 0, 2, 3})
+          textPickVertices.push_back({corner[index], idColor});
+        for (const int index : {0, 2, 1, 0, 3, 2})
+          textPickVertices.push_back({corner[index], idColor});
+      }
+      layoutCenter /= double(placements.size() * 4);
+      acgs::acgsGetManager()->queueGpuTrianglePick(
+          0, textPickVertices.data(), uint32_t(textPickVertices.size()),
+          viewRte, projection, logDepth, objectId);
+      if (pickDebugEnabled())
+      {
+        const glm::vec4 clip = projection * viewRte *
+                               glm::vec4(glm::vec3(layoutCenter - cameraPos),
+                                         1.0f);
+        const glm::dvec2 ndc(double(clip.x) / clip.w,
+                             double(clip.y) / clip.w);
+        int winW = 0, winH = 0;
+        SDL_GetWindowSize(window, &winW, &winH);
+        std::cout << "[TEXT_PICK] id=" << objectId
+                  << " depth=" << clip.w
+                  << " px=("
+                  << int((ndc.x * 0.5 + 0.5) * winW) << ","
+                  << int((0.5 - ndc.y * 0.5) * winH) << ")"
+                  << " msg='" << request.message.substr(0, 16)
+                  << "'" << std::endl;
+      }
+    }
+  }
+
+  acgsView().flushTextRequests();
+
+  // Picked text highlights by redrawing the request in the selection
+  // color (glyphs have no line outline to widen; the redraw lands
+  // exactly on the original glyph quads).
+  if (outlineEntity && outlineEntity->kind == VisibilityKind::CadText &&
+      outlineEntity->text)
+  {
+    const int highlightGlyphs = acgsView().drawTextRequest(
+        *outlineEntity->text, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f));
+    if (pickDebugEnabled())
+      std::cout << "[TEXT_PICK] highlight glyphs=" << highlightGlyphs
+                << std::endl;
+  }
+  else if (outlineEntity && outlineEntity->kind == VisibilityKind::CadPoint &&
+           outlineEntity->cadRange && outlineEntity->cadRange->count)
+  {
+    // The text entity's insertion marker is ordinary CAD point geometry;
+    // when that one-pixel dot wins the pick, highlight the SDF glyphs of
+    // the text it belongs to (matched by position inside the block).
+    const acdb::TessellatedEntity &pointTess =
+        getVectorPrimitivesTessellation().geometry;
+    const acdb::TessellatedPoint &marker =
+        pointTess.points[outlineEntity->cadRange->begin];
+    for (const acgi::TextRequest &request : acgi::textRequests())
+    {
+      const TextBlockFrame frame = textBlockFrame(request);
+      const glm::dvec3 local = marker.location - request.position;
+      const double u = glm::dot(local, frame.right);
+      const double v = glm::dot(local, frame.up);
+      const double w = std::abs(glm::dot(local, frame.normal));
+      if (-request.height <= u && u <= frame.width + request.height &&
+          -request.height <= v && v <= frame.height + request.height &&
+          w <= request.height * 8.0)
+      {
+        const int highlightGlyphs = acgsView().drawTextRequest(
+            request, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f));
+        if (pickDebugEnabled())
+          std::cout << "[TEXT_PICK] insertion-point highlight glyphs="
+                    << highlightGlyphs << std::endl;
+        break;
+      }
+    }
+  }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -6834,7 +7065,7 @@ void render()
       tinyMeshPickVertices.push_back({relative - right - up, idColor});
       tinyMeshPickVertices.push_back({relative + right + up, idColor});
       tinyMeshPickVertices.push_back({relative - right + up, idColor});
-      rendererBackend->queueGpuTrianglePick(
+      acgs::acgsGetManager()->queueGpuTrianglePick(
           0, tinyMeshPickVertices.data(),
           uint32_t(tinyMeshPickVertices.size()), viewRte, projection,
           logDepth, objectId);
@@ -6875,7 +7106,7 @@ void render()
     }
   }
 
-  acgsView.submit(sceneOverlay, {nullptr, pixelSize});
+  acgsView().submit(sceneOverlay, {nullptr, pixelSize});
 
   static bool screenshotRequested = false;
   if (!screenshotRequested && lineDebugEnabled())
@@ -6890,7 +7121,7 @@ void render()
       }
       else
       {
-        rendererBackend->requestDebugScreenShot(screenshot);
+        acgs::acgsGetManager()->requestDebugScreenshot(screenshot);
         screenshotRequested = true;
         std::cout << "[LINE_DEBUG] requested screenshot: " << screenshot
                   << std::endl;
@@ -6901,7 +7132,7 @@ void render()
   logCameraStateIfChanged(orbitCam.Target, activeNear, activeFar,
                           useOrthoProjection());
 
-  if (rendererBackend)
+  if (acgs::acgsGetManager()->deviceReady())
   {
     uint32_t outlineId = 0;
     if (outlineLockTest)
@@ -6916,7 +7147,7 @@ void render()
       // Reuse the cached id on idle frames; the ID texture is unchanged.
       outlineId = cachedOutlineObjectId;
     }
-    (*rendererBackend).setSelectionOutlineId(
+    acgs::acgsGetManager()->setSelectionOutlineId(
         outlineEntity && !outlineUsesGeometry(*outlineEntity) ? outlineId : 0);
     if (pickDebugEnabled())
     {
@@ -6931,15 +7162,104 @@ void render()
   }
   // Present normalization does not need a full-frame readback; expose the
   // range assigned while this frame's entities were queued.
-  if (rendererBackend)
+  if (acgs::acgsGetManager()->deviceReady())
   {
     const uint32_t nextId = gpuPickManager().nextIdCounter();
     const uint32_t maxId = nextId > 2 ? nextId - 1
         : 2;
-    rendererBackend->setGpuPickIdRange(2, maxId);
+    acgs::acgsGetManager()->setGpuPickIdRange(2, maxId);
   }
 
-  rendererBackend->endFrame();
+  // ---- picture-in-picture top viewport (GRID_PIP=1) ----
+  // The second AcGsView ("Top", created here on first use with its own
+  // AcDbViewportTableRecord) renders the scene contents into a
+  // quarter-size offscreen framebuffer on claimed frames only
+  // (time-share guard), and the last image composites as an inset over
+  // the presented frame.  v1 scope: candidates are submitted unculled
+  // with a fixed generous ortho slab; text and selection highlights stay
+  // main-view-only, and the pass is skipped while a GPU pick request is
+  // in flight so the re-submission cannot pollute the id queue.  The
+  // per-camera visibility-filter factorization upgrades this to full
+  // slab/culling fidelity later.
+  static const bool pipEnabled = []() {
+    const char *value = std::getenv("GRID_PIP");
+    return value != nullptr && *value != '\0' &&
+           std::strcmp(value, "0") != 0;
+  }();
+  if (pipEnabled && acgs::acgsGetManager()->deviceReady() &&
+      !gpuPickFocusWaiting() && !gpuPickSceneDebugQueueActive)
+  {
+    acgs::AcGsManager *pipManager = acgs::acgsGetManager();
+    if (pipManager->viewCount() < 2)
+    {
+      acgs::AcGsView *top = pipManager->createView();
+      top->setViewportRecordName("Top");
+      acdb::AcDbDatabase &document = acdbDocument();
+      acdb::AcDbViewportTableRecord &record =
+          document.viewportTable().contains("Top")
+              ? *document.viewportTable().getMutable("Top")
+              : document.viewportTable().add(
+                    "Top", document.allocateHandle());
+      top->orbitCamera().setOrbit(acgsView().orbitCamera().Target, 2000.0);
+      top->orbitCamera().setViewDirection(glm::dvec3(0.0, 0.0, -1.0));
+      top->orthoMode() = true;
+      top->writeToViewportRecord(record);
+    }
+    static std::uint64_t pipFrame = 0;
+    ++pipFrame;
+    if ((pipFrame % 2) == 1 && pipManager->tryClaimFrameRender())
+    {
+      acgs::AcGsView *pipView = pipManager->views()[1].get();
+      const int pipWidth = std::max(1, currentDrawableWidth() / 4);
+      const int pipHeight = std::max(1, currentDrawableHeight() / 4);
+      const double pipHalfH = pipView->orbitCamera().orthoSize();
+      const glm::mat4 pipProjection = glm::mat4(glm::ortho(
+          -pipHalfH * (double)aspect, pipHalfH * (double)aspect,
+          -pipHalfH, pipHalfH, 1.0, 4.0e6));
+      acgs::ViewFrameContext pipContext;
+      pipContext.view = pipView->orbitCamera().getViewMatrix(rebase);
+      pipContext.projection = pipProjection;
+      pipContext.overlayProjection = pipProjection;
+      pipContext.cameraPos = pipView->orbitCamera().Position;
+      pipContext.cameraRight = pipView->orbitCamera().Right;
+      pipContext.cameraUp = pipView->orbitCamera().Up;
+      pipContext.cameraFront = pipView->orbitCamera().Front;
+      pipContext.viewportWidth = pipWidth;
+      pipContext.viewportHeight = pipHeight;
+      pipContext.ortho = true;
+      pipContext.orthoSize = pipHalfH;
+      pipContext.orbitDistance = glm::length(
+          pipView->orbitCamera().Position - pipView->orbitCamera().Target);
+      pipContext.pixelSizeWorld =
+          float((2.0 * pipHalfH) / double(pipHeight));
+      pipView->setFrameContext(pipContext);
+      const int savedViewport = pipManager->activeViewIndex();
+      pipManager->setActiveView(1);
+      if (pipManager->beginPipScene())
+      {
+        static std::vector<const VisibilityCandidate *> pipCadDraws;
+        pipCadDraws.clear();
+        for (const VisibilityCandidate &candidate : visibilityCandidates)
+          if (candidate.kind != VisibilityKind::MeshObject)
+            pipCadDraws.push_back(&candidate);
+        drawVectorPrimitivesDemo(
+            pipContext.view, pipProjection, pipProjection, rebase,
+            glm::vec4(0.0f), pipContext.cameraPos, pipContext.cameraFront,
+            pipContext.cameraRight, pipContext.cameraUp,
+            pipContext.pixelSizeWorld, pipCadDraws, {});
+        drawLargeCoordinateObjects(pipContext.view, pipProjection, rebase,
+                                   drawOrder, glm::vec4(0.0f),
+                                   pipContext.pixelSizeWorld, 0.15f);
+        acgsView().submit(sceneOverlay, {nullptr, pipContext.pixelSizeWorld});
+        pipManager->endPipScene();
+      }
+      pipManager->setActiveView(savedViewport);
+      pipManager->resetFrameRender();
+    }
+    pipManager->compositePip();
+  }
+
+  acgs::acgsGetManager()->endFrame();
 }
 
 int main(int argc, char *argv[])
@@ -7017,7 +7337,7 @@ int main(int argc, char *argv[])
     const double tanHalfFov = std::tan(glm::radians(orbitCam.Zoom) * 0.5);
     orbitCam.setTargetDistance(requestedOrthoHalfHeight / tanHalfFov);
   }
-  acgsView.resetDepthSlabs();
+  acgsView().resetDepthSlabs();
   SDL_SetWindowTitle(
       window, "grid plane - large-coordinate stress field");
 
@@ -7034,6 +7354,7 @@ int main(int argc, char *argv[])
   bool testPanApplied = false;
   bool originOrthoScenarioApplied = false;
   bool testDoubleClickApplied = false;
+  bool testSecondClickApplied = false;
 
 
   const Uint64 frameTimerFrequency = SDL_GetPerformanceFrequency();
@@ -7044,7 +7365,9 @@ int main(int argc, char *argv[])
     float currentFrame = SDL_GetTicks() / 1000.0f;
 
     // Automated validation: inject the same SDL event path as a real
-    // left-button double click. Set GRID_CAMERA_TEST_DOUBLE_CLICK_AT_SECONDS.
+    // left-button pick click (single click since picking moved from
+    // double-click to single-click).  The env names keep their historic
+    // DOUBLE_CLICK spelling for script compatibility.
     if (!testDoubleClickApplied)
     {
       const char *testAtValue = std::getenv(
@@ -7061,7 +7384,7 @@ int main(int argc, char *argv[])
         synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
         synthetic.button.windowID = SDL_GetWindowID(window);
         synthetic.button.timestamp = SDL_GetTicks();
-        synthetic.button.clicks = 2;
+        synthetic.button.clicks = 1;
         synthetic.button.button = SDL_BUTTON_LEFT;
         synthetic.button.down = true;
         synthetic.button.x = x;
@@ -7072,7 +7395,36 @@ int main(int argc, char *argv[])
         {
           std::puts("[PICK_DEBUG] test event push failed");
         }
-        std::printf("[PICK_DEBUG] test double-click x=%d y=%d", x, y);
+        std::printf("[PICK_DEBUG] test click x=%d y=%d", x, y);
+        std::puts("");
+      }
+    }
+
+    // Optional second synthetic click (two-step autofocus + fill pick).
+    if (!testSecondClickApplied)
+    {
+      const char *secondAt = std::getenv(
+          "GRID_CAMERA_TEST_SECOND_CLICK_AT_SECONDS");
+      if (secondAt && currentFrame >= std::atof(secondAt))
+      {
+        int winW = 0, winH = 0;
+        SDL_GetWindowSize(window, &winW, &winH);
+        const char *testX = std::getenv("GRID_CAMERA_TEST_SECOND_CLICK_X");
+        const char *testY = std::getenv("GRID_CAMERA_TEST_SECOND_CLICK_Y");
+        const int x = testX ? std::atoi(testX) : winW / 2;
+        const int y = testY ? std::atoi(testY) : winH / 2;
+        SDL_Event synthetic{};
+        synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        synthetic.button.windowID = SDL_GetWindowID(window);
+        synthetic.button.timestamp = SDL_GetTicks();
+        synthetic.button.clicks = 1;
+        synthetic.button.button = SDL_BUTTON_LEFT;
+        synthetic.button.down = true;
+        synthetic.button.x = x;
+        synthetic.button.y = y;
+        testSecondClickApplied = true;
+        SDL_PushEvent(&synthetic);
+        std::printf("[PICK_DEBUG] test second click x=%d y=%d", x, y);
         std::puts("");
       }
     }
@@ -7096,8 +7448,8 @@ int main(int argc, char *argv[])
         if (evt.key.key == SDLK_I)
         {
           gpuPickDebugVisible = !gpuPickDebugVisible;
-          if (rendererBackend)
-            rendererBackend->setGpuPickDebugVisible(gpuPickDebugVisible);
+          if (acgs::acgsGetManager()->deviceReady())
+            acgs::acgsGetManager()->setGpuPickDebugVisible(gpuPickDebugVisible);
           std::cout << "GPU pick debug texture: "
                     << (gpuPickDebugVisible ? "visible" : "hidden")
                     << std::endl;
@@ -7122,8 +7474,8 @@ int main(int argc, char *argv[])
         if (evt.key.key == SDLK_K)
         {
           gpuPickSceneDebug = !gpuPickSceneDebug;
-          if (rendererBackend)
-            (*rendererBackend).setGpuPickSceneDebug(gpuPickSceneDebug);
+          if (acgs::acgsGetManager()->deviceReady())
+            acgs::acgsGetManager()->setGpuPickSceneDebug(gpuPickSceneDebug);
           if (gpuPickSceneDebug)
             std::puts("Full-scene GPU ID view: on");
           else
@@ -7145,8 +7497,8 @@ int main(int argc, char *argv[])
         if (evt.key.key == SDLK_U)
         {
           outlineAllTest = !outlineAllTest;
-          if (rendererBackend)
-            (*rendererBackend).setSelectionOutlineAll(outlineAllTest);
+          if (acgs::acgsGetManager()->deviceReady())
+            acgs::acgsGetManager()->setSelectionOutlineAll(outlineAllTest);
           if (outlineAllTest)
             std::puts("Outline all: on");
           else
@@ -7155,11 +7507,11 @@ int main(int argc, char *argv[])
         // V -- cycle the visual style through all render modes.
         if (evt.key.key == SDLK_V)
         {
-          acgsView.visualStyle().cycle();
-          if (rendererBackend)
-            rendererBackend->setRenderMode(acgsView.visualStyle().mode());
+          acgsView().visualStyle().cycle();
+          if (acgs::acgsGetManager()->deviceReady())
+            acgs::acgsGetManager()->syncActiveRenderMode();
           std::cout << "Visual style: "
-                    << rendering::renderModeLabel(acgsView.visualStyle().mode())
+                    << rendering::renderModeLabel(acgsView().visualStyle().mode())
                     << std::endl;
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
@@ -7174,7 +7526,7 @@ int main(int argc, char *argv[])
                 LARGE_COORDINATE_BASE_POINT +
                 LARGE_COORDINATE_DETAIL_OFFSET;
             fitCameraToStressField();
-            acgsView.resetDepthSlabs();
+            acgsView().resetDepthSlabs();
             SDL_SetWindowTitle(
                 window, "grid plane - large-coordinate stress field");
           }
@@ -7183,13 +7535,97 @@ int main(int argc, char *argv[])
             cubeWorldPosition = glm::dvec3(0.0);
             orbitCam.clearDepthBounds();
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
-            acgsView.resetDepthSlabs();
+            acgsView().resetDepthSlabs();
             SDL_SetWindowTitle(window, "grid plane");
           }
           std::cout << "Camera: "
                     << (largeCoordinateCameraView ? "large-coordinate field"
                                                   : "origin")
                     << std::endl;
+        }
+        // X -- toggle the erased flag of the newest model-space entity.
+        // The mutation rides the identity chain end to end: the reactor
+        // lands a Dirty tag in the ECS mirror, the mirror revision bumps,
+        // and the revision-keyed draw list rebuild drops/returns the
+        // entity from the picture.
+        if (evt.key.key == SDLK_X)
+        {
+          acdb::AcDbDatabase &document = acdbDocument();
+          const std::vector<acdb::AcDbHandle> &handles =
+              document.modelSpace().entityHandles();
+          if (!handles.empty())
+          {
+            const acdb::AcDbHandle target = handles.back();
+            if (document.isErased(target))
+            {
+              document.uneraseEntity(target);
+              std::cout << "ECS mirror: unerased entity " << target.value
+                        << std::endl;
+            }
+            else
+            {
+              document.eraseEntity(target);
+              std::cout << "ECS mirror: erased entity " << target.value
+                        << std::endl;
+            }
+          }
+        }
+        // Tab -- switch the active viewport (ObjectARX CVPORT).  The
+        // first press materializes the second viewport bound to its own
+        // AcDbViewportTableRecord ("Top"); every switch performs the
+        // ARX DB↔GS parameter transfer: the outgoing view's camera
+        // lands in its record (zoom/pan write-back), the incoming
+        // record restores into its view.
+        if (evt.key.key == SDLK_TAB)
+        {
+          acgs::AcGsManager *manager = acgs::acgsGetManager();
+          acdb::AcDbDatabase &document = acdbDocument();
+          if (manager->viewCount() < 2)
+          {
+            acgs::AcGsView *top = manager->createView();
+            top->setViewportRecordName("Top");
+            acdb::AcDbViewportTableRecord &record =
+                document.viewportTable().contains("Top")
+                    ? *document.viewportTable().getMutable("Top")
+                    : document.viewportTable().add(
+                        "Top", document.allocateHandle());
+            // A fresh top viewport looks straight down at whatever the
+            // active view is currently framing.
+            top->orbitCamera().setOrbit(
+                acgsView().orbitCamera().Target, 200.0);
+            top->orbitCamera().setViewDirection(
+                glm::dvec3(0.0, 0.0, -1.0));
+            top->orthoMode() = true;
+            top->writeToViewportRecord(record);
+          }
+
+          auto boundRecord = [&](acgs::AcGsView &view)
+              -> acdb::AcDbViewportTableRecord * {
+            const std::string &name = view.viewportRecordName();
+            const char *bound = !name.empty()
+                                    ? name.c_str()
+                                    : acdb::kActiveViewportName;
+            return document.viewportTable().contains(bound)
+                       ? document.viewportTable().getMutable(bound)
+                       : nullptr;
+          };
+          if (acdb::AcDbViewportTableRecord *outgoing =
+                  boundRecord(acgsView()))
+            acgsView().writeToViewportRecord(*outgoing);
+
+          manager->setActiveView(manager->activeViewIndex() == 0 ? 1
+                                                                 : 0);
+          selectionHighlighter.setView(acgsView());
+          if (acdb::AcDbViewportTableRecord *incoming =
+                  boundRecord(acgsView()))
+            acgsView().applyViewportRecord(*incoming);
+          document.setCvport(manager->activeViewIndex() + 1);
+          std::cout << "Active viewport: "
+                    << manager->activeViewIndex() + 1 << " ("
+                    << (acgsView().viewportRecordName().empty()
+                            ? acdb::kActiveViewportName
+                            : acgsView().viewportRecordName())
+                    << ")" << std::endl;
         }
       }
 
@@ -7212,16 +7648,16 @@ int main(int argc, char *argv[])
         middleMouseDrag = false;
       }
 
-      // Double-click left button: autofocus at cursor position.
+      // Single-click left button: pick + autofocus at cursor position.
       if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
           evt.button.button == SDL_BUTTON_LEFT &&
-          evt.button.clicks == 2)
+          evt.button.clicks == 1)
       {
         int winW = 0, winH = 0;
         SDL_GetWindowSize(window, &winW, &winH);
         if (pickDebugEnabled())
         {
-          std::printf("[PICK_DEBUG] double-click x=%d y=%d gpu=%d",
+          std::printf("[PICK_DEBUG] click x=%d y=%d gpu=%d",
                       static_cast<int>(evt.button.x), static_cast<int>(evt.button.y),
                       gpuPickEnabled() ? 1 : 0);
           std::puts("");
@@ -7280,7 +7716,7 @@ int main(int argc, char *argv[])
         orbitCam.clearDepthBounds();
         orbitCam.setOrbit(cubeWorldPosition, 15.0);
         switchProjectionMode();
-        acgsView.resetDepthSlabs();
+        acgsView().resetDepthSlabs();
         originOrthoScenarioApplied = true;
         std::cout << "Camera test: origin orthographic convergence"
                   << std::endl;
@@ -7296,7 +7732,7 @@ int main(int argc, char *argv[])
         running = false;
     }
 
-    rendererBackend->present();
+    acgs::acgsGetManager()->present();
 
     if (frameLogEnabled())
     {

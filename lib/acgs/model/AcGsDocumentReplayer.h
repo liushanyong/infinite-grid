@@ -93,6 +93,10 @@ public:
       const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
       if (payload == nullptr)
         continue;
+      // Erased residents stay in the document for undo; they leave the
+      // picture here, which is what a dirty-driven rebuild shows.
+      if (document.isErased(handle))
+        continue;
       if (const auto *text = std::get_if<acdb::AcDbText>(payload);
           text != nullptr && shxFontReady && text->styleName == "SHX")
       {

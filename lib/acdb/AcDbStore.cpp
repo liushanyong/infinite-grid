@@ -2,6 +2,8 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
+#include <type_traits>
+
 #include "acdb/AcDbJson.h"
 
 namespace acdb
@@ -773,6 +775,190 @@ bool decodeEntity(const std::string &className, const Value &data,
     return false;
 }
 
+// ---- non-graphical payload codec (NOD: dictionaries, xrecords) ----
+
+constexpr int kXrBool = 0, kXrInt32 = 1, kXrDouble = 2, kXrString = 3,
+              kXrPoint3 = 4, kXrVector3 = 5, kXrDoubles = 6,
+              kXrInt32s = 7, kXrBytes = 8, kXrPoints = 9;
+
+const char *nonGraphicalClassName(const AcDbNonGraphicalObject &object)
+{
+    return std::holds_alternative<AcDbDictionary>(object)
+               ? "AcDbDictionary"
+               : "AcDbXrecord";
+}
+
+Value encodeNonGraphical(const AcDbNonGraphicalObject &object)
+{
+    Value out(json::Object{});
+    if (const AcDbDictionary *dictionary =
+            std::get_if<AcDbDictionary>(&object))
+    {
+        Value entries(json::Array{});
+        dictionary->forEach([&](const std::string &name,
+                                AcDbHandle handle) {
+            Value entry(json::Array{});
+            entry.push(Value(name));
+            entry.push(Value(double(handle.value)));
+            entries.push(std::move(entry));
+        });
+        out.set("entries", std::move(entries));
+        return out;
+    }
+    const AcDbXrecord *xrecord = std::get_if<AcDbXrecord>(&object);
+    if (xrecord == nullptr)
+        return out;
+    Value values(json::Array{});
+    xrecord->forEachValue([&](int id, const AcDbXrecord::Value &slot) {
+        Value record(json::Array{});
+        record.push(Value(id));
+        std::visit(
+            [&](const auto &alternative) {
+                using T = std::decay_t<decltype(alternative)>;
+                if constexpr (std::is_same_v<T, bool>)
+                {
+                    record.push(Value(kXrBool));
+                    record.push(Value(alternative));
+                }
+                else if constexpr (std::is_same_v<T, std::int32_t>)
+                {
+                    record.push(Value(kXrInt32));
+                    record.push(Value(alternative));
+                }
+                else if constexpr (std::is_same_v<T, double>)
+                {
+                    record.push(Value(kXrDouble));
+                    record.push(Value(alternative));
+                }
+                else if constexpr (std::is_same_v<T, std::string>)
+                {
+                    record.push(Value(kXrString));
+                    record.push(Value(alternative));
+                }
+                else if constexpr (std::is_same_v<T, AcGePoint3d>)
+                {
+                    record.push(Value(kXrPoint3));
+                    record.push(point3ToJson(alternative));
+                }
+                else if constexpr (std::is_same_v<T, AcGeVector3d>)
+                {
+                    record.push(Value(kXrVector3));
+                    record.push(vec3ToJson(alternative));
+                }
+                else if constexpr (std::is_same_v<T, std::vector<double>>)
+                {
+                    record.push(Value(kXrDoubles));
+                    record.push(doublesToJson(alternative));
+                }
+                else if constexpr (std::is_same_v<T,
+                                                  std::vector<std::int32_t>>)
+                {
+                    record.push(Value(kXrInt32s));
+                    Value items(json::Array{});
+                    for (std::int32_t item : alternative)
+                        items.push(Value(item));
+                    record.push(std::move(items));
+                }
+                else if constexpr (std::is_same_v<T,
+                                                  std::vector<std::uint8_t>>)
+                {
+                    record.push(Value(kXrBytes));
+                    Value items(json::Array{});
+                    for (std::uint8_t item : alternative)
+                        items.push(Value(double(item)));
+                    record.push(std::move(items));
+                }
+                else if constexpr (std::is_same_v<T,
+                                                  std::vector<AcGePoint3d>>)
+                {
+                    record.push(Value(kXrPoints));
+                    record.push(pointsToJson(alternative));
+                }
+            },
+            slot);
+        values.push(std::move(record));
+    });
+    out.set("values", std::move(values));
+    return out;
+}
+
+void decodeXRecordValues(const Value &data, AcDbXrecord &xrecord)
+{
+    const Value *values = data.find("values");
+    if (values == nullptr)
+        return;
+    for (const Value &record : values->asArray())
+    {
+        const json::Array &fields = record.asArray();
+        if (fields.size() < 3)
+            continue;
+        const int id = int(fields[0].asNumber());
+        const int tag = int(fields[1].asNumber());
+        const Value &payload = fields[2];
+        switch (tag)
+        {
+        case kXrBool:
+            xrecord.setValue(id, payload.asBool());
+            break;
+        case kXrInt32:
+            xrecord.setValue(id, std::int32_t(payload.asNumber()));
+            break;
+        case kXrDouble:
+            xrecord.setValue(id, payload.asNumber());
+            break;
+        case kXrString:
+            xrecord.setValue(id, payload.asString());
+            break;
+        case kXrPoint3:
+            xrecord.setValue(id, jsonToPoint3(payload));
+            break;
+        case kXrVector3:
+            xrecord.setValue(id, jsonToVec3(payload));
+            break;
+        case kXrDoubles:
+            xrecord.setValue(id, jsonToDoubles(payload));
+            break;
+        case kXrInt32s:
+        {
+            std::vector<int> items;
+            for (const double item : jsonToDoubles(payload))
+                items.push_back(int(item));
+            xrecord.setValue(id, items);
+            break;
+        }
+        case kXrBytes:
+        {
+            std::vector<std::uint8_t> items;
+            for (const double item : jsonToDoubles(payload))
+                items.push_back(std::uint8_t(item));
+            xrecord.setValue(id, items);
+            break;
+        }
+        case kXrPoints:
+            xrecord.setValue(id, jsonToPoints3(payload));
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+bool decodeNonGraphical(const std::string &className,
+                        AcDbNonGraphicalObject &out)
+{
+    if (className == "AcDbDictionary")
+    {
+        out = AcDbDictionary{};
+        return true;
+    }
+    if (className == "AcDbXrecord")
+    {
+        out = AcDbXrecord{};
+        return true;
+    }
+    return false;
+}
+
 void executeSchema(SQLite::Database &db)
 {
     db.exec("CREATE TABLE IF NOT EXISTS meta("
@@ -789,9 +975,20 @@ void executeSchema(SQLite::Database &db)
     db.exec("CREATE TABLE IF NOT EXISTS blocks("
             "name TEXT PRIMARY KEY, handle INTEGER, base_point TEXT,"
             "members TEXT)");
+    db.exec("CREATE TABLE IF NOT EXISTS viewports("
+            "name TEXT PRIMARY KEY, handle INTEGER, target TEXT,"
+            "direction TEXT, height REAL, is_perspective INTEGER,"
+            "lens REAL, twist REAL, lower_left TEXT, upper_right TEXT)");
+    db.exec("CREATE TABLE IF NOT EXISTS views("
+            "name TEXT PRIMARY KEY, handle INTEGER, target TEXT,"
+            "direction TEXT, height REAL, is_perspective INTEGER,"
+            "lens REAL, twist REAL, lower_left TEXT, upper_right TEXT)");
     db.exec("CREATE TABLE IF NOT EXISTS entities("
             "handle INTEGER PRIMARY KEY, owner INTEGER, class TEXT,"
             "erased INTEGER, data TEXT)");
+    db.exec("CREATE TABLE IF NOT EXISTS nongraphical("
+            "handle INTEGER PRIMARY KEY, owner INTEGER, class TEXT,"
+            "data TEXT)");
     db.exec("CREATE TABLE IF NOT EXISTS ops("
             "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT,"
             "payload TEXT, created TEXT DEFAULT (datetime('now')))");
@@ -816,7 +1013,9 @@ StoreResult saveDatabase(const AcDbDatabase &database, const char *path)
         SQLite::Transaction transaction(db);
         db.exec("DELETE FROM meta; DELETE FROM layers; "
                 "DELETE FROM linetypes; DELETE FROM text_styles; "
-                "DELETE FROM blocks; DELETE FROM entities;");
+                "DELETE FROM blocks; DELETE FROM entities; "
+                "DELETE FROM nongraphical; DELETE FROM viewports; "
+                "DELETE FROM views;");
 
         // ---- meta ----
         SQLite::Statement meta(db,
@@ -838,6 +1037,10 @@ StoreResult saveDatabase(const AcDbDatabase &database, const char *path)
                 std::to_string(database.activeLineTypeScale()));
         putMeta("active_lineweight",
                 std::to_string(database.activeLineWeight()));
+        putMeta("nod_root",
+                std::to_string(
+                    database.namedObjectsDictionary().value));
+        putMeta("cvport", std::to_string(database.cvport()));
 
         // ---- symbol tables ----
         database.layerTable().forEach([&](const std::string &name,
@@ -892,6 +1095,42 @@ StoreResult saveDatabase(const AcDbDatabase &database, const char *path)
             insert.exec();
         });
 
+        // ---- viewport / named-view configurations ----
+        auto saveViewRecord = [&](SQLite::Statement &insert,
+                                  const AcDbAbstractViewTableRecord &r) {
+            insert.bind(3, point3ToJson(r.target()).dump());
+            insert.bind(4, vec3ToJson(r.viewDirection()).dump());
+            insert.bind(5, r.height());
+            insert.bind(6, r.isPerspectiveEnabled() ? 1 : 0);
+            insert.bind(7, r.lensLength());
+            insert.bind(8, r.twistAngle());
+            insert.bind(9, Value(json::Array{Value(r.lowerLeft().x),
+                                             Value(r.lowerLeft().y)})
+                               .dump());
+            insert.bind(10, Value(json::Array{Value(r.upperRight().x),
+                                              Value(r.upperRight().y)})
+                                .dump());
+        };
+        database.viewportTable().forEach(
+            [&](const std::string &name,
+                const AcDbViewportTableRecord &r) {
+                SQLite::Statement insert(db,
+                    "INSERT INTO viewports VALUES (?,?,?,?,?,?,?,?,?,?)");
+                insert.bind(1, name);
+                insert.bind(2, std::int64_t(r.handle.value));
+                saveViewRecord(insert, r);
+                insert.exec();
+            });
+        database.viewTable().forEach(
+            [&](const std::string &name, const AcDbViewTableRecord &r) {
+                SQLite::Statement insert(db,
+                    "INSERT INTO views VALUES (?,?,?,?,?,?,?,?,?,?)");
+                insert.bind(1, name);
+                insert.bind(2, std::int64_t(r.handle.value));
+                saveViewRecord(insert, r);
+                insert.exec();
+            });
+
         // ---- entities ----
         database.forEachEntity([&](AcDbHandle handle,
                                    const AcDbEntityVariant &payload) {
@@ -909,6 +1148,23 @@ StoreResult saveDatabase(const AcDbDatabase &database, const char *path)
             insert.exec();
             ++result.entities;
         });
+
+        // ---- non-graphical objects (NOD subtree) ----
+        database.forEachNonGraphicalObject(
+            [&](AcDbHandle handle, const AcDbNonGraphicalObject &object) {
+                const AcDbObject *base = std::visit(
+                    [](const AcDbObject &objectBase) -> const AcDbObject * {
+                        return &objectBase;
+                    },
+                    object);
+                SQLite::Statement insert(db,
+                    "INSERT INTO nongraphical VALUES (?,?,?,?)");
+                insert.bind(1, std::int64_t(handle.value));
+                insert.bind(2, std::int64_t(base->ownerHandle.value));
+                insert.bind(3, nonGraphicalClassName(object));
+                insert.bind(4, encodeNonGraphical(object).dump());
+                insert.exec();
+            });
 
         // ---- ops journal (append-only) ----
         {
@@ -943,13 +1199,17 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
         executeSchema(db);
 
         // The document is value-semantic: rebuild into a fresh store
-        // and move it over the caller's on success.
+        // and move it over the caller's on success.  The constructor's
+        // default NOD subtree is dropped first so the persisted rows
+        // keep their original handles.
         AcDbDatabase loaded;
+        loaded.clearNonGraphicalObjects();
 
         SQLite::Statement meta(db, "SELECT key, value FROM meta");
         std::uint64_t nextHandle = 1;
         std::string activeLayer, activeColor, activeLineType;
         double activeLineTypeScale = 1.0, activeLineWeight = 0.0;
+        std::uint64_t nodRoot = 0;
         while (meta.executeStep())
         {
             const std::string key = meta.getColumn(0).getString();
@@ -966,6 +1226,10 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
                 activeLineTypeScale = std::stod(value);
             else if (key == "active_lineweight")
                 activeLineWeight = std::stod(value);
+            else if (key == "nod_root")
+                nodRoot = std::stoull(value);
+            else if (key == "cvport")
+                loaded.setCvport(std::stoi(value));
         }
 
         // ---- entities first (blocks reference handles, not payloads) ----
@@ -1011,6 +1275,75 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
                 ++result.entities;
             }
             nextHandle = std::max(nextHandle, maxHandle);
+        }
+
+        // ---- non-graphical objects (NOD subtree) ----
+        {
+            SQLite::Statement rows(db,
+                "SELECT handle, owner, class, data FROM nongraphical");
+            std::uint64_t maxHandle = 1;
+            while (rows.executeStep())
+            {
+                const AcDbHandle handle{std::uint64_t(
+                    rows.getColumn(0).getInt64())};
+                const std::string className =
+                    rows.getColumn(2).getString();
+                AcDbNonGraphicalObject object;
+                if (!decodeNonGraphical(className, object))
+                {
+                    result.error =
+                        "unknown non-graphical class: " + className;
+                    return result;
+                }
+                std::visit(
+                    [&](AcDbObject &objectBase) {
+                        objectBase.handle = handle;
+                        objectBase.ownerHandle = AcDbHandle{
+                            std::uint64_t(
+                                rows.getColumn(1).getInt64())};
+                    },
+                    object);
+                const auto parsed =
+                    json::parse(rows.getColumn(3).getString());
+                if (!parsed)
+                {
+                    result.error = "bad non-graphical JSON at handle " +
+                                   std::to_string(handle.value);
+                    return result;
+                }
+                if (auto *dictionary =
+                        std::get_if<AcDbDictionary>(&object))
+                {
+                    const Value *entries = parsed->find("entries");
+                    if (entries != nullptr)
+                        for (const Value &entry : entries->asArray())
+                        {
+                            const json::Array &pair = entry.asArray();
+                            if (pair.size() >= 2)
+                                dictionary->setAt(
+                                    pair[0].asString(),
+                                    AcDbHandle{std::uint64_t(
+                                        pair[1].asNumber())});
+                        }
+                }
+                else if (auto *xrecord =
+                                 std::get_if<AcDbXrecord>(&object))
+                {
+                    decodeXRecordValues(*parsed, *xrecord);
+                }
+                if (!loaded.insertNonGraphicalObject(handle,
+                                                     std::move(object)))
+                {
+                    result.error = "non-graphical handle collision: " +
+                                   std::to_string(handle.value);
+                    return result;
+                }
+                maxHandle = std::max(maxHandle, handle.value + 1);
+            }
+            nextHandle = std::max(nextHandle, maxHandle);
+            if (nodRoot != 0)
+                loaded.restoreNamedObjectsDictionary(
+                    AcDbHandle{nodRoot});
         }
 
         // ---- symbol tables ----
@@ -1096,6 +1429,83 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
                     for (const Value &member : members->asArray())
                         record.appendEntityHandle(AcDbHandle{
                             std::uint64_t(member.asNumber())});
+            }
+        }
+        // ---- viewport / named-view configurations ----
+        {
+            SQLite::Statement rows(db, "SELECT * FROM viewports");
+            while (rows.executeStep())
+            {
+                const std::string name = rows.getColumn(0).getString();
+                AcDbViewportTableRecord &record =
+                    loaded.viewportTable().contains(name)
+                        ? *loaded.viewportTable().getMutable(name)
+                        : loaded.viewportTable().add(name, AcDbHandle{});
+                record.handle = AcDbHandle{std::uint64_t(
+                    rows.getColumn(1).getInt64())};
+                if (const auto target =
+                        json::parse(rows.getColumn(2).getString()))
+                    record.setTarget(jsonToPoint3(*target));
+                if (const auto direction =
+                        json::parse(rows.getColumn(3).getString()))
+                {
+                    const json::Array &axis = direction->asArray();
+                    if (axis.size() >= 3)
+                        record.setViewDirection({axis[0].asNumber(),
+                                                 axis[1].asNumber(),
+                                                 axis[2].asNumber()});
+                }
+                record.setHeight(rows.getColumn(4).getDouble());
+                record.setPerspectiveEnabled(
+                    rows.getColumn(5).getInt() != 0);
+                record.setLensLength(rows.getColumn(6).getDouble());
+                record.setTwistAngle(rows.getColumn(7).getDouble());
+                if (const auto bounds =
+                        json::parse(rows.getColumn(8).getString()))
+                {
+                    const json::Array &point = bounds->asArray();
+                    if (point.size() >= 2)
+                        record.setLowerLeft({point[0].asNumber(),
+                                             point[1].asNumber()});
+                }
+                if (const auto bounds =
+                        json::parse(rows.getColumn(9).getString()))
+                {
+                    const json::Array &point = bounds->asArray();
+                    if (point.size() >= 2)
+                        record.setUpperRight({point[0].asNumber(),
+                                              point[1].asNumber()});
+                }
+            }
+        }
+        {
+            SQLite::Statement rows(db, "SELECT * FROM views");
+            while (rows.executeStep())
+            {
+                const std::string name = rows.getColumn(0).getString();
+                AcDbViewTableRecord &record =
+                    loaded.viewTable().contains(name)
+                        ? *loaded.viewTable().getMutable(name)
+                        : loaded.viewTable().add(name, AcDbHandle{});
+                record.handle = AcDbHandle{std::uint64_t(
+                    rows.getColumn(1).getInt64())};
+                if (const auto target =
+                        json::parse(rows.getColumn(2).getString()))
+                    record.setTarget(jsonToPoint3(*target));
+                if (const auto direction =
+                        json::parse(rows.getColumn(3).getString()))
+                {
+                    const json::Array &axis = direction->asArray();
+                    if (axis.size() >= 3)
+                        record.setViewDirection({axis[0].asNumber(),
+                                                 axis[1].asNumber(),
+                                                 axis[2].asNumber()});
+                }
+                record.setHeight(rows.getColumn(4).getDouble());
+                record.setPerspectiveEnabled(
+                    rows.getColumn(5).getInt() != 0);
+                record.setLensLength(rows.getColumn(6).getDouble());
+                record.setTwistAngle(rows.getColumn(7).getDouble());
             }
         }
 

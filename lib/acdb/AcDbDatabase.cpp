@@ -135,6 +135,53 @@ AcDbBlockTableRecord &AcDbBlockTable::add(const std::string &name,
     return record;
 }
 
+// ---- AcDbViewportTable / AcDbViewTable ----
+
+const AcDbViewportTableRecord *AcDbViewportTable::get(
+    const std::string &name) const
+{
+    const auto found = records_.find(name);
+    return found != records_.end() ? &found->second : nullptr;
+}
+
+AcDbViewportTableRecord *AcDbViewportTable::getMutable(
+    const std::string &name)
+{
+    const auto found = records_.find(name);
+    return found != records_.end() ? &found->second : nullptr;
+}
+
+AcDbViewportTableRecord &AcDbViewportTable::add(const std::string &name,
+                                                AcDbHandle handle)
+{
+    AcDbViewportTableRecord &record = records_[name];
+    record.setRecordName(name);
+    record.handle = handle;
+    return record;
+}
+
+const AcDbViewTableRecord *AcDbViewTable::get(
+    const std::string &name) const
+{
+    const auto found = records_.find(name);
+    return found != records_.end() ? &found->second : nullptr;
+}
+
+AcDbViewTableRecord *AcDbViewTable::getMutable(const std::string &name)
+{
+    const auto found = records_.find(name);
+    return found != records_.end() ? &found->second : nullptr;
+}
+
+AcDbViewTableRecord &AcDbViewTable::add(const std::string &name,
+                                        AcDbHandle handle)
+{
+    AcDbViewTableRecord &record = records_[name];
+    record.setRecordName(name);
+    record.handle = handle;
+    return record;
+}
+
 // ---- AcDbDatabase ----
 
 AcDbDatabase::AcDbDatabase()
@@ -160,6 +207,23 @@ void AcDbDatabase::createDefaults()
 
     blockTable_.add(kModelSpaceName, allocateHandle());
     blockTable_.add(kPaperSpaceName, allocateHandle());
+
+    // The default single model-space viewport (ObjectARX VPORT "*Active");
+    // named views start empty.
+    viewportTable_.add(kActiveViewportName, allocateHandle());
+
+    // Named Objects Dictionary root + the standard ACAD_* subtrees
+    // (group / mlinestyle / layout containers; materials arrive
+    // with the material object type).
+    AcDbDictionary root;
+    namedObjectsHandle_ = allocateHandle();
+    root.handle = namedObjectsHandle_;
+    nonGraphicalObjects_.emplace(namedObjectsHandle_,
+                                 std::move(root));
+    for (const char *standardName :
+         {kAcadGroupDictionary, kAcadMlineStyleDictionary,
+          kAcadLayoutDictionary})
+        createSubDictionary(namedObjectsHandle_, standardName);
 }
 
 AcDbHandle AcDbDatabase::allocateHandle()
@@ -167,6 +231,50 @@ AcDbHandle AcDbDatabase::allocateHandle()
     const AcDbHandle allocated = nextHandle_;
     nextHandle_.value += 1;
     return allocated;
+}
+
+// ---- reactors ----
+
+void AcDbDatabase::addReactor(AcDbDatabaseReactor *reactor)
+{
+    if (reactor != nullptr &&
+        std::find(reactors_.begin(), reactors_.end(), reactor) ==
+            reactors_.end())
+        reactors_.push_back(reactor);
+}
+
+void AcDbDatabase::removeReactor(AcDbDatabaseReactor *reactor)
+{
+    std::erase(reactors_, reactor);
+}
+
+void AcDbDatabaseReactor::objectAppended(const AcDbDatabase &, AcDbHandle) {}
+void AcDbDatabaseReactor::objectErased(const AcDbDatabase &, AcDbHandle) {}
+void AcDbDatabaseReactor::objectUnerased(const AcDbDatabase &, AcDbHandle) {}
+void AcDbDatabaseReactor::objectRemoved(const AcDbDatabase &, AcDbHandle) {}
+
+void AcDbDatabase::notifyAppended(AcDbHandle handle)
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->objectAppended(*this, handle);
+}
+
+void AcDbDatabase::notifyErased(AcDbHandle handle)
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->objectErased(*this, handle);
+}
+
+void AcDbDatabase::notifyUnerased(AcDbHandle handle)
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->objectUnerased(*this, handle);
+}
+
+void AcDbDatabase::notifyRemoved(AcDbHandle handle)
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->objectRemoved(*this, handle);
 }
 
 const AcDbEntityVariant *AcDbDatabase::getEntity(AcDbHandle handle) const
@@ -191,6 +299,115 @@ bool AcDbDatabase::insertLoadedEntity(AcDbEntityVariant payload)
     return true;
 }
 
+// ---- Named Objects Dictionary ----
+
+AcDbDictionary *AcDbDatabase::namedObjectsDictionaryMutable()
+{
+    const auto found = nonGraphicalObjects_.find(namedObjectsHandle_);
+    return found != nonGraphicalObjects_.end()
+               ? std::get_if<AcDbDictionary>(&found->second)
+               : nullptr;
+}
+
+const AcDbDictionary *AcDbDatabase::namedObjectsDictionaryObject() const
+{
+    const auto found = nonGraphicalObjects_.find(namedObjectsHandle_);
+    return found != nonGraphicalObjects_.end()
+               ? std::get_if<AcDbDictionary>(&found->second)
+               : nullptr;
+}
+
+const AcDbNonGraphicalObject *AcDbDatabase::getNonGraphicalObject(
+    AcDbHandle handle) const
+{
+    const auto found = nonGraphicalObjects_.find(handle);
+    return found != nonGraphicalObjects_.end() ? &found->second
+                                               : nullptr;
+}
+
+AcDbNonGraphicalObject *AcDbDatabase::getNonGraphicalObjectMutable(
+    AcDbHandle handle)
+{
+    const auto found = nonGraphicalObjects_.find(handle);
+    return found != nonGraphicalObjects_.end() ? &found->second
+                                               : nullptr;
+}
+
+AcDbHandle AcDbDatabase::getDictionary(const std::string &path,
+                                       bool createIfNotFound)
+{
+    AcDbHandle current = namedObjectsHandle_;
+    std::size_t start = 0;
+    while (start <= path.size())
+    {
+        const std::size_t slash = path.find(char(47), start);
+        const std::string name = path.substr(
+            start, slash == std::string::npos ? std::string::npos
+                                              : slash - start);
+        if (!name.empty())
+        {
+            AcDbNonGraphicalObject *level =
+                getNonGraphicalObjectMutable(current);
+            AcDbDictionary *dictionary =
+                level ? std::get_if<AcDbDictionary>(level) : nullptr;
+            if (dictionary == nullptr)
+                return kNullHandle;
+            AcDbHandle next = dictionary->getAt(name);
+            if (next == kNullHandle)
+            {
+                if (!createIfNotFound)
+                    return kNullHandle;
+                next = createSubDictionary(current, name);
+                if (next == kNullHandle)
+                    return kNullHandle;
+            }
+            current = next;
+        }
+        if (slash == std::string::npos)
+            break;
+        start = slash + 1;
+    }
+    return current;
+}
+
+AcDbHandle AcDbDatabase::createSubDictionary(
+    AcDbHandle parentDictionaryHandle, const std::string &name)
+{
+    AcDbNonGraphicalObject *parent =
+        getNonGraphicalObjectMutable(parentDictionaryHandle);
+    AcDbDictionary *dictionary =
+        parent ? std::get_if<AcDbDictionary>(parent) : nullptr;
+    if (dictionary == nullptr || name.empty() ||
+        dictionary->has(name))
+        return dictionary != nullptr ? dictionary->getAt(name)
+                                     : kNullHandle;
+    AcDbDictionary created;
+    const AcDbHandle handle = allocateHandle();
+    created.handle = handle;
+    created.ownerHandle = parentDictionaryHandle;
+    nonGraphicalObjects_.emplace(handle, std::move(created));
+    dictionary->setAt(name, handle);
+    return handle;
+}
+
+AcDbHandle AcDbDatabase::createXRecord(
+    AcDbHandle parentDictionaryHandle, const std::string &name)
+{
+    AcDbNonGraphicalObject *parent =
+        getNonGraphicalObjectMutable(parentDictionaryHandle);
+    AcDbDictionary *dictionary =
+        parent ? std::get_if<AcDbDictionary>(parent) : nullptr;
+    if (dictionary == nullptr || name.empty())
+        return kNullHandle;
+    AcDbXrecord created;
+    const AcDbHandle handle = allocateHandle();
+    created.handle = handle;
+    created.ownerHandle = parentDictionaryHandle;
+    nonGraphicalObjects_.emplace(handle, std::move(created));
+    dictionary->setAt(name, handle);
+    return handle;
+}
+
 void AcDbDatabase::restoreNextHandle(std::uint64_t next)
 {
     if (next > nextHandle_.value)
@@ -200,12 +417,16 @@ void AcDbDatabase::restoreNextHandle(std::uint64_t next)
 void AcDbDatabase::eraseEntity(AcDbHandle handle)
 {
     if (entities_.count(handle) != 0)
+    {
         erased_[handle] = true;
+        notifyErased(handle);
+    }
 }
 
 void AcDbDatabase::uneraseEntity(AcDbHandle handle)
 {
-    erased_.erase(handle);
+    if (erased_.erase(handle) != 0)
+        notifyUnerased(handle);
 }
 
 bool AcDbDatabase::isErased(AcDbHandle handle) const
@@ -353,8 +574,10 @@ std::size_t AcDbDatabase::applyUndoDelta(const AcDbUndoDelta &delta,
             AcDbEntityVariant payload = *target;
             // Keep the delta's original handle (OpenCADStudio
             // restore_entity_arc reinserts with the original handle).
+            const bool wasErased = erased_.count(entry.handle) != 0;
             auto stored = entities_.find(entry.handle);
-            if (stored != entities_.end())
+            const bool fresh = stored == entities_.end();
+            if (!fresh)
             {
                 stored->second = std::move(payload);
             }
@@ -377,6 +600,13 @@ std::size_t AcDbDatabase::applyUndoDelta(const AcDbUndoDelta &delta,
                     modelSpace().appendEntityHandle(entry.handle);
             }
             erased_.erase(entry.handle);
+            // Undo replays through the same lifecycle notifications:
+            // a resurrected resident re-enters the mirror, one restored
+            // from an erased flag turns visible again.
+            if (fresh)
+                notifyAppended(entry.handle);
+            else if (wasErased)
+                notifyUnerased(entry.handle);
         }
         else
         {
@@ -397,6 +627,7 @@ bool AcDbDatabase::removeEntity(AcDbHandle handle)
     std::vector<AcDbHandle> &handles = space.entityHandles();
     handles.erase(std::remove(handles.begin(), handles.end(), handle),
                   handles.end());
+    notifyRemoved(handle);
     return true;
 }
 

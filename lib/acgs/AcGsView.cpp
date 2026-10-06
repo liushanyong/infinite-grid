@@ -5,6 +5,7 @@
 // ViewFrameContext.
 
 #include "acgs/AcGsView.h"
+#include "acgs/AcGsManager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +24,12 @@
 
 namespace acgs
 {
+
+// The device lives in the manager (Route-B encapsulation): views fetch it per call.
+static rendering::RendererBackend *viewDevice()
+{
+    return acgsGetManager()->device();
+}
 
 rendering::SurfaceMaterial toSurfaceMaterial(
     const acgs::AcGiMaterial &material)
@@ -469,15 +476,53 @@ CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
             glm::dot(delta, cameraFront)};
 }
 
-AcGsView &AcGsView::instance()
+// ---- document binding: AcDbViewportTableRecord ↔ camera ----
+//
+// The bidirectional parameter transfer of the ObjectARX viewport model:
+// the persistent record is the drawing data, the view is its live
+// session state.  Lens/height ride the ARX conventions: lens length in
+// millimetres over a 24mm frame (fov = 2·atan(12/lens), 50mm ≈ 27°),
+// height the vertical drawing-units extent (our orthoSize).
+
+void AcGsView::applyViewportRecord(
+    const acdb::AcDbViewportTableRecord &record)
 {
-    static AcGsView view;
-    return view;
+    // Lens first: the height→distance solve below uses the new fov.
+    const double lens = record.lensLength();
+    if (lens > 0.0)
+    {
+        const double fovDegrees =
+            glm::degrees(2.0 * std::atan(12.0 / lens));
+        orbitCamera_.Zoom = glm::clamp(float(fovDegrees), 0.01f, 179.0f);
+    }
+    orbitCamera_.setTarget(
+        glm::dvec3(record.target().x, record.target().y,
+                   record.target().z));
+    orbitCamera_.setViewDirection(
+        glm::dvec3(record.viewDirection().x, record.viewDirection().y,
+                   record.viewDirection().z));
+    const double tanHalfFov =
+        std::tan(glm::radians(double(orbitCamera_.Zoom)) * 0.5);
+    orbitCamera_.setTargetDistance(record.height() /
+                                   std::max(1e-6, tanHalfFov));
+    orthoMode_ = !record.isPerspectiveEnabled();
+    resetDepthSlabs();
 }
 
-void AcGsView::attach(rendering::RendererBackend *backend)
+void AcGsView::writeToViewportRecord(
+    acdb::AcDbViewportTableRecord &record) const
 {
-    backend_ = backend;
+    record.setTarget(AcGePoint3d(orbitCamera_.Target.x,
+                                 orbitCamera_.Target.y,
+                                 orbitCamera_.Target.z));
+    record.setViewDirection(AcGeVector3d(orbitCamera_.Front.x,
+                                         orbitCamera_.Front.y,
+                                         orbitCamera_.Front.z));
+    record.setHeight(orbitCamera_.orthoSize());
+    record.setPerspectiveEnabled(!orthoMode_);
+    record.setLensLength(
+        12.0 / std::tan(glm::radians(double(orbitCamera_.Zoom)) * 0.5));
+    record.setTwistAngle(0.0); // the turntable camera keeps no roll
 }
 
 // Depth-slab hysteresis: expansion is applied immediately so nothing is
@@ -701,7 +746,7 @@ void AcGsView::submitMeshBatch(acgs::MeshBatchCommand &command,
                                const rendering::DoubleSingleVec3 &eye,
                                const SubmitOptions &options)
 {
-    if (!backend_ || command.instances.empty())
+    if (!viewDevice() || command.instances.empty())
         return;
 
     const glm::mat4 &view = frame_.view;
@@ -713,6 +758,23 @@ void AcGsView::submitMeshBatch(acgs::MeshBatchCommand &command,
     const float edgeSoftness = options.edgeSoftness > 0.0f
                                    ? options.edgeSoftness
                                    : frame_.edgeSoftness;
+
+    // The 1-px visibility floor is evaluated at THIS batch's own depth.
+    // The frame's pixelSizeWorld is referenced to the orbit target, so in
+    // perspective an autofocus retarget would rescale every OTHER object's
+    // edge width (pick one object and a different object's lines
+    // thicken).  Ortho pixel size is depth-independent -- no scaling.
+    float edgeFloor = pixelSizeWorld;
+    if (!frame_.ortho && frame_.orbitDistance > 1.0e-6 &&
+        !command.instances.empty())
+    {
+        const glm::vec3 batchWorld =
+            glm::vec3(command.instances.front().positionHigh) +
+            glm::vec3(command.instances.front().positionLow);
+        edgeFloor = pixelSizeWorld *
+                    float(glm::length(batchWorld - (eye.high + eye.low)) /
+                          frame_.orbitDistance);
+    }
 
     if (command.cadAlgorithm)
     {
@@ -735,10 +797,10 @@ void AcGsView::submitMeshBatch(acgs::MeshBatchCommand &command,
             .eye = eye,
             .material = toSurfaceMaterial(command.acgiMaterial),
             .edgeHalfWidth = std::max(command.acgiMaterial.lineWidth * 0.5f,
-                                      pixelSizeWorld),
+                                      edgeFloor),
             .edgeSoftness = edgeSoftness,
         };
-        backend_->drawCadAlgorithmDemo(renderData);
+        viewDevice()->drawCadAlgorithmDemo(renderData);
         return;
     }
 
@@ -758,16 +820,16 @@ void AcGsView::submitMeshBatch(acgs::MeshBatchCommand &command,
         .realistic = command.realistic,
         .material = command.material,
         .edgeHalfWidth = std::max(command.acgiMaterial.lineWidth * 0.5f,
-                                  pixelSizeWorld),
+                                  edgeFloor),
         .edgeSoftness = edgeSoftness,
     };
-    backend_->drawMeshInstances(renderData);
+    viewDevice()->drawMeshInstances(renderData);
 }
 
 void AcGsView::submit(acgs::AcGsModel &drawList,
                       const SubmitOptions &options)
 {
-    if (!backend_)
+    if (!viewDevice())
         return;
 
     const ViewFrameContext &ctx = frame_;
@@ -784,10 +846,10 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
                                              : ctx.overlayProjection;
 
     if (drawList.lights())
-        backend_->setRealisticLights(drawList.lights()->data);
+        viewDevice()->setRealisticLights(drawList.lights()->data);
 
     if (drawList.grid())
-        backend_->drawGrid(drawList.grid()->data);
+        viewDevice()->drawGrid(drawList.grid()->data);
 
     const rendering::DoubleSingleVec3 ownEye =
         rendering::encodeDoubleSingle(ctx.cameraPos);
@@ -978,7 +1040,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             .edgeSoftness = edgeSoftness,
             .layer = envLayer("GRID_LINE_LAYER"),
         };
-        backend_->drawLineInstances(lineData);
+        viewDevice()->drawLineInstances(lineData);
     }
 
     if (!polylineVertices.empty())
@@ -1011,7 +1073,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             .edgeSoftness = edgeSoftness,
             .layer = envLayer("GRID_LINE_LAYER"),
         };
-        backend_->drawPolylines(polylineData);
+        viewDevice()->drawPolylines(polylineData);
     }
 
     const bool submitDebug = [] {
@@ -1057,7 +1119,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             .logDepth = ctx.logDepth,
             .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
         };
-        backend_->drawFilledTriangles(fillData);
+        viewDevice()->drawFilledTriangles(fillData);
     }
 
     static std::vector<rendering::TargetPointInstance> points;
@@ -1098,7 +1160,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             .isOrtho = ctx.ortho ? 1.0f : 0.0f,
             .logDepth = ctx.logDepth,
         };
-        backend_->drawTargetPointInstances(pointData);
+        viewDevice()->drawTargetPointInstances(pointData);
     }
 }
 
@@ -1139,7 +1201,7 @@ void AcGsView::drawRibbonVertices(
     std::vector<rendering::PrimVertex> &vertices, float edgeSoftness,
     float layer) const
 {
-    if (!backend_ || vertices.empty())
+    if (!viewDevice() || vertices.empty())
         return;
     const rendering::PolylineRenderData data{
         .view = frame_.view,
@@ -1150,7 +1212,7 @@ void AcGsView::drawRibbonVertices(
         .edgeSoftness = edgeSoftness,
         .layer = layer,
     };
-    backend_->drawPolylines(data);
+    viewDevice()->drawPolylines(data);
     vertices.clear();
 }
 
@@ -1158,7 +1220,7 @@ void AcGsView::drawLineInstanceBatch(
     std::vector<rendering::LineInstance> &instances, float edgeSoftness,
     float layer) const
 {
-    if (!backend_ || instances.empty())
+    if (!viewDevice() || instances.empty())
         return;
     const rendering::LineInstancesRenderData data{
         .view = frame_.view,
@@ -1169,7 +1231,7 @@ void AcGsView::drawLineInstanceBatch(
         .edgeSoftness = edgeSoftness,
         .layer = layer,
     };
-    backend_->drawLineInstances(data);
+    viewDevice()->drawLineInstances(data);
     instances.clear();
 }
 
@@ -1177,7 +1239,7 @@ void AcGsView::drawFillTriangles(
     std::vector<rendering::FillVertex> &vertices, const glm::mat4 &view,
     const glm::mat4 &projection, bool is3DFace, float layer) const
 {
-    if (!backend_ || vertices.empty())
+    if (!viewDevice() || vertices.empty())
         return;
     const rendering::FilledTrianglesRenderData data{
         .view = view,
@@ -1189,14 +1251,14 @@ void AcGsView::drawFillTriangles(
         .logDepth = frame_.logDepth,
         .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
     };
-    backend_->drawFilledTriangles(data);
+    viewDevice()->drawFilledTriangles(data);
 }
 
 void AcGsView::drawFillBoundary(const acdb::TessellatedEntity &tess,
                                 size_t begin, size_t count, float halfWidth,
                                 const glm::vec4 &color) const
 {
-    if (!backend_ || count == 0)
+    if (!viewDevice() || count == 0)
         return;
     // Shared-edge analysis: a triangle edge used by exactly one triangle is
     // a boundary edge; edges shared by two stay hidden in wireframe modes.
@@ -1245,16 +1307,31 @@ void AcGsView::drawFillBoundary(const acdb::TessellatedEntity &tess,
         drawRibbonVertices(vertices, 0.15f, envLayer("GRID_LINE_LAYER"));
 }
 
-int AcGsView::flushTextRequests()
+int AcGsView::drawTextRequest(const acgi::TextRequest &request,
+                             const glm::vec4 &colorOverride)
 {
-    if (!backend_ || !acgi::textEngine().sdfReady())
+    if (!viewDevice() || !acgi::textEngine().sdfReady())
         return 0;
 
+    acgi::TextRequest drawn = request;
+    if (glm::any(glm::notEqual(colorOverride, glm::vec4(0.0f))))
+        drawn.color = colorOverride;
     constexpr glm::mat4 identityView(1.0f);
     const ViewFrameContext &ctx = frame_;
+    return acgi::textEngine().drawText(
+        *viewDevice(), identityView, ctx.projection, ctx.cameraPos,
+        ctx.cameraRight, ctx.cameraUp, ctx.cameraFront, drawn);
+}
+
+int AcGsView::flushTextRequests()
+{
+    if (!viewDevice() || !acgi::textEngine().sdfReady())
+        return 0;
+
     // Frustum culling: skip text whose oriented bounding rectangle lies
     // entirely outside the ortho viewport (perspective keeps drawing —
     // its frustum test hooks in at the same call when needed).
+    const ViewFrameContext &ctx = frame_;
     const double orthoHalfHeight =
         ctx.ortho ? ctx.orthoSize : std::numeric_limits<double>::max();
     const double orthoHalfWidth =
@@ -1270,9 +1347,7 @@ int AcGsView::flushTextRequests()
         {
             continue;
         }
-        glyphsDrawn += acgi::textEngine().drawText(
-            *backend_, identityView, ctx.projection, ctx.cameraPos,
-            ctx.cameraRight, ctx.cameraUp, ctx.cameraFront, request);
+        glyphsDrawn += drawTextRequest(request, glm::vec4(0.0f));
     }
     return glyphsDrawn;
 }

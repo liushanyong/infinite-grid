@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RendererBackend.h"
+#include "RenderTypes.h"
 
 #include <cstddef>
 #include <vector>

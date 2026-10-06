@@ -14,15 +14,14 @@
 
 #include <map>
 #include <string>
+#include <array>
+#include <cstdint>
 #include <vector>
 
+#include "AcGiTextDevice.h"
 #include "AcGiTextQueue.h"
 #include "../text/text_font.h"
 
-namespace rendering
-{
-class RendererBackend;
-}
 
 namespace acgi
 {
@@ -50,7 +49,7 @@ public:
     // basis vectors and camera position are the current camera frame;
     // quads are expanded in view space for the identity-view submission.
     // Returns the number of glyphs drawn.
-    int drawText(rendering::RendererBackend &backend,
+    int drawText(TextDevice &device,
                  const glm::mat4 &view, const glm::mat4 &projection,
                  const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
                  const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
@@ -68,6 +67,22 @@ public:
                                  const glm::dvec3 &cameraUp,
                                  const glm::dvec3 &cameraFront,
                                  double halfWidth, double halfHeight) const;
+
+    // Per-glyph layout for picking AND drawing: one walk of the exact
+    // drawText() rules (codepoints, per-glyph left/top/height/advance,
+    // newline at 1.35 line spacing, billboard or entity-plane
+    // orientation).  Corners are WORLD-space (c00, c10, c11, c01); the
+    // GPU pick pass builds its ID geometry from these so the ID texture
+    // matches the visible glyphs pixel for pixel.
+    struct GlyphPlacement
+    {
+        std::array<glm::dvec3, 4> corners;
+        std::uint32_t codepoint = 0;
+    };
+    std::vector<GlyphPlacement> layoutGlyphs(
+        const TextRequest &request,
+        const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
+        const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront);
 
     // SHX stroke geometry for a message, in em units (cap height 1.0);
     // ASCII glyphs resolve through the regular font, double-byte codes

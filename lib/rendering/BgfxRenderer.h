@@ -26,6 +26,9 @@ public:
     bool beginFrame(const glm::vec4 &clearColor) override;
     void endFrame() override;
     void present() override;
+    bool beginPipScene() override;
+    void endPipScene() override;
+    void compositePip() override;
     void drawGrid(const GridRenderData &data) override;
     void drawCube(const CubeRenderData &data) override;
     void drawMeshInstances(const MeshInstancesRenderData &data) override;
@@ -68,6 +71,9 @@ public:
                               uint32_t objectId,
                               uint8_t occlusionRank = 2) override;
     GpuPickResult pollGpuPick() override;
+    // Unified picking: samples the always-on full-scene ID texture at the
+    // click texel (no per-click re-render, no candidate filter).
+    uint32_t requestGpuPickPixel(float ndcX, float ndcY) override;
     void cancelGpuPick() override;
     uint32_t loadMeshTexture(const std::string &path) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
@@ -82,7 +88,8 @@ private:
     glm::mat4 gpuPickProjection(const GpuPickRequest &request) const;
     bool gpuPickInstanceIsCandidate(const MeshInstance &instance) const;
     bool gpuPickVerticesAreCandidate(const FillVertex *vertices,
-                                     uint32_t vertexCount) const;
+                                     uint32_t vertexCount,
+                                     const glm::mat4 &view) const;
     void renderGpuPickPass();
     void completeGpuPickReadback();
     bool createGpuPickDebugResources();
@@ -228,6 +235,10 @@ private:
     // The CAD passes render into one explicit MSAA target so every pass shares
     // the same color/depth pair on every backend.
     bgfx::FrameBufferHandle m_sceneFrameBuffer = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle m_pipFrameBuffer = BGFX_INVALID_HANDLE;
+    uint32_t m_pipWidth = 0;
+    uint32_t m_pipHeight = 0;
+    uint32_t m_clearColorPacked = 0;
     bgfx::ProgramHandle m_presentProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_presentQuadBuffer = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentSampler = BGFX_INVALID_HANDLE;
@@ -287,6 +298,11 @@ private:
     uint32_t m_gpuPickNextToken = 1;
     bool m_gpuPickActive = false;
     bool m_gpuPickReadPending = false;
+    // Unified-pick pixel read state (sample of the full-scene ID texture).
+    bool m_pixelReadPending = false;
+    float m_pixelReadNdcX = 0.0f;
+    float m_pixelReadNdcY = 0.0f;
+    uint32_t m_pixelReadToken = 0;
     uint32_t m_gpuPickReadFrame = 0;
 
     bgfx::FrameBufferHandle m_gpuPickDebugFrameBuffer = BGFX_INVALID_HANDLE;
