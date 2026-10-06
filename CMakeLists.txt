@@ -109,6 +109,7 @@ set(WINDOW_SOURCES
     lib/acgi/AcGiTextEngine.cpp
     lib/acgs/AcGsView.cpp
     lib/acdb/AcDbDatabase.cpp
+    lib/acdb/AcDbStore.cpp
     lib/brep/BRep.cpp
     lib/acdb/AcDbTransaction.cpp
     lib/acgs/AcGsSelectionHighlighter.cpp
@@ -167,6 +168,32 @@ if(MSVC)
 endif()
 
 target_link_libraries(WINDOW PRIVATE predicates)
+
+# ---------------------------------------------------------------------------
+# entt — header-only ECS.  The scene/attribute layer (acgs::SceneStore)
+# keys its entities by AcDbHandle so the ECS never becomes a second ID
+# space; the topology layer stays in the brep arena per the roadmap
+# ("拓扑层不能上 ECS").
+# ---------------------------------------------------------------------------
+add_library(entt INTERFACE)
+target_include_directories(entt INTERFACE
+    "${CMAKE_SOURCE_DIR}/lib/entt/include")
+target_link_libraries(WINDOW PRIVATE entt)
+
+# ---------------------------------------------------------------------------
+# SQLiteCpp — MIT C++ wrapper over its bundled public-domain sqlite3
+# amalgamation (no external sqlite dependency).  Backs the AcDb document
+# store (lib/acdb/AcDbStore): entities + symbol tables + the operation
+# journal, opened in WAL mode.
+# ---------------------------------------------------------------------------
+set(SQLITECPP_RUN_CPPLINT OFF CACHE BOOL "" FORCE)
+set(SQLITECPP_RUN_CPPCHECK OFF CACHE BOOL "" FORCE)
+set(SQLITECPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SQLITECPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SQLITECPP_INTERNAL_SQLITE ON CACHE BOOL "" FORCE)
+add_subdirectory("${CMAKE_SOURCE_DIR}/lib/SQLiteCpp"
+                 "${CMAKE_BINARY_DIR}/SQLiteCpp")
+target_link_libraries(WINDOW PRIVATE SQLiteCpp)
 
 # wgpu-native is dynamically loaded so a missing optional runtime still allows
 # every legacy backend to build and run.

@@ -79,10 +79,24 @@ void AcDbLinetypeTable::add(const std::string &name, AcDbHandle handle,
     record.description = description;
 }
 
+AcDbLinetypeTableRecord *AcDbLinetypeTable::getMutable(
+    const std::string &name)
+{
+    const auto found = records_.find(name);
+    return found != records_.end() ? &found->second : nullptr;
+}
+
 // ---- AcDbTextStyleTable ----
 
 const AcDbTextStyleTableRecord *AcDbTextStyleTable::get(
     const std::string &name) const
+{
+    const auto found = records_.find(name);
+    return found != records_.end() ? &found->second : nullptr;
+}
+
+AcDbTextStyleTableRecord *AcDbTextStyleTable::getMutable(
+    const std::string &name)
 {
     const auto found = records_.find(name);
     return found != records_.end() ? &found->second : nullptr;
@@ -165,6 +179,22 @@ AcDbEntityVariant *AcDbDatabase::getEntityMutable(AcDbHandle handle)
 {
     const auto found = entities_.find(handle);
     return found != entities_.end() ? &found->second : nullptr;
+}
+
+bool AcDbDatabase::insertLoadedEntity(AcDbEntityVariant payload)
+{
+    const AcDbHandle handle = common(payload).handle;
+    if (!handle.isValid() || entities_.count(handle) != 0)
+        return false;
+    entities_.emplace(handle, std::move(payload));
+    erased_[handle] = false;
+    return true;
+}
+
+void AcDbDatabase::restoreNextHandle(std::uint64_t next)
+{
+    if (next > nextHandle_.value)
+        nextHandle_.value = next;
 }
 
 void AcDbDatabase::eraseEntity(AcDbHandle handle)

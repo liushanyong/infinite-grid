@@ -11,6 +11,7 @@
 #include "acdb/AcDbDwgBridge.h"
 #include "acdb/AcDbTransform.h"
 #include "brep/KernelSelfTest.h"
+#include "acdb/StoreSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionHighlighter.h"
@@ -6953,6 +6954,12 @@ int main(int argc, char *argv[])
   {
     const int kernelFails = brep::runKernelSelfTest();
     return kernelFails == 0 ? 0 : 1;
+  }
+  if (const char *selfTest = std::getenv("GRID_SELFTEST");
+      selfTest && std::strcmp(selfTest, "store") == 0)
+  {
+    const int storeFails = acdb::runStoreSelfTest();
+    return storeFails == 0 ? 0 : 1;
   }
 
 

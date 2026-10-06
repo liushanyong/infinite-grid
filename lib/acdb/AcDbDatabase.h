@@ -49,6 +49,7 @@ class AcDbLinetypeTable
 {
 public:
     const AcDbLinetypeTableRecord *get(const std::string &name) const;
+    AcDbLinetypeTableRecord *getMutable(const std::string &name);
     bool contains(const std::string &name) const { return records_.count(name) != 0; }
     void add(const std::string &name, AcDbHandle handle,
              const std::string &description = {});
@@ -66,6 +67,7 @@ class AcDbTextStyleTable
 {
 public:
     const AcDbTextStyleTableRecord *get(const std::string &name) const;
+    AcDbTextStyleTableRecord *getMutable(const std::string &name);
     bool contains(const std::string &name) const { return records_.count(name) != 0; }
     AcDbTextStyleTableRecord &add(const std::string &name, AcDbHandle handle);
     template <typename Fn> void forEach(Fn &&fn) const
@@ -108,6 +110,10 @@ public:
     // the handle-based DWG/DXF formats (OpenCADStudio issue #67: a table
     // record without a real handle is dropped on save).
     AcDbHandle allocateHandle();
+
+    // Store/import introspection: the next handle allocateHandle would
+    // return (persisted in the meta table so a load never collides).
+    std::uint64_t nextHandleValue() const { return nextHandle_.value; }
 
     // ---- tables ----
     AcDbLayerTable &layerTable() { return layerTable_; }
@@ -160,6 +166,16 @@ public:
 
     const AcDbEntityVariant *getEntity(AcDbHandle handle) const;
     AcDbEntityVariant *getEntityMutable(AcDbHandle handle);
+
+    // Store/import path (AcDbStore::loadDatabase): inserts a fully
+    // formed payload WITHOUT touching model-space membership — block
+    // membership is restored from the block-table rows themselves.
+    // Returns false when |payload|'s handle collides or is invalid.
+    bool insertLoadedEntity(AcDbEntityVariant payload);
+
+    // Store/import path: restores the monotonic handle counter so
+    // handles allocated after a load never collide with persisted ones.
+    void restoreNextHandle(std::uint64_t next);
 
     template <typename Fn> void forEachEntity(Fn &&fn) const
     {
