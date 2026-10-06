@@ -106,3 +106,7 @@ examples/UcsViewCubeImGui/imgui_ucs_viewcube.ini
 # Downloaded OpenCADStudio reference source/archive 
 /external/ 
 /OpenCADStudio.zip 
+
+# Local build residue inside vendored SQLiteCpp
+lib/SQLiteCpp/build*/
+lib/SQLiteCpp/.git*
