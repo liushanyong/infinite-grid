@@ -235,6 +235,43 @@ inline int runKernelSelfTest()
         }
         std::fprintf(report, "POST fwd=%d\n",
                      int(inward->shell->firstFace->outerLoop->first->forward));
+        // ---- milestone 3-a: extrudePolygon ----
+        {
+            Arena extArena;
+            AcGePoint3d profile[4] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0},
+                                     {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+            AcGeVector3d normal;
+            Body *extruded = extrudePolygon(extArena, profile, 4,
+                                            {0.0, 0.0, 10.0}, normal);
+            check(std::abs(normal.z - 1.0) < 1.0e-9,
+                  "extrude profile normal by Newell is +z");
+            const double extVol = signedVolume(extruded->shell);
+            std::fprintf(report, "extrude volume=%.4f\n", extVol);
+            check(std::abs(extVol - 1000.0) < 1.0e-6,
+                  "extruded box volume is +1000");
+            const auto extIssues = validate(extruded);
+            check(extIssues.empty(), "extruded box validates clean");
+
+            std::size_t vtx = 0, edges = 0, faces = 0;
+            std::map<const void *, int> seen;
+            for (const Face *f = extruded->shell->firstFace; f;
+                 f = f->next)
+            {
+                ++faces;
+                const CoEdge *ce2 = f->outerLoop->first;
+                do {
+                    ++edges;
+                    seen[ce2->edge->start] += 1;
+                    ce2 = ce2->next;
+                } while (ce2 != f->outerLoop->first);
+            }
+            vtx = seen.size();
+            check(faces == 6, "extruded box has 6 faces");
+            check(edges == 24, "extruded box has 24 loop coedges (12 edges x 2 sides)");
+            check(vtx == 8, "extruded box has 8 deduplicated vertices");
+            std::fprintf(report, "extrude faces=%zu coedge-runs=%zu vertices=%zu\n",
+                         faces, edges, vtx);
+        }
         bool inwardDetected = false;
         for (const ValidateIssue &issue : validate(inward))
             if (issue.error == ValidateError::kShellInward)

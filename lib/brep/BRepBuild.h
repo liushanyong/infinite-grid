@@ -191,4 +191,78 @@ inline Body *makeBox(Arena &arena, const AcGePoint3d &origin, double size)
     return body;
 }
 
+
+// Milestone 3-a: general planar-polygon extrude.  Sweeps a planar
+// profile |count| corners along |height| into a closed shell: bottom
+// face (normal = -n), top face (normal = +n), and one quadrilateral
+//     side face per profile edge (n by Newell's method over the
+//     profile, right-hand rule).  Vertices and edges are deduplicated
+//     through the shared maps, so the shell is a real manifold with
+//     radial coedge pairs.  |outNormal| receives the profile plane
+//     normal (right-hand around the profile).
+inline Body *extrudePolygon(Arena &arena, const AcGePoint3d *profile,
+                            std::size_t count, const AcGeVector3d &height,
+                            AcGeVector3d &outNormal)
+{
+    Builder builder(arena);
+    std::map<PosKey, Vertex *> vertices;
+    std::map<std::pair<PosKey, PosKey>, std::pair<Edge *, bool>> edgeMap;
+    Body *body = builder.createBody();
+    Shell *shell = body->shell;
+
+    AcGeVector3d n{0.0, 0.0, 0.0};
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const AcGePoint3d &a = profile[i];
+        const AcGePoint3d &b = profile[(i + 1) % count];
+        n = n + AcGeVector3d((a.y - b.y) * (a.z + b.z),
+                             (a.z - b.z) * (a.x + b.x),
+                             (a.x - b.x) * (a.y + b.y));
+    }
+    {
+        const double len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        n = AcGeVector3d(n.x / len, n.y / len, n.z / len);
+    }
+    outNormal = n;
+
+    std::vector<AcGePoint3d> bottomCorners(count);
+    std::vector<AcGePoint3d> topCorners(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        bottomCorners[i] = profile[i];
+        topCorners[i] = AcGePoint3d(profile[i].x + height.x,
+                                    profile[i].y + height.y,
+                                    profile[i].z + height.z);
+    }
+
+    makePlanarFaceFromCorners(builder, shell, vertices, edgeMap,
+                              topCorners.data(), count, n);
+    makePlanarFaceFromCorners(builder, shell, vertices, edgeMap,
+                              bottomCorners.data(), count, -n);
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const std::size_t j = (i + 1) % count;
+        const AcGePoint3d side[4] = {
+            profile[i], profile[j],
+            {profile[j].x + height.x, profile[j].y + height.y,
+             profile[j].z + height.z},
+            {profile[i].x + height.x, profile[i].y + height.y,
+             profile[i].z + height.z}};
+        const AcGeVector3d edgeDir = profile[j] - profile[i];
+        AcGeVector3d sideNormal = edgeDir.crossProduct(height);
+        {
+            const double len = std::sqrt(sideNormal.x * sideNormal.x +
+                                         sideNormal.y * sideNormal.y +
+                                         sideNormal.z * sideNormal.z);
+            sideNormal = AcGeVector3d(sideNormal.x / len,
+                                      sideNormal.y / len,
+                                      sideNormal.z / len);
+        }
+        makePlanarFaceFromCorners(builder, shell, vertices, edgeMap,
+                                  side, 4, sideNormal);
+    }
+    return body;
+}
+
 } // namespace brep
