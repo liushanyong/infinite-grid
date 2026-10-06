@@ -14,6 +14,7 @@
 #include "ge/ge2d.h"
 #include "brep/BRepBuild.h"
 #include "brep/Validate.h"
+#include "brep/BRepBoolean.h"
 
 namespace brep
 {
@@ -271,6 +272,44 @@ inline int runKernelSelfTest()
             check(vtx == 8, "extruded box has 8 deduplicated vertices");
             std::fprintf(report, "extrude faces=%zu coedge-runs=%zu vertices=%zu\n",
                          faces, edges, vtx);
+        }
+        // ---- milestone 3-b: box-box boolean ----
+        {
+            Arena boolArena;
+            Body *boxA = makeBox(boolArena, {0.0, 0.0, 0.0}, 10.0);
+            Body *boxB = makeBox(boolArena, {5.0, 2.0, 3.0}, 10.0);
+
+            std::fprintf(report, "[BOOL] union\n");
+            Body *uni = performBoolean(boxA, boxB, BoolOp::Union);
+            const double uniVol = signedVolume(uni->shell);
+            std::fprintf(report, "[BOOL] union volume=%.4f\n", uniVol);
+            check(std::abs(uniVol - 1720.0) < 1.0e-6,
+                  "union volume is 1720");
+            {
+                const auto uniIssues = validate(uni);
+                check(uniIssues.empty(), "union validates clean");
+                for (const ValidateIssue &issue : uniIssues)
+                    std::fprintf(report, "  union issue: %s\n",
+                                 validateErrorName(issue.error));
+            }
+
+            std::fprintf(report, "[BOOL] intersect\n");
+            Body *inter = performBoolean(boxA, boxB,
+                                         BoolOp::Intersect);
+            const double interVol = signedVolume(inter->shell);
+            std::fprintf(report, "[BOOL] intersect volume=%.4f\n", interVol);
+            check(std::abs(interVol - 280.0) < 1.0e-6,
+                  "intersect volume is 280");
+            check(validate(inter).empty(), "intersect validates clean");
+
+            std::fprintf(report, "[BOOL] subtract\n");
+            Body *sub = performBoolean(boxA, boxB,
+                                       BoolOp::Subtract);
+            const double subVol = signedVolume(sub->shell);
+            std::fprintf(report, "[BOOL] subtract volume=%.4f\n", subVol);
+            check(std::abs(subVol - 720.0) < 1.0e-6,
+                  "subtract volume is 720");
+            check(validate(sub).empty(), "subtract validates clean");
         }
         bool inwardDetected = false;
         for (const ValidateIssue &issue : validate(inward))

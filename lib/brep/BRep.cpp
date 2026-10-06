@@ -39,17 +39,6 @@ double signedVolume(const Shell *shell)
         }
         if (ring.size() < 3)
             continue;
-        {
-            static FILE *dbg = std::fopen("brep_vol_debug.log", "w");
-            if (dbg)
-            {
-                std::fprintf(dbg, "[FACE] ring=%zu\n", ring.size());
-                for (const AcGePoint3d &pt : ring)
-                    std::fprintf(dbg, "  v=(%.2f,%.2f,%.2f)\n",
-                                 pt.x, pt.y, pt.z);
-                std::fflush(dbg);
-            }
-        }
 
         const AcGePoint3d v0 = ring[0];
         const AcGeVector3d v0v(v0.x, v0.y, v0.z);
