@@ -8,9 +8,9 @@
 // record owns the member entity handles.
 
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 #include "acdb/AcDbCore.h"
+#include "ge/gematrix.h"
 
 namespace acdb
 {
@@ -27,24 +27,29 @@ public:
     // Name of the referenced AcDbBlockTableRecord.
     std::string blockTableRecordName;
 
-    glm::dvec3 position{0.0};
+    AcGePoint3d position{0.0, 0.0, 0.0};
     double rotation = 0.0; // radians, right-hand about |normal|
-    glm::dvec3 scale{1.0};
-    glm::dvec3 normal{0.0, 0.0, 1.0};
+    AcGeVector3d scale{1.0, 1.0, 1.0};
+    AcGeVector3d normal{0.0, 0.0, 1.0};
 
     // Local placement matrix relative to the referenced record's base
     // point: translate(position) * rotate * scale * translate(-basePoint).
-    glm::dmat4 toMatrix(const glm::dvec3 &basePoint) const
+    AcGeMatrix3d toMatrix(const AcGePoint3d &basePoint) const
     {
-        glm::dmat4 local(1.0);
-        local = glm::translate(local, position);
-        const glm::dvec3 axis = glm::normalize(
-            glm::length(normal) > 1.0e-12 ? normal : glm::dvec3(0.0, 0.0, 1.0));
+        AcGeMatrix3d local =
+            AcGeMatrix3d::setToTranslation(position.asVector());
+        const AcGeVector3d axis =
+            normal.length() > 1.0e-12
+                ? normal.normal()
+                : AcGeVector3d(0.0, 0.0, 1.0);
         if (rotation != 0.0)
-            local = glm::rotate(local, rotation, axis);
-        if (glm::any(glm::notEqual(scale, glm::dvec3(1.0))))
-            local = glm::scale(local, scale);
-        local = glm::translate(local, -basePoint);
+            local = local * AcGeMatrix3d::setToRotation(
+                                rotation, axis,
+                                AcGePoint3d(0.0, 0.0, 0.0));
+        if (scale != AcGeVector3d(1.0, 1.0, 1.0))
+            local = local * AcGeMatrix3d::setToScaling(scale);
+        local = local * AcGeMatrix3d::setToTranslation(
+                            (basePoint * -1.0).asVector());
         return local;
     }
 };

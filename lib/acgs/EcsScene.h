@@ -20,12 +20,12 @@
 
 #include <cstdint>
 #include <entt/entt.hpp>
-#include <glm/glm.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "acdb/AcDbCore.h"
+#include "ge/gematrix.h"
 
 namespace acgs
 {
@@ -46,7 +46,7 @@ struct Drawable
 
 struct InstanceXform
 {
-    glm::dmat4 matrix{1.0};
+    AcGeMatrix3d matrix;
 };
 
 struct LayerRef

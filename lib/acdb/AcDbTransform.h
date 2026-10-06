@@ -24,7 +24,8 @@ inline void transformBy(AcDbEntityVariant &payload, const glm::dvec3 &offset)
         using T = std::decay_t<decltype(entity)>;
         if constexpr (std::is_same_v<T, AcDbBlockReference>)
         {
-            entity.position += offset; // glm field
+            // AcGePoint3d takes the offset as a vector.
+            entity.position += AcGeVector3d(offset);
         }
         else if constexpr (std::is_same_v<T, AcDbLine>)
         {
@@ -99,7 +100,7 @@ inline void transformBy(AcDbEntityVariant &payload, const glm::dvec3 &offset)
         {
             // glm positions take the glm offset directly.
             for (auto &position : entity.geometry.positions)
-                position += offset;
+                position += AcGeVector3d(offset);
         }
         else if constexpr (std::is_same_v<T, AcDbMline>)
         {

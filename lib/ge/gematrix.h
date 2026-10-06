@@ -17,6 +17,18 @@ struct AcGeMatrix3d
     glm::dmat4 m{1.0};
 
     AcGeMatrix3d() = default;
+    // Boundary conversions: the rendering layer (camera/uniform math)
+    // stays in glm; the domain layer carries AcGeMatrix3d.
+    explicit AcGeMatrix3d(const glm::dmat4 &matrix) : m(matrix) {}
+    explicit AcGeMatrix3d(const glm::mat4 &matrix)
+        : m(matrix)
+    {
+    }
+    explicit operator glm::dmat4() const { return m; }
+    explicit operator glm::mat4() const
+    {
+        return glm::mat4(m);
+    }
 
     static AcGeMatrix3d identity() { return AcGeMatrix3d(); }
 
@@ -28,6 +40,14 @@ struct AcGeMatrix3d
     }
 
     static AcGeMatrix3d setToScaling(double factor)
+    {
+        AcGeMatrix3d result;
+        result.m = glm::scale(glm::dmat4(1.0), glm::dvec3(factor));
+        return result;
+    }
+
+    // ObjectARX setToScaling(const AcGeVector3d&): non-uniform scale.
+    static AcGeMatrix3d setToScaling(const AcGeVector3d &factor)
     {
         AcGeMatrix3d result;
         result.m = glm::scale(glm::dmat4(1.0), glm::dvec3(factor));

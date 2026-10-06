@@ -217,19 +217,21 @@ public:
     // (OpenCADStudio create_block_from_entities); the payloads stay in
     // the flat store with ownerHandle pointing at the record.
     AcDbHandle createBlockDefinition(const std::string &name,
-                                     const glm::dvec3 &basePoint,
+                                     const AcGePoint3d &basePoint,
                                      const std::vector<AcDbHandle> &members);
 
     // Adds an INSERT of |recordName| at |position| to model space.
     // Returns kNullHandle when the record does not exist.
     AcDbHandle addBlockReference(const std::string &recordName,
-                                 const glm::dvec3 &position,
+                                 const AcGePoint3d &position,
                                  double rotation = 0.0,
-                                 const glm::dvec3 &scale = glm::dvec3(1.0));
+                                 const AcGeVector3d &scale =
+                                     AcGeVector3d(1.0, 1.0, 1.0));
 
     // Resolves one block reference's placement matrix against its
-    // record's base point; kIdentity when the record is missing.
-    glm::dmat4 referenceTransform(const AcDbBlockReference &reference) const;
+    // record's base point; identity when the record is missing.
+    AcGeMatrix3d referenceTransform(
+        const AcDbBlockReference &reference) const;
 
     // Depth-first expansion of a block record into leaf-entity instances
     // (ObjectARX: the Gs replay of block contents).  |fn| receives the
@@ -276,7 +278,8 @@ private:
                 insertPath.push_back(memberHandle);
                 walkInsertInstances(reference->blockTableRecordName,
                                     parentTransform *
-                                        referenceTransform(*reference),
+                                        glm::dmat4(referenceTransform(
+                                            *reference)),
                                     nameStack, insertPath, fn);
                 insertPath.pop_back();
             }

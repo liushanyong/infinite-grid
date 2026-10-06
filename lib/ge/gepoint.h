@@ -195,6 +195,21 @@ struct AcGePoint3d
     {
         return {x - o.x, y - o.y, z - o.z};
     }
+    // AcGePoint3d::operator+=/-=(const AcGeVector3d&).
+    AcGePoint3d &operator+=(const AcGeVector3d &o)
+    {
+        x += o.x;
+        y += o.y;
+        z += o.z;
+        return *this;
+    }
+    AcGePoint3d &operator-=(const AcGeVector3d &o)
+    {
+        x -= o.x;
+        y -= o.y;
+        z -= o.z;
+        return *this;
+    }
     AcGeVector3d operator-(const AcGePoint3d &o) const
     {
         return {x - o.x, y - o.y, z - o.z};

@@ -195,8 +195,8 @@ public:
       if (topReference == nullptr ||
           topReference->blockTableRecordName != recordName)
         continue;
-      const glm::dmat4 topWorld =
-          document.referenceTransform(*topReference);
+      const glm::dmat4 topWorld = glm::dmat4(
+          document.referenceTransform(*topReference));
 
       document.walkInsertInstances(
           recordName, topWorld,

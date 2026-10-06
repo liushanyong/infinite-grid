@@ -232,7 +232,7 @@ bool AcDbDatabase::setActiveLineType(const std::string &name)
 // ---- blocks ----
 
 AcDbHandle AcDbDatabase::createBlockDefinition(
-    const std::string &name, const glm::dvec3 &basePoint,
+    const std::string &name, const AcGePoint3d &basePoint,
     const std::vector<AcDbHandle> &members)
 {
     if (blockTable_.contains(name))
@@ -266,8 +266,8 @@ AcDbHandle AcDbDatabase::createBlockDefinition(
 }
 
 AcDbHandle AcDbDatabase::addBlockReference(
-    const std::string &recordName, const glm::dvec3 &position,
-    double rotation, const glm::dvec3 &scale)
+    const std::string &recordName, const AcGePoint3d &position,
+    double rotation, const AcGeVector3d &scale)
 {
     if (!blockTable_.contains(recordName))
         return kNullHandle;
@@ -279,14 +279,14 @@ AcDbHandle AcDbDatabase::addBlockReference(
     return addEntity(std::move(reference));
 }
 
-glm::dmat4 AcDbDatabase::referenceTransform(
+AcGeMatrix3d AcDbDatabase::referenceTransform(
     const AcDbBlockReference &reference) const
 {
     const AcDbBlockTableRecord *record =
         blockTable_.get(reference.blockTableRecordName);
     return reference.toMatrix(record != nullptr
                                   ? record->basePoint()
-                                  : glm::dvec3(0.0));
+                                  : AcGePoint3d(0.0, 0.0, 0.0));
 }
 
 // ---- transactions ----

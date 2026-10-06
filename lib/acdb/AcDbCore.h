@@ -158,8 +158,8 @@ struct AcDbTextStyleTableRecord : AcDbSymbolTableRecord
 class AcDbBlockTableRecord : public AcDbSymbolTableRecord
 {
 public:
-    const glm::dvec3 &basePoint() const { return basePoint_; }
-    void setBasePoint(const glm::dvec3 &point) { basePoint_ = point; }
+    const AcGePoint3d &basePoint() const { return basePoint_; }
+    void setBasePoint(const AcGePoint3d &point) { basePoint_ = point; }
 
     const std::vector<AcDbHandle> &entityHandles() const
     {
@@ -173,7 +173,7 @@ public:
     }
 
 private:
-    glm::dvec3 basePoint_{0.0};
+    AcGePoint3d basePoint_{0.0, 0.0, 0.0};
     std::vector<AcDbHandle> entityHandles_;
 };
 

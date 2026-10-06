@@ -617,8 +617,9 @@ bool decodeInto(const Value &commonData, const Value &data,
                 const json::Array &a = item.asArray();
                 if (a.size() >= 3)
                     payload.geometry.positions.push_back(
-                        glm::dvec3(a[0].asNumber(), a[1].asNumber(),
-                                   a[2].asNumber()));
+                        AcGePoint3d(a[0].asNumber(),
+                                    a[1].asNumber(),
+                                    a[2].asNumber()));
             }
         if (const Value *v = data.find("normals"))
             for (const Value &item : v->asArray())
@@ -691,9 +692,9 @@ bool decodeInto(const Value &commonData, const Value &data,
         {
             const json::Array &a = v->asArray();
             if (a.size() >= 3)
-                payload.position = glm::dvec3(a[0].asNumber(),
-                                              a[1].asNumber(),
-                                              a[2].asNumber());
+                payload.position = AcGePoint3d(
+                    a[0].asNumber(), a[1].asNumber(),
+                    a[2].asNumber());
         }
         if (const Value *v = data.find("rotation"))
             payload.rotation = v->asNumber();
@@ -701,17 +702,18 @@ bool decodeInto(const Value &commonData, const Value &data,
         {
             const json::Array &a = v->asArray();
             if (a.size() >= 3)
-                payload.scale = glm::dvec3(a[0].asNumber(1.0),
-                                           a[1].asNumber(1.0),
-                                           a[2].asNumber(1.0));
+                payload.scale = AcGeVector3d(
+                    a[0].asNumber(1.0),
+                    a[1].asNumber(1.0),
+                    a[2].asNumber(1.0));
         }
         if (const Value *v = data.find("normal"))
         {
             const json::Array &a = v->asArray();
             if (a.size() >= 3)
-                payload.normal = glm::dvec3(a[0].asNumber(),
-                                            a[1].asNumber(),
-                                            a[2].asNumber());
+                payload.normal = AcGeVector3d(
+                    a[0].asNumber(), a[1].asNumber(),
+                    a[2].asNumber());
         }
     }
     else
