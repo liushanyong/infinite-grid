@@ -1522,13 +1522,14 @@ void BgfxRenderer::endFrame()
     {
         bgfx::dbgTextPrintf(
             1, 2, 0x0f,
-            "GPU ID queue: mesh=%llu/%llu tri=%llu/%llu droppedMesh=%llu droppedTri=%llu",
+            "GPU ID queue: mesh=%llu/%llu tri=%llu/%llu droppedMesh=%llu droppedTri=%llu failed=%llu",
             static_cast<unsigned long long>(m_gpuPickQueueStats.queuedMeshes),
             static_cast<unsigned long long>(m_gpuPickQueueStats.meshCapacity),
             static_cast<unsigned long long>(m_gpuPickQueueStats.queuedTriangles),
             static_cast<unsigned long long>(m_gpuPickQueueStats.triangleCapacity),
             static_cast<unsigned long long>(m_gpuPickQueueStats.droppedMeshes),
-            static_cast<unsigned long long>(m_gpuPickQueueStats.droppedTriangles));
+            static_cast<unsigned long long>(m_gpuPickQueueStats.droppedTriangles),
+            static_cast<unsigned long long>(m_gpuPickQueueStats.resourceFailures));
     }
 
     renderGpuPickPass();
@@ -3199,7 +3200,7 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         if (!bgfx::isValid(geometryIt->second.buffer))
         {
             m_gpuPickTriangleGeometry.erase(geometryIt);
-            ++m_gpuPickQueueStats.droppedTriangles;
+            ++m_gpuPickQueueStats.resourceFailures;
             return;
         }
     }

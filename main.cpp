@@ -5422,12 +5422,18 @@ void render()
     {
       gpuPickFocus.waitingResult = false;
       gpuPickFocus.pendingFrames = 0;
-      std::cout << "GPU pick capacity exceeded meshes="
-                << queueStats.droppedMeshes << "/"
+      std::cout << "GPU pick queue full meshes="
+                << queueStats.queuedMeshes << "/"
                 << queueStats.meshCapacity
-                << " triangles=" << queueStats.droppedTriangles
+                << " triangles=" << queueStats.queuedTriangles
                 << "/" << queueStats.triangleCapacity
+                << " dropped="
+                << (queueStats.droppedMeshes + queueStats.droppedTriangles)
                 << "; using CPU fallback" << std::endl;
+      if (queueStats.resourceFailures != 0)
+        std::cout << "GPU pick buffer creation failed on "
+                  << queueStats.resourceFailures
+                  << " geometries" << std::endl;
       reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
       gpuPickFocus.camera.reset();
     }

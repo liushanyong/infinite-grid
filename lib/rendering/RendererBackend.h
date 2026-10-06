@@ -271,6 +271,9 @@ struct GpuPickQueueStats
     size_t queuedTriangles = 0;
     size_t droppedMeshes = 0;
     size_t droppedTriangles = 0;
+    // GPU buffer creations that failed outright (driver/resource) —
+    // counted separately so they never masquerade as capacity drops.
+    size_t resourceFailures = 0;
 
     bool capacityExceeded() const
     {
