@@ -151,6 +151,118 @@ inline Face *makePlanarFaceFromCorners(
     return face;
 }
 
+// One side of an explicitly-ordered ring: the corner position plus
+// optional arc geometry for the side running from this corner to the
+// next.  Used by the M4 blend builders, where ring order is meaningful
+// (the cylinder patch ring is not planar, so no angle sort applies).
+struct RingSide
+{
+    AcGePoint3d point;
+    bool arc = false;
+    AcGePoint3d arcCenter{0.0, 0.0, 0.0};
+    AcGeVector3d arcAxis{0.0, 0.0, 1.0};
+};
+
+// Builds a face from an explicitly-ordered ring (CCW around |normal|
+// for a planar face; for a cylindrical face the patch ring walks the
+// surface counter-clockwise around outward radial normals).  Vertices
+// and edges dedupe through the shared maps; arc edges canonicalize to
+// the CCW span <= pi from edge->start, so the same physical arc built
+// from either adjacent face lands on one shared Edge object with
+// opposite traversal flags.
+inline Face *makeFaceFromRingSpec(
+    Builder &builder, Shell *shell,
+    std::map<PosKey, Vertex *> &vertices,
+    std::map<std::pair<PosKey, PosKey>, std::pair<Edge *, bool>> &edgeMap,
+    std::map<std::pair<PosKey, PosKey>, Edge *> &arcEdgeMap,
+    const RingSide *ring, std::size_t count,
+    const AcGeVector3d &normal, bool cylindrical = false,
+    const Cylinder &cylinder = {})
+{
+    std::vector<CoEdge *> traversal;
+    traversal.reserve(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const RingSide &side = ring[i];
+        const RingSide &next = ring[(i + 1) % count];
+        Vertex *a = vertexAt(builder, vertices, side.point);
+        Vertex *b = vertexAt(builder, vertices, next.point);
+        if (!side.arc)
+        {
+            Edge *edge;
+            bool forward;
+            edgeAt(builder, edgeMap, a, b, edge, forward);
+            traversal.push_back(forward ? edge->coedge[0]
+                                        : edge->coedge[1]);
+            continue;
+        }
+
+        // Arc side: canonicalize to the CCW span <= pi so both
+        // adjacent faces share one Edge regardless of declared
+        // direction.
+        AcGeCircArc3d arc(side.arcCenter, side.arcAxis,
+                          side.arcCenter.distanceTo(side.point));
+        const AcGeVector3d u = arc.referenceAxis();
+        const AcGeVector3d w = arc.normal.crossProduct(u);
+        auto angleOf = [&](const AcGePoint3d &p) {
+            const AcGeVector3d delta = p - arc.center;
+            return std::atan2(delta.dotProduct(w), delta.dotProduct(u));
+        };
+        const double phiA = angleOf(side.point);
+        const double phiB = angleOf(next.point);
+        double span = phiB - phiA;
+        while (span <= -3.14159265358979323846)
+            span += 6.2831853071795864769;
+        while (span > 3.14159265358979323846)
+            span -= 6.2831853071795864769;
+
+        const PosKey keyA = positionKey(a->point);
+        const PosKey keyB = positionKey(b->point);
+        const std::pair<PosKey, PosKey> key =
+            keyA < keyB ? std::make_pair(keyA, keyB)
+                        : std::make_pair(keyB, keyA);
+        Edge *edge;
+        bool forward;
+        auto found = arcEdgeMap.find(key);
+        if (found != arcEdgeMap.end())
+        {
+            edge = found->second;
+            forward = edge->start == a;
+        }
+        else
+        {
+            if (span >= 0.0)
+            {
+                edge = builder.createEdge(a, b);
+                edge->isArc = true;
+                edge->arc = AcGeCircArc3d(side.arcCenter, side.arcAxis,
+                                          side.arcCenter.distanceTo(
+                                              side.point),
+                                          phiA, phiA + span);
+            }
+            else
+            {
+                edge = builder.createEdge(b, a);
+                edge->isArc = true;
+                edge->arc = AcGeCircArc3d(side.arcCenter, side.arcAxis,
+                                          side.arcCenter.distanceTo(
+                                              side.point),
+                                          phiB, phiB - span);
+            }
+            arcEdgeMap[key] = edge;
+            forward = edge->start == a;
+        }
+        traversal.push_back(forward ? edge->coedge[0] : edge->coedge[1]);
+    }
+
+    Face *face = builder.createFace(shell, {ring[0].point, normal});
+    face->cylindrical = cylindrical;
+    face->cylinder = cylinder;
+    face->outerLoop = builder.createLoop(face, traversal.data(),
+                                         traversal.size());
+    return face;
+}
+
 // Axis-aligned box [0,size]^3 offset by |origin| with outward normals.
 inline Body *makeBox(Arena &arena, const AcGePoint3d &origin, double size)
 {

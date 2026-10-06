@@ -16,6 +16,7 @@
 #include <string>
 
 #include "brep/Arena.h"
+#include "ge/gecurve3d.h"
 #include "ge/gepoint.h"
 
 namespace brep
@@ -28,7 +29,8 @@ class Face;
 class Shell;
 class Body;
 
-// ---- geometry payload (M2 keeps planar faces; curves arrive with M3) ----
+// ---- geometry payload (M4: planar + cylindrical faces, line + arc
+// edges) ----
 
 struct Plane
 {
@@ -40,6 +42,16 @@ struct Plane
         const AcGeVector3d delta = point - origin;
         return delta.dotProduct(normal);
     }
+};
+
+// Right circular cylinder surface: axis through |origin| along the unit
+// |axis|, radius |radius|.  Faces carrying this surface are oriented
+// with outward radial normals.
+struct Cylinder
+{
+    AcGePoint3d origin{0.0, 0.0, 0.0};
+    AcGeVector3d axis{0.0, 0.0, 1.0};
+    double radius = 1.0;
 };
 
 // ---- topology ----
@@ -55,6 +67,12 @@ struct Edge
     Vertex *start = nullptr;
     Vertex *end = nullptr;
     CoEdge *coedge[2] = {nullptr, nullptr}; // the two sides
+    // Arc geometry (M4-c): when |isArc|, the side start->end follows
+    // the arc CCW around arc.normal from arc.startAngle to arc.endAngle
+    // (span <= pi, AcGeCircArc3d pointAt convention).  Coedges traversing
+    // the edge backwards walk the same arc in reverse.
+    bool isArc = false;
+    AcGeCircArc3d arc;
 };
 
 struct CoEdge
@@ -78,6 +96,8 @@ struct Face
     Loop *outerLoop = nullptr; // single loop in M2
     Shell *shell = nullptr;
     Plane surface;
+    bool cylindrical = false; // when true, |cylinder| carries the surface
+    Cylinder cylinder;
     Face *next = nullptr; // shell face list
 };
 

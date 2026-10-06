@@ -15,6 +15,8 @@
 #include "brep/BRepBuild.h"
 #include "brep/Validate.h"
 #include "brep/BRepBoolean.h"
+#include "brep/BRepBlend.h"
+#include "brep/BRepRayCast.h"
 
 namespace brep
 {
@@ -333,6 +335,186 @@ inline int runKernelSelfTest()
             if (issue.error == ValidateError::kCoedgePartnerBroken)
                 partnerDetected = true;
         check(partnerDetected, "broken radial pairing detected");
+
+        // ---- milestone 4: chamfer / thicken / fillet / raycast ----
+        auto findEdgeByPoints = [](Body *b, const AcGePoint3d &pa,
+                                   const AcGePoint3d &pb) -> Edge * {
+            for (Face *f = b->shell->firstFace; f != nullptr;
+                 f = f->next)
+            {
+                CoEdge *ce = f->outerLoop->first;
+                do {
+                    if ((ce->edge->start->point.distanceTo(pa) <
+                             1.0e-9 &&
+                         ce->edge->end->point.distanceTo(pb) <
+                             1.0e-9) ||
+                        (ce->edge->start->point.distanceTo(pb) <
+                             1.0e-9 &&
+                         ce->edge->end->point.distanceTo(pa) <
+                             1.0e-9))
+                        return ce->edge;
+                    ce = ce->next;
+                } while (ce != f->outerLoop->first);
+            }
+            return nullptr;
+        };
+        auto countFaces = [](const Body *b) {
+            int count = 0;
+            for (const Face *f = b->shell->firstFace; f != nullptr;
+                 f = f->next)
+                ++count;
+            return count;
+        };
+
+        {
+            Arena chArena;
+            Body *box = makeBox(chArena, {0.0, 0.0, 0.0}, 10.0);
+            Edge *target = findEdgeByPoints(
+                box, {10.0, 0.0, 10.0}, {10.0, 0.0, 0.0});
+            check(target != nullptr, "chamfer target edge found");
+            Body *ch = chamferEdge(box, target, 1.0);
+            check(ch != nullptr, "chamfer succeeds");
+            if (ch != nullptr)
+            {
+                const double chVol = signedVolume(ch->shell);
+                std::fprintf(report, "chamfer volume=%.6f faces=%d\n",
+                             chVol, countFaces(ch));
+                check(std::abs(chVol - 995.0) < 1.0e-6,
+                      "chamfer volume is 995");
+                check(validate(ch).empty(), "chamfer validates clean");
+                check(countFaces(ch) == 7,
+                      "chamfered box has 7 faces");
+            }
+        }
+
+        {
+            Arena thArena;
+            Builder builder(thArena);
+            std::map<PosKey, Vertex *> vertices;
+            std::map<std::pair<PosKey, PosKey>,
+                     std::pair<Edge *, bool>> edgeMap;
+            Body *sheet = builder.createBody();
+            const AcGePoint3d square[4] = {
+                {0.0, 0.0, 0.0}, {10.0, 0.0, 0.0},
+                {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+            makePlanarFaceFromCorners(builder, sheet->shell, vertices,
+                                      edgeMap, square, 4,
+                                      {0.0, 0.0, 1.0});
+            AcGeVector3d outNormal;
+            Body *slab = thickenSheet(thArena, sheet, 2.0, outNormal);
+            check(slab != nullptr, "thicken succeeds");
+            if (slab != nullptr)
+            {
+                const double slabVol = signedVolume(slab->shell);
+                std::fprintf(report, "thicken volume=%.6f\n", slabVol);
+                check(std::abs(slabVol - 200.0) < 1.0e-6,
+                      "thickened slab volume is 200");
+                check(validate(slab).empty(),
+                      "thickened slab validates clean");
+                check(std::abs(outNormal.z - 1.0) < 1.0e-9,
+                      "thicken normal is +z");
+            }
+        }
+
+        {
+            Arena fiArena;
+            Body *box = makeBox(fiArena, {0.0, 0.0, 0.0}, 10.0);
+            Edge *target = findEdgeByPoints(
+                box, {10.0, 0.0, 10.0}, {10.0, 0.0, 0.0});
+            check(target != nullptr, "fillet target edge found");
+            Body *fr = filletEdge(box, target, 2.0);
+            check(fr != nullptr, "fillet succeeds");
+            if (fr != nullptr)
+            {
+                const double pi = 3.14159265358979323846;
+                const double expected =
+                    1000.0 - (1.0 - pi / 4.0) * 2.0 * 2.0 * 10.0;
+                const double frVol = signedVolume(fr->shell);
+                int cylinderFaces = 0;
+                int arcEdges = 0;
+                std::map<const void *, bool> arcSeen;
+                for (const Face *f = fr->shell->firstFace; f != nullptr;
+                     f = f->next)
+                {
+                    if (f->cylindrical)
+                        ++cylinderFaces;
+                    const CoEdge *ce = f->outerLoop->first;
+                    do {
+                        if (ce->edge->isArc)
+                            arcSeen[ce->edge] = true;
+                        ce = ce->next;
+                    } while (ce != f->outerLoop->first);
+                }
+                arcEdges = int(arcSeen.size());
+                std::fprintf(report,
+                             "fillet volume=%.9f faces=%d cylinders=%d"
+                             " arcs=%d\n",
+                             frVol, countFaces(fr), cylinderFaces,
+                             arcEdges);
+                check(std::abs(frVol - expected) < 1.0e-6,
+                      "fillet volume is 991.4159");
+                check(validate(fr).empty(), "fillet validates clean");
+                check(countFaces(fr) == 7, "filleted box has 7 faces");
+                check(cylinderFaces == 1,
+                      "fillet adds one cylinder face");
+                check(arcEdges == 2,
+                      "fillet has two shared arc edges");
+            }
+        }
+
+        {
+            Arena rcArena;
+            Body *box = makeBox(rcArena, {0.0, 0.0, 0.0}, 10.0);
+            auto hit = rayCast(box, {20.0, 5.0, 5.0}, {-1.0, 0.0, 0.0});
+            check(hit.has_value(), "raycast hits the box");
+            if (hit.has_value())
+            {
+                check(std::abs(hit->point.x - 10.0) < 1.0e-9 &&
+                          std::abs(hit->point.y - 5.0) < 1.0e-9,
+                      "raycast hit point on px face");
+                check(hit->face != nullptr &&
+                          hit->face->surface.normal.x > 0.9,
+                      "raycast hit face is px");
+                check(std::abs(hit->distance - 10.0) < 1.0e-9,
+                      "raycast hit distance is 10");
+            }
+            auto miss = rayCast(box, {20.0, 5.0, 5.0}, {1.0, 0.0, 0.0});
+            check(!miss.has_value(), "raycast away from the box misses");
+
+            // Curved patch picking through the filleted body.
+            Arena frArena;
+            Body *fbox = makeBox(frArena, {0.0, 0.0, 0.0}, 10.0);
+            Edge *target = findEdgeByPoints(
+                fbox, {10.0, 0.0, 10.0}, {10.0, 0.0, 0.0});
+            Body *fr = filletEdge(fbox, target, 2.0);
+            check(fr != nullptr, "fillet for raycast succeeds");
+            if (fr != nullptr)
+            {
+                const double quarter = 0.5857864376269049;
+                auto chit = rayCast(fr, {20.0, quarter, 5.0},
+                                    {-1.0, 0.0, 0.0});
+                check(chit.has_value() && chit->face != nullptr &&
+                          chit->face->cylindrical,
+                      "raycast hits the fillet cylinder");
+                if (chit.has_value())
+                {
+                    // Tessellated chord error ~0.015 at 16 slices.
+                    std::fprintf(report,
+                                 "raycast cylinder hit=(%.4f,%.4f,%.4f)"
+                                 " n=(%.3f,%.3f,%.3f)\n",
+                                 chit->point.x, chit->point.y,
+                                 chit->point.z, chit->normal.x,
+                                 chit->normal.y, chit->normal.z);
+                    check(std::abs(chit->point.x - 9.41421356237) < 0.03,
+                          "cylinder hit x matches the arc");
+                    check(chit->normal.x > 0.65 &&
+                              chit->normal.x < 0.76 &&
+                              chit->normal.y < -0.65 &&
+                              chit->normal.y > -0.76,
+                          "cylinder hit normal is radial");
+                }
+            }
+        }
     }
 
     std::fprintf(report, fails == 0 ? "KERNEL SELFTEST PASSED\n"
