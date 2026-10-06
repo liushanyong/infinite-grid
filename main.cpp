@@ -3075,12 +3075,13 @@ public:
     {
         objects = std::move(sceneObjects);
         nodes.clear();
+        bvh_ = ge::AcGeBoundBvh{};
         if (objects.empty())
             return;
 
         // Binned-SAH construction (ge::AcGeBoundBvh, Embree-style): the
-        // partition permutes the primitive order, so the objects array is
-        // permuted to match and the nodes are copied 1:1.
+        // BVH instance is retained for ordered ray traversal; the node
+        // copies keep the legacy collect() path working.
         std::vector<ge::AcGeBoundBox3d> bounds;
         bounds.reserve(objects.size());
         for (const ObjectT *object : objects)
@@ -3089,18 +3090,16 @@ public:
             bounds.push_back({AcGePoint3d(b.min.x, b.min.y, b.min.z),
                               AcGePoint3d(b.max.x, b.max.y, b.max.z)});
         }
-
-        ge::AcGeBvhBuildResult plan =
-            ge::AcGeBoundBvh::partition(bounds);
+        bvh_.build(std::move(bounds));
 
         std::vector<const ObjectT *> ordered;
         ordered.reserve(objects.size());
-        for (std::uint32_t index : plan.order)
+        for (std::uint32_t index : bvh_.order())
             ordered.push_back(objects[index]);
         objects = std::move(ordered);
 
-        nodes.reserve(plan.nodes.size());
-        for (const ge::AcGeBvhNode &node : plan.nodes)
+        nodes.reserve(bvh_.nodes().size());
+        for (const ge::AcGeBvhNode &node : bvh_.nodes())
         {
             nodes.push_back({WorldAabb2{glm::dvec3(node.bounds.min.x,
                                                     node.bounds.min.y,
@@ -3111,6 +3110,23 @@ public:
                              node.leftChild, node.rightChild, node.begin,
                              node.end, node.leaf});
         }
+    }
+
+    // Near-ordered ray traversal over the primitive boxes; the callback
+    // receives (object index, box entry depth) and returns false to stop
+    // the walk.  Used by CPU picking so exact tests run nearest-first and
+    // prune with the current best depth.
+    template <typename Callback>
+    void rayTraverse(const glm::dvec3 &origin, const glm::dvec3 &direction,
+                     double tMin, double tMax, Callback &&callback) const
+    {
+        bvh_.rayTraverse(AcGePoint3d(origin.x, origin.y, origin.z),
+                         direction, tMin, tMax, callback);
+    }
+
+    const ObjectT *object(std::uint32_t index) const
+    {
+        return objects[index];
     }
 
     template <typename Visitor>
@@ -3156,6 +3172,7 @@ private:
 
     std::vector<const ObjectT *> objects;
     std::vector<Node> nodes;
+    ge::AcGeBoundBvh bvh_; // retained for ordered ray traversal
 };
 
 // Static median-split BVH over the immutable startup scene.  World positions
@@ -4099,28 +4116,14 @@ PickResult pickObjectAlongRay(const PickRay &ray,
 
     // CAD vector primitives are CPU-tessellated for drawing; test that same
     // geometry so lines, curves, fills, and points participate in autofocus.
+    // The pick is a near-ordered BVH traversal: candidate boxes are visited
+    // closest-first, and the exact per-kind tests prune with nearestDepth,
+    // so the walk stops once no remaining candidate can win (previously a
+    // flat scan over all visible candidates).
     if (cadEntityDemoEnabled())
     {
         const VectorPrimitivesTessellation &cad =
             getVectorPrimitivesTessellation();
-        std::vector<const VisibilityCandidate *> cadHits;
-        getCadRangeBvh().collect(
-            [&](const WorldAabb2 &bounds) {
-                double hitDepth = 0.0;
-                return rayIntersectsAabb(ray, bounds, hitDepth);
-            },
-            cadHits);
-        std::array<std::vector<const VisibilityCandidate *>, 4>
-            cadCandidates;
-        for (const VisibilityCandidate *candidate : cadHits)
-        {
-            const size_t slot =
-                candidate->kind == VisibilityKind::CadStroke ? 0
-                : candidate->kind == VisibilityKind::CadFill ? 1
-                : candidate->kind == VisibilityKind::CadCurve ? 2
-                                                             : 3;
-            cadCandidates[slot].push_back(candidate);
-        }
         const auto cadMeshState = [&](const MeshEntityRecord &mesh) {
             if (!meshEntityVisible(mesh))
                 return VisibilityState::Offscreen;
@@ -4133,137 +4136,132 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.cadFillCount = cad.geometry.fills.size();
             trace.cadPointCount = cad.geometry.points.size();
         }
-        for (const VisibilityCandidate *candidate : cadCandidates[0])
-        {
-            const acgs::AcGsEntityRange &range = *candidate->cadRange;
-
-            double bandDepth = 0.0;
-            if (rayIntersectsCadPairedBand(ray, cad.geometry, range,
-                                           bandDepth))
-            {
-                considerCadOverlayHit(bandDepth, range.name.c_str(),
-                                      VisibilityKind::CadStroke);
-                continue;
-            }
-
-            for (size_t strokeIndex = range.begin;
-                 strokeIndex < range.begin + range.count; ++strokeIndex)
-            {
-                const acdb::Stroke &stroke =
-                    cad.geometry.strokes[strokeIndex];
-                if (!stroke.common.visible || stroke.points.size() < 2)
-                    continue;
-
-                const size_t segmentCount =
-                    stroke.closed ? stroke.points.size()
-                                  : stroke.points.size() - 1;
-                for (size_t i = 0; i < segmentCount; ++i)
+        getCadRangeBvh().rayTraverse(
+            ray.origin, ray.direction, pickMinDepth(), pickMaxDepth(),
+            [&](std::uint32_t objectIndex, double entryDepth) {
+                if (entryDepth > nearestDepth)
+                    return false; // nothing later can beat the best hit
+                const VisibilityCandidate &candidate =
+                    *getCadRangeBvh().object(objectIndex);
+                const acgs::AcGsEntityRange &range = *candidate.cadRange;
+                switch (candidate.kind)
                 {
-                    double hitDepth = 0.0;
-                    const size_t next = (i + 1) % stroke.points.size();
-                    if (rayIntersectsSegmentWithTolerance(
-                            ray, stroke.points[i], stroke.points[next],
-                            [&](double depth) {
-                                return cadStrokePickTolerance(
-                                    ray, stroke,
-                                    ray.origin + ray.direction * depth);
-                            },
-                            hitDepth, pickMinDepth(), pickMaxDepth(),
-                            stroke.semiInfinite))
+                case VisibilityKind::CadStroke:
+                {
+                    double bandDepth = 0.0;
+                    if (rayIntersectsCadPairedBand(ray, cad.geometry, range,
+                                                   bandDepth))
                     {
-                        considerCadOverlayHit(
-                            hitDepth, range.name.c_str(),
-                            VisibilityKind::CadStroke);
+                        considerCadOverlayHit(bandDepth, range.name.c_str(),
+                                              VisibilityKind::CadStroke);
+                        break;
                     }
+                    for (size_t strokeIndex = range.begin;
+                         strokeIndex < range.begin + range.count;
+                         ++strokeIndex)
+                    {
+                        const acdb::Stroke &stroke =
+                            cad.geometry.strokes[strokeIndex];
+                        if (!stroke.common.visible ||
+                            stroke.points.size() < 2)
+                            continue;
+                        const size_t segmentCount =
+                            stroke.closed ? stroke.points.size()
+                                          : stroke.points.size() - 1;
+                        for (size_t i = 0; i < segmentCount; ++i)
+                        {
+                            double hitDepth = 0.0;
+                            const size_t next =
+                                (i + 1) % stroke.points.size();
+                            if (rayIntersectsSegmentWithTolerance(
+                                    ray, stroke.points[i],
+                                    stroke.points[next],
+                                    [&](double depth) {
+                                        return cadStrokePickTolerance(
+                                            ray, stroke,
+                                            ray.origin +
+                                                ray.direction * depth);
+                                    },
+                                    hitDepth, pickMinDepth(),
+                                    pickMaxDepth(), stroke.semiInfinite))
+                            {
+                                considerCadOverlayHit(
+                                    hitDepth, range.name.c_str(),
+                                    VisibilityKind::CadStroke);
+                            }
+                        }
+                    }
+                    break;
                 }
-            }
-        }
-
-        for (const VisibilityCandidate *candidate : cadCandidates[1])
-        {
-            const acgs::AcGsEntityRange &range = *candidate->cadRange;
-
-            for (size_t fillIndex = range.begin;
-                 fillIndex < range.begin + range.count; ++fillIndex)
-            {
-                const acdb::Triangle &triangle =
-                    cad.geometry.fills[fillIndex];
-                if (!triangle.common.visible)
-                    continue;
-
-                double hitDepth = 0.0;
-                if (rayIntersectsTriangle(ray, triangle.a, triangle.b,
-                                          triangle.c, hitDepth))
+                case VisibilityKind::CadFill:
                 {
-                    considerCadSurfaceHit(hitDepth, range.name.c_str());
+                    for (size_t fillIndex = range.begin;
+                         fillIndex < range.begin + range.count; ++fillIndex)
+                    {
+                        const acdb::Triangle &triangle =
+                            cad.geometry.fills[fillIndex];
+                        if (!triangle.common.visible)
+                            continue;
+                        double hitDepth = 0.0;
+                        if (rayIntersectsTriangle(ray, triangle.a,
+                                                  triangle.b, triangle.c,
+                                                  hitDepth))
+                        {
+                            considerCadSurfaceHit(hitDepth,
+                                                  range.name.c_str());
+                        }
+                    }
+                    break;
                 }
-            }
-        }
-
-        for (size_t meshIndex = 0; meshIndex < cad.meshes.size(); ++meshIndex)
-        {
-            const MeshEntityRecord &mesh = cad.meshes[meshIndex];
-            double hitDepth = 0.0;
-            size_t faceIndex = 0;
-            if (cadMeshState(mesh) != VisibilityState::Offscreen &&
-                rayIntersectsRenderedMesh(ray, mesh, hitDepth, &faceIndex))
-            {
-                if (hitDepth < nearestMeshDepth)
+                case VisibilityKind::CadCurve:
                 {
-                    nearestMeshDepth = hitDepth;
-                    nearestMeshOpaque = mesh.entity.common.color.a >= 0.999f;
+                    if (!candidate.curve)
+                        break;
+                    const std::vector<glm::dvec3> points =
+                        acgs::AcGsView::sampleCurveBatch(*candidate.curve);
+                    for (size_t i = 0; i + 1 < points.size(); ++i)
+                    {
+                        double hitDepth = 0.0;
+                        if (rayIntersectsSegment(
+                                ray, points[i], points[i + 1],
+                                cadCurvePickTolerance(ray, points[i + 1]),
+                                hitDepth))
+                        {
+                            considerCadOverlayHit(
+                                hitDepth, candidate.curve->name.c_str(),
+                                VisibilityKind::CadCurve);
+                        }
+                    }
+                    break;
                 }
-                considerCadSurfaceHit(hitDepth, mesh.displayName().c_str(),
-                                      faceIndex);
-                // Cad meshes go through the CAD surface path, but remember their
-                // translucency for overlay resolution below.
-            }
-        }
-
-        for (const VisibilityCandidate *candidate : cadCandidates[2])
-        {
-            if (!candidate->curve)
-                continue;
-            const std::vector<glm::dvec3> points =
-                acgs::AcGsView::sampleCurveBatch(*candidate->curve);
-            for (size_t i = 0; i + 1 < points.size(); ++i)
-            {
-                double hitDepth = 0.0;
-                if (rayIntersectsSegment(ray, points[i], points[i + 1],
-                                         cadCurvePickTolerance(ray,
-                                         points[i + 1]),
-                                         hitDepth))
+                case VisibilityKind::CadPoint:
                 {
-                    considerCadOverlayHit(
-                        hitDepth, candidate->curve->name.c_str(),
-                        VisibilityKind::CadCurve);
+                    for (size_t pointIndex = range.begin;
+                         pointIndex < range.begin + range.count;
+                         ++pointIndex)
+                    {
+                        const acdb::TessellatedPoint &point =
+                            cad.geometry.points[pointIndex];
+                        if (!point.common.visible)
+                            continue;
+                        double hitDepth = 0.0;
+                        if (rayIntersectsPoint(
+                                ray, point.location,
+                                cadPointPickTolerance(ray, point),
+                                hitDepth))
+                        {
+                            considerCadOverlayHit(
+                                hitDepth, range.name.c_str(),
+                                VisibilityKind::CadPoint);
+                        }
+                    }
+                    break;
                 }
-            }
-        }
-
-        for (const VisibilityCandidate *candidate : cadCandidates[3])
-        {
-            const acgs::AcGsEntityRange &range = *candidate->cadRange;
-
-            for (size_t pointIndex = range.begin;
-                 pointIndex < range.begin + range.count; ++pointIndex)
-            {
-                const acdb::TessellatedPoint &point =
-                    cad.geometry.points[pointIndex];
-                if (!point.common.visible)
-                    continue;
-
-                double hitDepth = 0.0;
-                if (rayIntersectsPoint(ray, point.location,
-                                       cadPointPickTolerance(ray, point),
-                                       hitDepth))
-                {
-                    considerCadOverlayHit(
-                        hitDepth, range.name.c_str(),
-                        VisibilityKind::CadPoint);
+                default:
+                    break;
                 }
-            }
-        }
+                return true;
+            });
     }
 
     if (trace.cadOverlayHit)

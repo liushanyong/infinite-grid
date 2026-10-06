@@ -87,10 +87,14 @@ public:
             refs.push_back({bounds_[i], bounds_[i].center(), i});
         nodes_.clear();
         order_.assign(refs.size(), 0);
+        positionOf_.assign(refs.size(), 0);
         partitionRange(refs, 0, std::uint32_t(refs.size()), settings,
                        nodes_, 0);
         for (std::uint32_t i = 0; i < refs.size(); ++i)
+        {
             order_[i] = refs[i].index;
+            positionOf_[refs[i].index] = i;
+        }
     }
 
     std::size_t size() const { return bounds_.size(); }
@@ -100,6 +104,7 @@ public:
         return bounds_[index];
     }
     const std::vector<AcGeBvhNode> &nodes() const { return nodes_; }
+    const std::vector<std::uint32_t> &order() const { return order_; }
 
     // Collects every primitive whose visited node bounds satisfy
     // |visitor| (frustum culling: receive bounds, return visible).
@@ -218,6 +223,149 @@ public:
             current = stack[--top].node;
         }
         return best;
+    }
+
+    // Near-ordered traversal visiting every primitive whose box the ray
+    // enters, nearest entry first.  |callback|(primitiveIndex, entryDepth)
+    // returns false to stop the walk (once an exact test has found a hit
+    // nearer than the remaining entries, nothing better can appear).
+    template <typename Callback>
+    void rayTraverse(const AcGePoint3d &origin, const glm::dvec3 &direction,
+                     double tMin, double tMax, Callback &&callback) const
+    {
+        if (nodes_.empty())
+            return;
+        const glm::dvec3 inverseDirection = 1.0 / direction;
+
+        struct StackItem
+        {
+            std::uint32_t node;
+            double distance;
+        };
+        std::array<StackItem, 128> stack{};
+        int top = 0;
+
+        std::optional<double> rootEntry =
+            slabEntry(nodes_[0].bounds, origin, inverseDirection, tMin, tMax);
+        if (!rootEntry)
+            return;
+
+        std::uint32_t current = 0;
+        double bestDistance = tMax;
+        while (true)
+        {
+            const AcGeBvhNode &node = nodes_[current];
+            if (node.leaf)
+            {
+                for (std::uint32_t i = node.begin; i < node.end; ++i)
+                {
+                    const std::uint32_t primitive = order_[i];
+                    std::optional<double> entry = slabEntry(
+                        bounds_[primitive], origin, inverseDirection, tMin,
+                        bestDistance);
+                    if (entry && !callback(primitive, *entry))
+                        return; // callback stopped the walk
+                }
+            }
+            else
+            {
+                const std::optional<double> leftEntry = slabEntry(
+                    nodes_[node.leftChild].bounds, origin, inverseDirection,
+                    tMin, bestDistance);
+                const std::optional<double> rightEntry = slabEntry(
+                    nodes_[node.rightChild].bounds, origin, inverseDirection,
+                    tMin, bestDistance);
+                if (leftEntry && rightEntry)
+                {
+                    if (*leftEntry <= *rightEntry)
+                    {
+                        stack[top++] = {node.rightChild, *rightEntry};
+                        current = node.leftChild;
+                        continue;
+                    }
+                    stack[top++] = {node.leftChild, *leftEntry};
+                    current = node.rightChild;
+                    continue;
+                }
+                if (leftEntry)
+                {
+                    current = node.leftChild;
+                    continue;
+                }
+                if (rightEntry)
+                {
+                    current = node.rightChild;
+                    continue;
+                }
+            }
+
+            // The stack is not distance-sorted after mixed descents, so
+            // skip (do not abandon) entries beyond the best hit.
+            while (top > 0 && stack[top - 1].distance > bestDistance)
+                --top;
+            if (top == 0)
+                break;
+            current = stack[--top].node;
+        }
+    }
+
+    // ---- dynamic refit: entity-level local update ----
+
+    // After an entity's bounds change (an edit), recompute the leaf and
+    // every ancestor bound on its path without reordering anything
+    // (ObjectARX-style refit: cheap, no rebuild; tree quality degrades
+    // gracefully until the next full build).
+    void refitPrimitive(std::uint32_t primitive,
+                        const AcGeBoundBox3d &newBounds)
+    {
+        bounds_[primitive] = newBounds;
+        if (nodes_.empty())
+            return;
+        // Walk the tree, tightening the leaf that contains the primitive
+        // and every ancestor on the path.
+        std::array<std::uint32_t, 128> path{};
+        int depth = 0;
+        std::uint32_t current = 0;
+        std::uint32_t leafNode = std::uint32_t(-1);
+        while (true)
+        {
+            path[depth++] = current;
+            const AcGeBvhNode &node = nodes_[current];
+            if (node.leaf)
+            {
+                leafNode = current;
+                break;
+            }
+            const AcGeBvhNode &left = nodes_[node.leftChild];
+            const AcGeBvhNode &right = nodes_[node.rightChild];
+            // Descend into the child whose ref range covers the
+            // primitive's permuted position.
+            const std::uint32_t position = positionOf_[primitive];
+            if (position >= left.begin && position < left.end)
+                current = node.leftChild;
+            else if (position >= right.begin && position < right.end)
+                current = node.rightChild;
+            else
+                return; // primitive not resident; nothing to refit
+        }
+        (void)leafNode;
+        // Recompute bounds bottom-up along the recorded path.
+        for (int i = depth - 1; i >= 0; --i)
+        {
+            AcGeBvhNode &node = nodes_[path[i]];
+            if (node.leaf)
+            {
+                AcGeBoundBox3d merged = bounds_[order_[node.begin]];
+                for (std::uint32_t k = node.begin + 1; k < node.end; ++k)
+                    merged = merge(merged, bounds_[order_[k]]);
+                node.bounds = merged;
+            }
+            else
+            {
+                node.bounds = merge(nodes_[node.leftChild].bounds,
+                                    nodes_[node.rightChild].bounds);
+            }
+        }
     }
 
     // ---- reusable partition (adapters build their own node types) ----
@@ -502,6 +650,7 @@ private:
     std::vector<AcGeBoundBox3d> bounds_;
     std::vector<AcGeBvhNode> nodes_;
     std::vector<std::uint32_t> order_;
+    std::vector<std::uint32_t> positionOf_; // primitive -> permuted slot
 };
 
 } // namespace ge
