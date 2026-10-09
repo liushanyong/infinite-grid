@@ -21,6 +21,9 @@
 // yet — open() re-mirror covers loaded documents; live NOD growth is
 // a follow-up.
 
+#include <unordered_set>
+#include <vector>
+
 #include "acdb/AcDbDatabase.h"
 #include "acgs/EcsScene.h"
 
@@ -41,21 +44,31 @@ public:
     DocumentSceneBridge(const DocumentSceneBridge &) = delete;
     DocumentSceneBridge &operator=(const DocumentSceneBridge &) = delete;
 
-    // Mirrors the document's current residents: every entity and
-    // non-graphical object receives an ECS entity keyed by its
-    // AcDbObjectId.  Residents already mirrored stay untouched.
+    // Mirrors current document residents, refreshes drawable attributes,
+    // marks resident entities dirty, and forgets handles absent after load.
     void open()
     {
+        std::unordered_set<std::uint64_t> residents;
         document_.forEachEntity([&](acdb::AcDbHandle handle,
                                     const acdb::AcDbEntityVariant &) {
+            residents.insert(handle.value);
             store_.ensure(acdb::AcDbObjectId{handle});
             attachAttributes(handle);
+            store_.markDirty(acdb::AcDbObjectId{handle});
         });
         document_.forEachNonGraphicalObject(
             [&](acdb::AcDbHandle handle,
                 const acdb::AcDbNonGraphicalObject &) {
+                residents.insert(handle.value);
                 store_.ensure(acdb::AcDbObjectId{handle});
             });
+        std::vector<acdb::AcDbObjectId> stale;
+        store_.forEachObjectId([&](acdb::AcDbObjectId objectId) {
+            if (!residents.contains(objectId.persistentHandle().value))
+                stale.push_back(objectId);
+        });
+        for (const acdb::AcDbObjectId objectId : stale)
+            store_.forget(objectId);
     }
 
     SceneStore &store() { return store_; }
@@ -79,6 +92,7 @@ public:
     void objectUnerased(const acdb::AcDbDatabase &,
                         acdb::AcDbHandle handle) override
     {
+        attachAttributes(handle);
         store_.markDirty(acdb::AcDbObjectId{handle});
     }
 
@@ -87,6 +101,15 @@ public:
     {
         store_.forget(acdb::AcDbObjectId{handle});
     }
+
+    void objectModified(const acdb::AcDbDatabase &,
+                        acdb::AcDbHandle handle) override
+    {
+        attachAttributes(handle);
+        store_.markDirty(acdb::AcDbObjectId{handle});
+    }
+
+    void databaseReplaced(const acdb::AcDbDatabase &) override { open(); }
 
 private:
     // Populates the attribute components of one mirrored entity from its
@@ -120,6 +143,10 @@ private:
         {
             assignOrReplace(
                 InstanceXform{document_.referenceTransform(*reference)});
+        }
+        else if (registry.has<InstanceXform>(entity))
+        {
+            registry.remove<InstanceXform>(entity);
         }
     }
 

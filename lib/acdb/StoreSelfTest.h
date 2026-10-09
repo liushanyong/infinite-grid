@@ -145,6 +145,105 @@ inline int runStoreSelfTest()
             doc.applyUndoDelta(delta, true);
             check(store.contains(AcDbObjectId{undoHandle}),
                   "redo of insert notifies ensure");
+
+            // Mutable entity access captures the transaction before-image;
+            // commit, undo and redo all refresh render-side attributes and
+            // invalidate the entity's cached draw output.
+            const AcDbObjectId editedId{undoHandle};
+            store.clearDirty(editedId);
+            doc.beginTransaction();
+            AcDbEntityVariant *editedPayload = doc.getEntityMutable(undoHandle);
+            if (editedPayload != nullptr)
+            {
+                common(*editedPayload).setLayerName("Edited");
+                std::get<AcDbLine>(*editedPayload).start = {7.0, 0.0, 0.0};
+            }
+            const auto editDelta = doc.commitTransaction();
+            const entt::entity editedEntity = store.find(editedId);
+            check(store.isDirty(editedId) &&
+                      store.registry()
+                              .get<acgs::LayerRef>(editedEntity)
+                              .name == "Edited",
+                  "committed edit refreshes attributes and dirties draw cache");
+            doc.applyUndoDelta(editDelta, false);
+            check(store.isDirty(editedId) &&
+                      store.registry()
+                              .get<acgs::LayerRef>(editedEntity)
+                              .name == "0" &&
+                      std::get<AcDbLine>(*doc.getEntity(undoHandle))
+                              .start.x == 2.0,
+                  "undo refreshes geometry and attributes");
+            store.clearDirty(editedId);
+            doc.applyUndoDelta(editDelta, true);
+            check(store.isDirty(editedId) &&
+                      store.registry()
+                              .get<acgs::LayerRef>(editedEntity)
+                              .name == "Edited" &&
+                      std::get<AcDbLine>(*doc.getEntity(undoHandle))
+                              .start.x == 7.0,
+                  "redo refreshes geometry and attributes");
+
+            // A changed block-reference placement must reach the ECS render
+            // projection, not leave its previous instance transform cached.
+            const AcDbObjectId referenceId{refHandle};
+            store.clearDirty(referenceId);
+            doc.beginTransaction();
+            AcDbEntityVariant *referencePayload =
+                doc.getEntityMutable(refHandle);
+            if (referencePayload != nullptr)
+                std::get<AcDbBlockReference>(*referencePayload).position =
+                    {15.0, 6.0, 0.0};
+            const auto referenceDelta = doc.commitTransaction();
+            const auto &updatedTransform =
+                store.registry()
+                    .get<acgs::InstanceXform>(store.find(referenceId))
+                    .matrix;
+            check(store.isDirty(referenceId) &&
+                      std::abs(transformBy(AcGePoint3d(0.0, 0.0, 0.0),
+                                           updatedTransform)
+                                    .x -
+                                15.0) < 1e-9,
+                  "block-reference edit refreshes its instance transform");
+            doc.applyUndoDelta(referenceDelta, false);
+            const auto &undoneTransform =
+                store.registry()
+                    .get<acgs::InstanceXform>(store.find(referenceId))
+                    .matrix;
+            check(std::abs(transformBy(AcGePoint3d(0.0, 0.0, 0.0),
+                                      undoneTransform)
+                               .x -
+                           5.0) < 1e-9,
+                  "undo restores the block-reference transform");
+            doc.applyUndoDelta(referenceDelta, true);
+            const auto &redoneTransform =
+                store.registry()
+                    .get<acgs::InstanceXform>(store.find(referenceId))
+                    .matrix;
+            check(std::abs(transformBy(AcGePoint3d(0.0, 0.0, 0.0),
+                                      redoneTransform)
+                               .x -
+                           15.0) < 1e-9,
+                  "redo restores the block-reference transform");
+
+            // Replacing a loaded document reconciles the mirror instead of
+            // silently dropping its reactor subscription.
+            AcDbDatabase replacement;
+            AcDbLine replacementLine;
+            replacementLine.start = {20.0, 0.0, 0.0};
+            replacementLine.end = {21.0, 0.0, 0.0};
+            const AcDbHandle replacementHandle =
+                replacement.addEntity(std::move(replacementLine));
+            doc.replaceContents(std::move(replacement));
+            check(store.contains(AcDbObjectId{replacementHandle}) &&
+                      store.isDirty(AcDbObjectId{replacementHandle}) &&
+                      !store.contains(editedId) &&
+                      !store.contains(referenceId),
+                  "database replacement refreshes and reconciles the scene");
+            AcDbPoint afterReplace;
+            const AcDbHandle afterReplaceHandle =
+                doc.addEntity(std::move(afterReplace));
+            check(store.contains(AcDbObjectId{afterReplaceHandle}),
+                  "database replacement keeps its reactor attached");
         }
         // Bridge destroyed: later mutations stay unnoticed by the store.
         AcDbPoint stray;

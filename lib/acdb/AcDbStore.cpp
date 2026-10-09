@@ -1530,7 +1530,7 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
         loaded.setActiveLineTypeScale(activeLineTypeScale);
         loaded.setActiveLineWeight(activeLineWeight);
         loaded.restoreNextHandle(nextHandle);
-        database = std::move(loaded);
+        database.replaceContents(std::move(loaded));
         result.ok = true;
     }
     catch (const std::exception &error)

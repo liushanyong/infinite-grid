@@ -35,7 +35,7 @@ class AcDbDatabase;
 // ---- AcDbDatabaseReactor: mutation notifications (ObjectARX reactor) ----
 //
 // Minimal ARX-faithful lifecycle slice: append / erase / unerase /
-// remove, fired after the mutation has committed.  The in-memory
+// remove / modify, fired after the mutation has committed.  The in-memory
 // graphics mirror (acgs::DocumentSceneBridge) subscribes so ECS
 // entities stay in step with document residents.  Scope notes: load-time
 // bulk inserts (insertLoadedEntity / insertNonGraphicalObject) stay
@@ -55,6 +55,9 @@ public:
                                 AcDbHandle handle);
     virtual void objectRemoved(const AcDbDatabase &database,
                                AcDbHandle handle);
+    virtual void objectModified(const AcDbDatabase &database,
+                                AcDbHandle handle);
+    virtual void databaseReplaced(const AcDbDatabase &database);
 };
 
 class AcDbLayerTable
@@ -213,6 +216,8 @@ public:
     }
 
     const AcDbEntityVariant *getEntity(AcDbHandle handle) const;
+    // Mutable edits are captured by the active transaction; commit publishes
+    // a modification notification so scene mirrors refresh only committed data.
     AcDbEntityVariant *getEntityMutable(AcDbHandle handle);
 
     // Store/import path (AcDbStore::loadDatabase): inserts a fully
@@ -220,6 +225,8 @@ public:
     // membership is restored from the block-table rows themselves.
     // Returns false when |payload|'s handle collides or is invalid.
     bool insertLoadedEntity(AcDbEntityVariant payload);
+    // Replaces persisted document state without detaching live reactors.
+    void replaceContents(AcDbDatabase &&loaded);
 
     // Store/import path: restores the monotonic handle counter so
     // handles allocated after a load never collide with persisted ones.
@@ -438,6 +445,8 @@ private:
     void notifyErased(AcDbHandle handle);
     void notifyUnerased(AcDbHandle handle);
     void notifyRemoved(AcDbHandle handle);
+    void notifyModified(AcDbHandle handle);
+    void notifyDatabaseReplaced();
 
 public:
 

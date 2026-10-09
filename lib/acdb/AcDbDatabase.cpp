@@ -253,6 +253,8 @@ void AcDbDatabaseReactor::objectAppended(const AcDbDatabase &, AcDbHandle) {}
 void AcDbDatabaseReactor::objectErased(const AcDbDatabase &, AcDbHandle) {}
 void AcDbDatabaseReactor::objectUnerased(const AcDbDatabase &, AcDbHandle) {}
 void AcDbDatabaseReactor::objectRemoved(const AcDbDatabase &, AcDbHandle) {}
+void AcDbDatabaseReactor::objectModified(const AcDbDatabase &, AcDbHandle) {}
+void AcDbDatabaseReactor::databaseReplaced(const AcDbDatabase &) {}
 
 void AcDbDatabase::notifyAppended(AcDbHandle handle)
 {
@@ -278,6 +280,18 @@ void AcDbDatabase::notifyRemoved(AcDbHandle handle)
         reactor->objectRemoved(*this, handle);
 }
 
+void AcDbDatabase::notifyModified(AcDbHandle handle)
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->objectModified(*this, handle);
+}
+
+void AcDbDatabase::notifyDatabaseReplaced()
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->databaseReplaced(*this);
+}
+
 const AcDbEntityVariant *AcDbDatabase::getEntity(AcDbHandle handle) const
 {
     const auto found = entities_.find(handle);
@@ -287,6 +301,8 @@ const AcDbEntityVariant *AcDbDatabase::getEntity(AcDbHandle handle) const
 AcDbEntityVariant *AcDbDatabase::getEntityMutable(AcDbHandle handle)
 {
     const auto found = entities_.find(handle);
+    if (found != entities_.end())
+        captureBefore(handle);
     return found != entities_.end() ? &found->second : nullptr;
 }
 
@@ -298,6 +314,29 @@ bool AcDbDatabase::insertLoadedEntity(AcDbEntityVariant payload)
     entities_.emplace(handle, std::move(payload));
     erased_[handle] = false;
     return true;
+}
+
+void AcDbDatabase::replaceContents(AcDbDatabase &&loaded)
+{
+    nextHandle_ = loaded.nextHandle_;
+    layerTable_ = std::move(loaded.layerTable_);
+    linetypeTable_ = std::move(loaded.linetypeTable_);
+    textStyleTable_ = std::move(loaded.textStyleTable_);
+    blockTable_ = std::move(loaded.blockTable_);
+    viewportTable_ = std::move(loaded.viewportTable_);
+    viewTable_ = std::move(loaded.viewTable_);
+    cvport_ = loaded.cvport_;
+    entities_ = std::move(loaded.entities_);
+    erased_ = std::move(loaded.erased_);
+    namedObjectsHandle_ = loaded.namedObjectsHandle_;
+    nonGraphicalObjects_ = std::move(loaded.nonGraphicalObjects_);
+    transaction_ = std::move(loaded.transaction_);
+    activeLayer_ = std::move(loaded.activeLayer_);
+    activeColor_ = loaded.activeColor_;
+    activeLineType_ = std::move(loaded.activeLineType_);
+    activeLineTypeScale_ = loaded.activeLineTypeScale_;
+    activeLineWeight_ = loaded.activeLineWeight_;
+    notifyDatabaseReplaced();
 }
 
 // ---- Named Objects Dictionary ----
@@ -559,6 +598,11 @@ AcDbUndoDelta AcDbDatabase::commitTransaction()
         delta.push_back(std::move(entry));
     }
     transaction_.active_ = false;
+    for (const AcDbUndoEntry &entry : delta)
+    {
+        if (entry.before.has_value() && entry.after.has_value())
+            notifyModified(entry.handle);
+    }
     transaction_.captureOrder_.clear();
     transaction_.before_.clear();
     return delta;
@@ -610,6 +654,8 @@ std::size_t AcDbDatabase::applyUndoDelta(const AcDbUndoDelta &delta,
                 notifyAppended(entry.handle);
             else if (wasErased)
                 notifyUnerased(entry.handle);
+            else
+                notifyModified(entry.handle);
         }
         else
         {

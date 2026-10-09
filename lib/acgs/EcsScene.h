@@ -135,7 +135,7 @@ public:
     void clearDirty(acdb::AcDbObjectId objectId)
     {
         const entt::entity entity = find(objectId);
-        if (entity != entt::null)
+        if (entity != entt::null && registry_.has<Dirty>(entity))
             registry_.remove<Dirty>(entity);
     }
 
@@ -163,6 +163,15 @@ public:
     }
 
     std::size_t count() const { return byId_.size(); }
+
+    template <typename Fn> void forEachObjectId(Fn &&fn) const
+    {
+        for (const auto &[handle, entity] : byId_)
+        {
+            (void)entity;
+            fn(acdb::AcDbObjectId{acdb::AcDbHandle{handle}});
+        }
+    }
 
     // Monotonic mirror generation: bumped when the mirror state actually
     // changes (first ensure of an objectId, forget, a newly tagged Dirty).
