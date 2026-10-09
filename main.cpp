@@ -6948,7 +6948,7 @@ void render()
       layoutCenter /= double(placements.size() * 4);
       acgs::acgsGetManager()->queueGpuTrianglePick(
           0, textPickVertices.data(), uint32_t(textPickVertices.size()),
-          viewRte, projection, logDepth, objectId);
+          viewRte, projection, logDepth, objectId, 3);
       if (pickDebugEnabled())
       {
         const glm::vec4 clip = projection * viewRte *
