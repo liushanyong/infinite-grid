@@ -206,14 +206,20 @@ constexpr bgfx::ViewId kViewWire = 4;
 constexpr bgfx::ViewId kViewOverlay = 5;
 constexpr bgfx::ViewId kViewGpuPick = 6;
 constexpr bgfx::ViewId kViewGpuPickBlit = 7;
-constexpr bgfx::ViewId kViewPresent = 8;
+// Above kViewText (12) and kViewSelectionOutline (14): both compose into
+// the scene target now, so the resolve must include them. Below the
+// backbuffer compositors that sample the resolved image:
+// kViewGpuPickDebugPresent (18), kViewPipComposite (19) and the host UI
+// view (20).
+constexpr bgfx::ViewId kViewPresent = 17;
 constexpr bgfx::ViewId kViewGpuPickDebug = 9;
 constexpr bgfx::ViewId kViewGpuPickDebugBlit = 10;
-// Own view id ABOVE kViewText (12) and kViewSelectionOutline (14): the
-// ID debug square is an inspection overlay, so it must composite over
-// every scene pass. At 11 the SDF glyph pass (12) drew the live glyphs
-// on top of the presented ID texture -- texts appeared twice.
-constexpr bgfx::ViewId kViewGpuPickDebugPresent = 15;
+// Own view id above kViewPresent (17): the ID debug square is an
+// inspection overlay, so it must composite over the resolved scene
+// image. Below the SDF glyph pass (12) it drew under the presented
+// image, and at 11 the live glyphs drew on top of the presented ID
+// texture -- texts appeared twice.
+constexpr bgfx::ViewId kViewGpuPickDebugPresent = 18;
 // The unified-pick pixel sample blits from the full-scene ID texture.
 // It must execute AFTER the debug pass (view 9) renders the current
 // frame, or the readback captures the previous registry generation.
@@ -1228,7 +1234,7 @@ void BgfxRenderer::destroySceneFrameBuffer()
 // kViewPipComposite executes after kViewPresent (bgfx view order), so the
 // inset composites over the resolved main image every frame; the pip
 // scene itself re-renders only on claimed frames (time-share).
-constexpr bgfx::ViewId kViewPipComposite = 13;
+constexpr bgfx::ViewId kViewPipComposite = 19;
 
 bool BgfxRenderer::beginPipScene()
 {
@@ -1611,11 +1617,17 @@ bool BgfxRenderer::beginFrame(const glm::vec4 &clearColor)
 
     for (const bgfx::ViewId view : { kViewBackground, kViewDepthPrepass,
                                      kViewSolidFill, kViewEdges,
-                                     kViewWire, kViewOverlay, kViewPresent })
+                                     kViewWire, kViewOverlay })
     {
         bgfx::setViewRect(view, 0, 0, sceneW, sceneH);
         bgfx::touch(view);
     }
+    // Present owns the window backbuffer: its viewport must stay the
+    // swapchain size, not the offscreen scene target (the demo shrinks that
+    // to its ImGui panel, which used to strand the uncovered swapchain rows
+    // with stale pixels from the first full-window frames).
+    bgfx::setViewRect(kViewPresent, 0, 0, m_width, m_height);
+    bgfx::touch(kViewPresent);
     // The solid channel composites mesh fills and solid fills together by
     // depth instead of grouping them per program.
     bgfx::setViewMode(kViewSolidFill,
@@ -2003,9 +2015,15 @@ void BgfxRenderer::renderSelectionOutlinePass()
         }
     }
 
+    // Compose into the scene target alongside the text pass: the outline
+    // must track the viewport image, not window-backbuffer coordinates.
+    const std::uint16_t sceneW =
+        std::uint16_t(m_sceneW ? m_sceneW : m_width);
+    const std::uint16_t sceneH =
+        std::uint16_t(m_sceneH ? m_sceneH : m_height);
     bgfx::setViewName(kViewSelectionOutline, "CAD Selection Outline");
-    bgfx::setViewFrameBuffer(kViewSelectionOutline, BGFX_INVALID_HANDLE);
-    bgfx::setViewRect(kViewSelectionOutline, 0, 0, m_width, m_height);
+    bgfx::setViewFrameBuffer(kViewSelectionOutline, m_sceneFrameBuffer);
+    bgfx::setViewRect(kViewSelectionOutline, 0, 0, sceneW, sceneH);
     bgfx::setViewClear(kViewSelectionOutline, BGFX_CLEAR_NONE,
                        0x00000000u, 1.0f, 0);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
@@ -4692,8 +4710,17 @@ void BgfxRenderer::drawSdfGlyphQuad(const glm::mat4 &view,
         return;
     }
 
-    bgfx::setViewFrameBuffer(kViewText, BGFX_INVALID_HANDLE);
-    bgfx::setViewRect(kViewText, 0, 0, m_width, m_height);
+    // Text composes into the per-viewport scene target, not the window
+    // backbuffer: the scene image is panel-sized and drawn inset by the
+    // host, so backbuffer-space glyphs were displaced by that padding and
+    // clipped at the window edge instead of tracking the viewport image.
+    // No depth test keeps text on top of the scene passes.
+    const std::uint16_t sceneW =
+        std::uint16_t(m_sceneW ? m_sceneW : m_width);
+    const std::uint16_t sceneH =
+        std::uint16_t(m_sceneH ? m_sceneH : m_height);
+    bgfx::setViewFrameBuffer(kViewText, m_sceneFrameBuffer);
+    bgfx::setViewRect(kViewText, 0, 0, sceneW, sceneH);
     bgfx::setViewClear(kViewText, BGFX_CLEAR_NONE, 0, 1.0f, 0);
     // D3D-family backends expect NDC depth in [0, 1]; without this remap
     // the near half of the ortho slab clips at a straight line (text

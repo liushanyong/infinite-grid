@@ -430,7 +430,9 @@ bool init()
     ImGui::CreateContext();
     imguiContextCreated = true;
     ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // No NavEnableKeyboard: with it set, ImGui claims WantCaptureKeyboard
+    // as soon as any window is focused and the SDL key handlers below
+    // (V/D/O/U/...) never fire -- the overlay UI here is mouse-only.
     io.IniFilename = nullptr;
 
     if (ImGui_ImplSDL3_InitForOther(window))
@@ -7496,8 +7498,9 @@ void render()
 
     if (imguiOverlayEnabled)
     {
-      // Refresh the active panel's final before the UI samples it
-      // (blit view 22 executes before the UI view in this frame).
+      // Refresh the active panel's final every frame.  The blit view (22)
+      // executes after the UI view (20), so the panels sample the previous
+      // bgfx frame's copy -- one wall-frame behind, refreshed every frame.
       //fprintf(stderr, "[P] blit enter\n");
       acgs::acgsGetManager()->blitSceneToSlot(g_activeSceneSlot);
       //fprintf(stderr, "[P] blit ok\n");
@@ -7510,7 +7513,9 @@ void render()
         //        dd ? (unsigned)dd->TotalIdxCount : 0u,
         //        dd ? dd->DisplaySize.x : -1.f,
         //        dd ? dd->DisplaySize.y : -1.f);
-        imguiBgfxRenderDrawData(dd, 17);
+        // Above kViewPresent (17) so the panels composite over the
+        // resolved scene; below the final blit (22).
+        imguiBgfxRenderDrawData(dd, 20);
       }
     }
 
@@ -7534,7 +7539,9 @@ static void drawScenePanels()
   ImGuiIO &io = ImGui::GetIO();
   const float panelWidth =
       io.DisplaySize.x / float(panelCount) - (panelCount > 1 ? 6.0f : 0.0f);
-  const ImVec2 panelSize(panelWidth, io.DisplaySize.y - 24.0f);
+  // Panels cover the full window: any uncovered swapchain row would show
+  // whatever the backbuffer last held there.
+  const ImVec2 panelSize(panelWidth, io.DisplaySize.y);
   g_imguiHoveredPanel = -1;
   for (int slot = 0; slot < panelCount; ++slot)
   {
