@@ -79,6 +79,7 @@ public:
     void objectUnerased(const acdb::AcDbDatabase &,
                         acdb::AcDbHandle handle) override
     {
+        attachAttributes(handle);
         store_.markDirty(acdb::AcDbObjectId{handle});
     }
 
