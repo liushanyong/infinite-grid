@@ -276,7 +276,8 @@ private:
         glm::mat4 view;
         glm::mat4 projection;
         uint32_t objectId = 0;
-        // 0: opaque blocker, 1: non-depth-writing mesh/edge, 2: CAD overlay.
+        // 0: opaque blocker, 1: non-depth-writing mesh/edge, 2: CAD overlay,
+        // 3: screen-overlay text.
         uint8_t occlusionRank = 2;
         std::vector<FillVertex> transientVertices;
     };

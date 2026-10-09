@@ -3318,7 +3318,7 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         primitive.view = view;
         primitive.projection = projection;
         primitive.objectId = objectId;
-        primitive.occlusionRank = std::min<uint8_t>(occlusionRank, 2);
+        primitive.occlusionRank = std::min<uint8_t>(occlusionRank, 3);
         primitive.transientVertices.assign(vertices, vertices + vertexCount);
         ++m_gpuPickQueueStats.queuedTriangles;
         return;
@@ -3384,7 +3384,7 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
     primitive.view = view;
     primitive.projection = projection;
     primitive.objectId = objectId;
-    primitive.occlusionRank = std::min<uint8_t>(occlusionRank, 2);
+    primitive.occlusionRank = std::min<uint8_t>(occlusionRank, 3);
     ++m_gpuPickQueueStats.queuedTriangles;
 }
 
@@ -3559,10 +3559,11 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             if (lhs.primitive->occlusionRank != rhs.primitive->occlusionRank)
                 return lhs.primitive->occlusionRank < rhs.primitive->occlusionRank;
 
-            // Non-depth-writing primitives are composited in submission order.
-            // Sort each rank back-to-front so the nearest visible surface/edge
-            // is submitted last and therefore owns the ID, matching blending.
-            if (lhs.primitive->occlusionRank == 0)
+            // Screen overlays match their visible pass order and ignore scene
+            // depth. Other ranks sort back-to-front so the nearest visible
+            // surface/edge is submitted last and therefore owns the ID.
+            if (lhs.primitive->occlusionRank == 0 ||
+                lhs.primitive->occlusionRank >= 3)
                 return false;
 
             constexpr float kDepthEpsilon = 1.0e-4f;
@@ -3828,8 +3829,9 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
         const uint64_t triangleState =
             BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
             (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z
-                                          : uint64_t(0)) |
-            BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_MSAA;
+             : primitive.occlusionRank >= 3 ? BGFX_STATE_DEPTH_TEST_ALWAYS
+                                            : BGFX_STATE_DEPTH_TEST_LEQUAL) |
+            BGFX_STATE_MSAA;
         bgfx::setState(triangleState);
         bgfx::submit(view, m_fillProgram);
         ++primitiveIndex;
