@@ -1,5 +1,11 @@
 #include <SDL.h>
 
+#include <cadui/ViewCube.hpp>
+#include <cadui/ViewCubeBgfx.hpp>
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_bgfx.h>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -54,6 +60,12 @@ namespace
 
 constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
+
+cadui::ViewCubeWidget viewCubeWidget;
+cadui::ViewCubeBgfxRenderer viewCubeRenderer;
+bool imguiContextCreated = false;
+bool imguiPlatformInitialized = false;
+bool imguiOverlayEnabled = false;
 
 // The AcGs view owns the camera, projection mode, and every renderer
 // submission.  ObjectARX: AcGsView is a first-class citizen owned by
@@ -394,6 +406,39 @@ bool init()
     return false;
   }
 
+  if (std::strncmp(gsManager->deviceName(), "bgfx", 4) == 0)
+  {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    imguiContextCreated = true;
+    ImGuiIO &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;
+
+    if (ImGui_ImplSDL3_InitForOther(window))
+    {
+      imguiPlatformInitialized = true;
+      std::string cjkFontPath;
+      if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
+        cjkFontPath =
+            util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
+      imguiBgfxCreate(18.0f, cjkFontPath.empty() ? nullptr : cjkFontPath.c_str());
+      imguiOverlayEnabled = true;
+      if (viewCubeRenderer.create())
+        viewCubeRenderer.setFontTexture(imguiBgfxGetFontTexture());
+      else
+        std::cerr << "ViewCube BGFX renderer unavailable; using ImGui fallback"
+                  << std::endl;
+    }
+    else
+    {
+      std::cerr << "ImGui SDL3 backend unavailable; ViewCube disabled"
+                << std::endl;
+      ImGui::DestroyContext();
+      imguiContextCreated = false;
+    }
+  }
+
   std::cout << "Renderer backend: " << gsManager->deviceName()
             << " (" << gsManager->deviceApiName() << ")"
             << std::endl;
@@ -487,11 +532,128 @@ bool init()
 
 void close()
 {
+  if (imguiContextCreated)
+  {
+    viewCubeRenderer.destroy();
+    if (imguiOverlayEnabled)
+      imguiBgfxDestroy();
+    if (imguiPlatformInitialized)
+      ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    imguiContextCreated = false;
+    imguiPlatformInitialized = false;
+    imguiOverlayEnabled = false;
+  }
   acgs::acgsGetManager()->shutdownDevice();
   if (window)
     SDL_DestroyWindow(window);
   window = nullptr;
   SDL_Quit();
+}
+
+bool isViewCubeScreenPoint(float x, float y)
+{
+  if (!imguiOverlayEnabled)
+    return false;
+  const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+  return x >= displaySize.x - 198.0f && x <= displaySize.x - 12.0f &&
+         y >= 0.0f && y <= 200.0f;
+}
+
+void setCameraEyeDirection(const glm::dvec3 &eyeDirection)
+{
+  if (glm::length(eyeDirection) < 1e-12)
+    return;
+  orbitCam.setViewDirection(-glm::normalize(eyeDirection));
+  orbitCam.setWorldUp(glm::dvec3(0.0, 0.0, 1.0));
+  acgsView().resetDepthSlabs();
+}
+
+void applyViewCubeAction(const cadui::ViewCubeAction &action)
+{
+  constexpr double quarterTurn = 1.57079632679489661923;
+  const glm::dvec3 eyeDirection =
+      glm::normalize(orbitCam.Rotation * glm::dvec3(0.0, 0.0, 1.0));
+  switch (action.kind)
+  {
+  case cadui::ViewCubeActionKind::Region:
+    setCameraEyeDirection(glm::dvec3(
+        cadui::ViewCubeWidget::snapDirection(action.region)));
+    break;
+  case cadui::ViewCubeActionKind::Cardinal:
+    setCameraEyeDirection(glm::dvec3(
+        cadui::ViewCubeWidget::cardinalDirection(action.region.index)));
+    break;
+  case cadui::ViewCubeActionKind::Home:
+    setCameraEyeDirection(glm::dvec3(0.0, 0.0, 1.0));
+    break;
+  case cadui::ViewCubeActionKind::RollLeft:
+  case cadui::ViewCubeActionKind::RollRight:
+  {
+    const double angle = action.kind == cadui::ViewCubeActionKind::RollLeft
+                             ? -quarterTurn
+                             : quarterTurn;
+    const glm::dvec3 rolledUp =
+        glm::angleAxis(angle, eyeDirection) * orbitCam.Up;
+    orbitCam.setWorldUp(rolledUp);
+    acgsView().resetDepthSlabs();
+    break;
+  }
+  case cadui::ViewCubeActionKind::NudgeUp:
+  case cadui::ViewCubeActionKind::NudgeDown:
+  case cadui::ViewCubeActionKind::NudgeLeft:
+  case cadui::ViewCubeActionKind::NudgeRight:
+  {
+    const bool horizontal = action.kind == cadui::ViewCubeActionKind::NudgeLeft ||
+                            action.kind == cadui::ViewCubeActionKind::NudgeRight;
+    const bool positive = action.kind == cadui::ViewCubeActionKind::NudgeDown ||
+                          action.kind == cadui::ViewCubeActionKind::NudgeRight;
+    const glm::dvec3 axis = horizontal ? orbitCam.Up : orbitCam.Right;
+    const double angle = positive ? quarterTurn : -quarterTurn;
+    setCameraEyeDirection(glm::angleAxis(angle, glm::normalize(axis)) *
+                          eyeDirection);
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+void drawViewCubeOverlay()
+{
+  if (!imguiOverlayEnabled)
+    return;
+
+  ImGuiIO &io = ImGui::GetIO();
+  constexpr float overlayWidth = 174.0f;
+  constexpr float overlayHeight = 188.0f;
+  ImGui::SetNextWindowPos(
+      ImVec2(io.DisplaySize.x - overlayWidth - 12.0f, 12.0f),
+      ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(overlayWidth, overlayHeight),
+                           ImGuiCond_Always);
+  ImGui::SetNextWindowBgAlpha(0.0f);
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoBackground;
+  if (!ImGui::Begin("UcsViewCubeOverlay", nullptr, flags))
+  {
+    ImGui::End();
+    return;
+  }
+
+  viewCubeWidget.setBgfxRenderer(&viewCubeRenderer);
+  cadui::ViewCubeOptions options;
+  options.showControls = true;
+  options.showUcsPicker = false;
+  const glm::mat3 cameraRotation(glm::mat3_cast(orbitCam.Rotation));
+  const cadui::ViewCubeResult result = viewCubeWidget.render(
+      "UcsViewCube", ImVec2(160.0f, 160.0f), cameraRotation,
+      glm::mat3(1.0f), options);
+  applyViewCubeAction(result.action);
+  ImGui::End();
 }
 
 void logCameraTargetIfChanged(const glm::dvec3 &target)
@@ -7262,7 +7424,14 @@ void render()
     pipManager->compositePip();
   }
 
-  acgs::acgsGetManager()->endFrame();
+    if (imguiOverlayEnabled)
+    {
+      drawViewCubeOverlay();
+      ImGui::Render();
+      imguiBgfxRenderDrawData(ImGui::GetDrawData(), 255);
+    }
+
+    acgs::acgsGetManager()->endFrame();
 }
 
 int main(int argc, char *argv[])
@@ -7434,12 +7603,33 @@ int main(int argc, char *argv[])
 
     while (SDL_PollEvent(&evt))
     {
-      if (evt.type == SDL_EVENT_QUIT)
-      {
-        running = false;
-      }
-      if (evt.type == SDL_EVENT_KEY_DOWN)
-      {
+        if (imguiPlatformInitialized)
+          ImGui_ImplSDL3_ProcessEvent(&evt);
+        bool mouseCaptured = imguiOverlayEnabled &&
+                             ImGui::GetIO().WantCaptureMouse;
+        if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
+          mouseCaptured = mouseCaptured ||
+                          isViewCubeScreenPoint(evt.button.x, evt.button.y);
+        else if (evt.type == SDL_EVENT_MOUSE_MOTION)
+          mouseCaptured = mouseCaptured ||
+                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y);
+        else if (evt.type == SDL_EVENT_MOUSE_WHEEL)
+        {
+          float mouseX = 0.0f;
+          float mouseY = 0.0f;
+          SDL_GetMouseState(&mouseX, &mouseY);
+          mouseCaptured = mouseCaptured ||
+                          isViewCubeScreenPoint(mouseX, mouseY);
+        }
+
+        if (evt.type == SDL_EVENT_QUIT)
+        {
+          running = false;
+        }
+        if (evt.type == SDL_EVENT_KEY_DOWN &&
+            (!imguiOverlayEnabled || !ImGui::GetIO().WantCaptureKeyboard))
+        {
         if (evt.key.key == SDLK_ESCAPE)
         {
           running = false;
@@ -7633,7 +7823,7 @@ int main(int argc, char *argv[])
       }
 
       if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-          evt.button.button == SDL_BUTTON_MIDDLE)
+          evt.button.button == SDL_BUTTON_MIDDLE && !mouseCaptured)
       {
         middleMouseDrag = true;
         orbitPivot = viewCenterObjectPivot().value_or(orbitCam.Target);
@@ -7654,7 +7844,7 @@ int main(int argc, char *argv[])
       // Single-click left button: pick + autofocus at cursor position.
       if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
           evt.button.button == SDL_BUTTON_LEFT &&
-          evt.button.clicks == 1)
+          evt.button.clicks == 1 && !mouseCaptured)
       {
         int winW = 0, winH = 0;
         SDL_GetWindowSize(window, &winW, &winH);
@@ -7683,8 +7873,11 @@ int main(int argc, char *argv[])
         }
       }
 
-      handleOrbitMouseMovement(evt, middleMouseDrag);
-      handleOrbitZoom(evt);
+      if (!mouseCaptured)
+      {
+        handleOrbitMouseMovement(evt, middleMouseDrag);
+        handleOrbitZoom(evt);
+      }
     }
 
 
@@ -7726,6 +7919,11 @@ int main(int argc, char *argv[])
       }
     }
 
+    if (imguiOverlayEnabled)
+    {
+      ImGui_ImplSDL3_NewFrame();
+      ImGui::NewFrame();
+    }
     render();
 
     if (debugExitFrames > 0)
