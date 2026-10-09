@@ -4346,7 +4346,8 @@ struct TextBlockFrame
   glm::dvec3 up{0.0, 1.0, 0.0};
   glm::dvec3 normal{0.0, 0.0, 1.0};
   double width = 1.0;
-  double height = 1.0;
+  double minV = 0.0;
+  double maxV = 1.0;
 };
 
 static TextBlockFrame textBlockFrame(const acgi::TextRequest &request)
@@ -4381,7 +4382,8 @@ static TextBlockFrame textBlockFrame(const acgi::TextRequest &request)
   longest = std::max(longest, double(current));
   frame.width = std::max(longest * request.height * request.xScale,
                          request.height);
-  frame.height = request.height * double(lineCount);
+  frame.minV = -request.height * 1.35 * double(lineCount - 1);
+  frame.maxV = request.height;
   return frame;
 }
 
@@ -4481,7 +4483,7 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
           const double v = glm::dot(local, frame.up);
           const double margin = request.height * 0.25;
           if (-margin <= u && u <= frame.width + margin &&
-              -margin <= v && v <= frame.height + margin)
+              frame.minV - margin <= v && v <= frame.maxV + margin)
           {
             hit = true;
             hitDepth = t;
@@ -7001,7 +7003,8 @@ void render()
       const double v = glm::dot(local, frame.up);
       const double w = std::abs(glm::dot(local, frame.normal));
       if (-request.height <= u && u <= frame.width + request.height &&
-          -request.height <= v && v <= frame.height + request.height &&
+          frame.minV - request.height <= v &&
+          v <= frame.maxV + request.height &&
           w <= request.height * 8.0)
       {
         const int highlightGlyphs = acgsView().drawTextRequest(
