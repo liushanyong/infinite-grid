@@ -1,6 +1,7 @@
 #include "acdb/AcDbDatabase.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 #include "acgi/AcGiLineType.h"
 
@@ -466,23 +467,25 @@ AcDbHandle AcDbDatabase::createBlockDefinition(
     // stay resident with ownerHandle = record (OpenCADStudio's
     // create_block_from_entities bookkeeping).
     AcDbBlockTableRecord &space = modelSpace();
+    const std::unordered_set<AcDbHandle> memberSet(members.begin(),
+                                                   members.end());
+    std::vector<AcDbHandle> &spaceHandles = space.entityHandles();
     std::vector<AcDbHandle> remaining;
-    remaining.reserve(space.entityHandles().size());
-    for (const AcDbHandle handle : space.entityHandles())
+    remaining.reserve(spaceHandles.size());
+    for (const AcDbHandle handle : spaceHandles)
     {
-        const bool isMember =
-            std::find(members.begin(), members.end(), handle) !=
-            members.end();
-        if (isMember)
+        if (memberSet.contains(handle))
         {
             record.appendEntityHandle(handle);
+            if (AcDbEntityVariant *payload = getEntityMutable(handle))
+                common(*payload).ownerHandle = recordHandle;
         }
         else
         {
             remaining.push_back(handle);
         }
     }
-    space.entityHandles() = std::move(remaining);
+    spaceHandles = std::move(remaining);
     return recordHandle;
 }
 

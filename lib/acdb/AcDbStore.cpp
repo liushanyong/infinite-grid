@@ -1427,8 +1427,14 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
                 if (const auto members =
                         json::parse(rows.getColumn(3).getString()))
                     for (const Value &member : members->asArray())
-                        record.appendEntityHandle(AcDbHandle{
-                            std::uint64_t(member.asNumber())});
+                    {
+                        const AcDbHandle memberHandle{
+                            std::uint64_t(member.asNumber())};
+                        record.appendEntityHandle(memberHandle);
+                        if (AcDbEntityVariant *payload =
+                                loaded.getEntityMutable(memberHandle))
+                            common(*payload).ownerHandle = handle;
+                    }
             }
         }
         // ---- viewport / named-view configurations ----
@@ -1535,4 +1541,3 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
 }
 
 } // namespace acdb
-
