@@ -94,6 +94,44 @@ target_include_directories(glm INTERFACE "${WINDOW_GLM_DIR}")
 # GLM uses some intrinsics; the upstream defaults are the right baseline.
 target_compile_definitions(glm INTERFACE GLM_FORCE_RADIANS)
 
+# ---------------------------------------------------------------------------
+# Dear ImGui + BGFX overlay widgets
+# ---------------------------------------------------------------------------
+add_library(imgui STATIC
+    "${CMAKE_SOURCE_DIR}/lib/imgui/imgui.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/imgui_draw.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/imgui_tables.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/imgui_widgets.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/imgui_demo.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/backends/imgui_impl_sdl3.cpp"
+)
+target_include_directories(imgui PUBLIC
+    "${CMAKE_SOURCE_DIR}/lib/imgui"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/backends"
+)
+target_link_libraries(imgui PUBLIC SDL3::SDL3)
+if(WIN32)
+    target_link_libraries(imgui PRIVATE legacy_stdio_definitions)
+elseif(UNIX)
+    target_link_libraries(imgui PRIVATE m)
+endif()
+
+add_library(imgui_bgfx STATIC
+    "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/src/backend/imgui_bgfx.cpp"
+)
+target_include_directories(imgui_bgfx PUBLIC
+    "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/src/backend"
+    "${CMAKE_SOURCE_DIR}/lib/bgfx/3rdparty"
+    "${CMAKE_SOURCE_DIR}/lib/bgfx/examples/common-/imgui"
+    "${CMAKE_SOURCE_DIR}/lib/bgfx/include"
+    "${CMAKE_SOURCE_DIR}/lib/bx/include"
+    "${CMAKE_SOURCE_DIR}/lib/bimg/include"
+)
+target_link_libraries(imgui_bgfx PUBLIC imgui bgfx bx bimg)
+
+add_subdirectory("${CMAKE_SOURCE_DIR}/lib/cadui"
+                 "${CMAKE_BINARY_DIR}/lib/cadui")
+
 
 # ---------------------------------------------------------------------------
 # Target
@@ -136,6 +174,9 @@ target_include_directories(WINDOW PRIVATE
 target_link_libraries(WINDOW PRIVATE
     SDL3::SDL3
     glm::glm
+    imgui
+    imgui_bgfx
+    cadui
     bgfx
     bx
     bimg
