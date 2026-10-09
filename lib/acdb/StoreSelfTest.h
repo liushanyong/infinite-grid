@@ -224,6 +224,26 @@ inline int runStoreSelfTest()
                                .x -
                            15.0) < 1e-9,
                   "redo restores the block-reference transform");
+
+            // Replacing a loaded document reconciles the mirror instead of
+            // silently dropping its reactor subscription.
+            AcDbDatabase replacement;
+            AcDbLine replacementLine;
+            replacementLine.start = {20.0, 0.0, 0.0};
+            replacementLine.end = {21.0, 0.0, 0.0};
+            const AcDbHandle replacementHandle =
+                replacement.addEntity(std::move(replacementLine));
+            doc.replaceContents(std::move(replacement));
+            check(store.contains(AcDbObjectId{replacementHandle}) &&
+                      store.isDirty(AcDbObjectId{replacementHandle}) &&
+                      !store.contains(editedId) &&
+                      !store.contains(referenceId),
+                  "database replacement refreshes and reconciles the scene");
+            AcDbPoint afterReplace;
+            const AcDbHandle afterReplaceHandle =
+                doc.addEntity(std::move(afterReplace));
+            check(store.contains(AcDbObjectId{afterReplaceHandle}),
+                  "database replacement keeps its reactor attached");
         }
         // Bridge destroyed: later mutations stay unnoticed by the store.
         AcDbPoint stray;
