@@ -122,6 +122,43 @@ public:
     // View camera state (ObjectARX: AcGsView::setView/setEye/setTarget).
     // The demo keeps calling it through the orbitCamera() alias.
     AcGsOrbitCamera &orbitCamera() { return orbitCamera_; }
+
+    // ---- host interaction facade (BlockView GsPreviewCtrl pattern) ----
+    // The host control speaks view operations; it never reaches into the
+    // camera.  Each call acts on THIS view's camera, so interaction always
+    // drives the active viewport even after AcGsManager view switches.
+
+    // Orbit around |pivot| (defaults to the view target) -- BlockView's
+    // orbit cursor drag.
+    void orbit(float deltaX, float deltaY,
+               const std::optional<glm::dvec3> &pivot = std::nullopt)
+    {
+        orbitCamera_.orbitAroundPivot(deltaX, deltaY,
+                                      pivot.value_or(orbitCamera_.Target));
+    }
+
+    // Pan on the camera image plane (eye follows the target, orientation
+    // and distance preserved) -- BlockView's pan cursor drag.
+    void pan(float deltaX, float deltaY, float viewportHeight)
+    {
+        orbitCamera_.panScreen(deltaX, deltaY, viewportHeight);
+    }
+
+    // Wheel zoom keeping the orbit target pinned to the viewport center.
+    void zoom(float delta) { orbitCamera_.zoom(delta); }
+
+    // Wheel zoom keeping the world point under the cursor screen-stable.
+    void zoomAtCursor(float delta, double ndcX, double ndcY, double aspect)
+    {
+        orbitCamera_.zoomAboutPoint(delta, ndcX, ndcY, aspect);
+    }
+
+    // Autofocus: place the orbit target at a view-ray depth (pick depth),
+    // preserving the ortho frame when the projection is orthographic.
+    void focusAtDepth(double depth)
+    {
+        orbitCamera_.setTargetDepth(depth, orthoMode_);
+    }
     // Projection toggle; exposed as a mutable reference so the demo's
     // useOrthoProjection() wrapper keeps its existing call sites.
     bool &orthoMode() { return orthoMode_; }

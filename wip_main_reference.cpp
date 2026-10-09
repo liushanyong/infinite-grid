@@ -1,11 +1,5 @@
 #include <SDL.h>
 
-#include <cadui/ViewCube.hpp>
-#include <cadui/ViewCubeBgfx.hpp>
-#include <imgui.h>
-#include <imgui_impl_sdl3.h>
-#include <imgui_bgfx.h>
-
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -18,11 +12,14 @@
 #include "acdb/AcDbTransform.h"
 #include "brep/KernelSelfTest.h"
 #include "acdb/StoreSelfTest.h"
+#include "acgs/AcGsPickSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionHighlighter.h"
 #include "acgs/AcGsSelectionManager.h"
 #include "acgs/DocumentSceneBridge.h"
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
 #include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -30,8 +27,8 @@
 #include "acgs/model/AcGsModel.h"
 #include "acgs/model/AcGsDocumentReplayer.h"
 #include "ge/gebvh.h"
-#include "rendering/RenderTypes.h"
-#include "rendering/ProceduralMesh.h"
+#include "acgs/AcGsProtocol.h"
+#include "acgs/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
 #include <cmath>
@@ -60,30 +57,6 @@ namespace
 
 constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
-
-cadui::ViewCubeWidget viewCubeWidget;
-cadui::ViewCubeBgfxRenderer viewCubeRenderer;
-bool imguiContextCreated = false;
-bool imguiPlatformInitialized = false;
-bool imguiOverlayEnabled = false;
-
-// ---- acgs ImGui panels: per-viewport presentation state ----
-// GRID_MULTI_VIEW=1 enables the two-panel round-robin (each panel owns
-// an AcGsView); the default is one fullscreen panel.  The panel block
-// publishes g_panelPx (device pixels) for the frame head and routes
-// input through the AcGsView interaction facade.
-static bool multiViewEnabled()
-{
-  static const bool requested = []() {
-    const char *value = std::getenv("GRID_MULTI_VIEW");
-    return value != nullptr && std::strcmp(value, "0") != 0;
-  }();
-  return requested;
-}
-static ImVec2 g_panelPx[2] = {ImVec2(0, 0), ImVec2(0, 0)};
-static int g_activeSceneSlot = 0;   // this frame's rendered viewport
-static int g_pickedSlot = -1;       // slot pinned by a panel click
-static int g_imguiHoveredPanel = -1;
 
 // The AcGs view owns the camera, projection mode, and every renderer
 // submission.  ObjectARX: AcGsView is a first-class citizen owned by
@@ -161,12 +134,12 @@ static bool realisticMeshEnabled()
   return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
 }
 
-static rendering::MeshInstance makeMeshInstance(
+static acgs::MeshInstance makeMeshInstance(
     float scale, const glm::vec3 &color, float opacity,
-    const rendering::DoubleSingleVec3 &position,
+    const acgs::DoubleSingleVec3 &position,
     const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f))
 {
-  rendering::MeshInstance instance;
+  acgs::MeshInstance instance;
   instance.transformColumn0 = glm::vec4(scale, 0.0f, 0.0f, color.r);
   instance.transformColumn1 = glm::vec4(0.0f, scale, 0.0f, color.g);
   instance.transformColumn2 = glm::vec4(0.0f, 0.0f, scale, color.b);
@@ -331,7 +304,71 @@ const glm::dvec3 LARGE_COORDINATE_BASE_POINT(1e7, 0.0, 1e7);
 const glm::dvec3 LARGE_COORDINATE_DETAIL_OFFSET(1536.0, 0.0, -1024.0);
 
 // The view owns the orbit camera; demo code keeps the orbitCam alias.
-AcGsOrbitCamera &orbitCam = acgsView().orbitCamera();
+// Accessor (not a static reference): it must always resolve to the
+// ACTIVE view's camera, which changes when the CVPORT switches.
+static AcGsOrbitCamera &orbitCam()
+{
+  return acgsView().orbitCamera();
+}
+
+// ---- ImGui presentation mode (default on; GRID_IMGUI=0 opts out) ----
+// The host owns the ImGui context and the SDL3 platform backend; the
+// device consumes the draw data (view 21) and shows the offscreen scenes
+// as panel images.  Mouse events captured by ImGui no longer reach the
+// legacy full-window handlers; each panel routes its own input to its
+// viewport through the AcGsView interaction facade.
+static bool imguiRequested()
+{
+  static const bool requested = []() {
+    const char *value = std::getenv("GRID_IMGUI");
+    return value == nullptr || std::strcmp(value, "0") != 0;
+  }();
+  return 0;
+}
+
+static bool imguiActive()
+{
+  return imguiRequested() && ImGui::GetCurrentContext() != nullptr;
+}
+
+// Multi-viewport panel layout (GRID_MULTI_VIEW=1 enables the two-panel
+// round-robin; the DEFAULT is one fullscreen viewport — single-view is
+// the stable baseline while dual-view interaction is being hardened).
+static bool multiViewEnabled()
+{
+  static const bool requested = []() {
+    const char *value = std::getenv("GRID_MULTI_VIEW");
+    return value != nullptr && std::strcmp(value, "0") != 0;
+  }();
+  return requested;
+}
+
+static bool imguiWantsMouse()
+{
+  return imguiActive() && ImGui::GetIO().WantCaptureMouse;
+}
+
+// Selection-halo scale for picked mesh entities (slightly larger than the
+// original so the highlight reads around it instead of z-fighting).
+static float meshSizeForHighlight(float size)
+{
+  return size * 1.04f;
+}
+
+// Desired Top-panel render-target size in pixels, published by the
+// ImGui build and consumed by the pip scene (camera == viewport).
+static ImVec2 g_pipDesiredPx(0.0f, 0.0f);
+
+// The panel under the mouse (0/1), reset each ImGui frame; keyboard
+// style commands act on it when set.
+static int g_imguiHoveredPanel = -1;
+
+// Per-panel display source: false = color scene, true = GPU ID texture
+// (slot 2, enabled while any panel shows it).
+static bool g_panelShowId[2] = {false, false};
+
+// Per-panel render-target sizes in pixels (ImGui publishes each frame).
+static ImVec2 g_panelPx[2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
 
 // An orbit drag locks its pivot when it starts.  Until this demo has a
 // selection system, use the same fallback as OpenCADStudio: the camera target.
@@ -344,9 +381,9 @@ void enforceTargetPlaneConstraint()
 {
     const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
     const double targetOnNormal =
-        glm::dot(orbitCam.Target - gridPlaneOrigin, planeNormal);
+        glm::dot(orbitCam().Target - gridPlaneOrigin, planeNormal);
     const glm::dvec3 correction = planeNormal * -targetOnNormal;
-    orbitCam.setTarget(orbitCam.Target + correction);
+    orbitCam().setTarget(orbitCam().Target + correction);
 }
 
 void setTargetPlaneConstraint(bool enabled)
@@ -370,19 +407,19 @@ void setTargetPlaneConstraint(bool enabled)
 // untouched and can restore a world-axis working plane.
 void resetWorldUpAndPlaneFromCamera()
 {
-    orbitCam.setWorldUp(orbitCam.Up);
+    orbitCam().setWorldUp(orbitCam().Up);
 
     const glm::dvec3 horizontalAxis =
-        glm::normalize(orbitCam.Right);
-    customGridPlaneOrigin = orbitCam.Target;
-    customGridPlaneNormal = glm::normalize(orbitCam.WorldUp);
-    customGridPlaneStartAxisOrigin = orbitCam.Target;
+        glm::normalize(orbitCam().Right);
+    customGridPlaneOrigin = orbitCam().Target;
+    customGridPlaneNormal = glm::normalize(orbitCam().WorldUp);
+    customGridPlaneStartAxisOrigin = orbitCam().Target;
     customGridPlaneStartAxisDirection = horizontalAxis;
 
     applyGridPlane(GridPlaneType::Custom);
     std::cout << "World up reset from camera: ("
-              << orbitCam.WorldUp.x << ", " << orbitCam.WorldUp.y << ", "
-              << orbitCam.WorldUp.z << ")" << std::endl;
+              << orbitCam().WorldUp.x << ", " << orbitCam().WorldUp.y << ", "
+              << orbitCam().WorldUp.z << ")" << std::endl;
 }
 
 } // namespace
@@ -424,42 +461,19 @@ bool init()
     return false;
   }
 
-  if (std::strncmp(gsManager->deviceName(), "bgfx", 4) == 0)
-  {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    imguiContextCreated = true;
-    ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename = nullptr;
-
-    if (ImGui_ImplSDL3_InitForOther(window))
-    {
-      imguiPlatformInitialized = true;
-      std::string cjkFontPath;
-      if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
-        cjkFontPath =
-            util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
-      imguiBgfxCreate(18.0f, cjkFontPath.empty() ? nullptr : cjkFontPath.c_str());
-      imguiOverlayEnabled = true;
-      if (viewCubeRenderer.create())
-        viewCubeRenderer.setFontTexture(imguiBgfxGetFontTexture());
-      else
-        std::cerr << "ViewCube BGFX renderer unavailable; using ImGui fallback"
-                  << std::endl;
-    }
-    else
-    {
-      std::cerr << "ImGui SDL3 backend unavailable; ViewCube disabled"
-                << std::endl;
-      ImGui::DestroyContext();
-      imguiContextCreated = false;
-    }
-  }
-
   std::cout << "Renderer backend: " << gsManager->deviceName()
             << " (" << gsManager->deviceApiName() << ")"
             << std::endl;
+
+  if (imguiRequested())
+  {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplSDL3_InitForOther(window);
+    gsManager->setImGuiActive(true);
+    std::cout << "ImGui presentation mode: on" << std::endl;
+  }
 
   // Optional startup visual style (0=Wireframe2D .. 5=DepthBuffer), used by
   // tooling/screenshots to render specific styles without key input.
@@ -468,10 +482,10 @@ bool init()
     const int styleIndex = std::atoi(styleEnv);
     if (styleIndex > 0 && styleIndex < 6)
     {
-      acgsView().visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
+      acgsView().visualStyle().set(static_cast<acgi::AcGiVisualStyle>(styleIndex));
       gsManager->syncActiveRenderMode();
       std::cout << "Visual style: "
-              << rendering::renderModeLabel(acgsView().visualStyle().mode())
+              << acgi::visualStyleLabel(acgsView().visualStyle().mode())
               << std::endl;
     }
   }
@@ -550,134 +564,29 @@ bool init()
 
 void close()
 {
-  if (imguiContextCreated)
-  {
-    viewCubeRenderer.destroy();
-    if (imguiOverlayEnabled)
-      imguiBgfxDestroy();
-    if (imguiPlatformInitialized)
-      ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-    imguiContextCreated = false;
-    imguiPlatformInitialized = false;
-    imguiOverlayEnabled = false;
-  }
   acgs::acgsGetManager()->shutdownDevice();
+  if (ImGui::GetCurrentContext() != nullptr)
+  {
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+  }
   if (window)
     SDL_DestroyWindow(window);
   window = nullptr;
   SDL_Quit();
 }
 
-bool isViewCubeScreenPoint(float x, float y)
-{
-  if (!imguiOverlayEnabled)
-    return false;
-  int displayWidth = 0;
-  int displayHeight = 0;
-  SDL_GetWindowSize(window, &displayWidth, &displayHeight);
-  return x >= displayWidth - 198.0f && x <= displayWidth - 12.0f &&
-         y >= 0.0f && y <= 200.0f;
-}
-
-void setCameraEyeDirection(const glm::dvec3 &eyeDirection)
-{
-  if (glm::length(eyeDirection) < 1e-12)
-    return;
-  orbitCam.setViewDirection(-glm::normalize(eyeDirection));
-  orbitCam.setWorldUp(glm::dvec3(0.0, 0.0, 1.0));
-  acgsView().resetDepthSlabs();
-}
-
-void applyViewCubeAction(const cadui::ViewCubeAction &action)
-{
-  constexpr double quarterTurn = 1.57079632679489661923;
-  const glm::dvec3 eyeDirection =
-      glm::normalize(orbitCam.Rotation * glm::dvec3(0.0, 0.0, 1.0));
-  switch (action.kind)
-  {
-  case cadui::ViewCubeActionKind::Region:
-    setCameraEyeDirection(glm::dvec3(
-        cadui::ViewCubeWidget::snapDirection(action.region)));
-    break;
-  case cadui::ViewCubeActionKind::Cardinal:
-    setCameraEyeDirection(glm::dvec3(
-        cadui::ViewCubeWidget::cardinalDirection(action.region.index)));
-    break;
-  case cadui::ViewCubeActionKind::Home:
-    setCameraEyeDirection(glm::dvec3(0.0, 0.0, 1.0));
-    break;
-  case cadui::ViewCubeActionKind::RollLeft:
-  case cadui::ViewCubeActionKind::RollRight:
-  {
-    const double angle = action.kind == cadui::ViewCubeActionKind::RollLeft
-                             ? -quarterTurn
-                             : quarterTurn;
-    const glm::dvec3 rolledUp =
-        glm::angleAxis(angle, eyeDirection) * orbitCam.Up;
-    orbitCam.setWorldUp(rolledUp);
-    acgsView().resetDepthSlabs();
-    break;
-  }
-  case cadui::ViewCubeActionKind::NudgeUp:
-  case cadui::ViewCubeActionKind::NudgeDown:
-  case cadui::ViewCubeActionKind::NudgeLeft:
-  case cadui::ViewCubeActionKind::NudgeRight:
-  {
-    const bool horizontal = action.kind == cadui::ViewCubeActionKind::NudgeLeft ||
-                            action.kind == cadui::ViewCubeActionKind::NudgeRight;
-    const bool positive = action.kind == cadui::ViewCubeActionKind::NudgeDown ||
-                          action.kind == cadui::ViewCubeActionKind::NudgeRight;
-    const glm::dvec3 axis = horizontal ? orbitCam.Up : orbitCam.Right;
-    const double angle = positive ? quarterTurn : -quarterTurn;
-    setCameraEyeDirection(glm::angleAxis(angle, glm::normalize(axis)) *
-                          eyeDirection);
-    break;
-  }
-  default:
-    break;
-  }
-}
-
-void drawViewCubeOverlay()
-{
-  if (!imguiOverlayEnabled)
-    return;
-
-  ImGuiIO &io = ImGui::GetIO();
-  constexpr float overlayWidth = 174.0f;
-  constexpr float overlayHeight = 188.0f;
-  ImGui::SetNextWindowPos(
-      ImVec2(io.DisplaySize.x - overlayWidth - 12.0f, 12.0f),
-      ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(overlayWidth, overlayHeight),
-                           ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.0f);
-  const ImGuiWindowFlags flags =
-      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-      ImGuiWindowFlags_NoBackground;
-  if (!ImGui::Begin("UcsViewCubeOverlay", nullptr, flags))
-  {
-    ImGui::End();
-    return;
-  }
-
-  viewCubeWidget.setBgfxRenderer(&viewCubeRenderer);
-  cadui::ViewCubeOptions options;
-  options.showControls = true;
-  options.showUcsPicker = false;
-  const glm::mat3 cameraRotation(glm::mat3_cast(orbitCam.Rotation));
-  const cadui::ViewCubeResult result = viewCubeWidget.render(
-      "UcsViewCube", ImVec2(160.0f, 160.0f), cameraRotation,
-      glm::mat3(1.0f), options);
-  applyViewCubeAction(result.action);
-  ImGui::End();
-}
-
 void logCameraTargetIfChanged(const glm::dvec3 &target)
 {
+  // Off by default: with multiple viewports the per-view targets alternate
+  // every frame and the change-detector floods the console.
+  static const bool enabled = []() {
+    const char *value = std::getenv("GRID_CAMERA_LOG");
+    return value != nullptr && *value != '\0' &&
+           std::strcmp(value, "0") != 0;
+  }();
+  if (!enabled)
+    return;
   static glm::dvec3 lastTarget(std::numeric_limits<double>::quiet_NaN());
   if (!(std::abs(target.x - lastTarget.x) < 1e-9 &&
         std::abs(target.y - lastTarget.y) < 1e-9 &&
@@ -695,6 +604,14 @@ void logCameraStateIfChanged(const glm::dvec3 &target,
                              double nearPlane, double farPlane,
                              bool isOrtho)
 {
+  // Off by default: multi-viewport alternates two cameras every frame.
+  static const bool camLogEnabled = []() {
+    const char *value = std::getenv("GRID_CAMERA_LOG");
+    return value != nullptr && *value != '\0' &&
+           std::strcmp(value, "0") != 0;
+  }();
+  if (!camLogEnabled)
+    return;
   static glm::dvec3 lastTarget(std::numeric_limits<double>::quiet_NaN());
   static double lastNear = std::numeric_limits<double>::quiet_NaN();
   static double lastFar  = std::numeric_limits<double>::quiet_NaN();
@@ -834,7 +751,7 @@ struct MeshEntityRecord
   acdb::AcDbPolyFaceMesh entity;
   glm::dvec3 worldPosition;
   float size;
-  rendering::MeshType mesh = rendering::MeshType::Cube;
+  acgs::MeshType mesh = acgs::MeshType::Cube;
 
   bool realistic() const
   {
@@ -857,8 +774,7 @@ enum class VisibilityKind
   CadStroke,
   CadFill,
   CadPoint,
-  CadCurve,
-  CadText
+  CadCurve
 };
 
 
@@ -868,14 +784,12 @@ struct GpuPickEntity
   const MeshEntityRecord *mesh = nullptr;
   const acgs::AcGsEntityRange *cadRange = nullptr;
   const acgs::CurveBatchCommand *curve = nullptr;
-  const acgi::TextRequest *text = nullptr;
 
   bool operator==(const GpuPickEntity &other) const
   {
     return kind == other.kind && mesh == other.mesh &&
            cadRange == other.cadRange &&
-           curve == other.curve &&
-           text == other.text;
+           curve == other.curve;
   }
 };
 
@@ -890,7 +804,7 @@ static acgs::AcGsSelectionManager &gpuPickManager()
 static acgs::AcGsPickEntity toPickEntity(const GpuPickEntity &entity)
 {
   return {uint32_t(entity.kind), entity.mesh, entity.cadRange,
-          entity.curve, entity.text};
+          entity.curve};
 }
 
 static bool gpuPickEnabled()
@@ -915,7 +829,6 @@ static const GpuPickEntity *findGpuPickEntity(uint32_t id)
       static_cast<const acgs::AcGsEntityRange *>(found->range);
   converted.curve =
       static_cast<const acgs::CurveBatchCommand *>(found->curve);
-  converted.text = static_cast<const acgi::TextRequest *>(found->text);
   return &converted;
 }
 
@@ -930,18 +843,6 @@ bool gpuPickSceneDebugQueueActive = false;
 std::optional<GpuPickEntity> outlineEntity;
 bool outlineLockTest = false;
 bool outlineAllTest = false;
-// Startup override for automated validation: GRID_OUTLINE_ALL=1 enables
-// the full-scene selection-outline overlay without a key press.
-const bool outlineAllAtStartup = [] {
-  const char *value = std::getenv("GRID_OUTLINE_ALL");
-  return value != nullptr && std::strcmp(value, "0") != 0;
-}();
-// Startup override for automated validation: GRID_ID_VISIBLE=1 presents
-// the full-scene GPU ID debug square without a key press.
-const bool idVisibleAtStartup = [] {
-  const char *value = std::getenv("GRID_ID_VISIBLE");
-  return value != nullptr && std::strcmp(value, "0") != 0;
-}();
 uint32_t lockedOutlineId = 0;
 
 static uint64_t hashGpuPickSceneBytes(uint64_t hash, const void *data,
@@ -972,13 +873,13 @@ bool meshEntityVisible(const MeshEntityRecord &entity)
   return entity.entity.common.visible && entity.entity.common.color.a > 0.0f;
 }
 
-static rendering::MeshInstance &cachedMeshInstance(
+static acgs::MeshInstance &cachedMeshInstance(
     const MeshEntityRecord &entity,
     const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f))
 {
   struct CacheEntry
   {
-    rendering::MeshInstance instance;
+    acgs::MeshInstance instance;
     glm::dvec3 position;
     float size = 0.0f;
     glm::vec4 color;
@@ -1001,7 +902,7 @@ static rendering::MeshInstance &cachedMeshInstance(
   entry.color = color;
   entry.instance = makeMeshInstance(
       entity.size, glm::vec3(color), color.a,
-      rendering::encodeDoubleSingle(entity.worldPosition), material);
+      acgs::encodeDoubleSingle(entity.worldPosition), material);
   auto inserted = cache.emplace(&entity, std::move(entry));
   return inserted.first->second.instance;
 }
@@ -1014,10 +915,10 @@ static void queueGpuMeshEntity(const MeshEntityRecord &entity,
       !meshEntityVisible(entity) || objectId == 0)
     return;
 
-  const rendering::DoubleSingleVec3 objectPosition =
-      rendering::encodeDoubleSingle(entity.worldPosition);
+  const acgs::DoubleSingleVec3 objectPosition =
+      acgs::encodeDoubleSingle(entity.worldPosition);
   const glm::vec4 color = meshEntityColor(entity);
-  const rendering::MeshInstance instance = makeMeshInstance(
+  const acgs::MeshInstance instance = makeMeshInstance(
       entity.size, glm::vec3(color), color.a, objectPosition);
   acgs::acgsGetManager()->queueGpuMeshPick(instance, entity.mesh, objectId);
 }
@@ -1066,14 +967,14 @@ glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
 }
 
 
-const char *meshDisplayName(rendering::MeshType mesh)
+const char *meshDisplayName(acgs::MeshType mesh)
 {
   switch (mesh)
   {
-  case rendering::MeshType::Sphere: return "Sphere";
-  case rendering::MeshType::Cone: return "Cone";
-  case rendering::MeshType::Torus: return "Torus";
-  case rendering::MeshType::Cube: break;
+  case acgs::MeshType::Sphere: return "Sphere";
+  case acgs::MeshType::Cone: return "Cone";
+  case acgs::MeshType::Torus: return "Torus";
+  case acgs::MeshType::Cube: break;
   }
   return "Cube";
 }
@@ -1101,25 +1002,25 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
       glm::dvec3 offset;
       glm::vec3 color;
       float size;
-      rendering::MeshType mesh;
+      acgs::MeshType mesh;
     };
     const ValidationPoint validationPoints[] = {
         {glm::dvec3(0.0, 256.0, 0.0), glm::vec3(0.43f, 0.91f, 0.98f),
-         512.0f, rendering::MeshType::Cube},
+         512.0f, acgs::MeshType::Cube},
         {glm::dvec3(0.0, 224.0, 0.0), glm::vec3(1.0f, 0.58f, 0.25f),
-         448.0f, rendering::MeshType::Cube},
+         448.0f, acgs::MeshType::Cube},
         {glm::dvec3(1920.0, 64.0, 0.0), glm::vec3(0.95f, 0.95f, 0.95f),
-         128.0f, rendering::MeshType::Cube},
+         128.0f, acgs::MeshType::Cube},
         {glm::dvec3(0.0, 64.0, -1920.0), glm::vec3(0.95f, 0.95f, 0.95f),
-         128.0f, rendering::MeshType::Cube},
+         128.0f, acgs::MeshType::Cube},
         {glm::dvec3(-288.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, acgs::MeshType::Cube},
         {glm::dvec3(-96.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, acgs::MeshType::Cube},
         {glm::dvec3(96.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, acgs::MeshType::Cube},
         {glm::dvec3(288.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, acgs::MeshType::Cube},
     };
     std::vector<LargeCoordinateObject> objects;
     if (debugValidationMeshesEnabled())
@@ -1162,7 +1063,7 @@ MeshEntityRecord getCenterCubeEntity()
   entity.entity.common.color = glm::vec4(1.0f, 0.58f, 0.25f, 1.0f);
   entity.worldPosition = cubeWorldPosition;
   entity.size = 1.0f;
-  entity.mesh = rendering::MeshType::Cube;
+  entity.mesh = acgs::MeshType::Cube;
   return entity;
 }
 
@@ -1960,7 +1861,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   replayer.shxFontReady = gShxFontReady;
   replayer.record(document, options, target);
 
-    auto addCurveDemo = [&target](rendering::CurveAlgorithm algorithm,
+    auto addCurveDemo = [&target](acgs::CurveAlgorithm algorithm,
                                    const char *name,
                                    const glm::vec4 &color,
                                    std::vector<glm::dvec3> controlPoints,
@@ -1978,20 +1879,20 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     };
 
     const glm::dvec3 curveCenter = demoAnchor;
-    addCurveDemo(rendering::CurveAlgorithm::Bezier, "BezierCurve",
+    addCurveDemo(acgs::CurveAlgorithm::Bezier, "BezierCurve",
                  glm::vec4(0.15f, 1.0f, 0.55f, 1.0f),
                  {curveCenter + glm::dvec3(-240.0, -120.0, 0.0),
                   curveCenter + glm::dvec3(-80.0, 220.0, 0.0),
                   curveCenter + glm::dvec3(80.0, -220.0, 0.0),
                   curveCenter + glm::dvec3(240.0, 120.0, 0.0)});
-    addCurveDemo(rendering::CurveAlgorithm::BSpline, "BSplineCurve",
+    addCurveDemo(acgs::CurveAlgorithm::BSpline, "BSplineCurve",
                  glm::vec4(0.20f, 0.62f, 1.00f, 1.0f),
                  {curveCenter + glm::dvec3(-320.0, -180.0, 0.0),
                   curveCenter + glm::dvec3(-140.0, 180.0, 0.0),
                   curveCenter + glm::dvec3(0.0, -140.0, 0.0),
                   curveCenter + glm::dvec3(140.0, 180.0, 0.0),
                   curveCenter + glm::dvec3(320.0, -180.0, 0.0)});
-    addCurveDemo(rendering::CurveAlgorithm::NURBS, "NurbsCurve",
+    addCurveDemo(acgs::CurveAlgorithm::NURBS, "NurbsCurve",
                  glm::vec4(0.95f, 0.82f, 0.25f, 1.0f),
                  {curveCenter + glm::dvec3(-280.0, 260.0, 0.0),
                   curveCenter + glm::dvec3(-110.0, -260.0, 0.0),
@@ -2000,7 +1901,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
                  3, {1.0, 2.0, 2.0, 1.0});
 
     acgs::CurveBatchCommand &curveArc = target.curves.emplace_back();
-    curveArc.algorithm = rendering::CurveAlgorithm::Arc;
+    curveArc.algorithm = acgs::CurveAlgorithm::Arc;
     curveArc.name = "CurveArc";
     curveArc.sampleCount = 192;
     curveArc.center = curveCenter;
@@ -2033,9 +1934,9 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
       const glm::dvec3 solidBase =
           demoAnchor + glm::dvec3(0.0, 768.0, 512.0);
-      const rendering::MeshType meshTypes[] = {
-          rendering::MeshType::Cube, rendering::MeshType::Sphere,
-          rendering::MeshType::Cone, rendering::MeshType::Torus};
+      const acgs::MeshType meshTypes[] = {
+          acgs::MeshType::Cube, acgs::MeshType::Sphere,
+          acgs::MeshType::Cone, acgs::MeshType::Torus};
       const char *meshNames[] = {
           "DemoCube", "DemoSphere", "DemoCone", "DemoTorus"};
       for (size_t index = 0; index < std::size(meshTypes); ++index)
@@ -2069,32 +1970,30 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
   return cache.get(key, buildVectorPrimitivesTessellation);
 }
 
-
-
-int currentDrawableHeight();
-
-
-struct CadPairedBandPoints
+static uint64_t cadGpuPickGeometryKey(const acgs::AcGsEntityRange *range,
+                                      size_t chunkIndex,
+                                      uint32_t objectId)
 {
-    const acdb::Stroke *left = nullptr;
-    const acdb::Stroke *right = nullptr;
-    size_t segmentCount = 0;
-};
+  const uint64_t pointer =
+      static_cast<uint64_t>(reinterpret_cast<uintptr_t>(range));
+  return pointer * 0x9e3779b97f4a7c15ULL +
+         (static_cast<uint64_t>(objectId) << 32) +
+         static_cast<uint64_t>(chunkIndex);
+}
 
-bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
-                         const acdb::TessellatedEntity &tess,
-                         CadPairedBandPoints &band);
-
+// CAD fill tessellation is immutable.  Cache each entity's pick soup in
+// anchor-relative coordinates so repeated GPU pick requests reuse the same
+// renderer-side vertex buffer instead of rebuilding large-coordinate copies.
 // The anchor-relative frame is camera-independent, so the cached buffers stay
 // valid; cadAnchorView supplies the camera-dependent translation.
 // Visible CAD fills are immutable once tessellated.  Cache the renderer-side
 // camera-relative vertices per entity range so normal drawing does not repeat
 // the per-triangle double-to-float conversion and color contrast pass every
 // frame.  The anchor-relative frame is camera-independent.
-static const std::vector<rendering::FillVertex> &
+static const std::vector<acgs::FillVertex> &
 cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
 {
-  static std::map<const acgs::AcGsEntityRange *, std::vector<rendering::FillVertex>>
+  static std::map<const acgs::AcGsEntityRange *, std::vector<acgs::FillVertex>>
       cache;
   auto [it, inserted] = cache.try_emplace(&range);
   if (!inserted)
@@ -2102,7 +2001,7 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
 
   const VectorPrimitivesTessellation &tessellation =
       getVectorPrimitivesTessellation();
-  std::vector<rendering::FillVertex> &vertices = it->second;
+  std::vector<acgs::FillVertex> &vertices = it->second;
   vertices.reserve(range.count * 3);
   for (size_t i = range.begin; i < range.begin + range.count; ++i)
   {
@@ -2120,6 +2019,50 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
   }
   return vertices;
 }
+
+static const std::vector<acgs::FillVertex> &
+cadGpuPickFillVertices(const acgs::AcGsEntityRange &range,
+                       const glm::vec4 &idColor, uint32_t objectId)
+{
+  static std::map<std::pair<const acgs::AcGsEntityRange *, uint32_t>,
+                  std::vector<acgs::FillVertex>>
+      cache;
+  auto [it, inserted] = cache.try_emplace({&range, objectId});
+  if (!inserted)
+    return it->second;
+
+  const VectorPrimitivesTessellation &tessellation =
+      getVectorPrimitivesTessellation();
+  std::vector<acgs::FillVertex> &vertices = it->second;
+  vertices.reserve(range.count * 3);
+  for (size_t i = range.begin; i < range.begin + range.count; ++i)
+  {
+    const acdb::Triangle &triangle = tessellation.geometry.fills[i];
+    if (!triangle.common.visible)
+      continue;
+    vertices.push_back(
+        {glm::vec3(triangle.a - tessellation.anchor), idColor});
+    vertices.push_back(
+        {glm::vec3(triangle.b - tessellation.anchor), idColor});
+    vertices.push_back(
+        {glm::vec3(triangle.c - tessellation.anchor), idColor});
+  }
+  return vertices;
+}
+
+int currentDrawableHeight();
+
+
+struct CadPairedBandPoints
+{
+    const acdb::Stroke *left = nullptr;
+    const acdb::Stroke *right = nullptr;
+    size_t segmentCount = 0;
+};
+
+bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
+                         const acdb::TessellatedEntity &tess,
+                         CadPairedBandPoints &band);
 
 static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                      const glm::mat4 &projection,
@@ -2144,7 +2087,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   // target.
   auto pointWorldPerPixel = [&](const glm::dvec3 &worldPoint) {
     if (useOrthoProjection())
-      return 2.0 * orbitCam.orthoSize() / currentDrawableHeight();
+      return 2.0 * orbitCam().orthoSize() / currentDrawableHeight();
     const double viewDepth = std::max(1.0e-9,
         glm::dot(worldPoint - cameraPos, cameraFront));
     return 2.0 * viewDepth * std::tan(glm::radians(45.0) * 0.5) /
@@ -2162,13 +2105,14 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   static std::vector<bool> pointVisible;
 
   const acdb::TessellatedEntity &tess = tessellation.geometry;
-  static std::vector<rendering::FillVertex> gpuPickVertices;
+  static std::vector<acgs::FillVertex> gpuPickVertices;
   const bool gpuPickQueueActive =
       acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
       (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive);
-  const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
+  const acgi::AcGiVisualStyleFlags renderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
-      : rendering::RenderModeFlags{};
+      : acgi::AcGiVisualStyleFlags{};
+  const bool queueSolidFillPicks = renderFlags.show2dSolidFills;
   auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId) {
     gpuPickManager().queueSoupChunks(gpuPickVertices,
                                      view, pickProjection, logDepth,
@@ -2234,42 +2178,22 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
-    // Fully transient (the strokes/points convention): the pick id is
-    // re-assigned on every registry rebuild, so any id-keyed cache
-    // (CPU soup or GPU vertex buffer) grows without bound under the
-    // continuous full-scene pass and eventually exhausts bgfx buffers
-    // -- fills silently vanished from the ID view when that happened.
+    const std::vector<acgs::FillVertex> &pickVertices =
+        cadGpuPickFillVertices(range, idColor, objectId);
     // CAD surfaces participate in occlusion. Transparent CAD fills behave like
     // transparent meshes: they are visible through, but still receive picks.
     const uint8_t fillOcclusionRank =
         range.count && tess.fills[range.begin].common.color.a >= 0.999f ? 0 : 1;
     constexpr size_t kMaxPickChunkVertices = 3 * 21000;
-    for (size_t consumed = 0; consumed < range.count;)
+    for (size_t chunk = 0, first = 0; first < pickVertices.size();
+         ++chunk, first += kMaxPickChunkVertices)
     {
-      const size_t triangleCount =
-          std::min(range.count - consumed, kMaxPickChunkVertices / 3);
-      gpuPickVertices.clear();
-      for (size_t i = range.begin + consumed;
-           i < range.begin + consumed + triangleCount; ++i)
-      {
-        const acdb::Triangle &triangle = tess.fills[i];
-        if (!triangle.common.visible)
-          continue;
-        gpuPickVertices.push_back(
-            {glm::vec3(triangle.a - tessellation.anchor), idColor});
-        gpuPickVertices.push_back(
-            {glm::vec3(triangle.b - tessellation.anchor), idColor});
-        gpuPickVertices.push_back(
-            {glm::vec3(triangle.c - tessellation.anchor), idColor});
-      }
-      if (!gpuPickVertices.empty())
-      {
-        acgs::acgsGetManager()->queueGpuTrianglePick(
-            0, gpuPickVertices.data(), uint32_t(gpuPickVertices.size()),
-            cadAnchorView, projection, logDepth, objectId,
-            fillOcclusionRank);
-      }
-      consumed += triangleCount;
+      const size_t count = std::min(kMaxPickChunkVertices,
+                                    pickVertices.size() - first);
+      acgs::acgsGetManager()->queueGpuTrianglePick(
+          cadGpuPickGeometryKey(&range, chunk, objectId),
+          pickVertices.data() + first, uint32_t(count), cadAnchorView,
+          projection, logDepth, objectId, fillOcclusionRank);
     }
   };
   auto queueCadStroke = [&](const VisibilityCandidate &candidate) {
@@ -2421,21 +2345,21 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   }
   // CAD fills bypass the generic AcGsModel copy.  Visible ranges reuse
   // their cached anchor-relative renderer vertices and submit as one batch.
-  static std::vector<rendering::FillVertex> visibleFillVertices;
+  static std::vector<acgs::FillVertex> visibleFillVertices;
   visibleFillVertices.clear();
   for (const VisibilityCandidate *candidate : visibleCad)
   {
     if (!candidate || candidate->kind != VisibilityKind::CadFill ||
         !candidate->cadRange || !candidate->cadRange->count)
       continue;
-    const std::vector<rendering::FillVertex> &rangeVertices =
+    const std::vector<acgs::FillVertex> &rangeVertices =
         cadVisibleFillVertices(*candidate->cadRange);
     visibleFillVertices.insert(visibleFillVertices.end(),
                                rangeVertices.begin(), rangeVertices.end());
   }
   if (!visibleFillVertices.empty())
   {
-    const rendering::FilledTrianglesRenderData cadFillData{
+    const acgs::FilledTrianglesRenderData cadFillData{
         .view = cadAnchorView,
         .projection = projection,
         .vertices = visibleFillVertices.data(),
@@ -2455,9 +2379,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   // entities (Solid, Rectangle, Hatch, CircleFill) vanish.  Draw their
   // per-range boundary edges (edges used by a single triangle, the same
   // shared-edge rule as the selection outline) as colored ribbons instead.
-  const rendering::RenderModeFlags fillRenderFlags = acgs::acgsGetManager()->deviceReady()
+  const acgi::AcGiVisualStyleFlags fillRenderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
-      : rendering::RenderModeFlags{};
+      : acgi::AcGiVisualStyleFlags{};
   if (!fillRenderFlags.show2dSolidFills && !fillRenderFlags.face3dFill &&
       !fillRenderFlags.hiddenLine)
   {
@@ -2519,10 +2443,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   {
     for (const VisibilityCandidate *candidate : visibleCad)
     {
-      // Pickability is style-independent (AutoCAD semantics): a fill is
-      // selectable even in styles that do not draw it (Wireframe3D), so
-      // no show2dSolidFills gate here.
-      if (candidate && candidate->kind == VisibilityKind::CadFill)
+      if (candidate && candidate->kind == VisibilityKind::CadFill &&
+          queueSolidFillPicks)
         queueCadFill(*candidate);
     }
     for (const VisibilityCandidate *candidate : visibleCad)
@@ -2564,10 +2486,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
             now - lastPickStatsLog).count() >= 1000)
     {
       lastPickStatsLog = now;
-      const rendering::GpuPickQueueStats stats =
+      const acgs::GpuPickQueueStats stats =
           acgs::acgsGetManager()->gpuPickQueueStats();
       std::cout << "[PICK_QUEUE] style="
-                << rendering::renderModeLabel(
+                << acgi::visualStyleLabel(
                        acgsView().visualStyle().mode())
                 << " meshes=" << stats.queuedMeshes
                 << " edges=" << stats.queuedEdges
@@ -2592,8 +2514,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     acgs::AcGsModel meshDrawList;
     appendMeshEntityToScene(mesh, meshDrawList);
-    const rendering::DoubleSingleVec3 meshEye =
-        rendering::encodeDoubleSingle(rebase);
+    const acgs::DoubleSingleVec3 meshEye =
+        acgs::encodeDoubleSingle(rebase);
     acgsView().submit(meshDrawList,
                     {nullptr, pixelSizeWorld, 0.0f, 0.0f, &meshEye});
     queueGpuMeshEntity(&mesh);
@@ -2622,8 +2544,8 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
                                 float pixelSizeWorld = 0.0f,
                                 float edgeSoftness = 0.15f)
 {
-  const glm::dvec3 cameraPos(orbitCam.Position);
-  const glm::dvec3 &cameraFront = orbitCam.Front;
+  const glm::dvec3 cameraPos(orbitCam().Position);
+  const glm::dvec3 &cameraFront = orbitCam().Front;
 
   // Depth values feed both sort comparisons, so cache them once per frame.
   static std::vector<std::pair<double, const LargeCoordinateObject *>>
@@ -2640,7 +2562,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
               return lhs.first > rhs.first;
             });
 
-  rendering::RealisticLightsRenderData realisticLights;
+  acgs::RealisticLightsRenderData realisticLights;
   realisticLights.pointLights[0].position =
       glm::vec3(LARGE_COORDINATE_BASE_POINT +
                 LARGE_COORDINATE_DETAIL_OFFSET + glm::dvec3(-1024.0, 640.0, 512.0) -
@@ -2660,7 +2582,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
     cadDrawList.clearKeepCapacity();
     cadDrawList.setLights(realisticLights);
     constexpr size_t kCadMeshCount = 4;
-    static std::array<std::vector<rendering::MeshInstance>, kCadMeshCount>
+    static std::array<std::vector<acgs::MeshInstance>, kCadMeshCount>
         cadGroups;
     for (auto &group : cadGroups)
       group.clear();
@@ -2674,9 +2596,9 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
       queueGpuMeshEntity(object);
     }
 
-    const rendering::MeshType cadMeshTypes[kCadMeshCount] = {
-        rendering::MeshType::Cube, rendering::MeshType::Sphere,
-        rendering::MeshType::Cone, rendering::MeshType::Torus};
+    const acgs::MeshType cadMeshTypes[kCadMeshCount] = {
+        acgs::MeshType::Cube, acgs::MeshType::Sphere,
+        acgs::MeshType::Cone, acgs::MeshType::Torus};
     for (size_t meshIndex = 0; meshIndex < kCadMeshCount; ++meshIndex)
     {
       auto &instances = cadGroups[meshIndex];
@@ -2697,11 +2619,11 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   constexpr size_t kDepthBucketCount = 16;
   struct InstanceGroup
   {
-    rendering::MeshType mesh;
+    acgs::MeshType mesh;
     bool realistic;
     glm::vec4 material;
     float opacity;
-    std::vector<rendering::MeshInstance> instances;
+    std::vector<acgs::MeshInstance> instances;
   };
   static std::array<std::vector<InstanceGroup>, kDepthBucketCount> buckets;
   for (auto &bucket : buckets)
@@ -2788,9 +2710,9 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
     constexpr double kSpacing = 256.0;
     constexpr double kObjectSize = 128.0;
     const double centerOffset = (cols - 1) * 0.5 * kSpacing;
-    static constexpr rendering::MeshType kMeshCycle[] = {
-        rendering::MeshType::Sphere, rendering::MeshType::Cone,
-        rendering::MeshType::Torus,  rendering::MeshType::Cube,
+    static constexpr acgs::MeshType kMeshCycle[] = {
+        acgs::MeshType::Sphere, acgs::MeshType::Cone,
+        acgs::MeshType::Torus,  acgs::MeshType::Cube,
     };
     static constexpr glm::vec3 kPalette[] = {
         {0.43f, 0.91f, 0.98f}, {1.00f, 0.58f, 0.25f},
@@ -2874,7 +2796,7 @@ void expandCadTessellationBounds(WorldAabb &bounds,
     expandWorldAabb(bounds, point.location, glm::dvec3(0.0));
   for (const acgs::CurveBatchCommand &curve : tess.curves)
   {
-    if (curve.algorithm == rendering::CurveAlgorithm::Arc)
+    if (curve.algorithm == acgs::CurveAlgorithm::Arc)
     {
       const double radius = glm::max(curve.radius, 0.0);
       expandWorldAabb(bounds, curve.center, glm::dvec3(radius));
@@ -2960,9 +2882,9 @@ static double currentDrawableAspect()
 static void fitCameraToBounds(const WorldAabb &bounds, const char *label)
 {
   acgsView().zoomExtents(bounds.min, bounds.max);
-  std::cout << label << " center=(" << orbitCam.Target.x << ", "
-            << orbitCam.Target.y << ", " << orbitCam.Target.z
-            << ") distance=" << orbitCam.Distance
+  std::cout << label << " center=(" << orbitCam().Target.x << ", "
+            << orbitCam().Target.y << ", " << orbitCam().Target.z
+            << ") distance=" << orbitCam().Distance
             << std::endl;
 }
 
@@ -3058,16 +2980,15 @@ void handleOrbitMouseMovement(SDL_Event event, bool middleMouseDrag)
     if (shiftKeyDown())
     {
       // Shift + middle-drag orbits the camera.
-      orbitCam.orbitAroundPivot(
-          event.motion.xrel, -event.motion.yrel,
-          orbitPivot.value_or(orbitCam.Target));
+      acgsView().orbit(event.motion.xrel, -event.motion.yrel,
+                       orbitPivot);
       return;
     }
 
     // OpenCADStudio pans on the camera image plane in both projections.
     // The eye moves with the target, preserving orientation and distance.
-    orbitCam.panScreen(event.motion.xrel, event.motion.yrel,
-                       (float)currentDrawableHeight());
+    acgsView().pan(event.motion.xrel, event.motion.yrel,
+                   (float)currentDrawableHeight());
   }
 }
 
@@ -3080,11 +3001,11 @@ void handleOrbitZoom(SDL_Event event)
 
   // Keep the orbit target (tag point) pinned to the viewport center. Wheel
   // zoom changes Distance/ortho size without cursor-plane target compensation.
-  orbitCam.zoom(delta);
+  acgsView().zoom(delta);
   if (cameraDebugEnabled())
   {
     std::cout << "Ortho half-height: " << std::scientific
-              << std::setprecision(4) << orbitCam.orthoSize() << std::endl;
+              << std::setprecision(4) << orbitCam().orthoSize() << std::endl;
   }
 }
 
@@ -3101,9 +3022,9 @@ void switchProjectionMode()
   const double aspect = static_cast<double>(drawableWidth) /
                         static_cast<double>(drawableHeight);
 
-  orbitCam.setProjectionPreservingFrame(isOrtho, !isOrtho, aspect);
-  isOrtho = !isOrtho;
-  acgsView().resetDepthSlabs();
+  // The facade flips the view's ortho flag (the isOrtho reference),
+  // re-solves the frame-preserving distance, and resets the slabs.
+  acgsView().toggleProjection(aspect);
 
   std::cout << "Projection: "
             << (isOrtho ? "ORTHOGRAPHIC" : "PERSPECTIVE")
@@ -3414,13 +3335,15 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
     PickRay ray;
     ray.origin = basis.position;
 
+    const double aspect = basis.aspect > 0.0
+                              ? basis.aspect
+                              : (double)currentDrawableWidth() /
+                                    (double)currentDrawableHeight();
     if (basis.ortho)
     {
         const double halfH = basis.orthoHalfHeight > 0.0
                                 ? basis.orthoHalfHeight
-                                : orbitCam.orthoSize();
-        const double aspect = (double)currentDrawableWidth() /
-                               (double)currentDrawableHeight();
+                                : orbitCam().orthoSize();
         const double halfW = halfH * aspect;
         ray.origin += basis.right * (ndcX * halfW) +
                        basis.up * (ndcY * halfH);
@@ -3432,8 +3355,6 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
         // FOV; OrbitCamera::Zoom controls only orthographic framing.
         const double tanHalfV =
             std::tan(glm::radians(45.0) * 0.5);
-        const double aspect = (double)currentDrawableWidth() /
-                               (double)currentDrawableHeight();
         const double tanHalfH = tanHalfV * aspect;
         ray.direction = glm::normalize(
             basis.front +
@@ -3446,8 +3367,8 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
 PickRay pickRayFromNdc(double ndcX, double ndcY)
 {
     const GpuPickCameraBasis liveCamera{
-        orbitCam.Position, orbitCam.Front, orbitCam.Right, orbitCam.Up,
-        useOrthoProjection(), orbitCam.orthoSize()};
+        orbitCam().Position, orbitCam().Front, orbitCam().Right, orbitCam().Up,
+        useOrthoProjection(), orbitCam().orthoSize()};
     return pickRayFromNdc(ndcX, ndcY, liveCamera);
 }
 
@@ -3458,6 +3379,12 @@ PickRay pickRayFromNdc(double ndcX, double ndcY)
 // clips at that far plane, so geometry beyond it cannot be under the cursor.
 static double g_pickDepthNear = 0.0;
 static double g_pickDepthFar = std::numeric_limits<double>::infinity();
+// Panel-pick override: the depth window above is the RENDERED viewport's
+// slab (round-robin refreshes it every frame), so a click processed on
+// the other viewport's frame would clamp the ray into an unrelated slab.
+// While set (NaN = inactive) it wins over both globals.
+static double g_pickDepthOverrideNear = std::numeric_limits<double>::quiet_NaN();
+static double g_pickDepthOverrideFar = std::numeric_limits<double>::quiet_NaN();
 
 static bool pickIsOrthoProjection()
 {
@@ -3466,6 +3393,8 @@ static bool pickIsOrthoProjection()
 
 static double pickMinDepth()
 {
+    if (!std::isnan(g_pickDepthOverrideNear))
+        return g_pickDepthOverrideNear;
     return pickIsOrthoProjection() ? g_pickDepthNear : 0.0;
 }
 
@@ -3474,6 +3403,8 @@ static double pickMaxDepth()
     // Without the far clamp the 1e6-unit Ray stroke stays pickable far
     // outside the rendered slab, and autofocus would then blow up the
     // depth range for the whole scene.
+    if (!std::isnan(g_pickDepthOverrideFar))
+        return g_pickDepthOverrideFar;
     return g_pickDepthFar;
 }
 
@@ -3578,7 +3509,9 @@ const CadRangeBvh &getCadRangeBvh()
     return bvh;
 }
 
-double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint);
+double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint,
+                        const GpuPickCameraBasis *basis = nullptr,
+                        double viewportHeight = 0.0);
 
 // Closest approach between a normalized picking ray and a finite segment.
 // Keeping every intermediate value in double avoids false hits/misses in the
@@ -3803,7 +3736,7 @@ bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
                                    double &hitDepth)
 {
     const std::vector<float> &edges =
-        rendering::proceduralMeshFeatureEdges(object.mesh);
+        acgs::proceduralMeshFeatureEdges(object.mesh);
     const glm::dvec3 objectCenter(object.worldPosition);
     bool hit = false;
     double best = std::numeric_limits<double>::infinity();
@@ -3860,9 +3793,9 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     double best = std::numeric_limits<double>::infinity();
     const PickRay localRay{origin, direction};
 
-    const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
+    const acgi::AcGiVisualStyleFlags renderFlags = acgs::acgsGetManager()->deviceReady()
         ? acgs::acgsGetManager()->deviceRenderModeFlags()
-        : rendering::RenderModeFlags{};
+        : acgi::AcGiVisualStyleFlags{};
     const bool pickFeatureEdges = !renderFlags.meshFill && renderFlags.show3dEdges;
 
     // Wireframe/edge modes draw only feature edges in the GPU ID pass. CPU
@@ -3871,9 +3804,9 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     if (!pickFeatureEdges)
     {
         const std::vector<float> &soup =
-            rendering::proceduralMeshVertices(object.mesh);
+            acgs::proceduralMeshVertices(object.mesh);
         constexpr size_t kVertexFloats =
-            rendering::kProceduralMeshFloatStride;
+            acgs::kProceduralMeshFloatStride;
 
         for (size_t vertex = 0; vertex + 2 < soup.size() / kVertexFloats;
              vertex += 3)
@@ -3921,37 +3854,57 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
 // CAD strokes and points are visible as screen-space primitives, so use a
 // cursor-sized tolerance instead of a fixed radius that disappears when the
 // large-coordinate demo is zoomed out.
-double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint)
+double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint,
+                        const GpuPickCameraBasis *basis,
+                        double viewportHeight)
 {
-    const double worldPerPixel = useOrthoProjection()
-        ? 2.0 * orbitCam.orthoSize() / currentDrawableHeight()
+    // The tolerance lives in the CLICKED panel's pixel space: with the
+    // round-robin the active view at UI time is whichever viewport
+    // rendered this frame, so orbitCam() would use a foreign camera.
+    const double height = viewportHeight > 0.0
+        ? viewportHeight
+        : double(currentDrawableHeight());
+    const bool ortho = basis ? basis->ortho : useOrthoProjection();
+    const glm::dvec3 front = basis ? basis->front : orbitCam().Front;
+    const double orthoHalfH =
+        basis && basis->orthoHalfHeight > 0.0 ? basis->orthoHalfHeight
+                                              : orbitCam().orthoSize();
+    const double worldPerPixel = ortho
+        ? 2.0 * orthoHalfH / height
         : 2.0 * std::max(0.0,
-              glm::dot(worldPoint - ray.origin, orbitCam.Front)) *
-          std::tan(glm::radians(45.0) * 0.5) /
-          currentDrawableHeight();
+              glm::dot(worldPoint - ray.origin, front)) *
+          std::tan(glm::radians(45.0) * 0.5) / height;
     return worldPerPixel * 5.0;
 }
 
 double cadCurvePickTolerance(const PickRay &ray,
-                             const glm::dvec3 &worldPoint)
+                             const glm::dvec3 &worldPoint,
+                             const GpuPickCameraBasis *basis = nullptr,
+                             double viewportHeight = 0.0)
 {
     // CurveBatchCommand is projected like every other cursor-sized overlay.
     // A fixed world-space radius is wrong as soon as ortho zoom changes.
-    return cadPickTolerance(ray, worldPoint);
+    return cadPickTolerance(ray, worldPoint, basis, viewportHeight);
 }
 
 double cadStrokePickTolerance(const PickRay &ray,
                               const acdb::Stroke &stroke,
-                              const glm::dvec3 &worldPoint)
+                              const glm::dvec3 &worldPoint,
+                              const GpuPickCameraBasis *basis = nullptr,
+                              double viewportHeight = 0.0)
 {
     const double renderedHalfWidth = acgsView().strokeHalfWidth(stroke);
-    return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
+    return std::max(cadPickTolerance(ray, worldPoint, basis, viewportHeight),
+                    renderedHalfWidth);
 }
 
 double cadPointPickTolerance(const PickRay &ray,
-                             const acdb::TessellatedPoint &point)
+                             const acdb::TessellatedPoint &point,
+                             const GpuPickCameraBasis *basis = nullptr,
+                             double viewportHeight = 0.0)
 {
-    const double baseTolerance = cadPickTolerance(ray, point.location);
+    const double baseTolerance =
+        cadPickTolerance(ray, point.location, basis, viewportHeight);
     const double worldPerPixel = baseTolerance / 3.0;
     return std::max(baseTolerance, point.pointSize * worldPerPixel);
 }
@@ -4071,22 +4024,35 @@ VisibilityCandidate makeCadRangeCandidate(
 
 const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
 
-UnifiedVisibilityQuery makePickingVisibilityQuery()
+// The pick frustum must match the CLICKED panel's camera: with the
+// round-robin the active view at UI time is whichever viewport rendered
+// this frame, not necessarily the one under the cursor.
+UnifiedVisibilityQuery makePickingVisibilityQuery(
+    const GpuPickCameraBasis *basis = nullptr)
 {
-  const double aspect = (double)currentDrawableWidth() /
-                        (double)currentDrawableHeight();
-  const glm::dvec3 cameraPosition(orbitCam.Position);
-  if (useOrthoProjection())
+  const double windowAspect = (double)currentDrawableWidth() /
+                              (double)currentDrawableHeight();
+  const double aspect =
+      basis && basis->aspect > 0.0 ? basis->aspect : windowAspect;
+  const glm::dvec3 cameraPosition = basis
+      ? basis->position
+      : glm::dvec3(orbitCam().Position);
+  const glm::dvec3 &right = basis ? basis->right : orbitCam().Right;
+  const glm::dvec3 &up = basis ? basis->up : orbitCam().Up;
+  const glm::dvec3 &front = basis ? basis->front : orbitCam().Front;
+  if (basis ? basis->ortho : useOrthoProjection())
   {
+    const double halfH = basis && basis->orthoHalfHeight > 0.0
+        ? basis->orthoHalfHeight
+        : orbitCam().orthoSize();
     return UnifiedVisibilityQuery::makeOrtho(
-        cameraPosition, orbitCam.Right, orbitCam.Up, orbitCam.Front,
-        orbitCam.orthoSize() * aspect, orbitCam.orthoSize(),
+        cameraPosition, right, up, front, halfH * aspect, halfH,
         (double)currentDrawableHeight());
   }
 
   const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
   return UnifiedVisibilityQuery::makePerspective(
-      cameraPosition, orbitCam.Right, orbitCam.Up, orbitCam.Front,
+      cameraPosition, right, up, front,
       tanHalfVertical, tanHalfVertical * aspect,
       (double)currentDrawableHeight(), 0.05, 1.0e9);
 }
@@ -4154,12 +4120,34 @@ struct AutofocusResult
 };
 
 PickResult pickObjectAlongRay(const PickRay &ray,
-                              PickDebugTrace *debugTrace = nullptr)
+                              PickDebugTrace *debugTrace = nullptr,
+                              const GpuPickCameraBasis *basis = nullptr,
+                              double pickViewportHeight = 0.0)
 {
+    // Panel picks ignore the rendered slab: the ray already belongs to
+    // the clicked panel, and the round-robin slab belongs to whichever
+    // viewport rendered this frame.
+    struct PickDepthOverride
+    {
+        PickDepthOverride()
+        {
+            g_pickDepthOverrideNear = -1.0e9;
+            g_pickDepthOverrideFar = 1.0e9;
+        }
+        ~PickDepthOverride()
+        {
+            g_pickDepthOverrideNear =
+                std::numeric_limits<double>::quiet_NaN();
+            g_pickDepthOverrideFar =
+                std::numeric_limits<double>::quiet_NaN();
+        }
+    } pickDepthOverride;
+    (void)pickDepthOverride;
     PickResult result;
     PickDebugTrace localTrace;
     PickDebugTrace &trace = debugTrace ? *debugTrace : localTrace;
-    const UnifiedVisibilityQuery pickVisibility = makePickingVisibilityQuery();
+    const UnifiedVisibilityQuery pickVisibility =
+        makePickingVisibilityQuery(basis);
     const auto meshObjectState = [&](const MeshEntityRecord *object) {
         if (!meshEntityVisible(*object))
             return VisibilityState::Offscreen;
@@ -4354,7 +4342,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                                         return cadStrokePickTolerance(
                                             ray, stroke,
                                             ray.origin +
-                                                ray.direction * depth);
+                                                ray.direction * depth,
+                                            basis, pickViewportHeight);
                                     },
                                     hitDepth, pickMinDepth(),
                                     pickMaxDepth(), stroke.semiInfinite))
@@ -4421,7 +4410,9 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                         double hitDepth = 0.0;
                         if (rayIntersectsPoint(
                                 ray, point.location,
-                                cadPointPickTolerance(ray, point),
+                                cadPointPickTolerance(
+                                    ray, point, basis,
+                                    pickViewportHeight),
                                 hitDepth))
                         {
                             considerCadOverlayHit(
@@ -4509,66 +4500,15 @@ std::optional<AutofocusResult> autofocusAtNdc(
     // orbit target stays on the camera's center axis; it is intentionally not
     // moved to an off-center cursor ray's world-space hit pivot.
     const double viewDepth =
-        glm::dot(result.pivot - orbitCam.Position, orbitCam.Front);
+        glm::dot(result.pivot - orbitCam().Position, orbitCam().Front);
     if (!entityNameIsInfinite(result.objectName))
-        orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+        orbitCam().setTargetDepth(viewDepth, useOrthoProjection());
     return AutofocusResult{result.objectName, result.pivot, viewDepth};
 }
 
 // The GPU pass only identifies an entity.  Refine against its CPU geometry so
 // every hit point still comes from the same exact primitive tests used by the
 // fallback picker.
-// Text pick frame: the oriented block rectangle of a text request, with
-// the same metrics the ortho viewport cull uses (longest line x line count
-// in the entity plane).  Shared by the GPU pick soup and the CPU
-// refinement so both sides address the identical rectangle.
-struct TextBlockFrame
-{
-  glm::dvec3 right{1.0, 0.0, 0.0};
-  glm::dvec3 up{0.0, 1.0, 0.0};
-  glm::dvec3 normal{0.0, 0.0, 1.0};
-  double width = 1.0;
-  double minV = 0.0;
-  double maxV = 1.0;
-};
-
-static TextBlockFrame textBlockFrame(const acgi::TextRequest &request)
-{
-  TextBlockFrame frame;
-  frame.right = request.direction;
-  if (glm::dot(frame.right, frame.right) < 1.0e-18)
-    frame.right = glm::dvec3(1.0, 0.0, 0.0);
-  frame.right = glm::normalize(frame.right);
-  frame.normal = glm::normalize(request.normal);
-  frame.up = glm::cross(frame.normal, frame.right);
-  if (glm::dot(frame.up, frame.up) < 1.0e-18)
-    frame.up = glm::dvec3(0.0, 0.0, 1.0);
-  frame.up = glm::normalize(frame.up);
-
-  size_t lineCount = 1;
-  double longest = 0.0;
-  size_t current = 0;
-  for (char character : request.message)
-  {
-    if (character == 10) // newline
-    {
-      ++lineCount;
-      longest = std::max(longest, double(current));
-      current = 0;
-    }
-    else
-    {
-      ++current;
-    }
-  }
-  longest = std::max(longest, double(current));
-  frame.width = std::max(longest * request.height * request.xScale,
-                         request.height);
-  frame.minV = -request.height * 1.35 * double(lineCount - 1);
-  frame.maxV = request.height;
-  return frame;
-}
-
 std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                                 double ndcX, double ndcY)
 {
@@ -4605,9 +4545,9 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
 
         const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
         const double viewDepth =
-            glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+            glm::dot(hitPivot - orbitCam().Position, orbitCam().Front);
         if (!entityNameIsInfinite(meshEntity->displayName()))
-            orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+            orbitCam().setTargetDepth(viewDepth, useOrthoProjection());
         std::optional<size_t> pickedFace;
         if (faceIndex != std::numeric_limits<size_t>::max())
             pickedFace = faceIndex;
@@ -4637,49 +4577,10 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
             return std::nullopt;
         const glm::dvec3 hitPivot = ray.origin + ray.direction * bestDepth;
         const double viewDepth =
-            glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+            glm::dot(hitPivot - orbitCam().Position, orbitCam().Front);
         if (!entityNameIsInfinite(pickEntity->curve->name))
-            orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+            orbitCam().setTargetDepth(viewDepth, useOrthoProjection());
         return AutofocusResult{pickEntity->curve->name, hitPivot, viewDepth};
-    }
-
-    if (pickEntity && pickEntity->kind == VisibilityKind::CadText &&
-        pickEntity->text)
-    {
-      // Glyphs pick as one block: refine the GPU hit against the text's
-      // plane and block rectangle (the same frame the ID quads used).
-      const acgi::TextRequest &request = *pickEntity->text;
-      const TextBlockFrame frame = textBlockFrame(request);
-      const double denom = glm::dot(ray.direction, frame.normal);
-      double hitDepth = 0.0;
-      bool hit = false;
-      if (std::abs(denom) > 1.0e-12)
-      {
-        const double t =
-            glm::dot(request.position - ray.origin, frame.normal) / denom;
-        if (t > 0.0)
-        {
-          const glm::dvec3 local =
-              ray.origin + ray.direction * t - request.position;
-          const double u = glm::dot(local, frame.right);
-          const double v = glm::dot(local, frame.up);
-          const double margin = request.height * 0.25;
-          if (-margin <= u && u <= frame.width + margin &&
-              frame.minV - margin <= v && v <= frame.maxV + margin)
-          {
-            hit = true;
-            hitDepth = t;
-          }
-        }
-      }
-      if (!hit)
-        return std::nullopt;
-      const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
-      const double viewDepth =
-          glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
-      if (!entityNameIsInfinite(request.message))
-        orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
-      return AutofocusResult{request.message, hitPivot, viewDepth};
     }
 
     if (!pickEntity || !pickEntity->cadRange)
@@ -4800,23 +4701,28 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         return std::nullopt;
 
     const glm::dvec3 hitPivot = ray.origin + ray.direction * bestDepth;
-    const double viewDepth = glm::dot(hitPivot - orbitCam.Position,
-                                      orbitCam.Front);
+    const double viewDepth = glm::dot(hitPivot - orbitCam().Position,
+                                      orbitCam().Front);
     if (!entityNameIsInfinite(range.name))
-        orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
+        orbitCam().setTargetDepth(viewDepth, useOrthoProjection());
     return AutofocusResult{range.name, hitPivot, viewDepth, primitiveIndex};
 }
 
 void reportAutofocus(const AutofocusResult &selected)
 {
+    // Diagnostic echo only; the pick itself has already applied.  Floods
+    // the console once scene-id requests complete every frame, so gate
+    // it behind the pick-debug switch.
+    if (!pickDebugEnabled())
+        return;
     std::cout << std::fixed << std::setprecision(3)
               << "Autofocus: entity=" << selected.entityName
               << " pivot=(" << selected.hitPivot.x << ", "
               << selected.hitPivot.y << ", " << selected.hitPivot.z << ")"
-              << " target=(" << orbitCam.Target.x << ", "
-              << orbitCam.Target.y << ", " << orbitCam.Target.z << ")"
+              << " target=(" << orbitCam().Target.x << ", "
+              << orbitCam().Target.y << ", " << orbitCam().Target.z << ")"
               << " depth=" << selected.viewDepth
-              << " distance=" << orbitCam.Distance
+              << " distance=" << orbitCam().Distance
               << " face="
               << (selected.faceIndex ? std::to_string(*selected.faceIndex)
                                      : std::string("edge"))
@@ -4827,7 +4733,6 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
     const std::string &name)
 {
   thread_local GpuPickEntity converted;
-  converted.text = nullptr;
   const GpuPickEntity *result = nullptr;
   gpuPickManager().forEach(
       [&](std::uint32_t, const acgs::AcGsPickEntity &registered) {
@@ -4866,18 +4771,6 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
           converted.curve =
               static_cast<const acgs::CurveBatchCommand *>(
                   registered.curve);
-          result = &converted;
-        }
-        else if (registered.text &&
-                 static_cast<const acgi::TextRequest *>(registered.text)
-                         ->message == name)
-        {
-          converted.kind = VisibilityKind(registered.kind);
-          converted.mesh = nullptr;
-          converted.cadRange = nullptr;
-          converted.curve = nullptr;
-          converted.text =
-              static_cast<const acgi::TextRequest *>(registered.text);
           result = &converted;
         }
       });
@@ -5030,7 +4923,7 @@ bool runCadPickAudit()
     sample.extent = mesh.size;
     sample.candidate = makeMeshCandidate(mesh, kind);
     sample.mesh = &mesh;
-    if (mesh.mesh == rendering::MeshType::Torus)
+    if (mesh.mesh == acgs::MeshType::Torus)
     {
       // A ray through the torus center passes through the hole. Aim at a
       // point on the tube so the diagnostic validates the rendered surface.
@@ -5043,10 +4936,10 @@ bool runCadPickAudit()
   for (const MeshEntityRecord &mesh : cad.meshes)
     addMeshSample(mesh, VisibilityKind::CadMesh);
 
-  static constexpr rendering::MeshType kAuditMeshTypes[] = {
-      rendering::MeshType::Cube, rendering::MeshType::Sphere,
-      rendering::MeshType::Cone, rendering::MeshType::Torus};
-  for (const rendering::MeshType meshType : kAuditMeshTypes)
+  static constexpr acgs::MeshType kAuditMeshTypes[] = {
+      acgs::MeshType::Cube, acgs::MeshType::Sphere,
+      acgs::MeshType::Cone, acgs::MeshType::Torus};
+  for (const acgs::MeshType meshType : kAuditMeshTypes)
   {
     const auto found = std::find_if(
         getStressObjects().begin(), getStressObjects().end(),
@@ -5063,13 +4956,13 @@ bool runCadPickAudit()
     return true;
 
   const bool previousOrtho = useOrthoProjection();
-  const glm::dquat previousRotation = orbitCam.Rotation;
-  const glm::dvec3 previousTarget = orbitCam.Target;
-  const double previousDistance = orbitCam.Distance;
-  const glm::dvec3 previousWorldUp = orbitCam.WorldUp;
-  const float previousZoom = orbitCam.Zoom;
+  const glm::dquat previousRotation = orbitCam().Rotation;
+  const glm::dvec3 previousTarget = orbitCam().Target;
+  const double previousDistance = orbitCam().Distance;
+  const glm::dvec3 previousWorldUp = orbitCam().WorldUp;
+  const float previousZoom = orbitCam().Zoom;
   useOrthoProjection() = true;
-  orbitCam.Zoom = 45.0f;
+  orbitCam().Zoom = 45.0f;
 
   constexpr int kAzimuthCount = 8;
   constexpr double kElevations[] = {
@@ -5091,9 +4984,9 @@ bool runCadPickAudit()
       right = glm::normalize(
           glm::cross(front, glm::dvec3(0.0, 0.0, 1.0)));
     const glm::dvec3 up = glm::normalize(glm::cross(right, front));
-    orbitCam.Rotation = glm::dquat(
+    orbitCam().Rotation = glm::dquat(
         glm::dmat3(right, up, -front));
-    orbitCam.setOrbit(target, std::max(1.0, distance));
+    orbitCam().setOrbit(target, std::max(1.0, distance));
   };
 
   auto recordResult = [&](const AuditSample &sample,
@@ -5117,8 +5010,8 @@ bool runCadPickAudit()
     const UnifiedVisibilityQuery visibility = makePickingVisibilityQuery();
     AuditStats &stats =
         results[AuditKey{sample.kind, sample.name}];
-    const PickRay ray{orbitCam.Position,
-                      glm::normalize(sample.location - orbitCam.Position)};
+    const PickRay ray{orbitCam().Position,
+                      glm::normalize(sample.location - orbitCam().Position)};
     bool directHit = false;
     if (sample.kind == VisibilityKind::CadStroke)
     {
@@ -5186,18 +5079,18 @@ bool runCadPickAudit()
             std::cos(elevation) * std::sin(angle),
             std::sin(elevation)));
         setAuditCamera(sample.location, viewDirection, distance);
-        const PickRay ray{orbitCam.Position,
-                          glm::normalize(sample.location - orbitCam.Position)};
+        const PickRay ray{orbitCam().Position,
+                          glm::normalize(sample.location - orbitCam().Position)};
         recordSample(sample, pickObjectAlongRay(ray));
       }
     }
 
     setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, -1.0), distance);
     recordSample(sample, pickObjectAlongRay(
-        {orbitCam.Position, glm::dvec3(0.0, 0.0, -1.0)}));
+        {orbitCam().Position, glm::dvec3(0.0, 0.0, -1.0)}));
     setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, 1.0), distance);
     recordSample(sample, pickObjectAlongRay(
-        {orbitCam.Position, glm::dvec3(0.0, 0.0, 1.0)}));
+        {orbitCam().Position, glm::dvec3(0.0, 0.0, 1.0)}));
 
   }
 
@@ -5230,10 +5123,10 @@ bool runCadPickAudit()
   }
 
   useOrthoProjection() = previousOrtho;
-  orbitCam.Zoom = previousZoom;
-  orbitCam.WorldUp = previousWorldUp;
-  orbitCam.Rotation = previousRotation;
-  orbitCam.setOrbit(previousTarget, previousDistance);
+  orbitCam().Zoom = previousZoom;
+  orbitCam().WorldUp = previousWorldUp;
+  orbitCam().Rotation = previousRotation;
+  orbitCam().setOrbit(previousTarget, previousDistance);
   return true;
 }
 
@@ -5679,31 +5572,45 @@ bool outlineUsesGeometry(const GpuPickEntity &entity)
 {
     return outlineIsLineLike(entity) ||
            entity.kind == VisibilityKind::CadFill ||
-           entity.kind == VisibilityKind::CadPoint ||
-           entity.kind == VisibilityKind::CadText;
+           entity.kind == VisibilityKind::CadPoint;
 }
 
 void render()
 {
   if (!acgs::acgsGetManager()->deviceReady())
     return;
-  if (outlineAllAtStartup && !outlineAllTest)
-  {
-    outlineAllTest = true;
-    acgs::acgsGetManager()->setSelectionOutlineAll(true);
-  }  if (idVisibleAtStartup)
-  {
-    static bool s_idVisibleApplied = false;
-    if (!s_idVisibleApplied)
-    {
-      s_idVisibleApplied = true;
-      acgs::acgsGetManager()->setGpuPickDebugVisible(true);
-    }
-  }
 
   // ECS mirror watcher: surface document mutations that landed since the
   // last frame (reactor -> Dirty -> revision).
   reportDemoSceneMirror();
+
+  // SYCAD round-robin: each frame renders ONE viewport's full scene
+  // pipeline into the shared scene target (sized to that panel), then
+  // blits the result into the viewport's persistent final texture; the
+  // other panel keeps displaying its last blit.  Applying the target
+  // size here -- BEFORE beginFrame configures the view rects -- keeps
+  // target, rects, clears, and projection consistent within the frame.
+  static std::uint64_t s_frameIndex = 0;
+  const int renderSlot =
+      imguiActive() && multiViewEnabled() &&
+              acgs::acgsGetManager()->viewCount() > 1
+          ? int(s_frameIndex % 2)
+          : 0;
+  ++s_frameIndex;
+  if (imguiActive() && g_panelPx[renderSlot].x > 0.0f &&
+      g_panelPx[renderSlot].y > 0.0f)
+  {
+    acgs::acgsGetManager()->setSceneRenderSize(
+        std::uint32_t(g_panelPx[renderSlot].x),
+        std::uint32_t(g_panelPx[renderSlot].y));
+    // The ID debug target follows the rendered panel too, so each
+    // viewport's ID final matches its color final pixel for pixel.
+    if (g_panelShowId[0] || g_panelShowId[1])
+      acgs::acgsGetManager()->setGpuPickDebugSize(
+          std::uint32_t(g_panelPx[renderSlot].x),
+          std::uint32_t(g_panelPx[renderSlot].y));
+  }
+  acgs::acgsGetManager()->setActiveSceneSlot(renderSlot);
 
   // ARX zoom/pan write-back: the live camera lands in its viewport
   // record every frame (a few doubles; the record is drawing data).
@@ -5718,62 +5625,307 @@ void render()
           *document.viewportTable().getMutable(bound));
   }
 
-  // SYCAD round-robin: each frame renders ONE viewport into the shared
-  // scene target, then blits into that viewport's persistent final;
-  // the other panel keeps displaying its last blit.  A panel click
-  // pins the slot until its pick resolves so the pixel read samples
-  // the clicked view's camera.
-  static std::uint64_t s_frameIndex = 0;
-  int renderSlot =
-      multiViewEnabled() && acgs::acgsGetManager()->viewCount() > 1
-          ? int(s_frameIndex % 2)
-          : 0;
-  if (g_pickedSlot >= 0 &&
-      (gpuPickFocus.pendingNdc || gpuPickFocus.waitingResult))
-    renderSlot = g_pickedSlot;
-  ++s_frameIndex;
-  g_activeSceneSlot = renderSlot;
-  if (g_panelPx[renderSlot].x > 0.0f && g_panelPx[renderSlot].y > 0.0f)
-  {
-    acgs::acgsGetManager()->setSceneRenderSize(
-        std::uint32_t(g_panelPx[renderSlot].x),
-        std::uint32_t(g_panelPx[renderSlot].y));
-  }
-  acgs::acgsGetManager()->setActiveSceneSlot(renderSlot);
-
   if (!acgs::acgsGetManager()->beginFrame())
     return;
 
-  // The second viewport materializes lazily once the document bounds
-  // exist (the tessellation builds during the first frames).
-  static bool s_secondViewTried = false;
-  if (!s_secondViewTried && s_frameIndex > 2 && multiViewEnabled())
-  {
-    s_secondViewTried = true;
-    if (acgs::acgsGetManager()->viewCount() < 2)
-    {
-      acgs::AcGsView *top = acgs::acgsGetManager()->createView();
-      top->setViewportRecordName("Top");
-      acdb::AcDbDatabase &document = acdbDocument();
-      acdb::AcDbViewportTableRecord &record =
-          document.viewportTable().contains("Top")
-              ? *document.viewportTable().getMutable("Top")
-              : document.viewportTable().add(
-                    "Top", document.allocateHandle());
-      top->orbitCamera().setViewDirection(
-          glm::dvec3(0.0, 0.0, 1.0));
-      top->writeToViewportRecord(record);
-      std::cout << "Top viewport created" << std::endl;
-    }
-  }
-
-  // The scene pipeline reads the ACTIVE view; round-robin aims it at
-  // this frame's viewport.
+  // The scene pipeline (ctx, visibility, content, overlay, text) reads
+  // the ACTIVE view; round-robin aims it at this frame's viewport.
   acgs::acgsGetManager()->setActiveView(renderSlot);
+  selectionHighlighter.setView(acgsView());
+  acgs::acgsGetManager()->syncRenderMode(acgsView());
+
+  // ImGui frame: two offscreen-scene panels with per-panel input routing
+  // (each panel drives its own AcGsView through the interaction facade).
+  if (imguiActive())
+  {
+    // The second viewport materializes lazily once the document bounds
+    // exist (the tessellation builds during the first frame's pass).
+    static bool s_secondViewTried = false;
+    if (!s_secondViewTried && s_frameIndex > 2 && multiViewEnabled())
+    {
+      s_secondViewTried = true;
+      std::cout << "[VIEW] lazy second-view creation runs, frame="
+                << s_frameIndex << std::endl << std::flush;
+      acgs::AcGsManager *bootManager = acgs::acgsGetManager();
+      if (bootManager->viewCount() < 2)
+      {
+        acgs::AcGsView *top = bootManager->createView();
+        top->setViewportRecordName("Top");
+        acdb::AcDbDatabase &bootDocument = acdbDocument();
+        acdb::AcDbViewportTableRecord &bootRecord =
+            bootDocument.viewportTable().contains("Top")
+                ? *bootDocument.viewportTable().getMutable("Top")
+                : bootDocument.viewportTable().add(
+                      "Top", bootDocument.allocateHandle());
+        // The stress content is a vertical wall: frame it FACE-ON (from
+        // -Y toward +Y) — a straight top-down view would show the wall
+        // edge-on as a thin line.  zoomExtents needs this panel's aspect
+        // in the view context, so publish it before fitting.
+        top->orbitCamera().setOrbit(glm::dvec3(0.0), 2000.0);
+        top->orbitCamera().setViewDirection(glm::dvec3(0.0, 1.0, 0.0));
+        top->orthoMode() = true;
+        acgs::ViewFrameContext bootContext;
+        bootContext.viewportWidth =
+            int(g_panelPx[1].x) > 0 ? int(g_panelPx[1].x) : 1;
+        bootContext.viewportHeight =
+            int(g_panelPx[1].y) > 0 ? int(g_panelPx[1].y) : 1;
+        top->setFrameContext(bootContext);
+        const WorldAabb documentBounds = stressFieldBounds();
+        if (documentBounds.valid)
+          top->zoomExtents(documentBounds.min, documentBounds.max);
+        top->writeToViewportRecord(bootRecord);
+        bootManager->setActiveView(0);
+        std::cout << "[VIEW] second view created, views="
+                  << bootManager->viewCount() << std::endl << std::flush;
+      }
+    }
+    // The SDL3 backend forwards the mouse position through events only;
+    // some sessions never see them and io.MousePos stays FLT_MAX, which
+    // kills every panel hover.  Poll the OS cursor while our window has
+    // input focus (SDL returns window-relative coordinates then).
+    if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0u)
+    {
+      float mouseX = 0.0f, mouseY = 0.0f;
+      const SDL_MouseButtonFlags mouseButtons =
+          SDL_GetMouseState(&mouseX, &mouseY);
+      ImGui::GetIO().AddMousePosEvent(mouseX, mouseY);
+      // Inject button events only on a state CHANGE: re-sending the same
+      // state every frame would register as repeated clicks.
+      static SDL_MouseButtonFlags lastButtons = 0;
+      if (mouseButtons != lastButtons)
+      {
+        ImGui::GetIO().AddMouseButtonEvent(
+            0, (mouseButtons & SDL_BUTTON_LMASK) != 0u);
+        ImGui::GetIO().AddMouseButtonEvent(
+            1, (mouseButtons & SDL_BUTTON_RMASK) != 0u);
+        ImGui::GetIO().AddMouseButtonEvent(
+            2, (mouseButtons & SDL_BUTTON_MMASK) != 0u);
+        lastButtons = mouseButtons;
+      }
+    }
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+
+    ImGuiIO &io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::Begin("CADViewports", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoScrollWithMouse);
+    acgs::AcGsManager *uiManager = acgs::acgsGetManager();
+    const auto toTextureId = [](std::uint32_t idx) {
+      return reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(idx));
+    };
+    const ImTextureID textures[2] = {toTextureId(uiManager->sceneTexture(0)),
+                                     toTextureId(uiManager->sceneTexture(1))};
+    const char *labels[2] = {"Model (viewport 1)", "Top (viewport 2)"};
+    const float statusHeight = ImGui::GetTextLineHeightWithSpacing();
+    const int panelCount = multiViewEnabled() ? 2 : 1;
+    const float panelWidth =
+        ImGui::GetContentRegionAvail().x / float(panelCount) -
+        (panelCount > 1 ? 6.0f : 0.0f);
+    const ImVec2 panelSize =
+        ImVec2(panelWidth,
+               ImGui::GetContentRegionAvail().y - statusHeight - 4.0f);
+    // Slot 0/1 render at their panels' own aspect (camera == viewport),
+    // so their images fill the children; the ID texture (slot 2) keeps
+    // the window aspect and is letterboxed.  The interaction NDC math
+    // uses the IMAGE rect so cursor-stable zoom stays exact.
+    const float windowAspect =
+        float(std::max(1, currentDrawableWidth())) /
+        float(std::max(1, currentDrawableHeight()));
+    const float panelAspect =
+        g_panelPx[renderSlot].y > 0.0f
+            ? g_panelPx[renderSlot].x / g_panelPx[renderSlot].y
+            : windowAspect;
+    g_imguiHoveredPanel = -1;
+    for (int slot = 0; slot < panelCount; ++slot)
+    {
+      // SameLine sits BETWEEN the two children so they share one row; a
+      // label after EndChild would push the second child below the first.
+      if (slot != 0)
+        ImGui::SameLine();
+      // NoScrollbar: the image is sized to the remaining child area, but
+      // border/rounding can overflow by a pixel and a scrollbar would
+      // appear and shrink the content every frame.
+      ImGui::BeginChild(slot == 0 ? "PanelMain" : "PanelTop", panelSize,
+                        ImGuiChildFlags_Border,
+                        ImGuiWindowFlags_NoScrollbar |
+                            ImGuiWindowFlags_NoScrollWithMouse);
+      ImGui::TextUnformatted(labels[slot]);
+      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      const bool showId = g_panelShowId[slot];
+      // Color finals and ID finals are both rendered at this panel's
+      // own size/aspect: the image fills the child exactly.
+      const ImTextureID source =
+          showId ? toTextureId(uiManager->sceneTexture(2 + slot))
+                 : textures[slot];
+      const ImVec2 imageSize = avail;
+      ImGui::Image(source, imageSize);
+      g_panelPx[slot] = ImVec2(
+          avail.x * io.DisplayFramebufferScale.x,
+          avail.y * io.DisplayFramebufferScale.y);
+      if (slot == 1 && textures[1] == toTextureId(0))
+        ImGui::Text("secondary scene unavailable");
+      if (ImGui::IsItemHovered() && uiManager->viewCount() > slot)
+      {
+        g_imguiHoveredPanel = slot;
+        acgs::AcGsView &panelView = *uiManager->views()[slot].get();
+        if (io.MouseWheel != 0.0f)
+        {
+          const ImVec2 minimum = ImGui::GetItemRectMin();
+          const double aspect =
+              double(imageSize.x) / std::max(1.0, double(imageSize.y));
+          const double ndcX =
+              (double(io.MousePos.x - minimum.x) / imageSize.x) * 2.0 - 1.0;
+          const double ndcY = 1.0 -
+              (double(io.MousePos.y - minimum.y) / imageSize.y) * 2.0;
+          panelView.zoomAtCursor(io.MouseWheel * 0.5f, ndcX, ndcY, aspect);
+        }
+        if (io.MouseDown[2])
+        {
+          if (io.KeyShift)
+            panelView.orbit(io.MouseDelta.x, -io.MouseDelta.y);
+          else
+            panelView.pan(io.MouseDelta.x, io.MouseDelta.y, imageSize.y);
+        }
+        // Left click: pick the entity under the cursor THROUGH THIS
+        // PANEL'S frustum and outline it (plain click only selects; the
+        // double-click autofocus stays a legacy-window behavior).
+        if (io.MouseClicked[0])
+        {
+          const ImVec2 minimum = ImGui::GetItemRectMin();
+          const double aspect =
+              double(imageSize.x) / std::max(1.0, double(imageSize.y));
+          const double ndcX =
+              (double(io.MousePos.x - minimum.x) / imageSize.x) * 2.0 - 1.0;
+          const double ndcY = 1.0 -
+              (double(io.MousePos.y - minimum.y) / imageSize.y) * 2.0;
+          const GpuPickCameraBasis basis{
+              panelView.orbitCamera().Position,
+              panelView.orbitCamera().Front,
+              panelView.orbitCamera().Right,
+              panelView.orbitCamera().Up,
+              panelView.orthoMode(),
+              panelView.orbitCamera().orthoSize(),
+              aspect};
+          const PickRay ray = pickRayFromNdc(ndcX, ndcY, basis);
+          const PickResult result =
+              pickObjectAlongRay(ray, nullptr, &basis);
+          if (result.hit)
+          {
+            // Resolve the hit name against the LIVE tessellation: the
+            // per-frame pick registry is cleared after every scene-id
+            // request and accumulates stale build pointers, which made
+            // the highlight land on a different entity.
+            outlineEntity.reset();
+            const VectorPrimitivesTessellation &liveTess =
+                getVectorPrimitivesTessellation();
+            for (const MeshEntityRecord &meshRec : liveTess.meshes)
+              if (meshRec.displayName() == result.objectName)
+              {
+                outlineEntity = GpuPickEntity{VisibilityKind::MeshObject,
+                                              &meshRec, nullptr};
+                break;
+              }
+            if (!outlineEntity)
+              for (const acgs::AcGsEntityRange &range :
+                   liveTess.strokeRanges)
+                if (range.name == result.objectName)
+                {
+                  outlineEntity = GpuPickEntity{VisibilityKind::CadStroke,
+                                                nullptr, &range};
+                  break;
+                }
+            if (!outlineEntity)
+              for (const acgs::AcGsEntityRange &range :
+                   liveTess.fillRanges)
+                if (range.name == result.objectName)
+                {
+                  outlineEntity = GpuPickEntity{VisibilityKind::CadFill,
+                                                nullptr, &range};
+                  break;
+                }
+            if (!outlineEntity)
+              for (const acgs::AcGsEntityRange &range :
+                   liveTess.pointRanges)
+                if (range.name == result.objectName)
+                {
+                  outlineEntity = GpuPickEntity{VisibilityKind::CadPoint,
+                                                nullptr, &range};
+                  break;
+                }
+            if (!outlineEntity)
+              for (const acgs::CurveBatchCommand &curve : liveTess.curves)
+                if (curve.name == result.objectName)
+                {
+                  outlineEntity = GpuPickEntity{VisibilityKind::CadCurve};
+                  outlineEntity->curve = &curve;
+                  break;
+                }
+            if (outlineEntity)
+            {
+              // The GPU outline id is re-resolved EVERY FRAME (see the
+              // per-frame pass before endFrame): the pick registry is
+              // cleared and re-registered with fresh ids each frame, so
+              // an id cached at click time drifts onto other entities.
+              std::cout << "Panel " << slot + 1 << " picked: "
+                        << result.objectName << std::endl;
+            }
+          }
+          else
+          {
+            outlineEntity.reset();
+          }
+          // Selection changed without a camera move: the render
+          // fingerprint cannot see it, so mark the view dirty (the
+          // invalidate() half of the AcGsView protocol).
+          panelView.invalidate();
+        }
+      }
+      ImGui::EndChild();
+    }
+    // FPS overlay pinned to the SDL window's bottom-right corner (the
+    // device's debug text renders inside panel 0's image in this mode).
+    {
+      static float fpsSmooth = 0.0f;
+      static double lastFrameSeconds = 0.0;
+      const double now = SDL_GetTicks() / 1000.0;
+      const double delta = now - lastFrameSeconds;
+      lastFrameSeconds = now;
+      if (delta > 0.0)
+        fpsSmooth = fpsSmooth * 0.9f +
+                    float(1.0 / delta) * 0.1f;
+      ImGui::SetNextWindowPos(
+          ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 30.0f));
+      ImGui::SetNextWindowBgAlpha(0.45f);
+      ImGui::Begin("##FPSOverlay", nullptr,
+                   ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                       ImGuiWindowFlags_NoInputs |
+                       ImGuiWindowFlags_AlwaysAutoResize |
+                       ImGuiWindowFlags_NoSavedSettings);
+      ImGui::Text("FPS: %.1f (%.1f ms)", fpsSmooth,
+                  fpsSmooth > 0.0f ? 1000.0f / fpsSmooth : 0.0f);
+      ImGui::End();
+    }
+
+    ImGui::Text(
+        "wheel zoom | middle-drag pan | shift+middle orbit "
+        "| X erase-toggle | V style (hovered panel) | D id-texture");
+    ImGui::End();
+    ImGui::PopStyleVar();
+
+    ImGui::Render();
+    uiManager->drawImGui(ImGui::GetDrawData());
+  }
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
-    const rendering::GpuPickQueueStats queueStats =
+    const acgs::GpuPickQueueStats queueStats =
         acgs::acgsGetManager()->gpuPickQueueStats();
     if (queueStats.capacityExceeded())
     {
@@ -5798,7 +5950,7 @@ void render()
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
-    const rendering::GpuPickResult gpuResult = acgs::acgsGetManager()->pollGpuPick();
+    const acgs::GpuPickResult gpuResult = acgs::acgsGetManager()->pollGpuPick();
     const bool resultMatches = gpuResult.ready &&
         gpuResult.requestToken == gpuPickFocus.requestToken;
     ++gpuPickFocus.pendingFrames;
@@ -5851,7 +6003,6 @@ void render()
             case VisibilityKind::CadCurve: kindName = "CadCurve"; break;
             case VisibilityKind::MeshObject: kindName = "MeshObject"; break;
             case VisibilityKind::CadMesh: kindName = "CadMesh"; break;
-            case VisibilityKind::CadText: kindName = "CadText"; break;
             default: break;
             }
             std::printf("[PICK_DEBUG] entity kind=%s range=%p count=%zu mesh=%p",
@@ -5884,13 +6035,78 @@ void render()
     }
   }
 
+
+  // Dirty-gated rendering (ObjectARX AcGsView::invalidate/update): the
+  // scene pipeline re-runs only when the active view's render state
+  // changed -- camera/viewport/style fingerprint, document revision, a
+  // pending pick pass, or a panel resize.  On idle frames the untouched
+  // bgfx scene views keep the persistent finals, so the panels keep
+  // displaying the last image without re-submitting the scene.
+  const std::uint64_t sceneRevision = demoSceneStore().revision();
+  bool sceneRenderNeeded =
+      !imguiActive() || acgsView().needsRender(sceneRevision) ||
+      (gpuPickEnabled() && (gpuPickFocus.waitingResult ||
+                            gpuPickSceneDebugQueueActive));
+  // A panel resize recreates the finals at the new size; they must be
+  // refilled even though the camera fingerprint did not change.
+  static float s_renderedPanelW = -1.0f;
+  static float s_renderedPanelH = -1.0f;
+  if (g_panelPx[renderSlot].x != s_renderedPanelW ||
+      g_panelPx[renderSlot].y != s_renderedPanelH)
+    sceneRenderNeeded = true;
+  // Escape hatch: GRID_GATE=0 restores every-frame rendering.
+  static const bool gateDisabled = [] {
+    const char *value = std::getenv("GRID_GATE");
+    return value != nullptr && std::strcmp(value, "0") == 0;
+  }();
+  if (gateDisabled)
+    sceneRenderNeeded = true;
+  // Warmup: the demo's draw lists/tessellations settle during the first
+  // frames (after the document revision has already stabilized), so the
+  // fingerprint/revision pair cannot see them yet.
+  if (s_frameIndex <= 10)
+    sceneRenderNeeded = true;
+  if (pickDebugEnabled())
+  {
+    // Dirty-gate efficiency probe: renders over total frames.
+    static std::uint32_t s_gateFrames = 0;
+    static std::uint32_t s_gateRenders = 0;
+    ++s_gateFrames;
+    if (sceneRenderNeeded)
+      ++s_gateRenders;
+    if (s_gateFrames % 120 == 0)
+      std::cout << "[GATE_DEBUG] renders=" << s_gateRenders
+                << "/" << s_gateFrames << " frames"
+                << " rev=" << sceneRevision
+                << " fp=" << std::hex << acgsView().renderFingerprint()
+                << std::dec
+                << " lastFp=" << std::hex
+                << acgsView().lastRenderFingerprint() << std::dec
+                << " lastRev=" << acgsView().lastRenderRevision()
+                << std::endl;
+  }
+
+  if (sceneRenderNeeded)
+  {
+    s_renderedPanelW = g_panelPx[renderSlot].x;
+    s_renderedPanelH = g_panelPx[renderSlot].y;
+    // Device-side half of the gate: bind + clear + touch the shared
+    // scene views so bgfx executes them this frame.
+    acgs::acgsGetManager()->touchSceneViews();
+  }
+
+  // This brace stays open until just before endFrame(): the whole scene
+  // pipeline (rebase, visibility, submits, text, outline, pick id) is
+  // gated as one unit.
+  if (sceneRenderNeeded)
+  {
   // �� Rebase layer ����������������������������������������������������������
   // Snap the world origin to the current camera chunk once per frame.
   // Every GPU-bound coordinate (view matrix translation, per-object
   // uModelRelativePosition, grid uOriginRelative) is computed relative
   // to this anchor, so its magnitude never exceeds chunkSize/2 even at
   // 1e9 world coordinates.
-  worldRebase().update(orbitCam.Position);
+  worldRebase().update(orbitCam().Position);
   const glm::dvec3 rebase = worldRebase().origin();
 
   int drawableWidth = SCREEN_WIDTH;
@@ -5898,17 +6114,26 @@ void render()
   SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
   drawableWidth = std::max(drawableWidth, 1);
   drawableHeight = std::max(drawableHeight, 1);
-  const float aspect = static_cast<float>(drawableWidth) /
-                       static_cast<float>(drawableHeight);
+  // In ImGui presentation mode the main scene renders at the Model
+  // panel's own size: projection, frustum, and pixel metrics follow it.
+  float sceneW = float(drawableWidth);
+  float sceneH = float(drawableHeight);
+  if (imguiActive() && g_panelPx[renderSlot].x > 0.0f &&
+      g_panelPx[renderSlot].y > 0.0f)
+  {
+    sceneW = g_panelPx[renderSlot].x;
+    sceneH = g_panelPx[renderSlot].y;
+  }
+  const float aspect = sceneW / sceneH;
   // RTE step: pass the rebase origin so the view matrix is built from
   // (camera - rebase, target - rebase).  Rotation is preserved; only the
   // translation column shifts, and the same shift is applied to every
   // object uniform downstream.
-  glm::mat4 view = orbitCam.getViewMatrix(rebase);
+  glm::mat4 view = orbitCam().getViewMatrix(rebase);
   // Object pipelines use the strict RTE view: rotation only, zero translation.
   // Grid/overlay keeps the old rebase view because its ray shaders reconstruct
   // world-space rays from the inverse view-projection.
-  const glm::mat4 viewRte = orbitCam.getViewRotationMatrix();
+  const glm::mat4 viewRte = orbitCam().getViewRotationMatrix();
   glm::mat4 projection;
   glm::mat4 overlayProjection;
   glm::mat4 gridProjection;
@@ -5940,8 +6165,8 @@ void render()
   glm::dvec3 referenceLineEnd = worldLineEnd;
   bool referenceLineVisible = false;
 
-  const glm::dvec3 cameraPos(orbitCam.Position);
-  const glm::dvec3 &frontVec = orbitCam.Front;
+  const glm::dvec3 cameraPos(orbitCam().Position);
+  const glm::dvec3 &frontVec = orbitCam().Front;
   glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
   glm::dvec3 tangentU;
   glm::dvec3 tangentV;
@@ -5962,18 +6187,18 @@ void render()
 
   if (useOrthoProjection())
   {
-    const double halfH = orbitCam.orthoSize();
+    const double halfH = orbitCam().orthoSize();
     const double halfW = (double)halfH * (double)aspect;
-    const glm::dvec3 &front = orbitCam.Front;
-    const glm::dvec3 &right = orbitCam.Right;
-    const glm::dvec3 &up = orbitCam.Up;
+    const glm::dvec3 &front = orbitCam().Front;
+    const glm::dvec3 &right = orbitCam().Right;
+    const glm::dvec3 &up = orbitCam().Up;
 
     // Start with the depth interval covered by the visible ortho image.
     // The scene bounds below can make near negative; that is intentional
     // because orthographic geometry can straddle the camera plane.
     // Clamping near to zero would hide the lower half of the center cube.
     const CameraSpacePoint targetCamera =
-        acgs::toCameraSpace(orbitCam.Target, cameraPos, right, up, front);
+        acgs::toCameraSpace(orbitCam().Target, cameraPos, right, up, front);
     const double targetDepth = targetCamera.depth;
 
     const double imageRadius = std::sqrt(halfW * halfW + halfH * halfH);
@@ -6155,7 +6380,7 @@ void render()
     // ends of the accumulated interval, so it still covers every
     // contributing object plus the target ± imageRadius seed.
     const double cameraDistance =
-        glm::length(orbitCam.Position - orbitCam.Target);
+        glm::length(orbitCam().Position - orbitCam().Target);
     double slabCenterDepth;
     double slabRadius;
     // Minimum slab span: keeps extreme zoom from starving the depth
@@ -6170,7 +6395,7 @@ void render()
           slabMaxDepth - slabCenterDepth, slabCenterDepth - slabMinDepth);
       const double frameRadius = std::max(
           {contentReach, imageRadius, kMinDepthSpan * 0.5,
-           orbitCam.orthoSize() * 3.0});
+           orbitCam().orthoSize() * 3.0});
       // The stored model bounds are a conservative fit-all fallback, not a
       // per-frame visibility request.  A previous scene can leave them
       // millions of units away from the active target; cap that historical
@@ -6182,7 +6407,7 @@ void render()
       const double modelDepthRadiusCeiling =
           std::max(kMinDepthSpan, frameRadius * kModelDepthRadiusHeadroom);
       const double modelDepthRadius =
-          std::min(orbitCam.orthoDepthRadius(), modelDepthRadiusCeiling);
+          std::min(orbitCam().orthoDepthRadius(), modelDepthRadiusCeiling);
       slabRadius = std::max(frameRadius, modelDepthRadius);
     }
     else
@@ -6247,8 +6472,8 @@ void render()
   }
   else
   {
-    const glm::dvec3 &right = orbitCam.Right;
-    const glm::dvec3 &up = orbitCam.Up;
+    const glm::dvec3 &right = orbitCam().Right;
+    const glm::dvec3 &up = orbitCam().Up;
     const double tanHalfVertical =
         std::tan(glm::radians(45.0) * 0.5);
     const double tanHalfHorizontal = tanHalfVertical * aspect;
@@ -6279,7 +6504,7 @@ void render()
     }
 
     const CameraSpacePoint targetCamera =
-        acgs::toCameraSpace(orbitCam.Target, cameraPos, right, up, frontVec);
+        acgs::toCameraSpace(orbitCam().Target, cameraPos, right, up, frontVec);
     double overlayMinDepth = targetCamera.depth;
     double overlayMaxDepth = targetCamera.depth;
     double objectMinDepth = targetCamera.depth;
@@ -6443,7 +6668,7 @@ void render()
 
     // Rough estimate around the orbit target, only used to seed the LOD
     // step; the shader computes exact per-fragment sizes for perspective.
-    pixelSize = (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target)
+    pixelSize = (2.0f * (float)glm::length(orbitCam().Position - orbitCam().Target)
                   * tan(glm::radians(22.5f)))
                / static_cast<float>(drawableHeight);
   }
@@ -6498,9 +6723,9 @@ void render()
   sceneIdSignature = hashGpuPickSceneBytes(
       sceneIdSignature, glm::value_ptr(rebase), 3 * sizeof(double));
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(orbitCam.Target), 3 * sizeof(double));
+      sceneIdSignature, glm::value_ptr(orbitCam().Target), 3 * sizeof(double));
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(orbitCam.Position), 3 * sizeof(double));
+      sceneIdSignature, glm::value_ptr(orbitCam().Position), 3 * sizeof(double));
   sceneIdSignature = hashGpuPickSceneBytes(
       sceneIdSignature, &activeNear, sizeof(activeNear));
   sceneIdSignature = hashGpuPickSceneBytes(
@@ -6539,25 +6764,29 @@ void render()
       !lastSceneIdSignatureValid || sceneIdSignature != lastSceneIdSignature;
   lastSceneIdSignature = sceneIdSignature;
   lastSceneIdSignatureValid = true;
-  // Unified picking: the full-scene ID pass runs every idle frame and is
-  // the SINGLE ID source for the K/I views, the outline overlay, and
-  // cursor picking (pixel reads).  It freezes while a pick result is in
-  // flight so the texture and the id registry stay consistent.
-  bool gpuSceneIdPassRequested = gpuPickEnabled();
+  bool gpuSceneIdPassRequested = gpuPickSceneDebug || outlineAllTest;
   if (outlineEntity.has_value() && sceneIdSignatureChanged)
     gpuSceneIdPassRequested = true;
   if (acgs::acgsGetManager()->deviceReady())
     acgs::acgsGetManager()->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
   if (gpuPickEnabled() && gpuPickFocus.pendingNdc)
   {
-    // Freeze the pose the CPU fallback refines with; the GPU path samples
-    // the always-on full-scene ID texture (no per-click re-render).
+    const acgs::GpuPickRequest request{
+        .view = viewRte,
+        .projection = overlayProjection,
+        .eye = acgs::encodeDoubleSingle(orbitCam().Position),
+        .ndcX = gpuPickFocus.ndcX,
+        .ndcY = gpuPickFocus.ndcY,
+        .nearDepth = activeNear,
+        .farDepth = activeFar,
+        .logDepth = logDepth,
+    };
+    // Freeze the pose the 1x1 ID pass will render with; the result handler
+    // rebuilds its refinement ray from this exact basis.
     gpuPickFocus.camera = GpuPickCameraBasis{
-        orbitCam.Position, orbitCam.Front, orbitCam.Right, orbitCam.Up,
-        useOrthoProjection(), orbitCam.orthoSize()};
-    const uint32_t requestToken =
-        acgs::acgsGetManager()->requestGpuPickPixel(gpuPickFocus.ndcX,
-                                                    gpuPickFocus.ndcY);
+        orbitCam().Position, orbitCam().Front, orbitCam().Right, orbitCam().Up,
+        useOrthoProjection(), orbitCam().orthoSize()};
+    const uint32_t requestToken = acgs::acgsGetManager()->requestGpuPick(request);
     if (requestToken != 0)
     {
       if (pickDebugEnabled())
@@ -6566,8 +6795,7 @@ void render()
                     requestToken, gpuPickFocus.ndcX, gpuPickFocus.ndcY);
         std::puts("");
       }
-      // No clearRegistry: the pixel read samples the standing
-      // full-scene texture, whose ids live in the standing registry.
+      gpuPickManager().clearRegistry();
       gpuPickFocus.requestToken = requestToken;
       gpuPickFocus.pendingFrames = 0;
       gpuPickFocus.pendingNdc = false;
@@ -6584,10 +6812,10 @@ void render()
   if (gpuSceneIdPassRequested && acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
       !gpuPickFocus.pendingNdc && !gpuPickFocus.waitingResult)
   {
-    const rendering::GpuPickRequest sceneRequest{
+    const acgs::GpuPickRequest sceneRequest{
         .view = viewRte,
         .projection = overlayProjection,
-        .eye = rendering::encodeDoubleSingle(orbitCam.Position),
+        .eye = acgs::encodeDoubleSingle(orbitCam().Position),
         .ndcX = 0.0,
         .ndcY = 0.0,
         .nearDepth = activeNear,
@@ -6607,22 +6835,16 @@ void render()
             : 0);
     gpuPickSceneDebugQueueActive =
         acgs::acgsGetManager()->requestGpuPick(sceneRequest) != 0;
-    // No clearRegistry here either: ids are keyed by entity identity
-    // and must stay STABLE across frames -- the selection-outline
-    // uniform and the pixel read both resolve against the standing
-    // registry.  A per-frame rebuild shifts every id and made the
-    // outline flicker across unrelated meshes.  Entities that leave
-    // the view keep a harmless stale entry; returning entities
-    // re-register under the same id.
+    gpuPickManager().clearRegistry();
   }
 
-  const glm::dvec3 cameraRight(orbitCam.Right);
-  const glm::dvec3 cameraUp(orbitCam.Up);
+  const glm::dvec3 cameraRight(orbitCam().Right);
+  const glm::dvec3 cameraUp(orbitCam().Up);
   if (useOrthoProjection())
   {
     referenceLineVisible = acgsView().clipSegmentToOrtho(
         glm::dvec3(0.0), worldLineEnd, activeNear, activeFar,
-        orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
+        orbitCam().orthoSize() * (double)aspect, orbitCam().orthoSize(),
         referenceLineStart, referenceLineEnd);
   }
   else
@@ -6659,7 +6881,7 @@ void render()
   static float step = 1.0f;
   const float baseStep = 1.0f;
   const bool freezeStep =
-      useOrthoProjection() && orbitCam.orthoSize() < 1.0;
+      useOrthoProjection() && orbitCam().orthoSize() < 1.0;
   if (!freezeStep)
   {
     float cellPx = step / pixelSize;
@@ -6715,10 +6937,10 @@ void render()
 
   if (useOrthoProjection())
   {
-    const glm::dvec3 front(orbitCam.Front);
-    const glm::dvec3 right(orbitCam.Right);
-    const glm::dvec3 up(orbitCam.Up);
-    const double halfH = orbitCam.orthoSize();
+    const glm::dvec3 front(orbitCam().Front);
+    const glm::dvec3 right(orbitCam().Right);
+    const glm::dvec3 up(orbitCam().Up);
+    const double halfH = orbitCam().orthoSize();
     const double halfW = halfH * (double)aspect;
 
     // Resolve the orthographic plane mapping in double precision on the CPU.
@@ -6877,10 +7099,10 @@ void render()
     gridPlaneVisible = orthoPlaneValid;
     if (gridPlaneVisible && std::abs(frontOnNormal) > kMinGridPlaneCos)
     {
-      const double halfH = orbitCam.orthoSize();
+      const double halfH = orbitCam().orthoSize();
       const double halfW = (double)halfH * (double)aspect;
-      const glm::dvec3 right(orbitCam.Right);
-      const glm::dvec3 up(orbitCam.Up);
+      const glm::dvec3 right(orbitCam().Right);
+      const glm::dvec3 up(orbitCam().Up);
       const double cameraPlaneDistance =
           glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
       const double groundCenterDepth =
@@ -6896,7 +7118,7 @@ void render()
   }
   else
   {
-    const glm::dvec3 front = glm::normalize(orbitCam.Front);
+    const glm::dvec3 front = glm::normalize(orbitCam().Front);
     const double planeCos = std::abs(glm::dot(front, planeNormal));
     gridPlaneVisible = planeCos >= kMinGridPlaneCos;
     if (gridPlaneVisible)
@@ -6945,7 +7167,7 @@ void render()
     }
     else if (!useOrthoProjection())
     {
-      const glm::dvec3 camPos = orbitCam.Position;
+      const glm::dvec3 camPos = orbitCam().Position;
       const glm::dvec3 n = glm::normalize(gridPlaneNormal);
       const double planeDist = glm::dot(gridPlaneOrigin - camPos, n);
       gridVisibleQuadValid = true;
@@ -6996,12 +7218,12 @@ void render()
       gridVisibleQuadCount = 0;
   }
 
-    const rendering::GridRenderData gridRenderData{
+    const acgs::GridRenderData gridRenderData{
       .view = view,
         .projection = gridProjection,
         .invViewProj = glm::inverse(gridViewProj),
       .viewProj = gridViewProj,
-      .camFront = glm::vec3(orbitCam.Front),
+      .camFront = glm::vec3(orbitCam().Front),
       .orthoPlaneCenter = orthoPlaneCenter,
       .orthoRight = orthoRight,
       .orthoUp = orthoUp,
@@ -7069,12 +7291,12 @@ void render()
     ctx.logDepth = logDepth;
     ctx.slabNear = overlayNear;
     ctx.slabFar = overlayFar;
-    ctx.viewportWidth = currentDrawableWidth();
-    ctx.viewportHeight = currentDrawableHeight();
+    ctx.viewportWidth = int(sceneW);
+    ctx.viewportHeight = int(sceneH);
     ctx.ortho = useOrthoProjection();
-    ctx.orthoSize = orbitCam.orthoSize();
+    ctx.orthoSize = orbitCam().orthoSize();
     ctx.orbitDistance =
-        glm::length(orbitCam.Position - orbitCam.Target);
+        glm::length(orbitCam().Position - orbitCam().Target);
     ctx.pixelSizeWorld = pixelSize;
     ctx.meshTextureIndex = gMeshTextureIndex;
     ctx.meshHeadlight = meshHeadlight();
@@ -7086,7 +7308,7 @@ void render()
 
   // Translucent meshes remain sorted far-to-near. They depth-test against
   // opaque geometry but must not overwrite the shared depth buffer.
-  drawLargeCoordinateObjects(viewRte, projection, orbitCam.Position, drawOrder,
+  drawLargeCoordinateObjects(viewRte, projection, orbitCam().Position, drawOrder,
                              logDepth, pixelSize, 0.15f);
 
   // Draw line-like outlines before the original CAD overlays.  The overlay
@@ -7096,13 +7318,91 @@ void render()
   {
     const acdb::TessellatedEntity &outlineTess =
         getVectorPrimitivesTessellation().geometry;
-    if (outlineEntity->kind == VisibilityKind::CadFill &&
-        outlineEntity->cadRange && outlineEntity->cadRange->count)
+    if (outlineEntity->kind == VisibilityKind::MeshObject &&
+        outlineEntity->mesh)
     {
-      selectionHighlighter.drawFillOutline(outlineTess,
-                                           outlineEntity->cadRange->begin,
-                                           outlineEntity->cadRange->count,
-                                           pixelSize);
+      // Mesh entities have no CAD stroke ranges: the selection outline is
+      // the mesh RE-DRAWN in the highlight color, 4% larger so the halo
+      // reads around the original instead of z-fighting with it.
+      MeshEntityRecord highlight = *outlineEntity->mesh;
+      highlight.entity.common.color = glm::vec4(1.0f, 0.9f, 0.15f, 0.85f);
+      highlight.size = meshSizeForHighlight(highlight.size);
+      acgs::AcGsModel highlightList;
+      appendMeshEntityToScene(highlight, highlightList);
+      // The stress-path mesh convention: contents are world-encoded and
+      // the eye is the CAMERA (not the rebase origin) — using the rebase
+      // origin here displaced the highlight by (camera - rebase).
+      const acgs::DoubleSingleVec3 highlightEye =
+          acgs::encodeDoubleSingle(orbitCam().Position);
+      acgsView().submit(highlightList,
+                        {nullptr, pixelSize, 0.0f, 0.0f, &highlightEye});
+    }
+    else if (outlineEntity->kind == VisibilityKind::CadFill &&
+             outlineEntity->cadRange && outlineEntity->cadRange->count)
+    {
+      const std::string &outlineName = outlineEntity->cadRange->name;
+      const auto hintsIt = acgs::replayHints().find(outlineName);
+      const bool solid3dFace = hintsIt != acgs::replayHints().end() &&
+                               hintsIt->second.fillIs3DFace;
+      if (solid3dFace)
+      {
+        // Solid3d (mesh-algorithm highlight): re-draw the picked range's
+        // own triangles in the highlight color, scaled 4% about the range
+        // centroid -- the shell wraps the original with no z-fighting,
+        // exactly like the mesh selection halo.
+        std::vector<acgs::FillVertex> shell;
+        glm::dvec3 centroid(0.0);
+        size_t vertexCount = 0;
+        for (size_t i = outlineEntity->cadRange->begin;
+             i < outlineEntity->cadRange->begin +
+                     outlineEntity->cadRange->count;
+             ++i)
+        {
+          const acdb::Triangle &triangle = outlineTess.fills[i];
+          if (!triangle.common.visible)
+            continue;
+          centroid += triangle.a + triangle.b + triangle.c;
+          vertexCount += 3;
+        }
+        if (vertexCount > 0)
+        {
+          centroid /= double(vertexCount);
+          const glm::vec4 shellColor(1.0f, 0.9f, 0.15f, 0.9f);
+          for (size_t i = outlineEntity->cadRange->begin;
+               i < outlineEntity->cadRange->begin +
+                       outlineEntity->cadRange->count;
+               ++i)
+          {
+            const acdb::Triangle &triangle = outlineTess.fills[i];
+            if (!triangle.common.visible)
+              continue;
+            for (const glm::dvec3 &vertex :
+                 {triangle.a, triangle.b, triangle.c})
+            {
+              const glm::dvec3 scaled =
+                  centroid + (vertex - centroid) * 1.04;
+              shell.push_back(
+                  {glm::vec3(scaled -
+                             getVectorPrimitivesTessellation().anchor),
+                   shellColor});
+            }
+          }
+          const glm::mat4 shellView =
+              view * glm::translate(
+                  glm::mat4(1.0f),
+                  glm::vec3(getVectorPrimitivesTessellation().anchor -
+                            cameraPos));
+          acgsView().drawFillTriangles(shell, shellView, projection,
+                                       true, 0.25f);
+        }
+      }
+      else
+      {
+        selectionHighlighter.drawFillOutline(outlineTess,
+                                             outlineEntity->cadRange->begin,
+                                             outlineEntity->cadRange->count,
+                                             pixelSize);
+      }
     }
     else if (outlineEntity->kind == VisibilityKind::CadPoint &&
              outlineEntity->cadRange && outlineEntity->cadRange->count)
@@ -7130,7 +7430,7 @@ void render()
   }
 
   drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
-                           orbitCam.Position, logDepth,
+                           orbitCam().Position, logDepth,
                            cameraPos, frontVec, cameraRight, cameraUp,
                            pixelSize, visibleCadDraws, tinyCadDraws);
 
@@ -7141,113 +7441,7 @@ void render()
   // content bounds so the depth slab covers the glyphs).
   // The AcGi view flushes queued text requests into SDF glyph quads,
   // including the ortho viewport cull.
-  // Text pick pass: each queued text request joins the GPU ID pass as
-  // PER-GLYPH quads from the same layout walk the visible SDF pass uses
-  // (layoutGlyphs), so the ID texture matches the visible glyphs pixel
-  // for pixel.  Camera-relative positions with the rotation-only view,
-  // matching the ID-pass eye convention; double-sided windings so text
-  // picks from both facings.
-  static const bool textPickEnabled = [] {
-    const char *value = std::getenv("GRID_TEXT_PICK");
-    return value == nullptr || std::strcmp(value, "0") != 0;
-  }();
-  if (textPickEnabled && gpuPickEnabled() &&
-      (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive))
-  {
-    for (const acgi::TextRequest &request : acgi::textRequests())
-    {
-      const std::vector<acgi::TextEngine::GlyphPlacement> placements =
-          acgi::textEngine().layoutGlyphs(request, cameraPos, cameraRight,
-                                          cameraUp, frontVec);
-      if (placements.empty())
-        continue;
-      const uint32_t objectId = registerGpuPickEntity(
-          {VisibilityKind::CadText, nullptr, nullptr, nullptr, &request});
-      const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
-      static std::vector<rendering::FillVertex> textPickVertices;
-      textPickVertices.clear();
-      glm::dvec3 layoutCenter(0.0);
-      for (const acgi::TextEngine::GlyphPlacement &placement : placements)
-      {
-        for (const glm::dvec3 &worldCorner : placement.corners)
-          layoutCenter += worldCorner;
-        glm::vec3 corner[4];
-        for (int i = 0; i < 4; ++i)
-          corner[i] = glm::vec3(placement.corners[i] - cameraPos);
-        for (const int index : {0, 1, 2, 0, 2, 3})
-          textPickVertices.push_back({corner[index], idColor});
-        for (const int index : {0, 2, 1, 0, 3, 2})
-          textPickVertices.push_back({corner[index], idColor});
-      }
-      layoutCenter /= double(placements.size() * 4);
-      acgs::acgsGetManager()->queueGpuTrianglePick(
-          0, textPickVertices.data(), uint32_t(textPickVertices.size()),
-          viewRte, projection, logDepth, objectId, 3);
-      if (pickDebugEnabled())
-      {
-        const glm::vec4 clip = projection * viewRte *
-                               glm::vec4(glm::vec3(layoutCenter - cameraPos),
-                                         1.0f);
-        const glm::dvec2 ndc(double(clip.x) / clip.w,
-                             double(clip.y) / clip.w);
-        int winW = 0, winH = 0;
-        SDL_GetWindowSize(window, &winW, &winH);
-        std::cout << "[TEXT_PICK] id=" << objectId
-                  << " depth=" << clip.w
-                  << " px=("
-                  << int((ndc.x * 0.5 + 0.5) * winW) << ","
-                  << int((0.5 - ndc.y * 0.5) * winH) << ")"
-                  << " msg='" << request.message.substr(0, 16)
-                  << "'" << std::endl;
-      }
-    }
-  }
-
   acgsView().flushTextRequests();
-
-  // Picked text highlights by redrawing the request in the selection
-  // color (glyphs have no line outline to widen; the redraw lands
-  // exactly on the original glyph quads).
-  if (outlineEntity && outlineEntity->kind == VisibilityKind::CadText &&
-      outlineEntity->text)
-  {
-    const int highlightGlyphs = acgsView().drawTextRequest(
-        *outlineEntity->text, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f));
-    if (pickDebugEnabled())
-      std::cout << "[TEXT_PICK] highlight glyphs=" << highlightGlyphs
-                << std::endl;
-  }
-  else if (outlineEntity && outlineEntity->kind == VisibilityKind::CadPoint &&
-           outlineEntity->cadRange && outlineEntity->cadRange->count)
-  {
-    // The text entity's insertion marker is ordinary CAD point geometry;
-    // when that one-pixel dot wins the pick, highlight the SDF glyphs of
-    // the text it belongs to (matched by position inside the block).
-    const acdb::TessellatedEntity &pointTess =
-        getVectorPrimitivesTessellation().geometry;
-    const acdb::TessellatedPoint &marker =
-        pointTess.points[outlineEntity->cadRange->begin];
-    for (const acgi::TextRequest &request : acgi::textRequests())
-    {
-      const TextBlockFrame frame = textBlockFrame(request);
-      const glm::dvec3 local = marker.location - request.position;
-      const double u = glm::dot(local, frame.right);
-      const double v = glm::dot(local, frame.up);
-      const double w = std::abs(glm::dot(local, frame.normal));
-      if (-request.height <= u && u <= frame.width + request.height &&
-          frame.minV - request.height <= v &&
-          v <= frame.maxV + request.height &&
-          w <= request.height * 8.0)
-      {
-        const int highlightGlyphs = acgsView().drawTextRequest(
-            request, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f));
-        if (pickDebugEnabled())
-          std::cout << "[TEXT_PICK] insertion-point highlight glyphs="
-                    << highlightGlyphs << std::endl;
-        break;
-      }
-    }
-  }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -7266,18 +7460,18 @@ void render()
   if ((gpuPickSceneDebugQueueActive || gpuPickFocusWaiting()) &&
       !tinyDraws.empty())
   {
-    static std::vector<rendering::FillVertex> tinyMeshPickVertices;
-    const glm::vec3 pickRight(orbitCam.Right);
-    const glm::vec3 pickUp(orbitCam.Up);
+    static std::vector<acgs::FillVertex> tinyMeshPickVertices;
+    const glm::vec3 pickRight(orbitCam().Right);
+    const glm::vec3 pickUp(orbitCam().Up);
     const double referenceDistance =
-        glm::length(orbitCam.Position - orbitCam.Target);
+        glm::length(orbitCam().Position - orbitCam().Target);
     for (const LargeCoordinateObject *object : tinyDraws)
     {
       if (!object || !meshEntityVisible(*object))
         continue;
 
       const glm::dvec3 center = object->worldPosition;
-      const double depth = glm::dot(center - orbitCam.Position, orbitCam.Front);
+      const double depth = glm::dot(center - orbitCam().Position, orbitCam().Front);
       const double objectPixelSize =
           useOrthoProjection()
               ? double(pixelSize)
@@ -7290,7 +7484,7 @@ void render()
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::MeshObject, object, nullptr});
       const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
-      const glm::vec3 relative = glm::vec3(center - orbitCam.Position);
+      const glm::vec3 relative = glm::vec3(center - orbitCam().Position);
       const glm::vec3 right = pickRight * radius;
       const glm::vec3 up = pickUp * radius;
       tinyMeshPickVertices.clear();
@@ -7311,7 +7505,7 @@ void render()
   // camera's focus point is always visible.  Uses the same RTE rebase as
   // every other draw call.
   // The camera focus marker remains a camera overlay, not a CAD entity.
-  appendScenePoint(sceneOverlay, orbitCam.Target,
+  appendScenePoint(sceneOverlay, orbitCam().Target,
                    glm::vec3(1.0f, 0.15f, 0.15f), 5.0);
 
   if (frustumWireframeVisible)
@@ -7364,7 +7558,7 @@ void render()
     }
   }
 
-  logCameraStateIfChanged(orbitCam.Target, activeNear, activeFar,
+  logCameraStateIfChanged(orbitCam().Target, activeNear, activeFar,
                           useOrthoProjection());
 
   if (acgs::acgsGetManager()->deviceReady())
@@ -7376,10 +7570,11 @@ void render()
     }
     else if (outlineEntity)
     {
-      if (gpuPickSceneDebugQueueActive)
-        cachedOutlineObjectId =
-            findGpuPickObjectIdForEntity(*outlineEntity);
-      // Reuse the cached id on idle frames; the ID texture is unchanged.
+      // ALWAYS re-resolve by name: the registry is rebuilt every frame
+      // with fresh monotonic ids, so a cached id drifts onto whichever
+      // entity later holds it (the zoom-time outline jump).
+      cachedOutlineObjectId =
+          findGpuPickObjectIdForEntity(*outlineEntity);
       outlineId = cachedOutlineObjectId;
     }
     acgs::acgsGetManager()->setSelectionOutlineId(
@@ -7405,207 +7600,22 @@ void render()
     acgs::acgsGetManager()->setGpuPickIdRange(2, maxId);
   }
 
-  // ---- picture-in-picture top viewport (GRID_PIP=1) ----
-  // The second AcGsView ("Top", created here on first use with its own
-  // AcDbViewportTableRecord) renders the scene contents into a
-  // quarter-size offscreen framebuffer on claimed frames only
-  // (time-share guard), and the last image composites as an inset over
-  // the presented frame.  v1 scope: candidates are submitted unculled
-  // with a fixed generous ortho slab; text and selection highlights stay
-  // main-view-only, and the pass is skipped while a GPU pick request is
-  // in flight so the re-submission cannot pollute the id queue.  The
-  // per-camera visibility-filter factorization upgrades this to full
-  // slab/culling fidelity later.
-  static const bool pipEnabled = []() {
-    const char *value = std::getenv("GRID_PIP");
-    return value != nullptr && *value != '\0' &&
-           std::strcmp(value, "0") != 0;
-  }();
-  if (pipEnabled && acgs::acgsGetManager()->deviceReady() &&
-      !gpuPickFocusWaiting() && !gpuPickSceneDebugQueueActive)
-  {
-    acgs::AcGsManager *pipManager = acgs::acgsGetManager();
-    if (pipManager->viewCount() < 2)
-    {
-      acgs::AcGsView *top = pipManager->createView();
-      top->setViewportRecordName("Top");
-      acdb::AcDbDatabase &document = acdbDocument();
-      acdb::AcDbViewportTableRecord &record =
-          document.viewportTable().contains("Top")
-              ? *document.viewportTable().getMutable("Top")
-              : document.viewportTable().add(
-                    "Top", document.allocateHandle());
-      top->orbitCamera().setOrbit(acgsView().orbitCamera().Target, 2000.0);
-      top->orbitCamera().setViewDirection(glm::dvec3(0.0, 0.0, -1.0));
-      top->orthoMode() = true;
-      top->writeToViewportRecord(record);
-    }
-    static std::uint64_t pipFrame = 0;
-    ++pipFrame;
-    if ((pipFrame % 2) == 1 && pipManager->tryClaimFrameRender())
-    {
-      acgs::AcGsView *pipView = pipManager->views()[1].get();
-      const int pipWidth = std::max(1, currentDrawableWidth() / 4);
-      const int pipHeight = std::max(1, currentDrawableHeight() / 4);
-      const double pipHalfH = pipView->orbitCamera().orthoSize();
-      const glm::mat4 pipProjection = glm::mat4(glm::ortho(
-          -pipHalfH * (double)aspect, pipHalfH * (double)aspect,
-          -pipHalfH, pipHalfH, 1.0, 4.0e6));
-      acgs::ViewFrameContext pipContext;
-      pipContext.view = pipView->orbitCamera().getViewMatrix(rebase);
-      pipContext.projection = pipProjection;
-      pipContext.overlayProjection = pipProjection;
-      pipContext.cameraPos = pipView->orbitCamera().Position;
-      pipContext.cameraRight = pipView->orbitCamera().Right;
-      pipContext.cameraUp = pipView->orbitCamera().Up;
-      pipContext.cameraFront = pipView->orbitCamera().Front;
-      pipContext.viewportWidth = pipWidth;
-      pipContext.viewportHeight = pipHeight;
-      pipContext.ortho = true;
-      pipContext.orthoSize = pipHalfH;
-      pipContext.orbitDistance = glm::length(
-          pipView->orbitCamera().Position - pipView->orbitCamera().Target);
-      pipContext.pixelSizeWorld =
-          float((2.0 * pipHalfH) / double(pipHeight));
-      pipView->setFrameContext(pipContext);
-      const int savedViewport = pipManager->activeViewIndex();
-      pipManager->setActiveView(1);
-      if (pipManager->beginPipScene())
-      {
-        static std::vector<const VisibilityCandidate *> pipCadDraws;
-        pipCadDraws.clear();
-        for (const VisibilityCandidate &candidate : visibilityCandidates)
-          if (candidate.kind != VisibilityKind::MeshObject)
-            pipCadDraws.push_back(&candidate);
-        drawVectorPrimitivesDemo(
-            pipContext.view, pipProjection, pipProjection, rebase,
-            glm::vec4(0.0f), pipContext.cameraPos, pipContext.cameraFront,
-            pipContext.cameraRight, pipContext.cameraUp,
-            pipContext.pixelSizeWorld, pipCadDraws, {});
-        drawLargeCoordinateObjects(pipContext.view, pipProjection, rebase,
-                                   drawOrder, glm::vec4(0.0f),
-                                   pipContext.pixelSizeWorld, 0.15f);
-        acgsView().submit(sceneOverlay, {nullptr, pipContext.pixelSizeWorld});
-        pipManager->endPipScene();
-      }
-      pipManager->setActiveView(savedViewport);
-      pipManager->resetFrameRender();
-    }
-    pipManager->compositePip();
-  }
+    // Rendered this frame: record the render fingerprint/revision so
+    // subsequent idle frames skip the scene pipeline until something
+    // changes again.
+    if (pickDebugEnabled())
+      std::cout << "[SCENE_DEBUG] frame=" << s_frameIndex
+                << " vis=" << visibleCadDraws.size()
+                << " order=" << drawOrder.size()
+                << " tiny=" << tinyDraws.size()
+                << " rev=" << sceneRevision << std::endl;
+    acgsView().clearNeedsRender(sceneRevision);
+  } // sceneRenderNeeded (dirty-gated scene segment)
 
-    if (imguiOverlayEnabled)
-    {
-      // Refresh the active panel's final before the UI samples it
-      // (blit view 22 executes before the UI view in this frame).
-      //fprintf(stderr, "[P] blit enter\n");
-      acgs::acgsGetManager()->blitSceneToSlot(g_activeSceneSlot);
-      //fprintf(stderr, "[P] blit ok\n");
-      drawViewCubeOverlay();
-      ImGui::Render();
-      {
-        ImDrawData *dd = ImGui::GetDrawData();
-        //fprintf(stderr, "[UI] drawData=%p totalIdx=%u display=(%.0f,%.0f)\n",
-        //        (const void *)dd,
-        //        dd ? (unsigned)dd->TotalIdxCount : 0u,
-        //        dd ? dd->DisplaySize.x : -1.f,
-        //        dd ? dd->DisplaySize.y : -1.f);
-        imguiBgfxRenderDrawData(dd, 17);
-      }
-    }
-
-    acgs::acgsGetManager()->endFrame();
-    // Display stage: the offscreen product becomes the window image
-    // (ImGui panels in ImGui mode, backbuffer resolve otherwise).
-    acgs::acgsGetManager()->compositeFrame();
-}
-
-// acgs ImGui panels: fullscreen-anchored windows presenting each
-// viewport's persistent final texture, with per-panel input routing
-// through the AcGsView interaction facade (wheel zoom at cursor,
-// middle-drag pan/orbit, left-click pick through the unified pipeline).
-static void drawScenePanels()
-{
-  if (!imguiOverlayEnabled)
-    return;
-  acgs::AcGsManager *manager = acgs::acgsGetManager();
-  const int panelCount =
-      multiViewEnabled() && manager->viewCount() > 1 ? 2 : 1;
-  ImGuiIO &io = ImGui::GetIO();
-  const float panelWidth =
-      io.DisplaySize.x / float(panelCount) - (panelCount > 1 ? 6.0f : 0.0f);
-  const ImVec2 panelSize(panelWidth, io.DisplaySize.y - 24.0f);
-  g_imguiHoveredPanel = -1;
-  for (int slot = 0; slot < panelCount; ++slot)
-  {
-    const char *title = slot == 0 ? "Model (viewport 1)"
-                                  : "Top (viewport 2)";
-    ImGui::SetNextWindowPos(
-        ImVec2(float(slot) *
-                   (panelWidth + (panelCount > 1 ? 6.0f : 0.0f)),
-               0.0f),
-        ImGuiCond_Always);
-    ImGui::SetNextWindowSize(panelSize, ImGuiCond_Always);
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (!ImGui::Begin(title, nullptr, flags))
-    {
-      ImGui::End();
-      continue;
-    }
-    const ImVec2 cursor = ImGui::GetCursorScreenPos();
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const std::uint32_t textureId = manager->sceneTexture(slot);
-    if (textureId != 0)
-      ImGui::Image(reinterpret_cast<ImTextureID>(
-                       static_cast<uintptr_t>(textureId)),
-                   avail);
-    else
-      ImGui::TextUnformatted("scene unavailable");
-
-    // Per-panel input routing (the panel owns its viewport's camera).
-    acgs::AcGsView &panelView = *manager->views()[std::size_t(slot)];
-    if (!ImGui::IsWindowHovered())
-    {
-      ImGui::End();
-      continue;
-    }
-    g_imguiHoveredPanel = slot;
-    const double aspect = double(avail.x) / std::max(1.0, double(avail.y));
-    const double ndcX =
-        (double(io.MousePos.x - cursor.x) /
-         std::max(1.0, double(avail.x))) *
-            2.0 -
-        1.0;
-    const double ndcY = 1.0 - (double(io.MousePos.y - cursor.y) /
-                               std::max(1.0, double(avail.y))) * 2.0;
-    if (io.MouseWheel != 0.0f)
-      panelView.zoomAtCursor(io.MouseWheel * 0.5f, ndcX, ndcY, aspect);
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
-    {
-      if (io.KeyShift)
-        panelView.orbit(io.MouseDelta.x, -io.MouseDelta.y);
-      else
-        panelView.pan(io.MouseDelta.x, io.MouseDelta.y, avail.y);
-    }
-    // Left click: pick through THIS panel's frustum via the unified
-    // pixel read (pin the round-robin to this slot while it resolves).
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
-    {
-      manager->setActiveView(slot);
-      g_pickedSlot = slot;
-      gpuPickFocus.ndcX = ndcX;
-      gpuPickFocus.ndcY = ndcY;
-      gpuPickFocus.pendingNdc = true;
-      gpuPickFocus.pendingFrames = 0;
-      gpuPickFocus.waitingResult = false;
-      gpuPickFocus.camera.reset();
-    }
-    ImGui::End();
-  }
+  acgs::acgsGetManager()->endFrame();
+  // Display stage: the offscreen product becomes the window image (scene
+  // resolve + debug overlays + PIP inset) and the frame kicks.
+  acgs::acgsGetManager()->compositeFrame();
 }
 
 int main(int argc, char *argv[])
@@ -7626,6 +7636,12 @@ int main(int argc, char *argv[])
   {
     const int storeFails = acdb::runStoreSelfTest();
     return storeFails == 0 ? 0 : 1;
+  }
+  if (const char *selfTest = std::getenv("GRID_SELFTEST");
+      selfTest && std::strcmp(selfTest, "pick") == 0)
+  {
+    const int pickFails = acgs::runPickSelfTest();
+    return pickFails == 0 ? 0 : 1;
   }
 
 
@@ -7665,7 +7681,7 @@ int main(int argc, char *argv[])
     double tx = 0.0, ty = 0.0, tz = 0.0, dist = 1500.0;
     if (std::sscanf(startTarget, "%lf,%lf,%lf,%lf", &tx, &ty, &tz, &dist) >= 3)
     {
-      orbitCam.setOrbit(glm::dvec3(tx, ty, tz), std::max(1.0, dist));
+      orbitCam().setOrbit(glm::dvec3(tx, ty, tz), std::max(1.0, dist));
       std::cout << "Camera start target: (" << tx << ", " << ty << ", "
                 << tz << ") distance=" << dist << std::endl;
     }
@@ -7680,8 +7696,8 @@ int main(int argc, char *argv[])
   // Distance after the OpenCAD-style fit has chosen its orientation.
   if (requestedOrthoHalfHeight > 0.0)
   {
-    const double tanHalfFov = std::tan(glm::radians(orbitCam.Zoom) * 0.5);
-    orbitCam.setTargetDistance(requestedOrthoHalfHeight / tanHalfFov);
+    const double tanHalfFov = std::tan(glm::radians(orbitCam().Zoom) * 0.5);
+    orbitCam().setTargetDistance(requestedOrthoHalfHeight / tanHalfFov);
   }
   acgsView().resetDepthSlabs();
   SDL_SetWindowTitle(
@@ -7700,7 +7716,6 @@ int main(int argc, char *argv[])
   bool testPanApplied = false;
   bool originOrthoScenarioApplied = false;
   bool testDoubleClickApplied = false;
-  bool testSecondClickApplied = false;
 
 
   const Uint64 frameTimerFrequency = SDL_GetPerformanceFrequency();
@@ -7711,9 +7726,7 @@ int main(int argc, char *argv[])
     float currentFrame = SDL_GetTicks() / 1000.0f;
 
     // Automated validation: inject the same SDL event path as a real
-    // left-button pick click (single click since picking moved from
-    // double-click to single-click).  The env names keep their historic
-    // DOUBLE_CLICK spelling for script compatibility.
+    // left-button double click. Set GRID_CAMERA_TEST_DOUBLE_CLICK_AT_SECONDS.
     if (!testDoubleClickApplied)
     {
       const char *testAtValue = std::getenv(
@@ -7730,7 +7743,7 @@ int main(int argc, char *argv[])
         synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
         synthetic.button.windowID = SDL_GetWindowID(window);
         synthetic.button.timestamp = SDL_GetTicks();
-        synthetic.button.clicks = 1;
+        synthetic.button.clicks = 2;
         synthetic.button.button = SDL_BUTTON_LEFT;
         synthetic.button.down = true;
         synthetic.button.x = x;
@@ -7741,69 +7754,27 @@ int main(int argc, char *argv[])
         {
           std::puts("[PICK_DEBUG] test event push failed");
         }
-        std::printf("[PICK_DEBUG] test click x=%d y=%d", x, y);
-        std::puts("");
-      }
-    }
-
-    // Optional second synthetic click (two-step autofocus + fill pick).
-    if (!testSecondClickApplied)
-    {
-      const char *secondAt = std::getenv(
-          "GRID_CAMERA_TEST_SECOND_CLICK_AT_SECONDS");
-      if (secondAt && currentFrame >= std::atof(secondAt))
-      {
-        int winW = 0, winH = 0;
-        SDL_GetWindowSize(window, &winW, &winH);
-        const char *testX = std::getenv("GRID_CAMERA_TEST_SECOND_CLICK_X");
-        const char *testY = std::getenv("GRID_CAMERA_TEST_SECOND_CLICK_Y");
-        const int x = testX ? std::atoi(testX) : winW / 2;
-        const int y = testY ? std::atoi(testY) : winH / 2;
-        SDL_Event synthetic{};
-        synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        synthetic.button.windowID = SDL_GetWindowID(window);
-        synthetic.button.timestamp = SDL_GetTicks();
-        synthetic.button.clicks = 1;
-        synthetic.button.button = SDL_BUTTON_LEFT;
-        synthetic.button.down = true;
-        synthetic.button.x = x;
-        synthetic.button.y = y;
-        testSecondClickApplied = true;
-        SDL_PushEvent(&synthetic);
-        std::printf("[PICK_DEBUG] test second click x=%d y=%d", x, y);
+        std::printf("[PICK_DEBUG] test double-click x=%d y=%d", x, y);
         std::puts("");
       }
     }
 
     while (SDL_PollEvent(&evt))
     {
-        if (imguiPlatformInitialized)
-          ImGui_ImplSDL3_ProcessEvent(&evt);
-        bool mouseCaptured = imguiOverlayEnabled &&
-                             ImGui::GetIO().WantCaptureMouse;
-        if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
-            evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
-          mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.button.x, evt.button.y);
-        else if (evt.type == SDL_EVENT_MOUSE_MOTION)
-          mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y);
-        else if (evt.type == SDL_EVENT_MOUSE_WHEEL)
-        {
-          float mouseX = 0.0f;
-          float mouseY = 0.0f;
-          SDL_GetMouseState(&mouseX, &mouseY);
-          mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(mouseX, mouseY);
-        }
+      // The ImGui event bridge MUST see every event: the SDL3 backend
+      // only polls the mouse POSITION while the window has input focus,
+      // so without ProcessEvent the buttons/wheel never reach the io,
+      // panel hover routing reads zeros, and interaction dies exactly
+      // while the app window is focused.
+      if (imguiActive())
+        ImGui_ImplSDL3_ProcessEvent(&evt);
 
-        if (evt.type == SDL_EVENT_QUIT)
-        {
-          running = false;
-        }
-        if (evt.type == SDL_EVENT_KEY_DOWN &&
-            (!imguiOverlayEnabled || !ImGui::GetIO().WantCaptureKeyboard))
-        {
+      if (evt.type == SDL_EVENT_QUIT)
+      {
+        running = false;
+      }
+      if (evt.type == SDL_EVENT_KEY_DOWN)
+      {
         if (evt.key.key == SDLK_ESCAPE)
         {
           running = false;
@@ -7851,6 +7822,10 @@ int main(int argc, char *argv[])
         if (evt.key.key == SDLK_O)
         {
           outlineLockTest = !outlineLockTest;
+          // Outline state is device-side and invisible to the
+          // fingerprint: force the next scene render.
+          for (auto &gateView : acgs::acgsGetManager()->views())
+            gateView->invalidate();
           if (outlineLockTest)
           {
             std::printf("Outline lock: on (id=%u)", lockedOutlineId);
@@ -7864,6 +7839,8 @@ int main(int argc, char *argv[])
         if (evt.key.key == SDLK_U)
         {
           outlineAllTest = !outlineAllTest;
+          for (auto &gateView : acgs::acgsGetManager()->views())
+            gateView->invalidate();
           if (acgs::acgsGetManager()->deviceReady())
             acgs::acgsGetManager()->setSelectionOutlineAll(outlineAllTest);
           if (outlineAllTest)
@@ -7872,13 +7849,51 @@ int main(int argc, char *argv[])
             std::puts("Outline all: off");
         }
         // V -- cycle the visual style through all render modes.
+        if (evt.key.key == SDLK_D)
+        {
+          if (imguiActive())
+          {
+            const int target =
+                g_imguiHoveredPanel >= 0 ? g_imguiHoveredPanel : 0;
+            g_panelShowId[target] = !g_panelShowId[target];
+            const bool anyId = g_panelShowId[0] || g_panelShowId[1];
+            if (acgs::acgsGetManager()->deviceReady())
+            {
+              acgs::acgsGetManager()->setGpuPickSceneDebug(anyId);
+              acgs::acgsGetManager()->setGpuPickScenePassEnabled(anyId);
+            }
+            // The ID-texture toggle is invisible to the render
+            // fingerprint: force the next scene render.
+            for (auto &gateView : acgs::acgsGetManager()->views())
+              gateView->invalidate();
+            std::cout << "Panel " << target + 1 << " shows: "
+                      << (g_panelShowId[target] ? "ID texture"
+                                                : "color scene")
+                      << std::endl;
+          }
+        }
         if (evt.key.key == SDLK_V)
         {
-          acgsView().visualStyle().cycle();
-          if (acgs::acgsGetManager()->deviceReady())
-            acgs::acgsGetManager()->syncActiveRenderMode();
-          std::cout << "Visual style: "
-                    << rendering::renderModeLabel(acgsView().visualStyle().mode())
+          // Independent viewport styles: V cycles the hovered panel's
+          // style (last-hovered when the cursor left the window); the
+          // pip pass picks its own view's style up per frame.
+          acgs::AcGsManager *styleManager = acgs::acgsGetManager();
+          const int styleTarget =
+              g_imguiHoveredPanel >= 0 &&
+                      int(styleManager->viewCount()) > g_imguiHoveredPanel
+                  ? g_imguiHoveredPanel
+                  : styleManager->activeViewIndex();
+          acgs::AcGsView &styleView =
+              *styleManager->views()[std::size_t(styleTarget)].get();
+          styleView.visualStyle().cycle();
+          // Style is invisible to other views' fingerprints and the
+          // device flags: mark the styled view dirty explicitly.
+          styleView.invalidate();
+          if (styleTarget == styleManager->activeViewIndex())
+            styleManager->syncActiveRenderMode();
+          std::cout << "Visual style (viewport "
+                    << styleTarget + 1 << "): "
+                    << acgi::visualStyleLabel(styleView.visualStyle().mode())
                     << std::endl;
         }
         if (evt.key.scancode == SDL_SCANCODE_L)
@@ -7900,8 +7915,8 @@ int main(int argc, char *argv[])
           else
           {
             cubeWorldPosition = glm::dvec3(0.0);
-            orbitCam.clearDepthBounds();
-            orbitCam.setOrbit(cubeWorldPosition, 15.0);
+            orbitCam().clearDepthBounds();
+            orbitCam().setOrbit(cubeWorldPosition, 15.0);
             acgsView().resetDepthSlabs();
             SDL_SetWindowTitle(window, "grid plane");
           }
@@ -7945,6 +7960,18 @@ int main(int argc, char *argv[])
         // record restores into its view.
         if (evt.key.key == SDLK_TAB)
         {
+          if (imguiActive())
+          {
+            // The two panels are pinned to viewport 1|2; the main scene
+            // channel follows the active view, so switching it here
+            // would duplicate content across both panels.  Keyboard
+            // commands target the hovered panel instead.
+            std::cout << "ImGui mode: panels pinned (A=viewport 1, "
+                         "B=viewport 2); hover a panel to target it."
+                      << std::endl;
+          }
+          else
+          {
           acgs::AcGsManager *manager = acgs::acgsGetManager();
           acdb::AcDbDatabase &document = acdbDocument();
           if (manager->viewCount() < 2)
@@ -7993,14 +8020,16 @@ int main(int argc, char *argv[])
                             ? acdb::kActiveViewportName
                             : acgsView().viewportRecordName())
                     << ")" << std::endl;
+          }
         }
       }
 
-      if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-          evt.button.button == SDL_BUTTON_MIDDLE && !mouseCaptured)
+      if (!imguiWantsMouse() &&
+          evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+          evt.button.button == SDL_BUTTON_MIDDLE)
       {
         middleMouseDrag = true;
-        orbitPivot = viewCenterObjectPivot().value_or(orbitCam.Target);
+        orbitPivot = viewCenterObjectPivot().value_or(orbitCam().Target);
       }
       if (evt.type == SDL_EVENT_MOUSE_BUTTON_UP &&
           evt.button.button == SDL_BUTTON_MIDDLE)
@@ -8015,16 +8044,17 @@ int main(int argc, char *argv[])
         middleMouseDrag = false;
       }
 
-      // Single-click left button: pick + autofocus at cursor position.
-      if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+      // Double-click left button: autofocus at cursor position.
+      if (!imguiActive() &&
+          evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
           evt.button.button == SDL_BUTTON_LEFT &&
-          evt.button.clicks == 1 && !mouseCaptured)
+          evt.button.clicks == 2)
       {
         int winW = 0, winH = 0;
         SDL_GetWindowSize(window, &winW, &winH);
         if (pickDebugEnabled())
         {
-          std::printf("[PICK_DEBUG] click x=%d y=%d gpu=%d",
+          std::printf("[PICK_DEBUG] double-click x=%d y=%d gpu=%d",
                       static_cast<int>(evt.button.x), static_cast<int>(evt.button.y),
                       gpuPickEnabled() ? 1 : 0);
           std::puts("");
@@ -8047,7 +8077,7 @@ int main(int argc, char *argv[])
         }
       }
 
-      if (!mouseCaptured)
+      if (!imguiWantsMouse())
       {
         handleOrbitMouseMovement(evt, middleMouseDrag);
         handleOrbitZoom(evt);
@@ -8064,7 +8094,7 @@ int main(int argc, char *argv[])
       if (testPanValue && testPanAtValue &&
           currentFrame >= std::atof(testPanAtValue))
       {
-        orbitCam.panScreen((float)std::atof(testPanValue), 0.0f,
+        orbitCam().panScreen((float)std::atof(testPanValue), 0.0f,
                            (float)currentDrawableHeight());
         testPanApplied = true;
       }
@@ -8083,8 +8113,8 @@ int main(int argc, char *argv[])
       {
         largeCoordinateCameraView = false;
         cubeWorldPosition = glm::dvec3(0.0);
-        orbitCam.clearDepthBounds();
-        orbitCam.setOrbit(cubeWorldPosition, 15.0);
+        orbitCam().clearDepthBounds();
+        orbitCam().setOrbit(cubeWorldPosition, 15.0);
         switchProjectionMode();
         acgsView().resetDepthSlabs();
         originOrthoScenarioApplied = true;
@@ -8093,14 +8123,6 @@ int main(int argc, char *argv[])
       }
     }
 
-    if (imguiOverlayEnabled)
-    {
-      ImGui_ImplSDL3_NewFrame();
-      ImGui::NewFrame();
-      //fprintf(stderr, "[P] NewFrame ok\n");
-      drawScenePanels();
-      //fprintf(stderr, "[P] panels ok\n");
-    }
     render();
 
     if (debugExitFrames > 0)

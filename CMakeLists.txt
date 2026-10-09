@@ -143,6 +143,7 @@ set(WINDOW_SOURCES
     main.cpp
     lib/rendering/RendererBackend.cpp
     lib/rendering/BgfxRenderer.cpp
+    lib/rendering/ImGuiBgfxPass.cpp
     lib/rendering/WebGpuRenderer.cpp
     lib/rendering/ProceduralMesh.cpp
     lib/text/text_font.cpp

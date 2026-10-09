@@ -1,5 +1,7 @@
 #include "acgs/AcGsManager.h"
 
+struct ImDrawData;
+
 #include <SDL.h>
 
 #include <cstdlib>
@@ -268,6 +270,52 @@ rendering::GpuPickResult AcGsManager::pollGpuPick()
 std::uint32_t AcGsManager::requestGpuPickPixel(float ndcX, float ndcY)
 {
     return device_ != nullptr ? device_->requestGpuPickPixel(ndcX, ndcY) : 0;
+}
+void AcGsManager::compositeFrame()
+{
+    if (device_ != nullptr)
+        device_->compositeFrame();
+}
+
+void AcGsManager::setImGuiActive(bool active)
+{
+    if (device_ != nullptr)
+        device_->setImGuiActive(active);
+}
+
+void AcGsManager::drawImGui(ImDrawData *drawData)
+{
+    if (device_ != nullptr)
+        device_->drawImGui(drawData);
+}
+
+std::uint32_t AcGsManager::sceneTexture(int slot) const
+{
+    return device_ != nullptr ? device_->sceneTexture(slot) : 0;
+}
+
+void AcGsManager::setSceneRenderSize(std::uint32_t width, std::uint32_t height)
+{
+    if (device_ != nullptr)
+        device_->setSceneRenderSize(width, height);
+}
+
+void AcGsManager::setGpuPickDebugSize(std::uint32_t width, std::uint32_t height)
+{
+    if (device_ != nullptr)
+        device_->setGpuPickDebugSize(width, height);
+}
+
+void AcGsManager::setActiveSceneSlot(int slot)
+{
+    if (device_ != nullptr)
+        device_->setActiveSceneSlot(slot);
+}
+
+void AcGsManager::blitSceneToSlot(int slot)
+{
+    if (device_ != nullptr)
+        device_->blitSceneToSlot(slot);
 }
 
 void AcGsManager::cancelGpuPick()

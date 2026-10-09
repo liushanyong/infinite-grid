@@ -13,6 +13,10 @@
 #include "RenderMode.h"
 #include "RenderTypes.h"
 
+// Global namespace: ImGui owns the type; a namespace-scoped forward
+// declaration would silently mismatch the override signature.
+struct ImDrawData;
+
 namespace rendering
 {
 
@@ -48,7 +52,40 @@ public:
     virtual void shutdown() = 0;
     virtual bool beginFrame(const glm::vec4 &clearColor) = 0;
     virtual void endFrame() = 0;
+    // Displays the finished offscreen frame (offscreen product -> window
+    // backbuffer / ImGui panels) and kicks it.  Default no-op: backends
+    // that present inside endFrame() ignore the split.
+    virtual void compositeFrame() {}
     virtual void present() = 0;
+    // ---- ImGui presentation mode (optional capability) ----
+    // When active, compositeFrame() clears the backbuffer and lets the
+    // host's ImGui draw data own the window: the offscreen scenes reach
+    // the screen as panel images (sceneTexture slots).  Backends without
+    // ImGui support ignore the flag.
+    virtual void setImGuiActive(bool active) { (void)active; }
+    virtual void drawImGui(ImDrawData *drawData) { (void)drawData; }
+    // Persistent per-viewport final images for ImGui::Image panels:
+    // slot 0/1 = the two viewports' last blit, slot 2 = the full-scene
+    // GPU ID debug texture.  0 = no texture.
+    virtual std::uint32_t sceneTexture(int slot) const { return 0; }
+    // Resizes the MAIN scene offscreen target independently of the
+    // window (ImGui mode renders each viewport at its panel's own size).
+    virtual void setSceneRenderSize(std::uint32_t width,
+                                    std::uint32_t height)
+    {
+        (void)width;
+        (void)height;
+    }
+    // Resizes the full-scene ID debug target independently of the window
+    virtual void setGpuPickDebugSize(std::uint32_t width,
+                                     std::uint32_t height)
+    {
+        (void)width;
+        (void)height;
+    }
+    // Selects which viewport the next blit targets (round-robin slot).
+    virtual void setActiveSceneSlot(int slot) { (void)slot; }
+    virtual void blitSceneToSlot(int slot) { (void)slot; }
     virtual void drawGrid(const GridRenderData &data) = 0;
     virtual void drawCube(const CubeRenderData &data) = 0;
     virtual void drawMeshInstances(const MeshInstancesRenderData &data) = 0;

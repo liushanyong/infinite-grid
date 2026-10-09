@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/RendererBackend.h"
+#include "ImGuiBgfxPass.h"
 
 #include <bgfx/bgfx.h>
 #include <array>
@@ -51,6 +52,24 @@ public:
     void drawSdfGlyphQuad(const glm::mat4 &view, const glm::mat4 &projection,
                           uint32_t textureId, const float *vertices);
     void requestDebugScreenShot(const std::string &filePath) override;
+    // Displays the finished offscreen frame: in ImGui mode the scene is
+    // blitted into the active viewport's persistent final texture and the
+    // ImGui draw data owns the window; otherwise the scene resolves into
+    // the backbuffer (debug overlays included) and the frame kicks.
+    void compositeFrame() override;
+    void setImGuiActive(bool active) override;
+    void drawImGui(ImDrawData *drawData) override;
+    std::uint32_t sceneTexture(int slot) const override;
+    // Resizes the MAIN scene offscreen target independently of the window
+    // (ImGui mode renders each viewport at its panel's own size).
+    void setSceneRenderSize(std::uint32_t width, std::uint32_t height) override;
+    // Resizes the full-scene ID debug target (ImGui ID panels).
+    void setGpuPickDebugSize(std::uint32_t width, std::uint32_t height) override;
+    // Selects which viewport the next blit targets (round-robin slot).
+    void setActiveSceneSlot(int slot) { m_activeSceneSlot = slot; }
+    // Copies the scene target into the viewport's persistent final texture
+    // (ImGui samples the finals, which keep the last rendered image).
+    void blitSceneToSlot(int slot);
     void setGpuPickDebugVisible(bool visible) override;
     void setGpuPickSceneDebug(bool visible) override;
     void setGpuPickScenePassEnabled(bool enabled) override;
@@ -82,6 +101,8 @@ private:
 
     bool createRenderResources();
     bool createSceneFrameBuffer();
+    bool createSceneFrameBuffer(std::uint32_t width,
+                                std::uint32_t height);
     void destroySceneFrameBuffer();
     bool createGpuPickResources();
     void destroyGpuPickResources();
@@ -312,6 +333,21 @@ private:
     std::vector<uint8_t> m_gpuPickDebugReadbackData;
     bool m_gpuPickDebugReadPending = false;
     uint32_t m_gpuPickDebugReadFrame = 0;
+    // ---- ImGui presentation mode ----
+    bool m_imguiActive = false;
+    int m_activeSceneSlot = 0;
+    ImGuiBgfxPass m_imguiPass;
+    // Main scene offscreen target size (window size unless ImGui mode
+    // renders a viewport at its panel's own size).
+    uint32_t m_sceneW = 0;
+    uint32_t m_sceneH = 0;
+    bgfx::TextureHandle m_finalTexture[2] = {BGFX_INVALID_HANDLE,
+                                             BGFX_INVALID_HANDLE};
+    uint32_t m_finalWidth[2] = {0, 0};
+    uint32_t m_finalHeight[2] = {0, 0};
+    // Full-scene ID debug target wanted size (per-panel ID finals).
+    uint32_t m_gpuPickDebugWantW = 0;
+    uint32_t m_gpuPickDebugWantH = 0;
     bool m_gpuPickDebugVisible = false;
     uint32_t m_gpuPickDebugMinId = 0u;
     uint32_t m_gpuPickDebugMaxId = 0u;

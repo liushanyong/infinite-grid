@@ -45,6 +45,8 @@ class RendererBackend; // acgs-internal: the app never names this type
 struct FillVertex;
 } // namespace rendering
 
+// ImGui owns the type; the forward declaration must be global.
+struct ImDrawData;
 namespace acgs
 {
 
@@ -107,6 +109,15 @@ public:
     void setGpuPickSceneDebug(bool visible);
     std::uint32_t requestGpuPick(const rendering::GpuPickRequest &request);
     rendering::GpuPickResult pollGpuPick();
+    // ---- ImGui presentation mode ----
+    void compositeFrame();
+    void setImGuiActive(bool active);
+    void drawImGui(ImDrawData *drawData);
+    std::uint32_t sceneTexture(int slot) const;
+    void setSceneRenderSize(std::uint32_t width, std::uint32_t height);
+    void setGpuPickDebugSize(std::uint32_t width, std::uint32_t height);
+    void setActiveSceneSlot(int slot);
+    void blitSceneToSlot(int slot);
     // Unified picking: sample the full-scene ID texture (see RendererBackend).
     std::uint32_t requestGpuPickPixel(float ndcX, float ndcY);
     void cancelGpuPick();

@@ -121,6 +121,9 @@ struct BgfxImGuiContext
         );
 
         created = bgfx::isValid(program) && bgfx::isValid(texture) && bgfx::isValid(sampler);
+        fprintf(stderr, "[IMGUI_BGFX] created=%d program=%d texture=%d\n",
+                (int)created, (int)bgfx::isValid(program),
+                (int)bgfx::isValid(texture));
     }
 
     void destroy()
@@ -158,6 +161,8 @@ struct BgfxImGuiContext
     {
         if (!created || drawData == nullptr)
         {
+            fprintf(stderr, "[IMGUI_BGFX] render bail created=%d dd=%p\n",
+                    (int)created, (const void *)drawData);
             return;
         }
 
