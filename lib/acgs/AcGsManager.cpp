@@ -173,6 +173,11 @@ void AcGsManager::present()
         device_->present();
 }
 
+float AcGsManager::fps() const
+{
+    return device_ != nullptr ? device_->fps() : 0.0f;
+}
+
 // ---- semantic device configuration ----
 
 void AcGsManager::syncActiveRenderMode()

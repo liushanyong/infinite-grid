@@ -87,12 +87,12 @@ p0 = grab('t0_startup', hwnd)
 
 # 1. left click on a stress-field mesh (dense cluster, right side)
 click(r.l + ox + 620, r.t + oy + 430)
-time.sleep(2.0)
+time.sleep(6.0)
 p1 = grab('t1_after_pick', hwnd)
 
 # 2. V key = cycle visual style
 send_key(0x56)
-time.sleep(1.5)
+time.sleep(5.0)
 p2 = grab('t2_after_vkey', hwnd)
 
 # 3. middle drag = orbit

@@ -81,6 +81,9 @@ public:
     bool beginFrame();
     void endFrame();
     void present();
+    // Presented frames per second tracked by the device (0 when the
+    // backend does not measure it).
+    float fps() const;
 
     // ---- semantic device configuration ----
     // Pushes the active view's visual style to the device (call after

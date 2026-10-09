@@ -45,6 +45,8 @@ struct BgfxImGuiContext
     bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle imageLodEnabled = BGFX_INVALID_HANDLE;
     bool created = false;
+    bool clearBackbuffer = false;
+    std::uint32_t clearColor = 0;
 
     void create(float fontSize, const char* cjkFontPath)
     {
@@ -175,6 +177,13 @@ struct BgfxImGuiContext
 
         bgfx::setViewName(viewId, "ImGui");
         bgfx::setViewMode(viewId, bgfx::ViewMode::Sequential);
+
+        if (clearBackbuffer)
+        {
+            bgfx::setViewClear(viewId,
+                               BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                               clearColor, 1.0f, 0);
+        }
 
         const bgfx::Caps* caps = bgfx::getCaps();
         {
@@ -318,6 +327,12 @@ void imguiBgfxDestroy()
 void imguiBgfxRenderDrawData(ImDrawData* drawData, bgfx::ViewId viewId)
 {
     s_context.render(drawData, viewId);
+}
+
+void imguiBgfxSetViewClear(unsigned int rgba)
+{
+    s_context.clearBackbuffer = true;
+    s_context.clearColor = rgba;
 }
 
 bgfx::TextureHandle imguiBgfxGetFontTexture()

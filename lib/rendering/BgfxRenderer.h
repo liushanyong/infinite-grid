@@ -27,6 +27,7 @@ public:
     bool beginFrame(const glm::vec4 &clearColor) override;
     void endFrame() override;
     void present() override;
+    float fps() const override { return m_fps; }
     bool beginPipScene() override;
     void endPipScene() override;
     void compositePip() override;

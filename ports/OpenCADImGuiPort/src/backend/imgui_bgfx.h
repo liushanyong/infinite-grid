@@ -11,5 +11,13 @@ void imguiBgfxDestroy();
 
 void imguiBgfxRenderDrawData(struct ImDrawData* drawData, bgfx::ViewId viewId = 255);
 
+// Opt-in: clear the window backbuffer to |rgba| (bgfx byte order, R most
+// significant) at the start of every UI view.  Hosts that let the ImGui
+// panels own the window (no backbuffer scene beneath) need this so any
+// row a widget does not paint is a deterministic color instead of stale
+// frame pixels; default remains no-clear for hosts that composite the
+// scene into the backbuffer beneath the UI.
+void imguiBgfxSetViewClear(unsigned int rgba);
+
 // Returns the font-atlas texture used by the bgfx ImGui backend.
 bgfx::TextureHandle imguiBgfxGetFontTexture();

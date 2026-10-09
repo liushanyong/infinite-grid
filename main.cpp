@@ -443,6 +443,18 @@ bool init()
         cjkFontPath =
             util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
       imguiBgfxCreate(18.0f, cjkFontPath.empty() ? nullptr : cjkFontPath.c_str());
+      // The panels own the window: the device skips the full-window
+      // present resolve (compositeFrame blits the viewport finals and
+      // kicks), and the UI view clears the swapchain so any pixel the
+      // panels do not paint is a deterministic color.  Text/outline live
+      // in the scene target now, so nothing needs a backbuffer underlay.
+      const glm::vec4 &uiClear = acgs::kClearColor;
+      imguiBgfxSetViewClear(
+          (std::uint32_t(uiClear.r * 255.0f) << 24) |
+          (std::uint32_t(uiClear.g * 255.0f) << 16) |
+          (std::uint32_t(uiClear.b * 255.0f) << 8) |
+          std::uint32_t(uiClear.a * 255.0f));
+      acgs::acgsGetManager()->setImGuiActive(true);
       imguiOverlayEnabled = true;
       if (viewCubeRenderer.create())
         viewCubeRenderer.setFontTexture(imguiBgfxGetFontTexture());
@@ -7525,6 +7537,32 @@ void render()
     acgs::acgsGetManager()->compositeFrame();
 }
 
+// FPS badge pinned over the viewport image: the device counts presented
+// frames (endFrame cadence, 500 ms smoothing) and this overlay draws the
+// value in the UI layer so it sits above the AcGsView output.  NoInputs
+// keeps viewport hover/pick routing untouched beneath it.
+static void drawFpsOverlay()
+{
+  if (!imguiOverlayEnabled)
+    return;
+  const float fps = acgs::acgsGetManager()->fps();
+  // ViewCube-overlay flag set plus NoInputs: the badge must never take
+  // focus or eat viewport hover/pick routing beneath it.  (Adding
+  // AlwaysAutoResize or NoBringToFrontOnFocus here renders the window
+  // nearly invisible over the panel image -- root cause not chased; the
+  // window auto-fits content anyway since NoInputs blocks manual resize.)
+  ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowBgAlpha(0.45f);
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+      ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+  if (ImGui::Begin("FpsOverlay", nullptr, flags))
+    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f), "FPS %.1f", fps);
+  ImGui::End();
+}
+
 // acgs ImGui panels: fullscreen-anchored windows presenting each
 // viewport's persistent final texture, with per-panel input routing
 // through the AcGsView interaction facade (wheel zoom at cursor,
@@ -8106,6 +8144,7 @@ int main(int argc, char *argv[])
       ImGui::NewFrame();
       //fprintf(stderr, "[P] NewFrame ok\n");
       drawScenePanels();
+      drawFpsOverlay();
       //fprintf(stderr, "[P] panels ok\n");
     }
     render();

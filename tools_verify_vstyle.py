@@ -1,16 +1,13 @@
 import ctypes, os, subprocess, sys, time
 import ctypes.wintypes
 from PIL import Image, ImageGrab
+import numpy as np
 
-EXE = sys.argv[1]
-TAG = sys.argv[2]
-LOG = f'final_{TAG}.log'
-env = dict(os.environ, GRID_RESOURCE_DIR='E:/infinite-grid',
-           GRID_CAMERA_START_TARGET='10002142,-1152,9999072,1200',
-           GRID_MULTI_VIEW='0')
+EXE = 'E:/infinite-grid/build2022/bin/Debug/WINDOW.exe'
+env = dict(os.environ, GRID_RESOURCE_DIR='E:/infinite-grid')
 proc = subprocess.Popen([EXE], env=env,
                         cwd='E:/infinite-grid/build2022/bin/Debug',
-                        stdout=open(LOG, 'wb'), stderr=subprocess.STDOUT)
+                        stdout=open('vstyle.log', 'wb'), stderr=subprocess.STDOUT)
 
 user32 = ctypes.windll.user32
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -20,12 +17,11 @@ class RECT(ctypes.Structure):
                 ('r', ctypes.c_long), ('b', ctypes.c_long)]
 
 def find_window():
-    image = os.path.basename(EXE)
     out = subprocess.check_output(
-        ['tasklist', '/FI', f'IMAGENAME eq {image}', '/FO', 'CSV']).decode('gbk', 'ignore')
+        ['tasklist', '/FI', 'IMAGENAME eq WINDOW.exe', '/FO', 'CSV']).decode('gbk', 'ignore')
     pid = None
     for line in out.splitlines():
-        if image in line:
+        if 'WINDOW.exe' in line:
             pid = int(line.split('","')[1]); break
     if not pid: return None
     CF = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
@@ -41,20 +37,10 @@ def find_window():
     user32.EnumWindows(CF(cb), None)
     return found[0] if found else None
 
-def grab(tag):
+def grab(tag, hwnd):
     r = RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(r))
-    ImageGrab.grab(bbox=(r.l, r.t, r.r, r.b)).save(f'final_{TAG}_{tag}.png')
-
-def wait_log(marker, timeout=8.0):
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        try:
-            with open(LOG, 'rb') as f:
-                if marker.encode() in f.read(): return time.time() - t0
-        except OSError: pass
-        time.sleep(0.1)
-    return None
+    ImageGrab.grab(bbox=(r.l, r.t, r.r, r.b)).save(f'vstyle_{tag}.png')
 
 def send_key(vk):
     scan = user32.MapVirtualKeyW(vk, 0)
@@ -65,11 +51,14 @@ time.sleep(5)
 hwnd = find_window()
 ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
 time.sleep(0.6)
-r = RECT(); user32.GetWindowRect(hwnd, ctypes.byref(r))
-grab('t0_startup')
-print('text visible at startup: see final_%s_t0_startup.png' % TAG)
-
-time.sleep(3.0)
-grab('t0_dual2')
+grab('t0', hwnd)
+send_key(0x56); time.sleep(6.0); grab('t1', hwnd)
+send_key(0x56); time.sleep(6.0); grab('t2', hwnd)
 proc.kill()
-print('done')
+
+a = np.asarray(Image.open('vstyle_t0.png').convert('RGB'), dtype=int)
+b = np.asarray(Image.open('vstyle_t1.png').convert('RGB'), dtype=int)
+c = np.asarray(Image.open('vstyle_t2.png').convert('RGB'), dtype=int)
+print('t1 vs t0:', round((abs(a-b).sum(axis=2) > 12).mean(), 4))
+print('t2 vs t1:', round((abs(b-c).sum(axis=2) > 12).mean(), 4))
+print('t2 vs t0:', round((abs(a-c).sum(axis=2) > 12).mean(), 4))

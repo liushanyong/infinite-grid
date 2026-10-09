@@ -57,6 +57,10 @@ public:
     // that present inside endFrame() ignore the split.
     virtual void compositeFrame() {}
     virtual void present() = 0;
+    // Presented frames per second, smoothed over 500 ms endFrame windows;
+    // 0 when the backend does not track it.  The host draws it as an
+    // overlay above the viewport image.
+    virtual float fps() const { return 0.0f; }
     // ---- ImGui presentation mode (optional capability) ----
     // When active, compositeFrame() clears the backbuffer and lets the
     // host's ImGui draw data own the window: the offscreen scenes reach
