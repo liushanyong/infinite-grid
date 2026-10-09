@@ -55,6 +55,8 @@ public:
                                 AcDbHandle handle);
     virtual void objectRemoved(const AcDbDatabase &database,
                                AcDbHandle handle);
+    virtual void objectModified(const AcDbDatabase &database,
+                                AcDbHandle handle);
 };
 
 class AcDbLayerTable
@@ -438,6 +440,7 @@ private:
     void notifyErased(AcDbHandle handle);
     void notifyUnerased(AcDbHandle handle);
     void notifyRemoved(AcDbHandle handle);
+    void notifyModified(AcDbHandle handle);
 
 public:
 

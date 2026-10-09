@@ -88,6 +88,13 @@ public:
         store_.forget(acdb::AcDbObjectId{handle});
     }
 
+    void objectModified(const acdb::AcDbDatabase &,
+                        acdb::AcDbHandle handle) override
+    {
+        attachAttributes(handle);
+        store_.markDirty(acdb::AcDbObjectId{handle});
+    }
+
 private:
     // Populates the attribute components of one mirrored entity from its
     // document payload (v1: LayerRef on every entity, InstanceXform on
@@ -120,6 +127,10 @@ private:
         {
             assignOrReplace(
                 InstanceXform{document_.referenceTransform(*reference)});
+        }
+        else if (registry.has<InstanceXform>(entity))
+        {
+            registry.remove<InstanceXform>(entity);
         }
     }
 

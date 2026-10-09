@@ -253,6 +253,7 @@ void AcDbDatabaseReactor::objectAppended(const AcDbDatabase &, AcDbHandle) {}
 void AcDbDatabaseReactor::objectErased(const AcDbDatabase &, AcDbHandle) {}
 void AcDbDatabaseReactor::objectUnerased(const AcDbDatabase &, AcDbHandle) {}
 void AcDbDatabaseReactor::objectRemoved(const AcDbDatabase &, AcDbHandle) {}
+void AcDbDatabaseReactor::objectModified(const AcDbDatabase &, AcDbHandle) {}
 
 void AcDbDatabase::notifyAppended(AcDbHandle handle)
 {
@@ -278,6 +279,12 @@ void AcDbDatabase::notifyRemoved(AcDbHandle handle)
         reactor->objectRemoved(*this, handle);
 }
 
+void AcDbDatabase::notifyModified(AcDbHandle handle)
+{
+    for (AcDbDatabaseReactor *reactor : reactors_)
+        reactor->objectModified(*this, handle);
+}
+
 const AcDbEntityVariant *AcDbDatabase::getEntity(AcDbHandle handle) const
 {
     const auto found = entities_.find(handle);
@@ -287,6 +294,8 @@ const AcDbEntityVariant *AcDbDatabase::getEntity(AcDbHandle handle) const
 AcDbEntityVariant *AcDbDatabase::getEntityMutable(AcDbHandle handle)
 {
     const auto found = entities_.find(handle);
+    if (found != entities_.end())
+        captureBefore(handle);
     return found != entities_.end() ? &found->second : nullptr;
 }
 
@@ -559,6 +568,11 @@ AcDbUndoDelta AcDbDatabase::commitTransaction()
         delta.push_back(std::move(entry));
     }
     transaction_.active_ = false;
+    for (const AcDbUndoEntry &entry : delta)
+    {
+        if (entry.before.has_value() && entry.after.has_value())
+            notifyModified(entry.handle);
+    }
     transaction_.captureOrder_.clear();
     transaction_.before_.clear();
     return delta;
@@ -610,6 +624,8 @@ std::size_t AcDbDatabase::applyUndoDelta(const AcDbUndoDelta &delta,
                 notifyAppended(entry.handle);
             else if (wasErased)
                 notifyUnerased(entry.handle);
+            else
+                notifyModified(entry.handle);
         }
         else
         {
