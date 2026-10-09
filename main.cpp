@@ -555,8 +555,10 @@ bool isViewCubeScreenPoint(float x, float y)
 {
   if (!imguiOverlayEnabled)
     return false;
-  const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-  return x >= displaySize.x - 198.0f && x <= displaySize.x - 12.0f &&
+  int displayWidth = 0;
+  int displayHeight = 0;
+  SDL_GetWindowSize(window, &displayWidth, &displayHeight);
+  return x >= displayWidth - 198.0f && x <= displayWidth - 12.0f &&
          y >= 0.0f && y <= 200.0f;
 }
 

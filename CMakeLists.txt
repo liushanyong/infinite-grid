@@ -109,6 +109,7 @@ target_include_directories(imgui PUBLIC
     "${CMAKE_SOURCE_DIR}/lib/imgui"
     "${CMAKE_SOURCE_DIR}/lib/imgui/backends"
 )
+target_compile_definitions(imgui PUBLIC IMGUI_API=)
 target_link_libraries(imgui PUBLIC SDL3::SDL3)
 if(WIN32)
     target_link_libraries(imgui PRIVATE legacy_stdio_definitions)
@@ -121,6 +122,8 @@ add_library(imgui_bgfx STATIC
 )
 target_include_directories(imgui_bgfx PUBLIC
     "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/src/backend"
+    "${CMAKE_SOURCE_DIR}/lib/imgui"
+    "${CMAKE_SOURCE_DIR}/lib/imgui/backends"
     "${CMAKE_SOURCE_DIR}/lib/bgfx/3rdparty"
     "${CMAKE_SOURCE_DIR}/lib/bgfx/examples/common-/imgui"
     "${CMAKE_SOURCE_DIR}/lib/bgfx/include"
