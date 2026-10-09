@@ -223,7 +223,8 @@ inline int runStoreSelfTest()
 
     // ---------------- persistence round-trip ----------------
     AcDbDatabase document;
-    AcDbHandle lineHandle{}, blockRefHandle{};
+    AcDbHandle lineHandle{}, blockRefHandle{}, blockMemberAHandle{},
+        blockMemberBHandle{}, blockDefinitionHandle{};
     {
         AcDbLayerTableRecord &walls = document.layerTable().add(
             "Walls", document.allocateHandle());
@@ -261,15 +262,23 @@ inline int runStoreSelfTest()
         // Block definition over two members + one reference.
         AcDbPoint memberA;
         memberA.location = {0.0, 0.0, 0.0};
-        const AcDbHandle memberAHandle =
-            document.addEntity(std::move(memberA));
+        blockMemberAHandle = document.addEntity(std::move(memberA));
         AcDbCircle memberB;
         memberB.center = {0.0, 0.0, 0.0};
         memberB.radius = 1.0;
-        const AcDbHandle memberBHandle =
-            document.addEntity(std::move(memberB));
-        document.createBlockDefinition("Bolt", {0.0, 0.0, 0.0},
-                                       {memberAHandle, memberBHandle});
+        blockMemberBHandle = document.addEntity(std::move(memberB));
+        blockDefinitionHandle = document.createBlockDefinition(
+            "Bolt", {0.0, 0.0, 0.0},
+            {blockMemberAHandle, blockMemberBHandle});
+        for (const AcDbHandle memberHandle :
+             {blockMemberAHandle, blockMemberBHandle})
+        {
+            const AcDbEntityVariant *member =
+                document.getEntity(memberHandle);
+            check(member != nullptr &&
+                      common(*member).ownerHandle == blockDefinitionHandle,
+                  "block member owner references its block definition");
+        }
         blockRefHandle = document.addBlockReference(
             "Bolt", {5.0, 5.0, 0.0}, 0.5, {2.0, 2.0, 2.0});
 
@@ -307,6 +316,14 @@ inline int runStoreSelfTest()
     check(load.entities == 7, "load read 7 entity rows");
     check(loaded.entityCount() == document.entityCount(),
           "loaded entity count matches");
+    for (const AcDbHandle memberHandle :
+         {blockMemberAHandle, blockMemberBHandle})
+    {
+        const AcDbEntityVariant *member = loaded.getEntity(memberHandle);
+        check(member != nullptr &&
+                  common(*member).ownerHandle == blockDefinitionHandle,
+              "loaded block member retains its owner");
+    }
 
     // Fresh session, fresh mirror: the loaded document binds into a new
     // SceneStore through the bridge (SQLite 管句柄管文件 → ECS 管

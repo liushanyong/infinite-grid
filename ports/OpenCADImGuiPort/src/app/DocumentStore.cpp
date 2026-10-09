@@ -381,9 +381,16 @@ bool DocumentStore::saveToFile(const std::string& filePath, std::string& error)
     }
 
     file << serialize();
+    file.flush();
     if (!file)
     {
         error = "Failed while writing file: " + filePath;
+        return false;
+    }
+    file.close();
+    if (!file)
+    {
+        error = "Failed while closing file: " + filePath;
         return false;
     }
     return true;
