@@ -906,6 +906,12 @@ static bool outlineUsesGeometry(const GpuPickEntity &entity)
          entity.kind == VisibilityKind::CadPoint;
 }
 
+static bool outlineUsesDedicatedHighlight(const GpuPickEntity &entity)
+{
+  return outlineUsesGeometry(entity) ||
+         entity.kind == VisibilityKind::CadText;
+}
+
 
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
@@ -6635,7 +6641,7 @@ void render()
       cachedOutlineObjectId =
           findGpuPickObjectIdForEntity(*outlineEntity);
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && !outlineUsesGeometry(*outlineEntity)
+        outlineEntity && !outlineUsesDedicatedHighlight(*outlineEntity)
             ? cachedOutlineObjectId
             : 0);
     gpuPickSceneDebugQueueActive =
@@ -7481,7 +7487,7 @@ void render()
       outlineId = cachedOutlineObjectId;
     }
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && !outlineUsesGeometry(*outlineEntity)
+        outlineEntity && !outlineUsesDedicatedHighlight(*outlineEntity)
             ? outlineId
             : 0);
     if (pickDebugEnabled())
