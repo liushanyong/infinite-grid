@@ -257,7 +257,8 @@ public:
     // optional color override (selection highlight redraws the picked
     // text in the highlight color; no override draws the request color).
     int drawTextRequest(const acgi::TextRequest &request,
-                        const glm::vec4 &colorOverride);
+                        const glm::vec4 &colorOverride,
+                        bool selectionHighlight = false);
 
     // ---- low-level drawing primitives (selection highlighter, overlays) ----
 

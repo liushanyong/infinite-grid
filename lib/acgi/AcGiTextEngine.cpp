@@ -171,7 +171,8 @@ int TextEngine::drawText(TextDevice &device,
                          const glm::dvec3 &cameraRight,
                          const glm::dvec3 &cameraUp,
                          const glm::dvec3 &cameraFront,
-                         const TextRequest &request)
+                         const TextRequest &request,
+                         bool selectionHighlight)
 {
     const std::vector<GlyphPlacement> placements =
         layoutGlyphs(request, cameraPos, cameraRight, cameraUp,
@@ -233,7 +234,7 @@ int TextEngine::drawText(TextDevice &device,
             std::memcpy(vertices + 45, v01.data(), sizeof(v01));
             constexpr glm::mat4 identityView(1.0f);
             device.drawSdfGlyphQuad(identityView, projection, textureId,
-                                     vertices);
+                                     vertices, selectionHighlight);
             ++glyphsDrawn;
         }
     }

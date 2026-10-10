@@ -28,7 +28,8 @@ public:
     virtual void drawSdfGlyphQuad(const glm::mat4 &view,
                                   const glm::mat4 &projection,
                                   std::uint32_t textureId,
-                                  const float *vertices) = 0;
+                                  const float *vertices,
+                                  bool selectionHighlight = false) = 0;
 };
 
 } // namespace acgi

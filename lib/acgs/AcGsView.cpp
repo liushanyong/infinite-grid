@@ -1308,7 +1308,8 @@ void AcGsView::drawFillBoundary(const acdb::TessellatedEntity &tess,
 }
 
 int AcGsView::drawTextRequest(const acgi::TextRequest &request,
-                             const glm::vec4 &colorOverride)
+                             const glm::vec4 &colorOverride,
+                             bool selectionHighlight)
 {
     if (!viewDevice() || !acgi::textEngine().sdfReady())
         return 0;
@@ -1320,7 +1321,8 @@ int AcGsView::drawTextRequest(const acgi::TextRequest &request,
     const ViewFrameContext &ctx = frame_;
     return acgi::textEngine().drawText(
         *viewDevice(), identityView, ctx.projection, ctx.cameraPos,
-        ctx.cameraRight, ctx.cameraUp, ctx.cameraFront, drawn);
+        ctx.cameraRight, ctx.cameraUp, ctx.cameraFront, drawn,
+        selectionHighlight);
 }
 
 int AcGsView::flushTextRequests()

@@ -113,8 +113,6 @@ WorldRebase &worldRebase()
 // avoiding needless color changes for clearly distinct hues.
 // The single render gateway every submission goes through.
 // Legacy alias kept for the submission call sites below.
-static acgs::AcGsSelectionHighlighter selectionHighlighter(acgsView());
-
 // Camera-space projection now lives in the acgi render gateway.
 using CameraSpacePoint = acgs::CameraSpacePoint;
 
@@ -5683,20 +5681,6 @@ void clipPolygonAgainstDepth(const glm::dvec3 *polygon, int &count,
 }
 
 
-bool outlineIsLineLike(const GpuPickEntity &entity)
-{
-    return entity.kind == VisibilityKind::CadStroke ||
-           entity.kind == VisibilityKind::CadCurve;
-}
-
-bool outlineUsesGeometry(const GpuPickEntity &entity)
-{
-    return outlineIsLineLike(entity) ||
-           entity.kind == VisibilityKind::CadFill ||
-           entity.kind == VisibilityKind::CadPoint ||
-           entity.kind == VisibilityKind::CadText;
-}
-
 void render()
 {
   if (!acgs::acgsGetManager()->deviceReady())
@@ -6616,7 +6600,7 @@ void render()
       cachedOutlineObjectId =
           findGpuPickObjectIdForEntity(*outlineEntity);
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && !outlineUsesGeometry(*outlineEntity)
+        outlineEntity && outlineEntity->kind != VisibilityKind::CadText
             ? cachedOutlineObjectId
             : 0);
     gpuPickSceneDebugQueueActive =
@@ -7103,46 +7087,6 @@ void render()
   drawLargeCoordinateObjects(viewRte, projection, orbitCam.Position, drawOrder,
                              logDepth, pixelSize, 0.15f);
 
-  // Draw line-like outlines before the original CAD overlays.  The overlay
-  // view is sequential, so the source line strokes/curves composite on top of
-  // their wider outline instead of the outline covering them.
-  if (outlineEntity)
-  {
-    const acdb::TessellatedEntity &outlineTess =
-        getVectorPrimitivesTessellation().geometry;
-    if (outlineEntity->kind == VisibilityKind::CadFill &&
-        outlineEntity->cadRange && outlineEntity->cadRange->count)
-    {
-      selectionHighlighter.drawFillOutline(outlineTess,
-                                           outlineEntity->cadRange->begin,
-                                           outlineEntity->cadRange->count,
-                                           pixelSize);
-    }
-    else if (outlineEntity->kind == VisibilityKind::CadPoint &&
-             outlineEntity->cadRange && outlineEntity->cadRange->count)
-    {
-      selectionHighlighter.drawPointHighlight(
-          outlineTess, outlineEntity->cadRange->begin,
-          outlineEntity->cadRange->count, pixelSize);
-    }
-    else if (outlineIsLineLike(*outlineEntity))
-    {
-      if (outlineEntity->kind == VisibilityKind::CadStroke &&
-          outlineEntity->cadRange && outlineEntity->cadRange->count)
-      {
-        selectionHighlighter.drawStrokeOutline(
-            outlineTess, outlineEntity->cadRange->begin,
-            outlineEntity->cadRange->count, pixelSize);
-      }
-      else if (outlineEntity->kind == VisibilityKind::CadCurve &&
-               outlineEntity->curve)
-      {
-        selectionHighlighter.drawCurveOutline(*outlineEntity->curve,
-                                              pixelSize);
-      }
-    }
-  }
-
   drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
                            orbitCam.Position, logDepth,
                            cameraPos, frontVec, cameraRight, cameraUp,
@@ -7226,7 +7170,7 @@ void render()
       outlineEntity->text)
   {
     const int highlightGlyphs = acgsView().drawTextRequest(
-        *outlineEntity->text, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f));
+        *outlineEntity->text, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f), true);
     if (pickDebugEnabled())
       std::cout << "[TEXT_PICK] highlight glyphs=" << highlightGlyphs
                 << std::endl;
@@ -7254,7 +7198,7 @@ void render()
           w <= request.height * 8.0)
       {
         const int highlightGlyphs = acgsView().drawTextRequest(
-            request, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f));
+            request, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f), true);
         if (pickDebugEnabled())
           std::cout << "[TEXT_PICK] insertion-point highlight glyphs="
                     << highlightGlyphs << std::endl;
@@ -7397,7 +7341,9 @@ void render()
       outlineId = cachedOutlineObjectId;
     }
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && !outlineUsesGeometry(*outlineEntity) ? outlineId : 0);
+        outlineEntity && outlineEntity->kind != VisibilityKind::CadText
+            ? outlineId
+            : 0);
     if (pickDebugEnabled())
     {
       static uint32_t lastLoggedOutlineId = 0xffffffffu;
@@ -8027,7 +7973,6 @@ int main(int argc, char *argv[])
 
           manager->setActiveView(manager->activeViewIndex() == 0 ? 1
                                                                  : 0);
-          selectionHighlighter.setView(acgsView());
           if (acdb::AcDbViewportTableRecord *incoming =
                   boundRecord(acgsView()))
             acgsView().applyViewportRecord(*incoming);
