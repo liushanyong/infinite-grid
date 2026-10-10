@@ -20,6 +20,7 @@
 #include "acdb/StoreSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
+#include "acgs/AcGsSelectionHighlighter.h"
 #include "acgs/AcGsSelectionManager.h"
 #include "acgs/DocumentSceneBridge.h"
 #include "acgi/AcGiTextEngine.h"
