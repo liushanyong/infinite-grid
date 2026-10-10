@@ -53,7 +53,8 @@ public:
                  const glm::mat4 &view, const glm::mat4 &projection,
                  const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
                  const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
-                 const TextRequest &request);
+                 const TextRequest &request,
+                 bool selectionHighlight = false);
 
     // Frustum culling (ortho): builds the text's oriented bounding
     // rectangle (baseline direction × line count in the entity plane) and

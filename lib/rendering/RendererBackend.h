@@ -114,7 +114,8 @@ public:
         return 0;
     }
     virtual void drawSdfGlyphQuad(const glm::mat4 &, const glm::mat4 &,
-                                  uint32_t, const float *) override
+                                  uint32_t, const float *,
+                                  bool = false) override
     {
     }
     virtual void requestDebugScreenShot(const std::string &) {}

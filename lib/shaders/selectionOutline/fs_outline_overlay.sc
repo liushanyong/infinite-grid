@@ -53,12 +53,13 @@ void main()
     float down  = readId(v_uv - vec2(0.0, u_viewTexel.y));
     float up    = readId(v_uv + vec2(0.0, u_viewTexel.y));
 
-    float idDeltaLR = max(abs(left - id), abs(right - id));
-    float idDeltaUD = max(abs(down - id), abs(up - id));
-    float selectedDeltaLR = max(abs(left - selectedId), abs(right - selectedId));
-    float selectedDeltaUD = max(abs(down - selectedId), abs(up - selectedId));
+    bool selected = outlineAll ? !background : id == selectedId;
     bool boundary = outlineAll
-        ? max(idDeltaLR, idDeltaUD) > 0.5
-        : max(selectedDeltaLR, selectedDeltaUD) > 0.5;
-    gl_FragColor = boundary ? u_outline_color : vec4(0.0, 0.0, 0.0, 0.0);
+        ? left != id || right != id || down != id || up != id
+        : left != selectedId || right != selectedId ||
+          down != selectedId || up != selectedId;
+    float tintAlpha = selected && !boundary ? 0.10 : 0.0;
+    float rimAlpha = selected && boundary ? 0.48 : 0.0;
+    gl_FragColor = vec4(u_outline_color.rgb,
+                        max(tintAlpha, rimAlpha) * u_outline_color.a);
 }

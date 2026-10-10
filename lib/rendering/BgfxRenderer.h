@@ -51,7 +51,8 @@ public:
     // view-space pos3 + uv2 + rgba4) with that texture bound.
     uint32_t uploadGlyphSdf(const unsigned char *sdf, int width, int height);
     void drawSdfGlyphQuad(const glm::mat4 &view, const glm::mat4 &projection,
-                          uint32_t textureId, const float *vertices);
+                          uint32_t textureId, const float *vertices,
+                          bool selectionHighlight = false);
     void requestDebugScreenShot(const std::string &filePath) override;
     // Displays the finished offscreen frame: in ImGui mode the scene is
     // blitted into the active viewport's persistent final texture and the

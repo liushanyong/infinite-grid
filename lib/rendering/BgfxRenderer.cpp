@@ -4702,7 +4702,8 @@ uint32_t BgfxRenderer::uploadGlyphSdf(const unsigned char *sdf, int width,
 void BgfxRenderer::drawSdfGlyphQuad(const glm::mat4 &view,
                                     const glm::mat4 &projection,
                                     uint32_t textureId,
-                                    const float *vertices)
+                                    const float *vertices,
+                                    bool selectionHighlight)
 {
     if (!m_initialized || !bgfx::isValid(m_textProgram) ||
         textureId == 0 || textureId > m_glyphTextures.size() || !vertices)
@@ -4742,7 +4743,8 @@ void BgfxRenderer::drawSdfGlyphQuad(const glm::mat4 &view,
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setTexture(0, m_textSampler,
                      m_glyphTextures[textureId - 1]);
-    const float params[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // textureLod 0
+    const float params[4] = {
+        0.0f, selectionHighlight ? 1.0f : 0.0f, 0.0f, 0.0f};
     bgfx::setUniform(m_textParams, params);
     bgfx::submit(kViewText, m_textProgram);
 }
