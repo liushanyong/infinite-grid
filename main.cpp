@@ -7192,7 +7192,13 @@ void render()
       highlight.size = meshSizeForHighlight(highlight.size);
       acgs::AcGsModel highlightList;
       appendMeshEntityToScene(highlight, highlightList);
-      acgsView().submit(highlightList, {nullptr, pixelSize});
+      const rendering::DoubleSingleVec3 highlightEye =
+          rendering::encodeDoubleSingle(
+              outlineEntity->kind == VisibilityKind::CadMesh
+                  ? rebase
+                  : cameraPos);
+      acgsView().submit(
+          highlightList, {nullptr, pixelSize, 0.0f, 0.0f, &highlightEye});
     }
     else if (outlineEntity->kind == VisibilityKind::CadFill &&
              outlineEntity->cadRange && outlineEntity->cadRange->count)
