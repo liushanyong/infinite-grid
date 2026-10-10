@@ -121,7 +121,7 @@ private:
                                  const glm::mat4 &projection);
     void renderGpuPickDebugPass(const glm::mat4 &projection);
     void completeGpuPickDebugReadback();
-    void renderSelectionOutlinePass();
+    void setPresentSelectionState(bool enabled);
     void drawEdgeRibbonsForInstances(
         const glm::mat4 &view,
         const glm::mat4 &projection,
@@ -265,8 +265,8 @@ private:
     bgfx::ProgramHandle m_presentProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_presentQuadBuffer = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentSampler = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_presentIdSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_presentParams = BGFX_INVALID_HANDLE;
-    bgfx::ProgramHandle m_selectionOutlineProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_selectionOutlineParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_selectionOutlineColor = BGFX_INVALID_HANDLE;
 
@@ -345,6 +345,8 @@ private:
     uint32_t m_sceneH = 0;
     bgfx::TextureHandle m_finalTexture[2] = {BGFX_INVALID_HANDLE,
                                              BGFX_INVALID_HANDLE};
+    bgfx::FrameBufferHandle m_finalFrameBuffer[2] = {BGFX_INVALID_HANDLE,
+                                                     BGFX_INVALID_HANDLE};
     uint32_t m_finalWidth[2] = {0, 0};
     uint32_t m_finalHeight[2] = {0, 0};
     // Full-scene ID debug target wanted size (per-panel ID finals).

@@ -155,7 +155,6 @@ set(WINDOW_SOURCES
     lib/acdb/AcDbStore.cpp
     lib/brep/BRep.cpp
     lib/acdb/AcDbTransaction.cpp
-    lib/acgs/AcGsSelectionHighlighter.cpp
     lib/acgs/AcGsSelectionManager.cpp
 )
 

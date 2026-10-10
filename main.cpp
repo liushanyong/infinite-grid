@@ -20,7 +20,6 @@
 #include "acdb/StoreSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
-#include "acgs/AcGsSelectionHighlighter.h"
 #include "acgs/AcGsSelectionManager.h"
 #include "acgs/DocumentSceneBridge.h"
 #include "acgi/AcGiTextEngine.h"
@@ -94,7 +93,6 @@ static acgs::AcGsView &acgsView()
   return *acgs::acgsGetManager()->activeView();
 }
 
-static acgs::AcGsSelectionHighlighter selectionHighlighter(acgsView());
 
 bool &useOrthoProjection()
 {
@@ -893,26 +891,6 @@ struct GpuPickEntity
   }
 };
 
-static bool outlineIsLineLike(const GpuPickEntity &entity)
-{
-  return entity.kind == VisibilityKind::CadStroke ||
-         entity.kind == VisibilityKind::CadCurve;
-}
-
-static bool outlineUsesGeometry(const GpuPickEntity &entity)
-{
-  return outlineIsLineLike(entity) ||
-         entity.kind == VisibilityKind::CadFill ||
-         entity.kind == VisibilityKind::CadPoint;
-}
-
-static bool outlineUsesDedicatedHighlight(const GpuPickEntity &entity)
-{
-  return outlineUsesGeometry(entity) ||
-         entity.kind == VisibilityKind::CadText;
-}
-
-
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
   return acgs::AcGsSelectionManager::instance();
@@ -1005,11 +983,6 @@ static bool gpuPickFocusWaiting()
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
   return acgsView().contrastColor(entity.entity.common.color);
-}
-
-static float meshSizeForHighlight(float size)
-{
-  return size * 1.04f;
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
@@ -5851,7 +5824,6 @@ void render()
   // The scene pipeline reads the ACTIVE view; round-robin aims it at
   // this frame's viewport.
   acgs::acgsGetManager()->setActiveView(renderSlot);
-  selectionHighlighter.setView(acgsView());
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
@@ -6622,11 +6594,12 @@ void render()
   lastSceneIdSignature = sceneIdSignature;
   lastSceneIdSignatureValid = true;
   // Unified picking: the full-scene ID pass runs every idle frame and is
-  // the SINGLE ID source for the K/I views, the outline overlay, and
+  // the SINGLE ID source for the K/I views, selection shading, and
   // cursor picking (pixel reads).  It freezes while a pick result is in
   // flight so the texture and the id registry stay consistent.
   bool gpuSceneIdPassRequested = gpuPickEnabled();
-  if (outlineEntity.has_value() && sceneIdSignatureChanged)
+  if ((outlineEntity.has_value() || outlineAllTest) &&
+      sceneIdSignatureChanged)
     gpuSceneIdPassRequested = true;
   if (acgs::acgsGetManager()->deviceReady())
     acgs::acgsGetManager()->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
@@ -6663,7 +6636,8 @@ void render()
     }
   }
 
-  if (gpuSceneIdPassRequested && acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
+  if (gpuSceneIdPassRequested && acgs::acgsGetManager()->deviceReady() &&
+      (gpuPickEnabled() || outlineEntity.has_value() || outlineAllTest) &&
       !gpuPickFocus.pendingNdc && !gpuPickFocus.waitingResult)
   {
     const rendering::GpuPickRequest sceneRequest{
@@ -6684,9 +6658,7 @@ void render()
       cachedOutlineObjectId =
           findGpuPickObjectIdForEntity(*outlineEntity);
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && !outlineUsesDedicatedHighlight(*outlineEntity)
-            ? cachedOutlineObjectId
-            : 0);
+        outlineEntity ? cachedOutlineObjectId : 0);
     gpuPickSceneDebugQueueActive =
         acgs::acgsGetManager()->requestGpuPick(sceneRequest) != 0;
     // No clearRegistry here either: ids are keyed by entity identity
@@ -7171,117 +7143,6 @@ void render()
   drawLargeCoordinateObjects(viewRte, projection, orbitCam.Position, drawOrder,
                              logDepth, pixelSize, 0.15f);
 
-  // Draw the selected entity through its native geometry path so wire,
-  // point, and fill selections remain visible independently of the optional
-  // full-scene ID-outline compositor.
-  if (outlineEntity)
-  {
-    const acdb::TessellatedEntity &outlineTess =
-        getVectorPrimitivesTessellation().geometry;
-    const MeshEntityRecord *meshToHighlight = outlineEntity->mesh;
-    MeshEntityRecord centerCube;
-    if (outlineEntity->kind == VisibilityKind::CenterCube)
-    {
-      centerCube = getCenterCubeEntity();
-      meshToHighlight = &centerCube;
-    }
-
-    if ((outlineEntity->kind == VisibilityKind::MeshObject ||
-         outlineEntity->kind == VisibilityKind::CadMesh ||
-         outlineEntity->kind == VisibilityKind::CenterCube) &&
-        meshToHighlight)
-    {
-      MeshEntityRecord highlight = *meshToHighlight;
-      highlight.entity.common.color =
-          glm::vec4(1.0f, 0.9f, 0.15f, 0.85f);
-      highlight.size = meshSizeForHighlight(highlight.size);
-      acgs::AcGsModel highlightList;
-      appendMeshEntityToScene(highlight, highlightList);
-      const rendering::DoubleSingleVec3 highlightEye =
-          rendering::encodeDoubleSingle(
-              outlineEntity->kind == VisibilityKind::CadMesh
-                  ? rebase
-                  : cameraPos);
-      acgsView().submit(
-          highlightList, {nullptr, pixelSize, 0.0f, 0.0f, &highlightEye});
-    }
-    else if (outlineEntity->kind == VisibilityKind::CadFill &&
-             outlineEntity->cadRange && outlineEntity->cadRange->count)
-    {
-      const acgs::AcGsEntityRange &range = *outlineEntity->cadRange;
-      const auto hintsIt = acgs::replayHints().find(range.name);
-      const bool solid3dFace =
-          hintsIt != acgs::replayHints().end() &&
-          hintsIt->second.fillIs3DFace;
-      if (solid3dFace)
-      {
-        const size_t last =
-            std::min(range.begin + range.count, outlineTess.fills.size());
-        glm::dvec3 centroid(0.0);
-        size_t vertexCount = 0;
-        for (size_t i = range.begin; i < last; ++i)
-        {
-          const acdb::Triangle &triangle = outlineTess.fills[i];
-          if (!triangle.common.visible)
-            continue;
-          centroid += triangle.a + triangle.b + triangle.c;
-          vertexCount += 3;
-        }
-        if (vertexCount > 0)
-        {
-          centroid /= double(vertexCount);
-          const glm::vec4 shellColor(1.0f, 0.9f, 0.15f, 0.9f);
-          std::vector<rendering::FillVertex> shell;
-          shell.reserve(vertexCount);
-          for (size_t i = range.begin; i < last; ++i)
-          {
-            const acdb::Triangle &triangle = outlineTess.fills[i];
-            if (!triangle.common.visible)
-              continue;
-            for (const glm::dvec3 &vertex :
-                 {triangle.a, triangle.b, triangle.c})
-            {
-              const glm::dvec3 expanded =
-                  centroid + (vertex - centroid) * 1.04;
-              shell.push_back(
-                  {glm::vec3(expanded - cameraPos), shellColor});
-            }
-          }
-          acgsView().drawFillTriangles(shell, viewRte, projection, true,
-                                       0.25f);
-        }
-      }
-      else
-      {
-        selectionHighlighter.drawFillOutline(
-            outlineTess, range.begin, range.count, pixelSize);
-      }
-    }
-    else if (outlineEntity->kind == VisibilityKind::CadPoint &&
-             outlineEntity->cadRange && outlineEntity->cadRange->count)
-    {
-      selectionHighlighter.drawPointHighlight(
-          outlineTess, outlineEntity->cadRange->begin,
-          outlineEntity->cadRange->count, pixelSize);
-    }
-    else if (outlineIsLineLike(*outlineEntity))
-    {
-      if (outlineEntity->kind == VisibilityKind::CadStroke &&
-          outlineEntity->cadRange && outlineEntity->cadRange->count)
-      {
-        selectionHighlighter.drawStrokeOutline(
-            outlineTess, outlineEntity->cadRange->begin,
-            outlineEntity->cadRange->count, pixelSize);
-      }
-      else if (outlineEntity->kind == VisibilityKind::CadCurve &&
-               outlineEntity->curve)
-      {
-        selectionHighlighter.drawCurveOutline(*outlineEntity->curve,
-                                              pixelSize);
-      }
-    }
-  }
-
   drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
                            orbitCam.Position, logDepth,
                            cameraPos, frontVec, cameraRight, cameraUp,
@@ -7357,50 +7218,6 @@ void render()
   }
 
   acgsView().flushTextRequests();
-
-  // Picked text highlights by redrawing the request in the selection
-  // color (glyphs have no line outline to widen; the redraw lands
-  // exactly on the original glyph quads).
-  if (outlineEntity && outlineEntity->kind == VisibilityKind::CadText &&
-      outlineEntity->text)
-  {
-    const int highlightGlyphs = acgsView().drawTextRequest(
-        *outlineEntity->text, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f), true);
-    if (pickDebugEnabled())
-      std::cout << "[TEXT_PICK] highlight glyphs=" << highlightGlyphs
-                << std::endl;
-  }
-  else if (outlineEntity && outlineEntity->kind == VisibilityKind::CadPoint &&
-           outlineEntity->cadRange && outlineEntity->cadRange->count)
-  {
-    // The text entity's insertion marker is ordinary CAD point geometry;
-    // when that one-pixel dot wins the pick, highlight the SDF glyphs of
-    // the text it belongs to (matched by position inside the block).
-    const acdb::TessellatedEntity &pointTess =
-        getVectorPrimitivesTessellation().geometry;
-    const acdb::TessellatedPoint &marker =
-        pointTess.points[outlineEntity->cadRange->begin];
-    for (const acgi::TextRequest &request : acgi::textRequests())
-    {
-      const TextBlockFrame frame = textBlockFrame(request);
-      const glm::dvec3 local = marker.location - request.position;
-      const double u = glm::dot(local, frame.right);
-      const double v = glm::dot(local, frame.up);
-      const double w = std::abs(glm::dot(local, frame.normal));
-      if (-request.height <= u && u <= frame.width + request.height &&
-          frame.minV - request.height <= v &&
-          v <= frame.maxV + request.height &&
-          w <= request.height * 8.0)
-      {
-        const int highlightGlyphs = acgsView().drawTextRequest(
-            request, glm::vec4(1.0f, 0.9f, 0.15f, 0.95f), true);
-        if (pickDebugEnabled())
-          std::cout << "[TEXT_PICK] insertion-point highlight glyphs="
-                    << highlightGlyphs << std::endl;
-        break;
-      }
-    }
-  }
 
   // Below the mesh LOD threshold, emit stable center-point impostors.  The
   // renderer projects and batches all points into one GPU submission per
@@ -7536,10 +7353,7 @@ void render()
       outlineId = cachedOutlineObjectId;
     }
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && gpuPickEnabled() &&
-                !outlineUsesDedicatedHighlight(*outlineEntity)
-            ? outlineId
-            : 0);
+        outlineEntity ? outlineId : 0);
     if (pickDebugEnabled())
     {
       static uint32_t lastLoggedOutlineId = 0xffffffffu;
