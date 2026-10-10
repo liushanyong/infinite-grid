@@ -3985,9 +3985,9 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
         bgfx::setUniform(m_realisticMaterial, identityMaterial);
         const uint64_t triangleState =
             BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-            (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z
-             : primitive.occlusionRank >= 3 ? BGFX_STATE_DEPTH_TEST_ALWAYS
-                                            : BGFX_STATE_DEPTH_TEST_LEQUAL) |
+            (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z : uint64_t(0)) |
+            (primitive.occlusionRank >= 3 ? BGFX_STATE_DEPTH_TEST_ALWAYS
+                                          : BGFX_STATE_DEPTH_TEST_LEQUAL) |
             BGFX_STATE_MSAA;
         bgfx::setState(triangleState);
         bgfx::submit(view, m_fillProgram);
