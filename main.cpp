@@ -94,6 +94,8 @@ static acgs::AcGsView &acgsView()
   return *acgs::acgsGetManager()->activeView();
 }
 
+static acgs::AcGsSelectionHighlighter selectionHighlighter(acgsView());
+
 bool &useOrthoProjection()
 {
     return acgsView().orthoMode();
@@ -891,6 +893,20 @@ struct GpuPickEntity
   }
 };
 
+static bool outlineIsLineLike(const GpuPickEntity &entity)
+{
+  return entity.kind == VisibilityKind::CadStroke ||
+         entity.kind == VisibilityKind::CadCurve;
+}
+
+static bool outlineUsesGeometry(const GpuPickEntity &entity)
+{
+  return outlineIsLineLike(entity) ||
+         entity.kind == VisibilityKind::CadFill ||
+         entity.kind == VisibilityKind::CadPoint;
+}
+
+
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
   return acgs::AcGsSelectionManager::instance();
@@ -915,9 +931,17 @@ static uint32_t registerGpuPickEntity(GpuPickEntity entity)
   return gpuPickManager().registerEntity(toPickEntity(entity));
 }
 
+constexpr uint32_t kGpuPickCenterCubeId = 1;
+
 static const GpuPickEntity *findGpuPickEntity(uint32_t id)
 {
   thread_local GpuPickEntity converted;
+  if (id == kGpuPickCenterCubeId)
+  {
+    converted = {};
+    converted.kind = VisibilityKind::CenterCube;
+    return &converted;
+  }
   const acgs::AcGsPickEntity *found = gpuPickManager().find(id);
   if (!found)
     return nullptr;
@@ -930,8 +954,6 @@ static const GpuPickEntity *findGpuPickEntity(uint32_t id)
   converted.text = static_cast<const acgi::TextRequest *>(found->text);
   return &converted;
 }
-
-constexpr uint32_t kGpuPickCenterCubeId = 1;
 
 using GpuPickCameraBasis = acgs::AcGsSelectionManager::CameraBasis;
 using GpuPickFocusState = acgs::AcGsSelectionManager::FocusState;
@@ -977,6 +999,11 @@ static bool gpuPickFocusWaiting()
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
   return acgsView().contrastColor(entity.entity.common.color);
+}
+
+static float meshSizeForHighlight(float size)
+{
+  return size * 1.04f;
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
@@ -4839,6 +4866,13 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
     const std::string &name)
 {
   thread_local GpuPickEntity converted;
+  const MeshEntityRecord centerCube = getCenterCubeEntity();
+  if (centerCube.displayName() == name)
+  {
+    converted = {};
+    converted.kind = VisibilityKind::CenterCube;
+    return &converted;
+  }
   converted.text = nullptr;
   const GpuPickEntity *result = nullptr;
   gpuPickManager().forEach(
@@ -5768,6 +5802,7 @@ void render()
   // The scene pipeline reads the ACTIVE view; round-robin aims it at
   // this frame's viewport.
   acgs::acgsGetManager()->setActiveView(renderSlot);
+  selectionHighlighter.setView(acgsView());
 
   if (gpuPickEnabled() && gpuPickFocus.waitingResult)
   {
@@ -6600,7 +6635,7 @@ void render()
       cachedOutlineObjectId =
           findGpuPickObjectIdForEntity(*outlineEntity);
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && outlineEntity->kind != VisibilityKind::CadText
+        outlineEntity && !outlineUsesGeometry(*outlineEntity)
             ? cachedOutlineObjectId
             : 0);
     gpuPickSceneDebugQueueActive =
@@ -7087,6 +7122,111 @@ void render()
   drawLargeCoordinateObjects(viewRte, projection, orbitCam.Position, drawOrder,
                              logDepth, pixelSize, 0.15f);
 
+  // Draw the selected entity through its native geometry path so wire,
+  // point, and fill selections remain visible independently of the optional
+  // full-scene ID-outline compositor.
+  if (outlineEntity)
+  {
+    const acdb::TessellatedEntity &outlineTess =
+        getVectorPrimitivesTessellation().geometry;
+    const MeshEntityRecord *meshToHighlight = outlineEntity->mesh;
+    MeshEntityRecord centerCube;
+    if (outlineEntity->kind == VisibilityKind::CenterCube)
+    {
+      centerCube = getCenterCubeEntity();
+      meshToHighlight = &centerCube;
+    }
+
+    if ((outlineEntity->kind == VisibilityKind::MeshObject ||
+         outlineEntity->kind == VisibilityKind::CadMesh ||
+         outlineEntity->kind == VisibilityKind::CenterCube) &&
+        meshToHighlight)
+    {
+      MeshEntityRecord highlight = *meshToHighlight;
+      highlight.entity.common.color =
+          glm::vec4(1.0f, 0.9f, 0.15f, 0.85f);
+      highlight.size = meshSizeForHighlight(highlight.size);
+      acgs::AcGsModel highlightList;
+      appendMeshEntityToScene(highlight, highlightList);
+      acgsView().submit(highlightList, {nullptr, pixelSize});
+    }
+    else if (outlineEntity->kind == VisibilityKind::CadFill &&
+             outlineEntity->cadRange && outlineEntity->cadRange->count)
+    {
+      const acgs::AcGsEntityRange &range = *outlineEntity->cadRange;
+      const auto hintsIt = acgs::replayHints().find(range.name);
+      const bool solid3dFace =
+          hintsIt != acgs::replayHints().end() &&
+          hintsIt->second.fillIs3DFace;
+      if (solid3dFace)
+      {
+        const size_t last =
+            std::min(range.begin + range.count, outlineTess.fills.size());
+        glm::dvec3 centroid(0.0);
+        size_t vertexCount = 0;
+        for (size_t i = range.begin; i < last; ++i)
+        {
+          const acdb::Triangle &triangle = outlineTess.fills[i];
+          if (!triangle.common.visible)
+            continue;
+          centroid += triangle.a + triangle.b + triangle.c;
+          vertexCount += 3;
+        }
+        if (vertexCount > 0)
+        {
+          centroid /= double(vertexCount);
+          const glm::vec4 shellColor(1.0f, 0.9f, 0.15f, 0.9f);
+          std::vector<rendering::FillVertex> shell;
+          shell.reserve(vertexCount);
+          for (size_t i = range.begin; i < last; ++i)
+          {
+            const acdb::Triangle &triangle = outlineTess.fills[i];
+            if (!triangle.common.visible)
+              continue;
+            for (const glm::dvec3 &vertex :
+                 {triangle.a, triangle.b, triangle.c})
+            {
+              const glm::dvec3 expanded =
+                  centroid + (vertex - centroid) * 1.04;
+              shell.push_back(
+                  {glm::vec3(expanded - cameraPos), shellColor});
+            }
+          }
+          acgsView().drawFillTriangles(shell, viewRte, projection, true,
+                                       0.25f);
+        }
+      }
+      else
+      {
+        selectionHighlighter.drawFillOutline(
+            outlineTess, range.begin, range.count, pixelSize);
+      }
+    }
+    else if (outlineEntity->kind == VisibilityKind::CadPoint &&
+             outlineEntity->cadRange && outlineEntity->cadRange->count)
+    {
+      selectionHighlighter.drawPointHighlight(
+          outlineTess, outlineEntity->cadRange->begin,
+          outlineEntity->cadRange->count, pixelSize);
+    }
+    else if (outlineIsLineLike(*outlineEntity))
+    {
+      if (outlineEntity->kind == VisibilityKind::CadStroke &&
+          outlineEntity->cadRange && outlineEntity->cadRange->count)
+      {
+        selectionHighlighter.drawStrokeOutline(
+            outlineTess, outlineEntity->cadRange->begin,
+            outlineEntity->cadRange->count, pixelSize);
+      }
+      else if (outlineEntity->kind == VisibilityKind::CadCurve &&
+               outlineEntity->curve)
+      {
+        selectionHighlighter.drawCurveOutline(*outlineEntity->curve,
+                                              pixelSize);
+      }
+    }
+  }
+
   drawVectorPrimitivesDemo(viewRte, projection, overlayProjection,
                            orbitCam.Position, logDepth,
                            cameraPos, frontVec, cameraRight, cameraUp,
@@ -7341,7 +7481,7 @@ void render()
       outlineId = cachedOutlineObjectId;
     }
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && outlineEntity->kind != VisibilityKind::CadText
+        outlineEntity && !outlineUsesGeometry(*outlineEntity)
             ? outlineId
             : 0);
     if (pickDebugEnabled())
