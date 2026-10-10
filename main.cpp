@@ -4872,14 +4872,13 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
     const std::string &name)
 {
   thread_local GpuPickEntity converted;
+  converted = {};
   const MeshEntityRecord centerCube = getCenterCubeEntity();
   if (centerCube.displayName() == name)
   {
-    converted = {};
     converted.kind = VisibilityKind::CenterCube;
     return &converted;
   }
-  converted.text = nullptr;
   const GpuPickEntity *result = nullptr;
   gpuPickManager().forEach(
       [&](std::uint32_t, const acgs::AcGsPickEntity &registered) {
@@ -4933,7 +4932,46 @@ const GpuPickEntity *findGpuPickEntityForAutofocusName(
           result = &converted;
         }
       });
-  return result;
+  if (result)
+    return result;
+
+  // The explicit CPU-picking mode does not populate the GPU ID registry.
+  // Resolve the same entity identity from the current scene candidates so
+  // CPU picks still drive the viewport's native selection highlights.
+  static std::vector<VisibilityCandidate> candidates;
+  candidates.clear();
+  buildVisibilityCandidates(candidates);
+  for (const VisibilityCandidate &candidate : candidates)
+  {
+    if (candidate.mesh && candidate.mesh->displayName() == name)
+    {
+      converted.kind = candidate.kind;
+      converted.mesh = candidate.mesh;
+      return &converted;
+    }
+    if (candidate.cadRange && candidate.cadRange->name == name)
+    {
+      converted.kind = candidate.kind;
+      converted.cadRange = candidate.cadRange;
+      return &converted;
+    }
+    if (candidate.curve && candidate.curve->name == name)
+    {
+      converted.kind = VisibilityKind::CadCurve;
+      converted.curve = candidate.curve;
+      return &converted;
+    }
+  }
+  for (const acgi::TextRequest &request : acgi::textRequests())
+  {
+    if (request.message == name)
+    {
+      converted.kind = VisibilityKind::CadText;
+      converted.text = &request;
+      return &converted;
+    }
+  }
+  return nullptr;
 }
 
 static void reportGpuPickFallback(double ndcX, double ndcY)
@@ -7487,7 +7525,8 @@ void render()
       outlineId = cachedOutlineObjectId;
     }
     acgs::acgsGetManager()->setSelectionOutlineId(
-        outlineEntity && !outlineUsesDedicatedHighlight(*outlineEntity)
+        outlineEntity && gpuPickEnabled() &&
+                !outlineUsesDedicatedHighlight(*outlineEntity)
             ? outlineId
             : 0);
     if (pickDebugEnabled())
@@ -8176,10 +8215,21 @@ int main(int argc, char *argv[])
           gpuPickFocus.waitingResult = false;
           gpuPickFocus.camera.reset();
         }
-        else if (const std::optional<AutofocusResult> selectedEntity =
-                     autofocusAtNdc(ndcX, ndcY))
+        else
         {
-          reportAutofocus(*selectedEntity);
+          outlineEntity.reset();
+          if (const std::optional<AutofocusResult> selectedEntity =
+                  autofocusAtNdc(ndcX, ndcY))
+          {
+            reportAutofocus(*selectedEntity);
+            if (const GpuPickEntity *entity =
+                    findGpuPickEntityForAutofocusName(
+                        selectedEntity->entityName))
+            {
+              outlineEntity = *entity;
+              lockedOutlineId = findGpuPickObjectIdForEntity(*entity);
+            }
+          }
         }
       }
 
