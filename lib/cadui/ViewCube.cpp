@@ -214,15 +214,25 @@ namespace cadui
                           const ImVec2& center,
                           float radius)
         {
+            // OpenCADStudio rejects clicks outside the cube's ±half box
+            // before the region loop, so the generous face threshold cannot
+            // steal clicks meant for the compass ring.
+            if (std::abs(mouse.x - center.x) > radius ||
+                std::abs(mouse.y - center.y) > radius)
+            {
+                return -1;
+            }
             int bestId = -1;
             float bestDistanceSq = std::numeric_limits<float>::max();
             for (int id = 0; id < 26; ++id)
             {
                 const glm::vec3 centroid = regionCentroid(id);
                 const glm::vec3 eye = rotation * centroid;
-                // OpenCADStudio uses the same +Z view direction and 0.05
-                // grazing cutoff for hit testing, hover and rendering.
-                if (eye.z < 0.05f)
+                // OpenCADStudio normalizes the rotated centroid before the
+                // 0.05 grazing cutoff; edge/corner centroids are longer than
+                // 1, so comparing the raw eye.z lets near-grazing regions
+                // through that the reference culls.
+                if (glm::normalize(eye).z < 0.05f)
                 {
                     continue;
                 }
@@ -488,11 +498,14 @@ namespace cadui
                     };
                     const ImVec2 uv0{ glyph->U0, glyph->V0 };
                     const ImVec2 uv1{ glyph->U1, glyph->V1 };
+                    // Corner UVs must mix U and V independently.  Assigning
+                    // uv0/uv1 as pairs makes V follow the quad's X axis, so the
+                    // glyph is sampled along its diagonal and renders as bars.
                     ViewCubeLabelVertex corners[4] = {
-                        { ImVec2{}, uv0, color, 0.0f },
-                        { ImVec2{}, uv1, color, 0.0f },
-                        { ImVec2{}, uv1, color, 0.0f },
-                        { ImVec2{}, uv0, color, 0.0f }
+                        { ImVec2{}, ImVec2{ uv0.x, uv0.y }, color, 0.0f },
+                        { ImVec2{}, ImVec2{ uv1.x, uv0.y }, color, 0.0f },
+                        { ImVec2{}, ImVec2{ uv1.x, uv1.y }, color, 0.0f },
+                        { ImVec2{}, ImVec2{ uv0.x, uv1.y }, color, 0.0f }
                     };
                     for (unsigned i = 0; i < 4; ++i)
                     {
@@ -746,78 +759,63 @@ namespace cadui
         int hoveredId = -1;
         bool controlHover = false;
         ViewCubeAction action;
+
+        // Nav control rects.  Computed once: the hover gate below uses them
+        // for hit-testing, and the always-on drawing pass later in this
+        // function reuses them (OpenCADStudio's iced buttons never hide).
+        const float buttonSize = 16.0f;
+        const ImRect homeRect{ ImVec2(navRect.Min.x + 3.0f, navRect.Min.y + 3.0f),
+                               ImVec2(navRect.Min.x + 3.0f + buttonSize, navRect.Min.y + 3.0f + buttonSize) };
+        const float rax = navRect.Max.x - 2.0f * buttonSize - 4.0f;
+        const float rbx = navRect.Max.x - buttonSize - 2.0f;
+        const ImRect undoRect{ ImVec2(rax, navRect.Min.y + 2.0f), ImVec2(rax + buttonSize, navRect.Min.y + 2.0f + buttonSize) };
+        const ImRect redoRect{ ImVec2(rbx, navRect.Min.y + 2.0f), ImVec2(rbx + buttonSize, navRect.Min.y + 2.0f + buttonSize) };
+
+        const float nudgeSize = 9.0f;
+        const float nr = cubeHalf + 6.0f;
+        const ImVec2 nc = navRect.GetCenter();
+        const auto nudgeRect = [&](float x, float y)
+        {
+            return ImRect{ ImVec2(x - nudgeSize * 0.5f, y - nudgeSize * 0.5f),
+                           ImVec2(x + nudgeSize * 0.5f, y + nudgeSize * 0.5f) };
+        };
+        const ImRect nudgeUp = nudgeRect(nc.x, nc.y - nr);
+        const ImRect nudgeDown = nudgeRect(nc.x, nc.y + nr);
+        const ImRect nudgeLeft = nudgeRect(nc.x - nr, nc.y);
+        const ImRect nudgeRight = nudgeRect(nc.x + nr, nc.y);
+
+        const std::array<const ImRect*, 7> controlRects{{
+            &homeRect, &undoRect, &redoRect, &nudgeUp, &nudgeDown, &nudgeLeft, &nudgeRight
+        }};
+        int controlIndex = -1;
+        for (unsigned i = 0; i < controlRects.size(); ++i)
+        {
+            if (mouseInRect(mouse, *controlRects[i]))
+            {
+                controlIndex = static_cast<int>(i);
+                break;
+            }
+        }
+
         if (widgetHovered && !pickerHovered)
         {
-            if (options.showControls)
+            if (options.showControls && controlIndex >= 0)
             {
-                const float buttonSize = 16.0f;
-                const ImRect homeRect{ ImVec2(navRect.Min.x + 3.0f, navRect.Min.y + 3.0f),
-                                       ImVec2(navRect.Min.x + 3.0f + buttonSize, navRect.Min.y + 3.0f + buttonSize) };
-                const float rax = navRect.Max.x - 2.0f * buttonSize - 4.0f;
-                const float rbx = navRect.Max.x - buttonSize - 2.0f;
-                const ImRect undoRect{ ImVec2(rax, navRect.Min.y + 2.0f), ImVec2(rax + buttonSize, navRect.Min.y + 2.0f + buttonSize) };
-                const ImRect redoRect{ ImVec2(rbx, navRect.Min.y + 2.0f), ImVec2(rbx + buttonSize, navRect.Min.y + 2.0f + buttonSize) };
-
-                const float nudgeSize = 9.0f;
-                const float nr = cubeHalf + 6.0f;
-                const ImVec2 nc = navRect.GetCenter();
-                const auto nudgeRect = [&](float x, float y)
+                controlHover = true;
+                if (clicked)
                 {
-                    return ImRect{ ImVec2(x - nudgeSize * 0.5f, y - nudgeSize * 0.5f),
-                                   ImVec2(x + nudgeSize * 0.5f, y + nudgeSize * 0.5f) };
-                };
-                const ImRect nudgeUp = nudgeRect(nc.x, nc.y - nr);
-                const ImRect nudgeDown = nudgeRect(nc.x, nc.y + nr);
-                const ImRect nudgeLeft = nudgeRect(nc.x - nr, nc.y);
-                const ImRect nudgeRight = nudgeRect(nc.x + nr, nc.y);
-
-                const std::array<const ImRect*, 7> rects{{
-                    &homeRect, &undoRect, &redoRect, &nudgeUp, &nudgeDown, &nudgeLeft, &nudgeRight
-                }};
-                int controlIndex = -1;
-                for (unsigned i = 0; i < rects.size(); ++i)
-                {
-                    if (mouseInRect(mouse, *rects[i]))
+                    switch (controlIndex)
                     {
-                        controlIndex = static_cast<int>(i);
-                        break;
+                    case 0: action.kind = ViewCubeActionKind::Home; break;
+                    case 1: action.kind = ViewCubeActionKind::RollLeft; break;
+                    case 2: action.kind = ViewCubeActionKind::RollRight; break;
+                    case 3: action.kind = ViewCubeActionKind::NudgeUp; break;
+                    case 4: action.kind = ViewCubeActionKind::NudgeDown; break;
+                    case 5: action.kind = ViewCubeActionKind::NudgeLeft; break;
+                    case 6: action.kind = ViewCubeActionKind::NudgeRight; break;
+                    default: break;
                     }
-                }
-
-                if (controlIndex >= 0)
-                {
-                    controlHover = true;
-                    if (clicked)
-                    {
-                        switch (controlIndex)
-                        {
-                        case 0: action.kind = ViewCubeActionKind::Home; break;
-                        case 1: action.kind = ViewCubeActionKind::RollLeft; break;
-                        case 2: action.kind = ViewCubeActionKind::RollRight; break;
-                        case 3: action.kind = ViewCubeActionKind::NudgeUp; break;
-                        case 4: action.kind = ViewCubeActionKind::NudgeDown; break;
-                        case 5: action.kind = ViewCubeActionKind::NudgeLeft; break;
-                        case 6: action.kind = ViewCubeActionKind::NudgeRight; break;
-                        default: break;
-                        }
-                        result.action = action;
-                    }
-
-                    ImDrawList* drawList = ImGui::GetWindowDrawList();
-                    drawIconButton(drawList, homeRect, controlIndex == 0);
-                    drawHomeIcon(drawList, homeRect.GetCenter(), controlIndex == 0);
-                    drawIconButton(drawList, undoRect, controlIndex == 1);
-                    drawRollIcon(drawList, undoRect.GetCenter(), false, controlIndex == 1);
-                    drawIconButton(drawList, redoRect, controlIndex == 2);
-                    drawRollIcon(drawList, redoRect.GetCenter(), true, controlIndex == 2);
-                    drawIconButton(drawList, nudgeUp, controlIndex == 3);
-                    drawNudgeIcon(drawList, nudgeUp.GetCenter(), 0, controlIndex == 3);
-                    drawIconButton(drawList, nudgeDown, controlIndex == 4);
-                    drawNudgeIcon(drawList, nudgeDown.GetCenter(), 1, controlIndex == 4);
-                    drawIconButton(drawList, nudgeLeft, controlIndex == 5);
-                    drawNudgeIcon(drawList, nudgeLeft.GetCenter(), 2, controlIndex == 5);
-                    drawIconButton(drawList, nudgeRight, controlIndex == 6);
-                    drawNudgeIcon(drawList, nudgeRight.GetCenter(), 3, controlIndex == 6);
+                    result.action = action;
                 }
             }
 
@@ -827,30 +825,40 @@ namespace cadui
                 hoveredId = hitTestRegion(mouse, cubeRotation, navRect.GetCenter(), radius);
                 if (hoveredId < 0)
                 {
-                    const glm::vec2 delta{ mouse.x - navRect.GetCenter().x, mouse.y - navRect.GetCenter().y };
-                    if (glm::length(delta) <= cubeHalf * 0.34f)
+                    // Compass letters sit on the ring at kCardinalR.  Like
+                    // OpenCADStudio's hit_test_cardinal, accept the nearest
+                    // projected letter anchor within 0.34 * cubeHalf after the
+                    // cube test misses (bounded by the nav inset box).  The
+                    // previous center-zone gate made the letters unclickable.
+                    const ImVec2 navCenter = navRect.GetCenter();
+                    const float inset = cubeHalf * kNavInset;
+                    if (std::abs(mouse.x - navCenter.x) <= inset &&
+                        std::abs(mouse.y - navCenter.y) <= inset)
                     {
                         float best = std::numeric_limits<float>::max();
-                        int cardinal = 0;
+                        int cardinal = -1;
                         for (unsigned i = 0; i < 4; ++i)
                         {
                             const glm::vec3 direction = ViewCubeWidget::cardinalDirection(static_cast<int>(i));
                             const glm::vec3 eye = viewRotation * glm::vec3{ direction.x * kCardinalR, direction.y * kCardinalR, kRingZ };
-                            const float distance = glm::length(glm::vec2{ mouse.x - (navRect.GetCenter().x + eye.x * radius),
-                                                                          mouse.y - (navRect.GetCenter().y - eye.y * radius) });
-                            if (distance < best)
+                            const float distance = glm::length(glm::vec2{ mouse.x - (navCenter.x + eye.x * radius),
+                                                                          mouse.y - (navCenter.y - eye.y * radius) });
+                            if (distance < cubeHalf * 0.34f && distance < best)
                             {
                                 best = distance;
                                 cardinal = static_cast<int>(i);
                             }
                         }
-                        if (clicked)
+                        if (cardinal >= 0)
                         {
-                            result.action.kind = ViewCubeActionKind::Cardinal;
-                            result.action.region = cardinalRegion(cardinal);
+                            if (clicked)
+                            {
+                                result.action.kind = ViewCubeActionKind::Cardinal;
+                                result.action.region = cardinalRegion(cardinal);
+                            }
+                            result.hasHover = true;
+                            result.hoveredRegion = cardinalRegion(cardinal);
                         }
-                        result.hasHover = true;
-                        result.hoveredRegion = cardinalRegion(cardinal);
                     }
                 }
                 else
@@ -946,6 +954,26 @@ namespace cadui
                                  13.0f);
             }
         }
+
+        // Home / roll / nudge controls are drawn every frame like
+        // OpenCADStudio's iced buttons; hover only drives the highlight.
+        if (options.showControls)
+        {
+            drawIconButton(drawList, homeRect, controlIndex == 0);
+            drawHomeIcon(drawList, homeRect.GetCenter(), controlIndex == 0);
+            drawIconButton(drawList, undoRect, controlIndex == 1);
+            drawRollIcon(drawList, undoRect.GetCenter(), false, controlIndex == 1);
+            drawIconButton(drawList, redoRect, controlIndex == 2);
+            drawRollIcon(drawList, redoRect.GetCenter(), true, controlIndex == 2);
+            drawIconButton(drawList, nudgeUp, controlIndex == 3);
+            drawNudgeIcon(drawList, nudgeUp.GetCenter(), 0, controlIndex == 3);
+            drawIconButton(drawList, nudgeDown, controlIndex == 4);
+            drawNudgeIcon(drawList, nudgeDown.GetCenter(), 1, controlIndex == 4);
+            drawIconButton(drawList, nudgeLeft, controlIndex == 5);
+            drawNudgeIcon(drawList, nudgeLeft.GetCenter(), 2, controlIndex == 5);
+            drawIconButton(drawList, nudgeRight, controlIndex == 6);
+            drawNudgeIcon(drawList, nudgeRight.GetCenter(), 3, controlIndex == 6);
+        }
         drawList->PopClipRect();
 
 
@@ -1011,6 +1039,24 @@ namespace cadui
         const int id = std::clamp(static_cast<int>(region.id), 0, 25);
         const glm::vec3 centroid{ coordinates[id][0], coordinates[id][1], coordinates[id][2] };
         return glm::normalize(centroid);
+    }
+
+    ViewCubeRegion ViewCubeWidget::oppositeRegion(const ViewCubeRegion& region)
+    {
+        const glm::vec3 target = snapDirection(region);
+        int bestId = region.id;
+        float bestDistance = std::numeric_limits<float>::max();
+        for (int id = 0; id < 26; ++id)
+        {
+            const glm::vec3 candidate = snapDirection(regionById(id));
+            const float distance = glm::length(candidate + target);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestId = id;
+            }
+        }
+        return regionById(bestId);
     }
 
     ViewCubeRegion ViewCubeWidget::cardinalRegion(int cardinalIndex)

@@ -67,6 +67,7 @@ bool LoadedFont::loadSdf(const SdfFontConfig &config)
         fontData_.clear();
         return false;
     }
+    delete static_cast<stbtt_fontinfo *>(fontInfo_); // reload: free the old
     fontInfo_ = info;
     pixelsPerEm_ = config.pixelsPerEm;
     sdfSpread_ = static_cast<float>(config.sdfSpread);

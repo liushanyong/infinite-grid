@@ -129,7 +129,8 @@ public:
         std::uint64_t geometryKey, const rendering::FillVertex *vertices,
         std::uint32_t vertexCount, const glm::mat4 &view,
         const glm::mat4 &projection, const glm::vec4 &logDepth,
-        std::uint32_t objectId, std::uint8_t occlusionRank = 2);
+        std::uint32_t objectId, std::uint8_t occlusionRank = 2,
+        const glm::vec4 &logDepthOverride = glm::vec4(0.0f));
     void queueGpuMeshPick(const rendering::MeshInstance &instance,
                           rendering::MeshType mesh, std::uint32_t objectId);
 

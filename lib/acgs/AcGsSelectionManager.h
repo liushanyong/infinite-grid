@@ -134,7 +134,9 @@ public:
                          const glm::mat4 &view,
                          const glm::mat4 &pickProjection,
                          const glm::vec4 &logDepth, std::uint32_t objectId,
-                         bool active, std::uint8_t occlusionRank = 2) const;
+                         bool active, std::uint8_t occlusionRank = 2,
+                         const glm::vec4 &logDepthOverride =
+                             glm::vec4(0.0f)) const;
 
     // FNV-1a over raw bytes; used to detect when the full-scene GPU ID
     // buffer must be re-rendered for the selection outline overlay.

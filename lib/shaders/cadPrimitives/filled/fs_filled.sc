@@ -9,6 +9,17 @@ uniform vec4 uDepthDisplay;
 
 void main()
 {
+    if (uPrimParams.y > 0.5)
+    {
+        // Slab-free overlay depth (GPU ID screen overlays such as SDF
+        // text): the visible text pass draws without a depth test and
+        // without the depth-slab discard, so its ID geometry must ignore
+        // the slab too, or text outside [near, far] loses its ID while
+        // still visible on screen.
+        gl_FragDepth = gl_FragCoord.z;
+        gl_FragColor = vec4(v_color.rgb * u_material.rgb, v_color.a);
+        return;
+    }
     gl_FragDepth = cad_outputDepth(gl_FragCoord.z, v_depth);
     if (uPrimParams.x > 6.5 && uPrimParams.x < 7.5)
     {

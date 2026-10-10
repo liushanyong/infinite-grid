@@ -253,6 +253,15 @@ public:
     // Flush the queued text requests as SDF glyph quads; returns the number
     // of glyphs drawn.
     int flushTextRequests();
+    // In-scene selection recolor: the named request draws with the override
+    // color instead of its own (unified depth buffer — the glyphs keep their
+    // pass, depth, and blending; only the color changes).
+    void setTextColorOverride(const acgi::TextRequest *request,
+                              const glm::vec4 &color)
+    {
+        overriddenText_ = request;
+        textOverrideColor_ = color;
+    }
     // Draws ONE queued text request through the SDF glyph path with an
     // optional color override (selection highlight redraws the picked
     // text in the highlight color; no override draws the request color).
@@ -347,6 +356,8 @@ private:
     bool orthoMode_ = false;
     rendering::RenderModeManager visualStyle_;
     std::string viewportRecordName_;
+    const acgi::TextRequest *overriddenText_ = nullptr;
+    glm::vec4 textOverrideColor_{0.0f};
 
     void submitMeshBatch(acgs::MeshBatchCommand &command,
                          const rendering::DoubleSingleVec3 &eye,

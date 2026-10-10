@@ -339,12 +339,13 @@ void AcGsManager::queueGpuTrianglePick(
     std::uint64_t geometryKey, const rendering::FillVertex *vertices,
     std::uint32_t vertexCount, const glm::mat4 &view,
     const glm::mat4 &projection, const glm::vec4 &logDepth,
-    std::uint32_t objectId, std::uint8_t occlusionRank)
+    std::uint32_t objectId, std::uint8_t occlusionRank,
+    const glm::vec4 &logDepthOverride)
 {
     if (device_ != nullptr)
         device_->queueGpuTrianglePick(geometryKey, vertices, vertexCount,
                                       view, projection, logDepth, objectId,
-                                      occlusionRank);
+                                      occlusionRank, logDepthOverride);
 }
 
 void AcGsManager::queueGpuMeshPick(

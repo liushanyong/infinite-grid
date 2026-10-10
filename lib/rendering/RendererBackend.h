@@ -151,7 +151,9 @@ public:
                                       const glm::mat4 &projection,
                                       const glm::vec4 &logDepth,
                                       uint32_t objectId,
-                                      uint8_t occlusionRank = 2) {}
+                                      uint8_t occlusionRank = 2,
+                                      const glm::vec4 &logDepthOverride =
+                                          glm::vec4(0.0f)) {}
     virtual GpuPickResult pollGpuPick() { return {}; }
     // Unified picking: reads the entity id under |ndc| from the always-on
     // full-scene ID texture instead of re-rendering a 1x1 pass.  Returns a

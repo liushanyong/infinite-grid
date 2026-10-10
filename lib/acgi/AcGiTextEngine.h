@@ -16,6 +16,7 @@
 #include <string>
 #include <array>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "AcGiTextDevice.h"
@@ -85,6 +86,17 @@ public:
         const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
         const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront);
 
+    // Cached layout access for the two per-frame consumers (visible SDF
+    // pass and pick soup). Planar text layouts are camera-independent, so
+    // they cache per request pointer (guarded by a field hash); billboard
+    // layouts stay per-call. clearLayoutCache() drops everything when the
+    // request vector is rebuilt (document revision bump).
+    const std::vector<GlyphPlacement> &glyphLayout(
+        const TextRequest &request,
+        const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
+        const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront);
+    void clearLayoutCache() { layoutCache_.clear(); }
+
     // SHX stroke geometry for a message, in em units (cap height 1.0);
     // ASCII glyphs resolve through the regular font, double-byte codes
     // through the big font.  Consumed by the stroke pipeline as ordinary
@@ -102,6 +114,14 @@ private:
     rendering::LoadedFont shxRegularFont_;
     rendering::LoadedFont shxBigFont_;
     std::map<unsigned int, uint32_t> glyphTextureIds_;
+
+    struct CachedGlyphLayout
+    {
+        std::uint64_t fieldsHash = 0;
+        std::vector<GlyphPlacement> placements;
+    };
+    std::unordered_map<const TextRequest *, CachedGlyphLayout> layoutCache_;
+    std::vector<GlyphPlacement> billboardLayout_;
 };
 
 // Global engine instance (the host loads fonts into it at startup).

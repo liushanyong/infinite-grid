@@ -79,9 +79,11 @@ void AcGsSelectionManager::queueSoupChunks(
     const std::vector<rendering::FillVertex> &vertices,
     const glm::mat4 &view, const glm::mat4 &pickProjection,
     const glm::vec4 &logDepth, std::uint32_t objectId, bool active,
-    std::uint8_t occlusionRank) const
+    std::uint8_t occlusionRank, const glm::vec4 &logDepthOverride) const
 {
     if (!active || objectId == 0 || vertices.size() < 3)
+        return;
+    if (acgsGetManager() == nullptr || acgsGetManager()->device() == nullptr)
         return;
 
     constexpr std::size_t kMaxPickChunkVertices = 3 * 21000;
@@ -94,7 +96,7 @@ void AcGsSelectionManager::queueSoupChunks(
             0, vertices.data() + first,
                                      std::uint32_t(count), view,
                                      pickProjection, logDepth, objectId,
-                                     occlusionRank);
+                                     occlusionRank, logDepthOverride);
     }
 }
 

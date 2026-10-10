@@ -562,10 +562,12 @@ int main(int argc, char** argv)
 
         const glm::mat4 view = camera.viewMatrix();
         const glm::mat3 viewRotation(view);
-        // OpenCADStudio rotates the ViewCube and compass with camera.rotation
-        // (camera-local -> world).  glm::lookAt gives the inverse view basis,
-        // so passing viewRotation transposes the navigation aid.
-        const glm::mat3 cameraRotation = glm::mat3_cast(camera.rotation);
+        // The widget projects cube-local points with eye = rotation * local
+        // and +Z toward the camera, i.e. it needs the world->eye basis — the
+        // conjugate of the turntable quaternion (OpenCADStudio's
+        // view_rotation_mat() = Mat4::from_quat(camera.rotation.conjugate())).
+        // Passing camera.rotation directly transposes the navigation aid.
+        const glm::mat3 cameraRotation = glm::mat3_cast(glm::conjugate(camera.rotation));
         const glm::mat3 ucs = ucsRotationFor(activeUcs);
 
         bgfx::touch(0);

@@ -1158,6 +1158,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_presentIdSampler);
     destroyUniform(m_selectionOutlineParams);
     destroyUniform(m_selectionOutlineColor);
+    destroyUniform(m_selectionLineColor);
     destroyUniform(m_presentParams);
     destroyUniform(m_pointPosition);
     destroyUniform(m_pointSize);
@@ -1484,11 +1485,21 @@ bool BgfxRenderer::createGpuPickDebugResources()
         width, height, false, 1, bgfx::TextureFormat::BGRA8,
         BGFX_TEXTURE_NONE | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    // Sticky copy of the last rendered ID image: render targets lose their
+    // content when their view is not re-submitted, while a sampled texture
+    // persists — the present pass reads this so the gated ID pass (which
+    // only runs on queue-refresh frames) still yields a stable highlight.
+    m_gpuPickIdSticky = bgfx::createTexture2D(
+        width, height, false, 1, bgfx::TextureFormat::BGRA8,
+        BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_MIN_POINT |
+            BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_U_CLAMP |
+            BGFX_SAMPLER_V_CLAMP);
     m_gpuPickDebugReadbackData.assign(size_t(width) * height * 4u, 0u);
 
     if (bgfx::isValid(color) && bgfx::isValid(depth) &&
         bgfx::isValid(m_gpuPickDebugReadback) &&
-        bgfx::isValid(m_gpuPickDebugVisualTexture))
+        bgfx::isValid(m_gpuPickDebugVisualTexture) &&
+        bgfx::isValid(m_gpuPickIdSticky))
     {
         const bgfx::TextureHandle attachments[2] = {color, depth};
         m_gpuPickDebugFrameBuffer = bgfx::createFrameBuffer(
@@ -1507,6 +1518,7 @@ bool BgfxRenderer::createGpuPickDebugResources()
     bgfx::setName(m_gpuPickDebugFrameBuffer, "GpuPickDebug");
     bgfx::setName(m_gpuPickDebugReadback, "GpuPickDebugReadback");
     bgfx::setName(m_gpuPickDebugVisualTexture, "GpuPickDebugVisual");
+    bgfx::setName(m_gpuPickIdSticky, "GpuPickIdSticky");
     return bgfx::isValid(m_gpuPickDebugFrameBuffer) &&
            bgfx::isValid(m_gpuPickDebugReadback) &&
            bgfx::isValid(m_gpuPickDebugVisualTexture);
@@ -1523,6 +1535,9 @@ void BgfxRenderer::destroyGpuPickDebugResources()
     if (bgfx::isValid(m_gpuPickDebugVisualTexture))
         bgfx::destroy(m_gpuPickDebugVisualTexture);
     m_gpuPickDebugVisualTexture = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(m_gpuPickIdSticky))
+        bgfx::destroy(m_gpuPickIdSticky);
+    m_gpuPickIdSticky = BGFX_INVALID_HANDLE;
     m_gpuPickDebugReadbackData.clear();
     m_gpuPickDebugReadPending = false;
 }
@@ -1677,6 +1692,7 @@ void BgfxRenderer::endFrame()
     }
 
     renderGpuPickPass();
+    gpuPickIdDumpTick();
 }
 
 void BgfxRenderer::compositeFrame()
@@ -1770,7 +1786,9 @@ void BgfxRenderer::compositeFrame()
         setPresentSelectionState(false);
         if (m_gpuPickSceneDebug)
         {
-            // Present the ID target directly; readback stays for CPU inspection.
+            // Present the ID target directly; readback stays for CPU
+            // inspection. The sticky copy is sampled: the gated pass does
+            // not re-run every frame, so the FB itself may be stale.
             debugPresentParams = {
                 0.0f,
                 static_cast<float>(m_gpuPickDebugMinId),
@@ -1778,8 +1796,7 @@ void BgfxRenderer::compositeFrame()
                 1.0f,
             };
             bgfx::setUniform(m_presentParams, debugPresentParams.data());
-            bgfx::setTexture(0, m_presentSampler,
-                             bgfx::getTexture(m_gpuPickDebugFrameBuffer, 0));
+            bgfx::setTexture(0, m_presentSampler, m_gpuPickIdSticky);
         }
         else
         {
@@ -2017,7 +2034,8 @@ void BgfxRenderer::setSelectionOutlineAll(bool enabled)
 void BgfxRenderer::setPresentSelectionState(bool enabled)
 {
     const bool hasIdTexture = enabled &&
-        bgfx::isValid(m_gpuPickDebugFrameBuffer);
+        bgfx::isValid(m_gpuPickDebugFrameBuffer) &&
+        bgfx::isValid(m_gpuPickIdSticky);
     const float idWidth = hasIdTexture
         ? float(std::max<uint16_t>(1, m_gpuPickDebugWidth))
         : float(std::max<uint16_t>(1, m_width));
@@ -2025,7 +2043,11 @@ void BgfxRenderer::setPresentSelectionState(bool enabled)
         ? float(std::max<uint16_t>(1, m_gpuPickDebugHeight))
         : float(std::max<uint16_t>(1, m_height));
     const float params[4] = {
-        hasIdTexture ? float(m_selectionOutlineId) : 0.0f,
+        // Single-selection highlight is recolored IN-SCENE (unified depth
+        // buffer: same primitives, same passes, same blending). The present
+        // pass keeps only the outlineAll debug compositor; the ID texture
+        // stays the click-pick source.
+        0.0f,
         hasIdTexture && m_selectionOutlineAll ? 1.0f : 0.0f,
         1.0f / idWidth,
         1.0f / idHeight,
@@ -2034,8 +2056,15 @@ void BgfxRenderer::setPresentSelectionState(bool enabled)
     const glm::vec4 outlineColor(1.0f, 0.55f, 0.05f, 1.0f);
     bgfx::setUniform(m_selectionOutlineColor,
                      glm::value_ptr(outlineColor));
+    // Single-selection highlight: one solid opaque color replaces the
+    // picked entity's pixels for every entity kind (present shader adds
+    // edge AA from the ID mask). .a = 1 enables the mode; selectedId
+    // gates it.
+    const glm::vec4 selectionLine(0.35f, 0.65f, 1.0f, 1.0f);
+    bgfx::setUniform(m_selectionLineColor,
+                     glm::value_ptr(selectionLine));
     const bgfx::TextureHandle idTexture = hasIdTexture
-        ? bgfx::getTexture(m_gpuPickDebugFrameBuffer, 0)
+        ? m_gpuPickIdSticky
         : m_whiteTexture;
     bgfx::setTexture(1, m_presentIdSampler, idTexture);
 }
@@ -3443,7 +3472,8 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
                                         const glm::mat4 &projection,
                                         const glm::vec4 &logDepth,
                                         uint32_t objectId,
-                                        uint8_t occlusionRank)
+                                        uint8_t occlusionRank,
+                                        const glm::vec4 &logDepthOverride)
 {
     const size_t triangleCount = m_gpuPickQueueStats.queuedTriangles;
     // The selected entity must always reach the ID buffer so presentation
@@ -3473,6 +3503,7 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
         primitive.geometryKey = 0;
         primitive.view = view;
         primitive.projection = projection;
+        primitive.logDepth = logDepthOverride;
         primitive.objectId = objectId;
         primitive.occlusionRank = std::min<uint8_t>(occlusionRank, 3);
         primitive.transientVertices.assign(vertices, vertices + vertexCount);
@@ -3635,6 +3666,60 @@ void BgfxRenderer::renderGpuPickPass()
         renderGpuPickDebugPass(projection);
 }
 
+// GRID_DUMP_ID=1: one-shot raw dump of the full-scene ID texture for
+// offline analysis (w*h BGRA rows; ids pack r|g<<8|b<<16|a<<24).
+static bool gpuPickIdDumpEnabled()
+{
+    static const bool enabled = [] {
+        const char *value = std::getenv("GRID_DUMP_ID");
+        return value != nullptr && std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+// Called every endFrame: issues one ID-texture readback at a time (the
+// gated ID pass runs rarely, so this cannot wait inside the pass) and
+// writes the captured bytes once the read lands.
+void BgfxRenderer::gpuPickIdDumpTick()
+{
+    if (!gpuPickIdDumpEnabled() ||
+        !bgfx::isValid(m_gpuPickDebugFrameBuffer) ||
+        !bgfx::isValid(m_gpuPickDebugReadback))
+    {
+        return;
+    }
+    static bool dumpPending = false;
+    static uint32_t dumpReadyFrame = 0;
+    static int dumpCount = 0;
+    if (dumpPending && m_frame > dumpReadyFrame)
+    {
+        dumpPending = false;
+        char path[64];
+        std::snprintf(path, sizeof(path), "id_dump_f%u.bin", m_frameCount);
+        FILE *file = std::fopen(path, "wb");
+        if (file)
+        {
+            std::fwrite(m_gpuPickDebugReadbackData.data(), 1,
+                        m_gpuPickDebugReadbackData.size(), file);
+            std::fclose(file);
+            std::printf("[ID_DUMP] wrote %s frame %u\n", path, m_frameCount);
+            std::fflush(stdout);
+        }
+        return;
+    }
+    if (!dumpPending && dumpCount < 12 && !m_gpuPickDebugReadPending)
+    {
+        // DEBUG: read the ID framebuffer directly (bypass the sticky) to
+        // separate rasterization failures from sticky-copy failures.
+        bgfx::blit(kViewGpuPickDebugBlit, m_gpuPickDebugReadback, 0, 0,
+                   bgfx::getTexture(m_gpuPickDebugFrameBuffer));
+        bgfx::touch(kViewGpuPickDebugBlit);
+        dumpReadyFrame = bgfx::readTexture(m_gpuPickDebugReadback,
+                                           m_gpuPickDebugReadbackData.data());
+        dumpPending = true;
+    }
+}
+
 // GRID_DEBUG_PICK=1: dump the pick payload once per visual-style change so
 // a broken ID pass can be compared across modes (instance matrices, eye
 // rebasing, and the first primitive of each kind).
@@ -3648,7 +3733,8 @@ static bool gpuPickDumpEnabled()
 }
 
 void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
-                                           const glm::mat4 &projection)
+                                           const glm::mat4 &projection,
+                                           bool allowPrimitiveProjection)
 {
     bgfx::setUniform(m_view, glm::value_ptr(m_gpuPickRequest.view));
     bgfx::setUniform(m_projection, glm::value_ptr(projection));
@@ -3887,9 +3973,15 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             bgfx::setUniform(m_projection, glm::value_ptr(projection));
             bgfx::setVertexBuffer(0, buffer);
             bgfx::setInstanceDataBuffer(&instanceBuffer);
+            // ID depth semantics mirror the VISIBLE pass per primitive
+            // class: only opaque surfaces (rank 0) write Z. Translucent
+            // surfaces (rank 1) must NOT — the visible pass blends them
+            // without a depth write, so geometry behind them stays pickable
+            // and highlights keep their original depth relationship.
             const uint64_t primitiveState =
                 BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z : uint64_t(0)) |
+                (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z
+                                              : uint64_t(0)) |
                 BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CW | BGFX_STATE_MSAA;
             const uint64_t edgeState =
                 BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
@@ -3929,6 +4021,14 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                 primitive.transientVertices.size() * sizeof(FillVertex);
             if (availableVertices < vertexCount32)
             {
+                if (gpuPickIdDumpEnabled())
+                {
+                    std::printf(
+                        "[TEXT_PICK_DEBUG] transient exhausted: need=%u "
+                        "avail=%u\n",
+                        vertexCount32, availableVertices);
+                    std::fflush(stdout);
+                }
                 ++m_gpuPickQueueStats.droppedTriangles;
                 ++primitiveIndex;
                 continue;
@@ -3939,6 +4039,14 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             if (!tvb.data || tvb.stride != sizeof(FillVertex) ||
                 size_t(tvb.size) < requiredBytes)
             {
+                if (gpuPickIdDumpEnabled())
+                {
+                    std::printf(
+                        "[TEXT_PICK_DEBUG] transient tvb invalid: n=%u "
+                        "avail=%u\n",
+                        vertexCount32, availableVertices);
+                    std::fflush(stdout);
+                }
                 ++m_gpuPickQueueStats.droppedTriangles;
                 ++primitiveIndex;
                 continue;
@@ -3968,20 +4076,59 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
         // CAD fills use an anchor-relative view, so using the global pick
         // view here shifts the ID geometry away from the visible fill.
         bgfx::setUniform(m_view, glm::value_ptr(primitive.view));
-        bgfx::setUniform(m_projection,
-                         glm::value_ptr(primitiveProjection));
-        const float logDepth[4] = {
-            m_gpuPickRequest.logDepth.x,
-            m_gpuPickRequest.logDepth.y,
-            m_gpuPickRequest.logDepth.z,
-            m_gpuPickRequest.logDepth.w};
+        // Full-scene pass: honor the primitive's own projection — the CAD
+        // overlay soups (points/text) queue with the OVERLAY projection
+        // (far = 1e9) while the pass projection is the object frustum whose
+        // far plane would clip geometry beyond it. The projection arrives
+        // raw (glm::perspective) and must go through the D3D depth remap
+        // like every other pass. The 1x1 click path keeps the pass
+        // projection: its frustum is the pick ray's and the primitive
+        // projection would raster the full screen into it.
+        bgfx::setUniform(
+            m_projection,
+            glm::value_ptr(allowPrimitiveProjection
+                               ? projectionForDirect3D(primitive.projection)
+                               : primitiveProjection));
+        // Screen-overlay primitives carry their own log-depth slab (around
+        // their own depth) — the shared content slab would discard them
+        // whenever the slab tightens elsewhere.
+        const glm::vec4 &effectiveSlab = primitive.logDepth.z > 0.0f
+                                             ? primitive.logDepth
+                                             : m_gpuPickRequest.logDepth;
+        const float logDepth[4] = {effectiveSlab.x, effectiveSlab.y,
+                                   effectiveSlab.z, effectiveSlab.w};
         bgfx::setUniform(m_logDepth, logDepth);
-        const float primParams[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const float primParams[4] = {
+            0.0f, primitive.occlusionRank >= 3 ? 1.0f : 0.0f, 0.0f, 0.0f};
         bgfx::setUniform(m_primParams, primParams);
+        if (gpuPickIdDumpEnabled() &&
+            primitive.objectId == m_selectionOutlineId &&
+            m_selectionOutlineId != 0)
+        {
+            static int submitPrinted = 0;
+            if (submitPrinted++ < 3)
+            {
+                const glm::vec4 clip = projection *
+                    primitive.view *
+                    glm::vec4(primitive.transientVertices.front().position,
+                              1.0f);
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                std::printf(
+                    "[POINT_PICK_DEBUG] submit selected soup: verts=%zu "
+                    "rank=%u slab=[%.0f,%.0f] ndc=(%.4f,%.4f,%.6f) w=%.1f\n",
+                    primitive.transientVertices.size(),
+                    primitive.occlusionRank, primitive.logDepth.y,
+                    primitive.logDepth.z, ndc.x, ndc.y, ndc.z, clip.w);
+                std::fflush(stdout);
+            }
+        }
         const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         bgfx::setUniform(m_layerOffset, layerOffset);
         const float identityMaterial[4] = {1.0f, 1.0f, 1.0f, 1.0f};
         bgfx::setUniform(m_realisticMaterial, identityMaterial);
+        // Mirror the visible pass: only opaque soups (rank 0) write Z;
+        // translucent fills blend without a depth write there, so the ID
+        // pass must let geometry behind them keep (and win) the ID.
         const uint64_t triangleState =
             BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
             (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z : uint64_t(0)) |
@@ -4023,7 +4170,17 @@ void BgfxRenderer::renderGpuPickDebugPass(const glm::mat4 &projection)
     if (m_gpuPickPrimitives.empty())
         bgfx::touch(kViewGpuPickDebug);
     else
-        submitGpuPickPrimitives(kViewGpuPickDebug, debugProjection);
+        // Full-scene ID pass: honor each primitive's own projection (the
+        // CAD overlay soups queue with the overlay frustum whose far plane
+        // covers them; the object frustum would clip them).
+        submitGpuPickPrimitives(kViewGpuPickDebug, debugProjection, true);
+
+    // Copy the fresh ID image into the sticky texture: render targets do
+    // not survive frames their view never re-submits, and the present pass
+    // composites the highlight from this copy on gated (non-refresh) frames.
+    bgfx::blit(kViewGpuPickDebugBlit, m_gpuPickIdSticky, 0, 0,
+               bgfx::getTexture(m_gpuPickDebugFrameBuffer));
+    bgfx::touch(kViewGpuPickDebugBlit);
 
     // A continuous full-scene ID view must not block on full-frame CPU
     // readback. Its present shader normalizes with the CPU-assigned range.
@@ -4452,6 +4609,8 @@ m_curveLayout.begin()
             "u_outline_params", bgfx::UniformType::Vec4);
         m_selectionOutlineColor = createUniformHandle(
             "u_outline_color", bgfx::UniformType::Vec4);
+        m_selectionLineColor = createUniformHandle(
+            "u_selection_line", bgfx::UniformType::Vec4);
         m_primParams = createUniformHandle("uPrimParams", bgfx::UniformType::Vec4);
         m_depthDisplayParams =
             createUniformHandle("uDepthDisplay", bgfx::UniformType::Vec4);

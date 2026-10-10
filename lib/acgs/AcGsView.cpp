@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 #include <tuple>
 #include <iostream>
 #include <limits>
@@ -340,40 +341,42 @@ std::vector<glm::dvec3> AcGsView::sampleCurveBatch(
     // Match the GPU shader's CAD_CURVE_MAX_CP capacity so CPU picking,
     // ID geometry, and visible rendering evaluate the same curve.
     // BSpline/NURBS need one spare slot for the clamped knot vector;
-    // Bezier can use all 16 control-point slots.
+    // Bezier can use all 16 control-point slots (clamped — the GPU
+    // uniforms cannot carry more, and the CPU must evaluate the same
+    // curve the shader would).
     const size_t controlCount =
         curve.algorithm == rendering::CurveAlgorithm::Bezier
-            ? curve.controlPoints.size()
+            ? std::min(curve.controlPoints.size(), size_t(16))
             : std::min(curve.controlPoints.size(), size_t(16 - 1));
     if (controlCount < 2)
         return result;
 
     if (curve.algorithm == rendering::CurveAlgorithm::Bezier)
     {
-        std::vector<glm::dvec4> points;
-        points.reserve(controlCount);
+        glm::dvec4 points[16];
         for (size_t i = 0; i < controlCount; ++i)
         {
             const double weight =
                 i < curve.weights.size() ? curve.weights[i] : 1.0;
-            points.push_back(
-                glm::dvec4(curve.controlPoints[i] * weight, weight));
+            points[i] =
+                glm::dvec4(curve.controlPoints[i] * weight, weight);
         }
 
         result.reserve(samples);
+        size_t active = controlCount;
         for (int sample = 0; sample < samples; ++sample)
         {
             const double t = static_cast<double>(sample) / (samples - 1);
-            std::vector<glm::dvec4> value = points;
-            while (value.size() > 1)
+            while (active > 1)
             {
-                for (size_t i = 0; i + 1 < value.size(); ++i)
-                    value[i] = glm::mix(value[i], value[i + 1], t);
-                value.pop_back();
+                for (size_t i = 0; i + 1 < active; ++i)
+                    points[i] = glm::mix(points[i], points[i + 1], t);
+                --active;
             }
-            const glm::dvec4 &homogeneous = value.front();
+            const glm::dvec4 &homogeneous = points[0];
             result.push_back(glm::dvec3(homogeneous) /
                              std::max(1.0e-12, homogeneous.w));
+            active = controlCount;
         }
         return result;
     }
@@ -425,11 +428,11 @@ std::vector<glm::dvec3> AcGsView::sampleCurveBatch(
     };
 
     result.reserve(samples);
+    glm::dvec4 points[4]; // degree <= 3 — fixed scratch, no per-sample alloc
     for (int sample = 0; sample < samples; ++sample)
     {
         const double t = static_cast<double>(sample) / (samples - 1);
         const size_t span = findSpan(t);
-        std::vector<glm::dvec4> points(degree + 1);
         for (int i = 0; i <= degree; ++i)
         {
             const size_t index = span - degree + i;
@@ -461,8 +464,16 @@ std::vector<glm::dvec3> AcGsView::sampleCurveBatch(
 
 float envLayer(const char *name)
 {
-    const char *value = std::getenv(name);
-    return value ? float(std::atof(value)) : 0.0f;
+    // Layer overrides are process-constant; cache the getenv/atoi per name
+    // (this runs per draw call per frame).
+    static std::unordered_map<std::string, float> cache;
+    auto [it, inserted] = cache.try_emplace(name, 0.0f);
+    if (inserted)
+    {
+        const char *value = std::getenv(name);
+        it->second = value ? float(std::atof(value)) : 0.0f;
+    }
+    return it->second;
 }
 
 CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
@@ -933,19 +944,21 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
                 curve.acgiMaterial.baseColor, halfWidth);
         }
     }
+    // Pattern lookups are constant per stroke; the caller resolves the
+    // marks once and the lambda only emits segments (no per-segment
+    // line-type scan or heap-allocated mark vector).
     auto appendLinePatternSegment = [&](const glm::vec3 &ra,
                                         const glm::vec3 &rb,
-                                        const acdb::Stroke &stroke) {
-        const std::string &type = stroke.common.lineType;
-        const AcGiLineType *lineType = acgiFindLineType(type.c_str());
-        if (!lineType)
+                                        const acdb::Stroke &stroke,
+                                        const std::vector<AcGiLineTypeMark>
+                                            &pattern) {
+        if (pattern.empty())
         {
+            // Unknown line type: plain solid ribbon, matching the old
+            // not-found fallback.
             appendAcGiRibbon(ra, rb, stroke.common.color, 0.0f, 0.0f, 0.0f);
             return;
         }
-        const std::vector<AcGiLineTypeMark> pattern =
-            acgiLineTypeMarks(*lineType);
-
         const float halfWidth = strokeHalfWidth(stroke);
         const glm::dvec3 start(ra);
         const glm::dvec3 end(rb);
@@ -953,12 +966,9 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         if (total < 1.0e-12)
             return;
 
-        double patternLength = 0.0;
-        for (const auto &mark : pattern)
-            patternLength += mark.length;
         double distance = 0.0;
         size_t markIndex = 0;
-        while (distance < total && !pattern.empty())
+        while (distance < total)
         {
             const auto &mark = pattern[markIndex % pattern.size()];
             const double markLength = mark.length;
@@ -986,6 +996,16 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         const size_t strokeCount = stroke.points.size();
         const bool patterned = stroke.common.lineType != "ByLayer" &&
                                stroke.common.lineType != "CONTINUOUS";
+        // The line-type pattern is constant per stroke: resolve the marks
+        // once here instead of per clipped segment.
+        std::vector<AcGiLineTypeMark> pattern;
+        if (patterned)
+        {
+            const AcGiLineType *lineType =
+                acgiFindLineType(stroke.common.lineType.c_str());
+            if (lineType)
+                pattern = acgiLineTypeMarks(*lineType);
+        }
         // Closed strokes also emit the wrap segment back to their first
         // point.
         const size_t strokeSegmentCount =
@@ -1017,7 +1037,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             {
                 appendLinePatternSegment(
                     glm::vec3(clippedStart - ctx.cameraPos),
-                    glm::vec3(clippedEnd - ctx.cameraPos), stroke);
+                    glm::vec3(clippedEnd - ctx.cameraPos), stroke, pattern);
             }
             else
             {
@@ -1076,7 +1096,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         viewDevice()->drawPolylines(polylineData);
     }
 
-    const bool submitDebug = [] {
+    static const bool submitDebug = [] {
         const char *v = std::getenv("GRID_SUBMIT_DEBUG");
         return v && *v && std::strcmp(v, "0") != 0;
     }();
@@ -1288,8 +1308,12 @@ void AcGsView::drawFillBoundary(const acdb::TessellatedEntity &tess,
             const glm::dvec3 *second = &q;
             if (std::tie(q.x, q.y, q.z) < std::tie(p.x, p.y, p.z))
                 std::swap(first, second);
-            key.v[0] = first->x; key.v[1] = first->y; key.v[2] = first->z;
-            key.v[3] = second->x; key.v[4] = second->y; key.v[5] = second->z;
+            // `+ 0.0` folds -0.0 into +0.0 so bit-equal-but-signed-zero
+            // vertices from different tessellation paths still share an
+            // edge key.
+            key.v[0] = first->x + 0.0; key.v[1] = first->y + 0.0;
+            key.v[2] = first->z + 0.0; key.v[3] = second->x + 0.0;
+            key.v[4] = second->y + 0.0; key.v[5] = second->z + 0.0;
             ++useCounts[key];
             edgeEnds[key] = {*first, *second};
         }
@@ -1342,6 +1366,10 @@ int AcGsView::flushTextRequests()
     int glyphsDrawn = 0;
     for (const acgi::TextRequest &request : acgi::textRequests())
     {
+        // In-scene selection recolor: the selected text draws with the
+        // highlight color in its own pass (unified depth buffer).
+        const glm::vec4 &colorOverride =
+            overriddenText_ == &request ? textOverrideColor_ : glm::vec4(0.0f);
         if (ctx.ortho &&
             !acgi::textEngine().intersectsOrthoViewport(
                 request, ctx.cameraPos, ctx.cameraRight, ctx.cameraUp,
@@ -1349,7 +1377,7 @@ int AcGsView::flushTextRequests()
         {
             continue;
         }
-        glyphsDrawn += drawTextRequest(request, glm::vec4(0.0f));
+        glyphsDrawn += drawTextRequest(request, colorOverride);
     }
     return glyphsDrawn;
 }

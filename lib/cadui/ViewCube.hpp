@@ -81,6 +81,10 @@ namespace cadui
                               const ViewCubeOptions& options = {});
         static ViewCubeRegion regionById(int id);
         static glm::vec3 snapDirection(const ViewCubeRegion& region);
+        // The region whose snap direction is nearest to -region's; mirrors
+        // OpenCADStudio's CubeRegion::opposite so an "already there" click can
+        // flip to the far side.
+        static ViewCubeRegion oppositeRegion(const ViewCubeRegion& region);
         static ViewCubeRegion cardinalRegion(int cardinalIndex);
         static glm::vec3 cardinalDirection(int cardinalIndex);
 

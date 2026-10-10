@@ -8,6 +8,7 @@ SAMPLER2D(s_texId, 1);
 uniform vec4 uPresentParams;
 uniform vec4 u_outline_params;
 uniform vec4 u_outline_color;
+uniform vec4 u_selection_line;
 
 float presentLuma(vec3 color)
 {
@@ -83,14 +84,43 @@ float presentReadId(vec2 uv)
 
 vec3 presentSelection(vec2 uv, vec3 color)
 {
-    float id = presentReadId(uv);
     vec4 idBytes = texture2D(s_texId, uv) * 255.0;
     bool background = min(min(idBytes.r, idBytes.g),
                           min(idBytes.b, idBytes.a)) > 254.5;
     bool outlineAll = u_outline_params.y > 0.5;
     float selectedId = u_outline_params.x;
-    bool selected = !outlineAll && selectedId > 0.5 && id == selectedId;
-    if (!selected && (!outlineAll || background))
+
+    // Single selection: the picked entity's pixels are re-output as ONE
+    // solid opaque highlight color (no tint blend, no outline mix -- the
+    // highlight fully replaces the original output for every entity kind:
+    // lines, text, fills, meshes, wireframes alike). The point-sampled ID
+    // mask has hard geometry edges, so coverage over a 3x3 tap kernel
+    // supplies the anti-aliasing: partial taps blend the highlight into
+    // the underlying scene color.
+    if (!outlineAll && selectedId > 0.5)
+    {
+        vec2 texel = vec2(u_outline_params.z, u_outline_params.w);
+        // Cascade: center + 4 axis taps decide the two hot cases for free
+        // (far exterior / far interior need no diagonal taps); only true
+        // edge pixels pay the full 9-tap coverage.
+        float center = presentReadId(uv) == selectedId ? 1.0 : 0.0;
+        float ring = 0.0;
+        ring += presentReadId(uv + vec2(-texel.x, 0.0)) == selectedId ? 1.0 : 0.0;
+        ring += presentReadId(uv + vec2( texel.x, 0.0)) == selectedId ? 1.0 : 0.0;
+        ring += presentReadId(uv + vec2(0.0, -texel.y)) == selectedId ? 1.0 : 0.0;
+        ring += presentReadId(uv + vec2(0.0,  texel.y)) == selectedId ? 1.0 : 0.0;
+        if (center < 0.5 && ring < 0.5)
+            return color;
+        float coverage = center + ring;
+        coverage += presentReadId(uv + vec2(-texel.x, -texel.y)) == selectedId ? 1.0 : 0.0;
+        coverage += presentReadId(uv + vec2( texel.x, -texel.y)) == selectedId ? 1.0 : 0.0;
+        coverage += presentReadId(uv + vec2(-texel.x,  texel.y)) == selectedId ? 1.0 : 0.0;
+        coverage += presentReadId(uv + vec2( texel.x,  texel.y)) == selectedId ? 1.0 : 0.0;
+        return mix(color, u_selection_line.rgb, coverage * (1.0 / 9.0));
+    }
+
+    float id = presentReadId(uv);
+    if (!outlineAll || background)
         return color;
 
     vec2 texel = vec2(uPresentParams.y, uPresentParams.z);
@@ -98,16 +128,8 @@ vec3 presentSelection(vec2 uv, vec3 color)
     float right = presentReadId(uv + vec2(texel.x, 0.0));
     float down = presentReadId(uv - vec2(0.0, texel.y));
     float up = presentReadId(uv + vec2(0.0, texel.y));
-    bool boundary = outlineAll
-        ? left != id || right != id || down != id || up != id
-        : left != selectedId || right != selectedId ||
-          down != selectedId || up != selectedId;
+    bool boundary = left != id || right != id || down != id || up != id;
 
-    if (selected && !boundary)
-    {
-        vec3 selectedColor = mix(color, vec3(0.15, 0.55, 1.0), 0.60);
-        color = mix(color, selectedColor, 0.90);
-    }
     if (boundary)
         color = mix(color, u_outline_color.rgb,
                     0.48 * u_outline_color.a);

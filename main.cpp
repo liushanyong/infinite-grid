@@ -609,9 +609,19 @@ void applyViewCubeAction(const cadui::ViewCubeAction &action)
   switch (action.kind)
   {
   case cadui::ViewCubeActionKind::Region:
+  {
+    // OpenCADStudio's snap_view_region flips to the opposite region when the
+    // camera already faces the clicked one, so re-clicking a region walks to
+    // the far side instead of doing nothing.
+    cadui::ViewCubeRegion target = action.region;
+    const glm::dvec3 targetDirection(
+        cadui::ViewCubeWidget::snapDirection(target));
+    if (glm::dot(eyeDirection, glm::normalize(targetDirection)) > 0.9999)
+      target = cadui::ViewCubeWidget::oppositeRegion(target);
     setCameraEyeDirection(glm::dvec3(
-        cadui::ViewCubeWidget::snapDirection(action.region)));
+        cadui::ViewCubeWidget::snapDirection(target)));
     break;
+  }
   case cadui::ViewCubeActionKind::Cardinal:
     setCameraEyeDirection(glm::dvec3(
         cadui::ViewCubeWidget::cardinalDirection(action.region.index)));
@@ -680,7 +690,15 @@ void drawViewCubeOverlay()
   cadui::ViewCubeOptions options;
   options.showControls = true;
   options.showUcsPicker = false;
-  const glm::mat3 cameraRotation(glm::mat3_cast(orbitCam.Rotation));
+  // The widget projects cube-local points with eye = rotation * local and
+  // +Z toward the camera, i.e. it needs the world->eye basis.  Rotation is
+  // the OpenCADStudio turntable quaternion (cam-local -> world, eye =
+  // Rotation * +Z), so pass its conjugate — the same matrix OpenCADStudio's
+  // view_rotation_mat() feeds its ViewCube.  Passing Rotation un-conjugated
+  // transposes the cube: hit tests resolve to the wrong regions and corner
+  // clicks snap to the wrong directions.
+  const glm::mat3 cameraRotation(
+      glm::mat3_cast(glm::conjugate(orbitCam.Rotation)));
   const cadui::ViewCubeResult result = viewCubeWidget.render(
       "UcsViewCube", ImVec2(160.0f, 160.0f), cameraRotation,
       glm::mat3(1.0f), options);
@@ -891,6 +909,99 @@ struct GpuPickEntity
   }
 };
 
+// Glyph-shaped pick coverage for SDF text: marching-squares the glyph's R8
+// distance field at the same 0.5 iso the visible text shader thresholds at,
+// so the ID texture carries the glyph shape instead of its bounding quad.
+// Returns triangles in glyph-quad UV space, cached per codepoint: the same
+// glyph repeats across requests and this soup rebuilds every pick frame.
+static const std::vector<glm::vec2> &glyphCoverageUV(std::uint32_t codepoint)
+{
+  static std::unordered_map<std::uint32_t, std::vector<glm::vec2>> cache;
+  auto [entry, inserted] = cache.try_emplace(codepoint);
+  if (!inserted)
+    return entry->second;
+  std::vector<glm::vec2> &soup = entry->second;
+  const rendering::GlyphSdfRaster &raster =
+      acgi::textEngine().sdfFont().glyphSdf(codepoint);
+  if (!raster.valid || raster.width < 2 || raster.height < 2 ||
+      raster.sdf.empty())
+  {
+    return soup;
+  }
+  const int width = raster.width;
+  const int height = raster.height;
+  // Cell stride 2 texels: quarters the triangle count while keeping the
+  // ID coverage within ~1 texel of the visible glyph edge.
+  const int stride = 2;
+  auto sample = [&](int i, int j) {
+    return float(raster.sdf[size_t(j) * width + i]) / 255.0f;
+  };
+  auto texelUv = [&](int i, int j) {
+    return glm::vec2((float(i) + 0.5f) / float(width),
+                     (float(j) + 0.5f) / float(height));
+  };
+  auto crossing = [](glm::vec2 a, glm::vec2 b, float va, float vb) {
+    const float t = (0.5f - va) / (vb - va);
+    return a + (b - a) * t;
+  };
+  std::vector<glm::vec2> polygon;
+  polygon.reserve(8);
+  for (int j = 0; j + stride < height; j += stride)
+  {
+    for (int i = 0; i + stride < width; i += stride)
+    {
+      const float v00 = sample(i, j);
+      const float v10 = sample(i + stride, j);
+      const float v11 = sample(i + stride, j + stride);
+      const float v01 = sample(i, j + stride);
+      const bool in00 = v00 > 0.5f;
+      const bool in10 = v10 > 0.5f;
+      const bool in11 = v11 > 0.5f;
+      const bool in01 = v01 > 0.5f;
+      const glm::vec2 p00 = texelUv(i, j);
+      const glm::vec2 p10 = texelUv(i + stride, j);
+      const glm::vec2 p11 = texelUv(i + stride, j + stride);
+      const glm::vec2 p01 = texelUv(i, j + stride);
+      if (in00 && in10 && in11 && in01)
+      {
+        // Fully inside: fill the cell so solid strokes get solid ID
+        // coverage, not just their contour band.
+        soup.push_back(p00);
+        soup.push_back(p10);
+        soup.push_back(p11);
+        soup.push_back(p00);
+        soup.push_back(p11);
+        soup.push_back(p01);
+        continue;
+      }
+      if (!in00 && !in10 && !in11 && !in01)
+        continue;
+      // Walk the cell corners in cyclic order, emitting inside corners and
+      // iso-0.5 edge crossings; the walk yields the inside-region polygon
+      // (3-6 vertices; the saddle case joins its two lobes).
+      polygon.clear();
+      auto walk = [&](const glm::vec2 &a, const glm::vec2 &b, bool aIn,
+                      float va, float vb) {
+        if (aIn)
+          polygon.push_back(a);
+        if ((va > 0.5f) != (vb > 0.5f))
+          polygon.push_back(crossing(a, b, va, vb));
+      };
+      walk(p00, p10, in00, v00, v10);
+      walk(p10, p11, in10, v10, v11);
+      walk(p11, p01, in11, v11, v01);
+      walk(p01, p00, in01, v01, v00);
+      for (size_t k = 2; k < polygon.size(); ++k)
+      {
+        soup.push_back(polygon[0]);
+        soup.push_back(polygon[k - 1]);
+        soup.push_back(polygon[k]);
+      }
+    }
+  }
+  return soup;
+}
+
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
   return acgs::AcGsSelectionManager::instance();
@@ -960,6 +1071,14 @@ const bool idVisibleAtStartup = [] {
   const char *value = std::getenv("GRID_ID_VISIBLE");
   return value != nullptr && std::strcmp(value, "0") != 0;
 }();
+// Startup override for automated validation: GRID_SELECT_NAME=<entity name>
+// selects (outlines + tints) the named entity once the registry sees it, so
+// captures can exercise the single-selection path without a scripted click.
+// A later Esc deselects normally; the hook does not re-select.
+const std::string selectNameAtStartup = [] {
+  const char *value = std::getenv("GRID_SELECT_NAME");
+  return value ? std::string(value) : std::string();
+}();
 uint32_t lockedOutlineId = 0;
 
 static uint64_t hashGpuPickSceneBytes(uint64_t hash, const void *data,
@@ -990,30 +1109,44 @@ bool meshEntityVisible(const MeshEntityRecord &entity)
   return entity.entity.common.visible && entity.entity.common.color.a > 0.0f;
 }
 
+// In-scene selection recolor: the selected entity's primitives draw with
+// this color IN their own passes (unified depth buffer — same geometry,
+// same depth, same blending; only the color changes).
+static constexpr glm::vec3 kSelectionHighlightRGB(0.35f, 0.65f, 1.0f);
+
+struct MeshInstanceCacheEntry
+{
+  rendering::MeshInstance instance;
+  glm::dvec3 position;
+  float size = 0.0f;
+  glm::vec4 color;
+  glm::vec4 material;
+};
+
+// Keyed on tessellation-stored record pointers; cleared wholesale by
+// invalidateTessellationKeyedCaches() when the tessellation rebuilds.
+static std::unordered_map<const MeshEntityRecord *, MeshInstanceCacheEntry>
+    g_meshInstanceCache;
+
 static rendering::MeshInstance &cachedMeshInstance(
     const MeshEntityRecord &entity,
-    const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f))
+    const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
+    const glm::vec3 *colorOverride = nullptr)
 {
-  struct CacheEntry
-  {
-    rendering::MeshInstance instance;
-    glm::dvec3 position;
-    float size = 0.0f;
-    glm::vec4 color;
-    glm::vec4 material;
-  };
-
-  static std::unordered_map<const MeshEntityRecord *, CacheEntry> cache;
-  const glm::vec4 color = meshEntityColor(entity);
-  auto found = cache.find(&entity);
-  if (found != cache.end() && found->second.position == entity.worldPosition &&
+  const glm::vec4 color =
+      colorOverride
+          ? glm::vec4(*colorOverride, meshEntityColor(entity).a)
+          : meshEntityColor(entity);
+  auto found = g_meshInstanceCache.find(&entity);
+  if (found != g_meshInstanceCache.end() &&
+      found->second.position == entity.worldPosition &&
       found->second.size == entity.size && found->second.color == color &&
       found->second.material == material)
   {
     return found->second.instance;
   }
 
-  CacheEntry entry;
+  MeshInstanceCacheEntry entry;
   entry.position = entity.worldPosition;
   entry.size = entity.size;
   entry.color = color;
@@ -1021,12 +1154,13 @@ static rendering::MeshInstance &cachedMeshInstance(
   entry.instance = makeMeshInstance(
       entity.size, glm::vec3(color), color.a,
       rendering::encodeDoubleSingle(entity.worldPosition), material);
-  if (found != cache.end())
+  if (found != g_meshInstanceCache.end())
   {
     found->second = std::move(entry);
     return found->second.instance;
   }
-  return cache.emplace(&entity, std::move(entry)).first->second.instance;
+  return g_meshInstanceCache.emplace(&entity, std::move(entry))
+      .first->second.instance;
 }
 
 static void queueGpuMeshEntity(const MeshEntityRecord &entity,
@@ -1058,12 +1192,16 @@ glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity);
 
 void appendMeshEntityToScene(const MeshEntityRecord &entity,
                              acgs::AcGsModel &drawList,
-                             bool cadAlgorithm = false)
+                             bool cadAlgorithm = false,
+                             const glm::vec3 *colorOverride = nullptr)
 {
   if (!meshEntityVisible(entity))
     return;
 
-  const glm::vec4 color = meshEntityColor(entity);
+  const glm::vec4 color =
+      colorOverride
+          ? glm::vec4(*colorOverride, meshEntityColor(entity).a)
+          : meshEntityColor(entity);
   const glm::vec4 material = meshEntityRenderMaterial(entity);
   acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
       entity.mesh, color.a >= 1.0f, entity.realistic(), material,
@@ -1077,7 +1215,7 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   batch.acgiMaterial.roughness = entity.entity.material.roughnessFactor;
   batch.acgiMaterial.transparency = 1.0f - color.a;
   batch.acgiMaterial.lineWidth = float(entity.entity.common.lineWeight);
-  batch.instances.push_back(cachedMeshInstance(entity, material));
+  batch.instances.push_back(cachedMeshInstance(entity, material, colorOverride));
 }
 
 glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
@@ -1964,6 +2102,11 @@ static void buildDemoDocument()
   (void)authored;
 }
 
+// Drop every cache/identity keyed on tessellation-stored pointers; called
+// from buildVectorPrimitivesTessellation before the rebuild repopulates.
+static void invalidateTessellationKeyedCaches();
+bool pickDebugEnabled();
+
 VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 {  VectorPrimitivesTessellation target;
   acdb::TessellatedEntity &result = target.geometry;
@@ -1972,6 +2115,13 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
   buildDemoDocument();
   acdb::AcDbDatabase &document = acdbDocument();
+  // The rebuild invalidates every tessellation-stored pointer: pick
+  // registry entries, text identities, pointer-keyed caches, and the live
+  // selection. Clear them together BEFORE the replayer repopulates the
+  // text queue, so no stale copy ever accumulates (the queue used to grow
+  // by a full duplicate set per revision).
+  invalidateTessellationKeyedCaches();
+  acgi::textRequests().clear();
 
   target.anchor = demoCadAnchor();
   const glm::dvec3 demoAnchor = demoAnchorPoint();
@@ -2114,12 +2264,32 @@ bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
 // camera-relative vertices per entity range so normal drawing does not repeat
 // the per-triangle double-to-float conversion and color contrast pass every
 // frame.  The anchor-relative frame is camera-independent.
+// Both caches below key on tessellation-stored pointers and are cleared
+// wholesale by invalidateTessellationKeyedCaches() when the tessellation
+// rebuilds (document revision bump) — a stale pointer must never resolve.
+static std::map<const acgs::AcGsEntityRange *, std::vector<rendering::FillVertex>>
+    g_cadFillVertexCache;
+static std::unordered_map<const acgs::CurveBatchCommand *,
+                          std::vector<glm::dvec3>>
+    g_curveSampleCache;
+static std::unordered_map<const MeshEntityRecord *, glm::dvec3>
+    g_curveCenterCache;
+static void invalidateTessellationKeyedCaches()
+{
+  g_cadFillVertexCache.clear();
+  g_curveSampleCache.clear();
+  g_curveCenterCache.clear();
+  g_meshInstanceCache.clear();
+  // Registry entries and text identities alias the old tessellation too;
+  // ids re-register (and stay stable) from the next queue refresh.
+  gpuPickManager().clearRegistry();
+  outlineEntity.reset();
+}
+
 static const std::vector<rendering::FillVertex> &
 cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
 {
-  static std::map<const acgs::AcGsEntityRange *, std::vector<rendering::FillVertex>>
-      cache;
-  auto [it, inserted] = cache.try_emplace(&range);
+  auto [it, inserted] = g_cadFillVertexCache.try_emplace(&range);
   if (!inserted)
     return it->second;
 
@@ -2179,9 +2349,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const glm::mat4 cadAnchorView = view * glm::translate(
       glm::mat4(1.0f), glm::vec3(tessellation.anchor - cameraPos));
   static acgs::AcGsModel cadDrawList;
-  cadDrawList.clear();
+  // Keep the geometry vectors' capacity across frames: clear() freed and
+  // re-allocated them every frame.
+  cadDrawList.clearKeepCapacity();
   static std::vector<bool> strokeVisible;
-  static std::vector<bool> fillVisible;
   static std::vector<bool> pointVisible;
 
   const acdb::TessellatedEntity &tess = tessellation.geometry;
@@ -2189,18 +2360,21 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const bool gpuPickQueueActive =
       acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
       (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive);
-  const char *lineLayerValue = std::getenv("GRID_LINE_LAYER");
-  const uint8_t linePickOcclusionRank =
-      lineLayerValue && std::atof(lineLayerValue) > 0.0 ? 3 : 2;
+  // Process-constant env override; cached (this runs every frame).
+  static const uint8_t linePickOcclusionRank = [] {
+    const char *lineLayerValue = std::getenv("GRID_LINE_LAYER");
+    return lineLayerValue && std::atof(lineLayerValue) > 0.0 ? 3 : 2;
+  }();
   const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
       : rendering::RenderModeFlags{};
   auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId,
-                          uint8_t occlusionRank) {
+                          uint8_t occlusionRank,
+                          const glm::vec4 &slabLogDepth = glm::vec4(0.0f)) {
     gpuPickManager().queueSoupChunks(gpuPickVertices,
                                      view, pickProjection, logDepth,
                                      objectId, gpuPickQueueActive,
-                                     occlusionRank);
+                                     occlusionRank, slabLogDepth);
   };
   // Match the centered visible AcGi ribbon and its symmetric edge shader.
   // A one-sided pick quad would offset the ID buffer from the rendered pixels.
@@ -2368,6 +2542,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {VisibilityKind::CadPoint, nullptr, &range});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
+    double pickDepthMin = 0.0;
+    double pickDepthMax = 0.0;
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
       const acdb::TessellatedPoint &point = tess.points[i];
@@ -2376,9 +2552,42 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const float radius = std::max(
           float(point.pointSize) * float(pointWorldPerPixel(point.location)),
           float(3.0 * pointWorldPerPixel(point.location)));
-      appendPickPoint(glm::vec3(point.location - cameraPos), radius, idColor);
+      // The visible point draws with a half-pixel camera bias (see
+      // drawTargetPointInstances, perspective branch only) so it stays
+      // visible on the surface it marks. Bias the pick disc identically,
+      // or its depth z-fights with that surface and the point's ID loses —
+      // the ID texture's depth relationship would differ from the visible.
+      const float pickBias = useOrthoProjection()
+                                 ? 0.0f
+                                 : std::max(0.5f * float(pointWorldPerPixel(
+                                                 point.location)),
+                                            0.01f);
+      const glm::vec3 discCenter =
+          glm::vec3(point.location - cameraPos) - camFront * pickBias;
+      appendPickPoint(discCenter, radius, idColor);
+      const double discDepth = glm::dot(glm::dvec3(discCenter),
+                                        glm::dvec3(camFront));
+      pickDepthMin = pickDepthMin == 0.0
+                         ? discDepth
+                         : std::min(pickDepthMin, discDepth);
+      pickDepthMax = std::max(pickDepthMax, discDepth);
+      if (pickDebugEnabled() && outlineEntity.has_value() &&
+          outlineEntity->cadRange == candidate.cadRange)
+      {
+        std::printf("[POINT_PICK] selected point queued: index=%zu verts=%zu "
+                    "range=[%zu,%zu]\n",
+                    i, gpuPickVertices.size(), range.begin, range.count);
+        std::fflush(stdout);
+      }
     }
-    queueGpuSoup(overlayProjection, objectId, 2);
+    // Point impostors are screen-overlay pickables (the visible point
+    // draws effectively always-on-top through the overlay projection):
+    // give the discs their own slab around their depths (rank 3 = no
+    // content-slab discard, no depth-test surprise).
+    const glm::vec4 pointSlab(
+        1.0f, float(std::max(1.0, pickDepthMin * 0.5)),
+        float(std::max(2.0, pickDepthMax * 2.0)), 0.0f);
+    queueGpuSoup(overlayProjection, objectId, 3, pointSlab);
   };
   auto queueCadCurve = [&](const VisibilityCandidate &candidate) {
     if (!candidate.curve)
@@ -2387,7 +2596,15 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         {VisibilityKind::CadCurve, nullptr, nullptr, candidate.curve});
     const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
-    const std::vector<glm::dvec3> points = acgs::AcGsView::sampleCurveBatch(*candidate.curve);
+    // The sampled polyline is camera-independent and the curve is immutable
+    // once tessellated: cache it per curve pointer (cleared when the
+    // tessellation rebuilds) instead of re-running de Casteljau/de Boor on
+    // every pick-refresh frame.
+    auto [sampleIt, inserted] =
+        g_curveSampleCache.try_emplace(candidate.curve);
+    if (inserted)
+      sampleIt->second = acgs::AcGsView::sampleCurveBatch(*candidate.curve);
+    const std::vector<glm::dvec3> &points = sampleIt->second;
     for (size_t i = 0; i + 1 < points.size(); ++i)
       appendCenteredPickRibbon(
           glm::vec3(points[i] - cameraPos),
@@ -2408,44 +2625,134 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         ? candidate.overlayPointSize *
               float(pointWorldPerPixel(candidate.center))
         : minimumRadius;
-    appendPickPoint(glm::vec3(candidate.center - cameraPos),
-                    std::max(pointRadius, minimumRadius), idColor);
-    queueGpuSoup(overlayProjection, objectId, 2);
+    // Tiny impostors render through the point path's half-pixel camera bias
+    // as well — without it the disc's depth z-fights with whatever the
+    // point sits on and the ID loses to the surface.
+    const float pickBias = useOrthoProjection()
+                               ? 0.0f
+                               : std::max(0.5f * float(pointWorldPerPixel(
+                                               candidate.center)),
+                                          0.01f);
+    if (pickDebugEnabled() && outlineEntity.has_value() &&
+        outlineEntity->cadRange == candidate.cadRange)
+    {
+      const double pointDepth =
+          glm::dot(candidate.center - cameraPos, cameraFront);
+      std::printf("[POINT_PICK] tiny selected point queued: verts=%zu "
+                  "viewDepth=%.1f slab=[%.1f, %.1f]\n",
+                  gpuPickVertices.size(), pointDepth, logDepth.y,
+                  logDepth.z);
+      std::fflush(stdout);
+    }
+    // Screen-overlay pickable: own slab + rank 3 (mirrors the visible
+    // impostor's effective always-on-top semantics).
+    const double tinyDepth =
+        glm::dot(glm::dvec3(candidate.center - cameraPos),
+                 glm::dvec3(camFront));
+    const glm::vec4 tinySlab(
+        1.0f, float(std::max(1.0, tinyDepth * 0.5)),
+        float(std::max(2.0, tinyDepth * 2.0)), 0.0f);
+    const float tinyRadius = std::max(pointRadius, minimumRadius);
+    const bool giantProbe =
+        pickDebugEnabled() && outlineEntity.has_value() &&
+        outlineEntity->cadRange == candidate.cadRange;
+    appendPickPoint(glm::vec3(candidate.center - cameraPos) -
+                        camFront * pickBias,
+                    giantProbe ? 200.0f * tinyRadius : tinyRadius, idColor);
+    queueGpuSoup(overlayProjection, objectId, 3, tinySlab);
   };
 
   strokeVisible.assign(tess.strokes.size(), false);
-  fillVisible.assign(tess.fills.size(), false);
   pointVisible.assign(tess.points.size(), false);
 
   auto markRange = [&](VisibilityKind kind, size_t begin, size_t count) {
-    std::vector<bool> &flags = kind == VisibilityKind::CadStroke ? strokeVisible
-                               : kind == VisibilityKind::CadFill ? fillVisible
-                                                                 : pointVisible;
-    const size_t limit = kind == VisibilityKind::CadStroke ? tess.strokes.size()
-                             : kind == VisibilityKind::CadFill ? tess.fills.size()
-                                                               : tess.points.size();
+    std::vector<bool> &flags = kind == VisibilityKind::CadStroke
+                                   ? strokeVisible
+                                   : pointVisible;
+    const size_t limit = kind == VisibilityKind::CadStroke
+                             ? tess.strokes.size()
+                             : tess.points.size();
     const size_t first = std::min(begin, limit);
     const size_t last = std::min(begin + count, limit);
     for (size_t i = first; i < last; ++i)
       flags[i] = true;
   };
 
+  // In-scene selection recolor (unified depth buffer): the selected
+  // entity's primitives draw in their OWN passes with the highlight color —
+  // same geometry, same depth, same blending — so the highlight's depth
+  // relationship is identical to the original by construction.
+  glm::dvec2 selectedStrokeRange{SIZE_MAX, 0}; // x=begin, y=count
+  glm::dvec2 selectedPointRange{SIZE_MAX, 0};
+  const acgs::CurveBatchCommand *selectedCurve = nullptr;
+  const acgs::AcGsEntityRange *selectedFillRange = nullptr;
+  auto entitySelected = [&](const VisibilityCandidate *candidate) {
+    if (!outlineEntity.has_value() || !candidate)
+      return false;
+    switch (outlineEntity->kind)
+    {
+    case VisibilityKind::CadStroke:
+    case VisibilityKind::CadFill:
+    case VisibilityKind::CadPoint:
+      return candidate->cadRange != nullptr &&
+             candidate->cadRange == outlineEntity->cadRange;
+    case VisibilityKind::CadCurve:
+      return candidate->curve != nullptr &&
+             candidate->curve == outlineEntity->curve;
+    default:
+      return false;
+    }
+  };
+
+  for (const VisibilityCandidate *candidate : visibleCad)
+  {
+    if (!candidate || !entitySelected(candidate))
+      continue;
+    if (candidate->kind == VisibilityKind::CadStroke)
+      selectedStrokeRange = {candidate->rangeBegin, candidate->rangeCount};
+    else if (candidate->kind == VisibilityKind::CadPoint)
+      selectedPointRange = {candidate->rangeBegin, candidate->rangeCount};
+    else if (candidate->kind == VisibilityKind::CadFill)
+      selectedFillRange = candidate->cadRange;
+    else if (candidate->kind == VisibilityKind::CadCurve)
+      selectedCurve = candidate->curve;
+  }
+
   for (const VisibilityCandidate *candidate : visibleCad)
   {
     if (!candidate)
       continue;
     if (candidate->kind == VisibilityKind::CadStroke ||
-        candidate->kind == VisibilityKind::CadFill ||
         candidate->kind == VisibilityKind::CadPoint)
     {
       markRange(candidate->kind, candidate->rangeBegin, candidate->rangeCount);
     }
   }
 
+  const size_t selStrokeBegin = size_t(selectedStrokeRange.x);
+  const size_t selStrokeLast =
+      std::min(selStrokeBegin + size_t(selectedStrokeRange.y),
+               tess.strokes.size());
+  const size_t selPointBegin = size_t(selectedPointRange.x);
+  const size_t selPointLast =
+      std::min(selPointBegin + size_t(selectedPointRange.y),
+               tess.points.size());
   for (const acdb::Stroke &stroke : tess.strokes)
   {
-    if (strokeVisible.empty() || strokeVisible[&stroke - tess.strokes.data()])
-      cadDrawList.geometry().strokes.push_back(stroke);
+    const size_t strokeIndex = &stroke - tess.strokes.data();
+    if (strokeVisible.empty() || !strokeVisible[strokeIndex])
+      continue;
+    if (strokeIndex >= selStrokeBegin && strokeIndex < selStrokeLast)
+    {
+      // Selected: recolor in place (keep the stroke's own alpha so the
+      // highlight blends exactly like the original).
+      acdb::Stroke recolored = stroke;
+      recolored.common.color =
+          glm::vec4(kSelectionHighlightRGB, stroke.common.color.a);
+      cadDrawList.geometry().strokes.push_back(std::move(recolored));
+      continue;
+    }
+    cadDrawList.geometry().strokes.push_back(stroke);
   }
   // CAD fills bypass the generic AcGsModel copy.  Visible ranges reuse
   // their cached anchor-relative renderer vertices and submit as one batch.
@@ -2458,22 +2765,23 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     const std::vector<rendering::FillVertex> &rangeVertices =
         cadVisibleFillVertices(*candidate->cadRange);
+    if (candidate->cadRange == selectedFillRange)
+    {
+      // Selected fill: recolor the inserted vertices (keep per-vertex
+      // alpha so translucency — and the depth relationship — survives).
+      for (const rendering::FillVertex &vertex : rangeVertices)
+      {
+        visibleFillVertices.push_back(
+            {vertex.position,
+             glm::vec4(kSelectionHighlightRGB, vertex.color.a)});
+      }
+      continue;
+    }
     visibleFillVertices.insert(visibleFillVertices.end(),
                                rangeVertices.begin(), rangeVertices.end());
   }
   if (!visibleFillVertices.empty())
   {
-    const rendering::FilledTrianglesRenderData cadFillData{
-        .view = cadAnchorView,
-        .projection = projection,
-        .vertices = visibleFillVertices.data(),
-        .vertexCount =
-            static_cast<uint32_t>(visibleFillVertices.size()),
-        .is3DFace = false,
-        .layer = acgs::envLayer("GRID_FILL_LAYER"),
-        .logDepth = logDepth,
-        .material = acgs::toSurfaceMaterial(acgs::AcGiMaterial{}),
-    };
     acgsView().drawFillTriangles(visibleFillVertices, cadAnchorView,
                                projection, false,
                                acgs::envLayer("GRID_FILL_LAYER"));
@@ -2483,6 +2791,18 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   // entities (Solid, Rectangle, Hatch, CircleFill) vanish.  Draw their
   // per-range boundary edges (edges used by a single triangle, the same
   // shared-edge rule as the selection outline) as colored ribbons instead.
+  auto fillRangeColor = [&](const acgs::AcGsEntityRange &range) {
+    const size_t last =
+        std::min(range.begin + range.count, tess.fills.size());
+    for (size_t i = range.begin; i < last; ++i)
+    {
+      const acdb::Triangle &triangle = tess.fills[i];
+      if (!triangle.common.visible)
+        continue;
+      return acgsView().contrastColor(triangle.common.color);
+    }
+    return glm::vec4(0.0f, 0.0f, 0.0f, -1.0f); // alpha<0: no visible color
+  };
   const rendering::RenderModeFlags fillRenderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
       : rendering::RenderModeFlags{};
@@ -2495,32 +2815,36 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           !candidate->cadRange || !candidate->cadRange->count)
         continue;
       const acgs::AcGsEntityRange &range = *candidate->cadRange;
-      const size_t last = std::min(range.begin + range.count,
-                                   tess.fills.size());
-      glm::vec4 rangeColor(1.0f);
-      bool hasColor = false;
-      for (size_t i = range.begin; i < last; ++i)
-      {
-        const acdb::Triangle &triangle = tess.fills[i];
-        if (!triangle.common.visible)
-          continue;
-        if (!hasColor)
-        {
-          rangeColor = acgsView().contrastColor(triangle.common.color);
-          hasColor = true;
-        }
-      }
-      if (!hasColor)
+      // The selected fill's boundary ribbons recolor too.
+      const glm::vec4 boundaryColor =
+          candidate->cadRange == selectedFillRange
+              ? glm::vec4(kSelectionHighlightRGB, 1.0f)
+              : fillRangeColor(range);
+      if (boundaryColor.a < 0.0f)
         continue;
       acgsView().drawFillBoundary(
           tess, range.begin, range.count,
-          1.5f * pixelSizeWorld, rangeColor);
+          1.5f * pixelSizeWorld, boundaryColor);
     }
   }
   for (const VisibilityCandidate *candidate : visibleCad)
   {
-    if (candidate && candidate->kind == VisibilityKind::CadCurve && candidate->curve)
-      cadDrawList.addCurveBatch() = *candidate->curve;
+    if (candidate && candidate->kind == VisibilityKind::CadCurve &&
+        candidate->curve)
+    {
+      if (candidate->curve == selectedCurve)
+      {
+        // Selected curve: recolor the batch copy (keep alpha).
+        acgs::CurveBatchCommand &recolored = cadDrawList.addCurveBatch();
+        recolored = *candidate->curve;
+        recolored.acgiMaterial.baseColor = glm::vec4(
+            kSelectionHighlightRGB, candidate->curve->acgiMaterial.baseColor.a);
+      }
+      else
+      {
+        cadDrawList.addCurveBatch() = *candidate->curve;
+      }
+    }
   }
 
   for (const acdb::TessellatedPoint &point : tess.points)
@@ -2529,6 +2853,15 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     if (!point.common.visible)
       continue;
+    const size_t pointIndex = &point - tess.points.data();
+    if (pointIndex >= selPointBegin && pointIndex < selPointLast)
+    {
+      acdb::TessellatedPoint recolored = point;
+      recolored.common.color =
+          glm::vec4(kSelectionHighlightRGB, point.common.color.a);
+      cadDrawList.geometry().points.push_back(std::move(recolored));
+      continue;
+    }
     cadDrawList.geometry().points.push_back(point);
   }
 
@@ -2538,8 +2871,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   {
     if (!candidate)
       continue;
+    const bool selected = entitySelected(candidate);
     appendScenePoint(cadDrawList, candidate->center,
-                     glm::vec3(candidate->overlayColor),
+                     selected ? glm::vec3(kSelectionHighlightRGB)
+                              : glm::vec3(candidate->overlayColor),
                      double(candidate->overlayPointSize));
   }
 
@@ -2618,8 +2953,18 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         tessellation.meshes[candidate->entityIndex];
     if (!meshEntityVisible(mesh))
       continue;
-    acgs::AcGsModel meshDrawList;
-    appendMeshEntityToScene(mesh, meshDrawList);
+    // In-scene selection recolor: the selected mesh draws in its own pass
+    // with the highlight color (unified depth buffer).
+    const bool meshSelected =
+        outlineEntity.has_value() &&
+        outlineEntity->kind == VisibilityKind::CadMesh &&
+        outlineEntity->mesh == &mesh;
+    // One reusable model for all CadMesh submits (was constructed and
+    // destroyed per candidate per frame).
+    static acgs::AcGsModel meshDrawList;
+    meshDrawList.clearKeepCapacity();
+    appendMeshEntityToScene(mesh, meshDrawList, false,
+                            meshSelected ? &kSelectionHighlightRGB : nullptr);
     const rendering::DoubleSingleVec3 meshEye =
         rendering::encodeDoubleSingle(rebase);
     acgsView().submit(meshDrawList,
@@ -2634,10 +2979,13 @@ const std::vector<LargeCoordinateObject> &getStressObjects();
 static bool cadAlgorithmDemoEnabled()
 {
   // The CAD instancing path is the design default. Keep the older stylized
-  // shader experiment opt-in.
-  const char *value = std::getenv("GRID_CAD_SHADER_DEMO");
-  return value != nullptr && *value != '\0' &&
-         std::strcmp(value, "0") != 0;
+  // shader experiment opt-in. Process-constant: cached.
+  static const bool enabled = [] {
+    const char *value = std::getenv("GRID_CAD_SHADER_DEMO");
+    return value != nullptr && *value != '\0' &&
+           std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
 }
 
 
@@ -2697,8 +3045,17 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
         const LargeCoordinateObject *object = entry.second;
       if (!meshEntityVisible(*object))
         continue;
+      // In-scene selection recolor: the selected mesh's instance draws
+      // with the highlight color in its own instanced batch.
+      const bool meshSelected =
+          outlineEntity.has_value() &&
+          outlineEntity->kind == VisibilityKind::MeshObject &&
+          outlineEntity->mesh == object;
       const size_t meshIndex = static_cast<size_t>(object->mesh);
-      cadGroups[meshIndex].push_back(cachedMeshInstance(*object, meshEntityRenderMaterial(*object)));
+      cadGroups[meshIndex].push_back(
+          cachedMeshInstance(*object, meshEntityRenderMaterial(*object),
+                             meshSelected ? &kSelectionHighlightRGB
+                                          : nullptr));
       queueGpuMeshEntity(object);
     }
 
@@ -2746,26 +3103,40 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
                                    std::max(orderCount, size_t(1));
         if (!meshEntityVisible(*object))
           continue;
+        // In-scene selection recolor: the selected mesh's instance draws
+        // with the highlight color (its own alpha and depth preserved).
+        const bool meshSelected =
+            outlineEntity.has_value() &&
+            outlineEntity->kind == VisibilityKind::MeshObject &&
+            outlineEntity->mesh == object;
 
         const bool realistic = object->realistic();
         const glm::vec4 material = meshEntityRenderMaterial(*object);
-        const glm::vec4 color = meshEntityColor(*object);
+        const glm::vec4 color =
+            meshSelected
+                ? glm::vec4(kSelectionHighlightRGB, meshEntityColor(*object).a)
+                : meshEntityColor(*object);
 
-        std::vector<InstanceGroup> &groups = buckets[bucketIndex];
-        auto groupIt = std::find_if(
-            groups.begin(), groups.end(),
-            [&](const InstanceGroup &group) {
-              return group.mesh == object->mesh &&
-                     group.realistic == realistic &&
-                     group.material == material &&
-                     group.opacity == color.a;
-            });
-        if (groupIt == groups.end())
         {
-          groups.push_back({object->mesh, realistic, material, color.a, {}});
-          groupIt = groups.end() - 1;
+          std::vector<InstanceGroup> &groups = buckets[bucketIndex];
+          auto groupIt = std::find_if(
+              groups.begin(), groups.end(),
+              [&](const InstanceGroup &group) {
+                return group.mesh == object->mesh &&
+                       group.realistic == realistic &&
+                       group.material == material &&
+                       group.opacity == color.a;
+              });
+          if (groupIt == groups.end())
+          {
+            groups.push_back({object->mesh, realistic, material, color.a, {}});
+            groupIt = groups.end() - 1;
+          }
+          groupIt->instances.push_back(
+              cachedMeshInstance(*object, material,
+                                 meshSelected ? &kSelectionHighlightRGB
+                                              : nullptr));
         }
-        groupIt->instances.push_back(cachedMeshInstance(*object, material));
         queueGpuMeshEntity(object);
     }
 
@@ -5750,7 +6121,164 @@ void render()
   {
     outlineAllTest = true;
     acgs::acgsGetManager()->setSelectionOutlineAll(true);
-  }  if (idVisibleAtStartup)
+  }
+  if (!selectNameAtStartup.empty())
+  {
+    static bool selectNameApplied = false;
+    if (!selectNameApplied && !outlineEntity.has_value())
+    {
+      if (pickDebugEnabled())
+      {
+        // One-shot registry name dump: what can GRID_SELECT_NAME match?
+        static bool namesDumped = false;
+        if (!namesDumped && gpuPickManager().registrySize() > 0)
+        {
+          namesDumped = true;
+          int printed = 0;
+          gpuPickManager().forEach(
+              [&](std::uint32_t id, const acgs::AcGsPickEntity &registered) {
+                if (printed >= 12)
+                  return;
+                if (registered.mesh)
+                  std::printf("[SELECT_DEBUG] mesh id=%u name=%s\n", id,
+                              static_cast<const MeshEntityRecord *>(
+                                  registered.mesh)
+                                  ->displayName()
+                                  .c_str());
+                else if (registered.range)
+                  std::printf("[SELECT_DEBUG] range id=%u name=%s\n", id,
+                              static_cast<const acgs::AcGsEntityRange *>(
+                                  registered.range)
+                                  ->name.c_str());
+                else if (registered.curve)
+                  std::printf("[SELECT_DEBUG] curve id=%u name=%s\n", id,
+                              static_cast<const acgs::CurveBatchCommand *>(
+                                  registered.curve)
+                                  ->name.c_str());
+                ++printed;
+              });
+          std::fflush(stdout);
+        }
+      }
+      if (const GpuPickEntity *entity =
+              findGpuPickEntityForAutofocusName(selectNameAtStartup))
+      {
+        outlineEntity = *entity;
+        selectNameApplied = true;
+        std::cout << "Startup selection: " << selectNameAtStartup
+                  << std::endl;
+        if (std::getenv("GRID_SELECT_FOCUS") != nullptr)
+        {
+          // Validation aid: aim the camera at the selected entity so the
+          // capture can inspect its highlight. Meshes aim at the record's
+          // world position (sized by the record); curves at the batch
+          // center; text is handled in the message branch below; range
+          // entities keep the startup camera (their centers live in the
+          // tessellation).
+          if (entity->mesh != nullptr)
+          {
+            const MeshEntityRecord *mesh = entity->mesh;
+            orbitCam.setTarget(mesh->worldPosition);
+            orbitCam.setTargetDistance(
+                std::max(200.0, double(mesh->size) * 6.0));
+            // Tilt down ~35 degrees so the mesh's filled faces (not just
+            // its edge-on silhouette) are visible for the capture.
+            orbitCam.setViewDirection(
+                glm::normalize(glm::dvec3(0.25, 0.25, -0.9)));
+          }
+          else if (entity->curve != nullptr)
+          {
+            orbitCam.setTarget(entity->curve->center);
+            orbitCam.setTargetDistance(
+                std::max(200.0, entity->curve->radius * 6.0));
+          }
+          else if (entity->cadRange != nullptr)
+          {
+            // Range entities (stroke/point/fill) carry no center: average
+            // their tessellated vertices.
+            const auto &tess = getVectorPrimitivesTessellation();
+            const acgs::AcGsEntityRange &range = *entity->cadRange;
+            glm::dvec3 center(0.0);
+            size_t count = 0;
+            const size_t last =
+                std::min(range.begin + range.count, size_t(1) << 30);
+            if (entity->kind == VisibilityKind::CadStroke)
+            {
+              const size_t last2 = std::min(last, tess.geometry.strokes.size());
+              for (size_t i = range.begin; i < last2; ++i)
+                for (const glm::dvec3 &pt : tess.geometry.strokes[i].points)
+                {
+                  center += pt;
+                  ++count;
+                }
+            }
+            else if (entity->kind == VisibilityKind::CadFill)
+            {
+              const size_t last2 = std::min(last, tess.geometry.fills.size());
+              for (size_t i = range.begin; i < last2; ++i)
+              {
+                center += tess.geometry.fills[i].a +
+                          tess.geometry.fills[i].b +
+                          tess.geometry.fills[i].c;
+                count += 3;
+              }
+            }
+            else
+            {
+              const size_t last2 = std::min(last, tess.geometry.points.size());
+              for (size_t i = range.begin; i < last2; ++i)
+              {
+                center += tess.geometry.points[i].location;
+                ++count;
+              }
+            }
+            if (count > 0)
+            {
+              orbitCam.setTarget(center / double(count));
+              orbitCam.setTargetDistance(std::max(300.0, orbitCam.Distance));
+            }
+          }
+        }
+      }
+      else
+      {
+        // Text fallback: substring match on the message. Exact matching
+        // needs the source encoding (CJK demo messages are UTF-8) while
+        // getenv hands over ANSI bytes; an ASCII substring sidesteps that.
+        // LAST match wins: re-tessellation pushes a fresh copy of each
+        // request, and earlier copies keep stale pointers that never reach
+        // the ID pass.
+        const acgi::TextRequest *matched = nullptr;
+        for (const acgi::TextRequest &request : acgi::textRequests())
+        {
+          if (request.message.find(selectNameAtStartup) ==
+              std::string::npos)
+            continue;
+          matched = &request;
+        }
+        if (matched != nullptr)
+        {
+          outlineEntity = GpuPickEntity{VisibilityKind::CadText, nullptr,
+                                        nullptr, nullptr, matched};
+          selectNameApplied = true;
+          std::cout << "Startup selection (text message): "
+                    << selectNameAtStartup << std::endl;
+          if (std::getenv("GRID_SELECT_FOCUS") != nullptr)
+          {
+            // Validation aid: top-down view of the text so the capture can
+            // inspect the highlight without scripted input (a horizontal
+            // startup camera sees ground text edge-on, with zero area).
+            const double focusDistance =
+                std::max(300.0, matched->height * 10.0);
+            orbitCam.setTarget(matched->position);
+            orbitCam.setTargetDistance(focusDistance);
+            orbitCam.setViewDirection(glm::dvec3(0.0, 0.0, -1.0));
+          }
+        }
+      }
+    }
+  }
+  if (idVisibleAtStartup)
   {
     static bool s_idVisibleApplied = false;
     if (!s_idVisibleApplied)
@@ -6582,7 +7110,9 @@ void render()
                        ? static_cast<const void *>(outlineEntity->mesh)
                        : outlineEntity->cadRange
                              ? static_cast<const void *>(outlineEntity->cadRange)
-                             : static_cast<const void *>(outlineEntity->curve);
+                             : outlineEntity->curve
+                                   ? static_cast<const void *>(outlineEntity->curve)
+                                   : static_cast<const void *>(outlineEntity->text);
       sceneIdSignature = hashGpuPickSceneBytes(
           sceneIdSignature, &outlineEntity->kind,
           sizeof(outlineEntity->kind));
@@ -6598,14 +7128,17 @@ void render()
       !lastSceneIdSignatureValid || sceneIdSignature != lastSceneIdSignature;
   lastSceneIdSignature = sceneIdSignature;
   lastSceneIdSignatureValid = true;
-  // Unified picking: the full-scene ID pass runs every idle frame and is
-  // the SINGLE ID source for the K/I views, selection shading, and
-  // cursor picking (pixel reads).  It freezes while a pick result is in
-  // flight so the texture and the id registry stay consistent.
-  bool gpuSceneIdPassRequested = gpuPickEnabled();
-  if ((outlineEntity.has_value() || outlineAllTest) &&
-      sceneIdSignatureChanged)
-    gpuSceneIdPassRequested = true;
+  // Unified picking: the full-scene ID pass is the SINGLE ID source for the
+  // K/I views, selection shading, and cursor picking.  It re-renders the
+  // whole scene, so it runs ONLY when its output can change: a pick is in
+  // flight, a debug ID view needs live content, or the scene signature
+  // changed (camera/slab/viewport/selection). The freshly rendered ID image
+  // is copied into a persistent sampled texture (m_gpuPickIdSticky), which
+  // keeps the highlight stable on gated frames at zero pass cost.
+  bool gpuSceneIdPassRequested =
+      gpuPickEnabled() &&
+      (gpuPickFocus.pendingNdc || gpuPickFocus.waitingResult ||
+       gpuPickSceneDebug || sceneIdSignatureChanged);
   if (acgs::acgsGetManager()->deviceReady())
     acgs::acgsGetManager()->setGpuPickScenePassEnabled(gpuSceneIdPassRequested);
   if (gpuPickEnabled() && gpuPickFocus.pendingNdc)
@@ -6641,6 +7174,8 @@ void render()
     }
   }
 
+  // The queue refresh re-arms the pass AND rebuilds the CPU soup; non-
+  // refresh frames sample the sticky ID copy at zero cost.
   if (gpuSceneIdPassRequested && acgs::acgsGetManager()->deviceReady() &&
       (gpuPickEnabled() || outlineEntity.has_value() || outlineAllTest) &&
       !gpuPickFocus.pendingNdc && !gpuPickFocus.waitingResult)
@@ -6664,6 +7199,13 @@ void render()
           findGpuPickObjectIdForEntity(*outlineEntity);
     acgs::acgsGetManager()->setSelectionOutlineId(
         outlineEntity ? cachedOutlineObjectId : 0);
+    // In-scene selection recolor: the selected text's glyphs draw with the
+    // highlight color in their own SDF pass (unified depth buffer).
+    acgsView().setTextColorOverride(
+        outlineEntity && outlineEntity->kind == VisibilityKind::CadText
+            ? outlineEntity->text
+            : nullptr,
+        glm::vec4(kSelectionHighlightRGB, 1.0f));
     gpuPickSceneDebugQueueActive =
         acgs::acgsGetManager()->requestGpuPick(sceneRequest) != 0;
     // No clearRegistry here either: ids are keyed by entity identity
@@ -7102,7 +7644,12 @@ void render()
   const MeshEntityRecord centerCube = getCenterCubeEntity();
   if (centerCubeInFrame)
   {
-    appendMeshEntityToScene(centerCube, sceneOverlay);
+    // In-scene selection recolor: the selected center cube draws with the
+    // highlight color in its own pass.
+    const bool cubeSelected = outlineEntity.has_value() &&
+                              outlineEntity->kind == VisibilityKind::CenterCube;
+    appendMeshEntityToScene(centerCube, sceneOverlay, false,
+                            cubeSelected ? &kSelectionHighlightRGB : nullptr);
     queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
   }
 
@@ -7175,9 +7722,11 @@ void render()
   {
     for (const acgi::TextRequest &request : acgi::textRequests())
     {
-      const std::vector<acgi::TextEngine::GlyphPlacement> placements =
-          acgi::textEngine().layoutGlyphs(request, cameraPos, cameraRight,
-                                          cameraUp, frontVec);
+      // Shared layout cache with the visible SDF pass (planar layouts are
+      // camera-independent; billboard stays per-call inside the engine).
+      const std::vector<acgi::TextEngine::GlyphPlacement> &placements =
+          acgi::textEngine().glyphLayout(request, cameraPos, cameraRight,
+                                         cameraUp, frontVec);
       if (placements.empty())
         continue;
       const uint32_t objectId = registerGpuPickEntity(
@@ -7186,22 +7735,99 @@ void render()
       static std::vector<rendering::FillVertex> textPickVertices;
       textPickVertices.clear();
       glm::dvec3 layoutCenter(0.0);
+      // GRID_TEXT_PICK_QUADS=1: regression switch forcing the full-quad
+      // pick shape (pre glyph-coverage behavior).
+      static const bool textPickQuads = [] {
+        const char *value = std::getenv("GRID_TEXT_PICK_QUADS");
+        return value != nullptr && *value != '\0' &&
+               std::strcmp(value, "0") != 0;
+      }();
+      static const std::vector<glm::vec2> kEmptyCoverage;
       for (const acgi::TextEngine::GlyphPlacement &placement : placements)
       {
         for (const glm::dvec3 &worldCorner : placement.corners)
           layoutCenter += worldCorner;
-        glm::vec3 corner[4];
-        for (int i = 0; i < 4; ++i)
-          corner[i] = glm::vec3(placement.corners[i] - cameraPos);
-        for (const int index : {0, 1, 2, 0, 2, 3})
-          textPickVertices.push_back({corner[index], idColor});
-        for (const int index : {0, 2, 1, 0, 3, 2})
-          textPickVertices.push_back({corner[index], idColor});
+        // Glyph-shaped coverage: the SDF iso-contour soup instead of the
+        // full quad, so the ID texture and the selection highlight follow
+        // the visible glyph rather than its bounding box.
+        const std::vector<glm::vec2> &coverage =
+            textPickQuads ? kEmptyCoverage
+                          : glyphCoverageUV(placement.codepoint);
+        if (coverage.empty())
+        {
+          // Raster unavailable: keep the quad as the conservative shape.
+          for (const int index : {0, 1, 2, 0, 2, 3})
+            textPickVertices.push_back(
+                {glm::vec3(placement.corners[index] - cameraPos), idColor});
+          continue;
+        }
+        for (size_t tri = 0; tri + 2 < coverage.size(); tri += 3)
+        {
+          for (int t = 0; t < 3; ++t)
+          {
+            const glm::vec2 uv = coverage[tri + t];
+            // The visible pass samples texture v=0 at the glyph's TOP row
+            // while quad cornerV=1 is the top (see AcGiTextEngine::drawText:
+            // cornerV carries uv v = 1 - cornerV). Invert v here so the
+            // coverage lands on the glyph instead of its mirror.
+            const glm::dvec3 world =
+                placement.corners[0] +
+                (placement.corners[1] - placement.corners[0]) *
+                    double(uv.x) +
+                (placement.corners[3] - placement.corners[0]) *
+                    double(1.0 - uv.y);
+            textPickVertices.push_back(
+                {glm::vec3(world - cameraPos), idColor});
+          }
+        }
       }
       layoutCenter /= double(placements.size() * 4);
-      acgs::acgsGetManager()->queueGpuTrianglePick(
-          0, textPickVertices.data(), uint32_t(textPickVertices.size()),
-          viewRte, projection, logDepth, objectId, 3);
+      if (pickDebugEnabled())
+      {
+        std::printf(
+            "[TEXT_PICK] placements=%zu coverage_tris=%zu verts=%zu id=%u",
+            placements.size(), textPickVertices.size() / 3,
+            textPickVertices.size(), objectId);
+        std::puts("");
+        static bool soupDumped = false;
+        if (!soupDumped && std::getenv("GRID_DUMP_ID"))
+        {
+          soupDumped = true;
+          FILE *obj = std::fopen("text_soup.obj", "wb");
+          if (obj)
+          {
+            for (const rendering::FillVertex &v : textPickVertices)
+              std::fprintf(obj, "v %f %f %f\n", v.position.x, v.position.y,
+                           v.position.z);
+            for (size_t t = 0; t + 2 < textPickVertices.size(); t += 3)
+              std::fprintf(obj, "f %zu %zu %zu\n", t + 1, t + 2, t + 3);
+            std::fclose(obj);
+            std::printf("[TEXT_PICK] wrote text_soup.obj");
+            std::puts("");
+          }
+        }
+      }
+      // Chunked queueing: dense CJK glyph coverage can exceed the 65535
+      // per-primitive vertex cap, which silently drops the whole text ID.
+      // The text quads carry their own slab around the text's depth: the
+      // content slab tightens around meshes and would discard the glyphs
+      // (the visible SDF pass never slab-discards).
+      constexpr size_t kMaxTextPickChunkVertices = 3 * 21000;
+      const double textPickDepth =
+          glm::dot(glm::dvec3(layoutCenter - cameraPos), frontVec);
+      const glm::vec4 textSlab(
+          1.0f, float(std::max(1.0, textPickDepth * 0.5)),
+          float(std::max(2.0, textPickDepth * 2.0)), 0.0f);
+      for (size_t first = 0; first < textPickVertices.size();
+           first += kMaxTextPickChunkVertices)
+      {
+        const size_t count =
+            std::min(kMaxTextPickChunkVertices,
+                     textPickVertices.size() - first);
+        acgs::acgsGetManager()->queueGpuTrianglePick(
+            0, textPickVertices.data() + first, uint32_t(count),
+            viewRte, projection, logDepth, objectId, 3, textSlab);
+      }
       if (pickDebugEnabled())
       {
         const glm::vec4 clip = projection * viewRte *
@@ -7211,11 +7837,28 @@ void render()
                              double(clip.y) / clip.w);
         int winW = 0, winH = 0;
         SDL_GetWindowSize(window, &winW, &winH);
+        glm::dvec2 ndcMin(1e9), ndcMax(-1e9);
+        double wMin = 1e9, wMax = -1e9;
+        for (const rendering::FillVertex &v : textPickVertices)
+        {
+          const glm::vec4 c = projection * viewRte *
+                              glm::vec4(v.position, 1.0f);
+          if (c.w <= 1.0e-6)
+            continue;
+          const glm::dvec2 n(double(c.x) / c.w, double(c.y) / c.w);
+          ndcMin = glm::min(ndcMin, n);
+          ndcMax = glm::max(ndcMax, n);
+          wMin = std::min(wMin, double(c.w));
+          wMax = std::max(wMax, double(c.w));
+        }
         std::cout << "[TEXT_PICK] id=" << objectId
                   << " depth=" << clip.w
                   << " px=("
                   << int((ndc.x * 0.5 + 0.5) * winW) << ","
                   << int((0.5 - ndc.y * 0.5) * winH) << ")"
+                  << " soupNDC=[" << ndcMin.x << "," << ndcMin.y << "]-["
+                  << ndcMax.x << "," << ndcMax.y << "] w=[" << wMin << ","
+                  << wMax << "]"
                   << " msg='" << request.message.substr(0, 16)
                   << "'" << std::endl;
       }
@@ -7229,8 +7872,18 @@ void render()
   // transient-buffer chunk.
   sceneOverlay.clear();
   for (const LargeCoordinateObject *object : tinyDraws)
+  {
+    // In-scene selection recolor: the selected tiny mesh's impostor draws
+    // with the highlight color in its own pass.
+    const bool meshSelected =
+        outlineEntity.has_value() &&
+        outlineEntity->kind == VisibilityKind::MeshObject &&
+        outlineEntity->mesh == object;
     appendScenePoint(sceneOverlay, object->worldPosition,
-                     glm::vec3(meshEntityColor(*object)), 2.0);
+                     meshSelected ? glm::vec3(kSelectionHighlightRGB)
+                                  : glm::vec3(meshEntityColor(*object)),
+                     2.0);
+  }
 
   // Tiny mesh impostors are renderable entities too.  Their full-scene ID
   // representation is a small camera-facing quad, matching the visible
@@ -7265,7 +7918,13 @@ void render()
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::MeshObject, object, nullptr});
       const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
-      const glm::vec3 relative = glm::vec3(center - orbitCam.Position);
+      // The visible impostor point draws with a half-pixel camera bias;
+      // bias the ID quad identically or its depth z-fights with whatever
+      // the tiny mesh sits on and the point's ID loses.
+      const float pickBias = std::max(0.5f * float(objectPixelSize), 0.01f);
+      const glm::vec3 relative =
+          glm::vec3(center - orbitCam.Position) -
+          glm::vec3(orbitCam.Front) * pickBias;
       const glm::vec3 right = pickRight * radius;
       const glm::vec3 up = pickUp * radius;
       tinyMeshPickVertices.clear();

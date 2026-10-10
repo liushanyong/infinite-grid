@@ -78,6 +78,7 @@ public:
     void setGpuPickIdRange(uint32_t minId, uint32_t maxId) override;
     void setSelectionOutlineId(uint32_t objectId) override;
     void setSelectionOutlineAll(bool enabled) override;
+    void gpuPickIdDumpTick();
     void drawCurves(const CurveRenderData &data) override;
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,
@@ -90,7 +91,9 @@ public:
                               const glm::mat4 &projection,
                               const glm::vec4 &logDepth,
                               uint32_t objectId,
-                              uint8_t occlusionRank = 2) override;
+                              uint8_t occlusionRank = 2,
+                              const glm::vec4 &logDepthOverride =
+                                  glm::vec4(0.0f)) override;
     GpuPickResult pollGpuPick() override;
     // Unified picking: samples the always-on full-scene ID texture at the
     // click texel (no per-click re-render, no candidate filter).
@@ -118,7 +121,8 @@ private:
     bool createGpuPickDebugResources();
     void destroyGpuPickDebugResources();
     void submitGpuPickPrimitives(bgfx::ViewId view,
-                                 const glm::mat4 &projection);
+                                 const glm::mat4 &projection,
+                                 bool allowPrimitiveProjection = false);
     void renderGpuPickDebugPass(const glm::mat4 &projection);
     void completeGpuPickDebugReadback();
     void setPresentSelectionState(bool enabled);
@@ -269,9 +273,14 @@ private:
     bgfx::UniformHandle m_presentParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_selectionOutlineParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_selectionOutlineColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_selectionLineColor = BGFX_INVALID_HANDLE;
 
     bgfx::FrameBufferHandle m_gpuPickFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle m_gpuPickReadback = BGFX_INVALID_HANDLE;
+    // Persistent copy of the last rendered ID image (render targets do not
+    // survive frames their view never re-submits; the present pass and the
+    // GRID_DUMP_ID readback sample this).
+    bgfx::TextureHandle m_gpuPickIdSticky = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle m_gpuPickProgram = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickCubeBuffer = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle m_gpuPickSphereBuffer = BGFX_INVALID_HANDLE;
@@ -298,6 +307,11 @@ private:
         uint64_t geometryKey = 0;
         glm::mat4 view;
         glm::mat4 projection;
+        // Per-primitive log-depth slab: screen-overlay primitives (point
+        // discs, text quads) carry a slab around their OWN depth so the
+        // fill shader's slab discard cannot kill them when the content slab
+        // tightens elsewhere. Zero = use the request's shared slab.
+        glm::vec4 logDepth{0.0f};
         uint32_t objectId = 0;
         // 0: opaque blocker, 1: non-depth-writing mesh/edge, 2: CAD overlay,
         // 3: screen-overlay text.

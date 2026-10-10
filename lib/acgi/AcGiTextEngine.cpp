@@ -34,7 +34,14 @@ bool TextEngine::loadSdfFont(const std::string &ttfPath, float pixelsPerEm)
     rendering::SdfFontConfig config;
     config.ttfPath = ttfPath;
     config.pixelsPerEm = pixelsPerEm;
-    return sdfFont_.loadSdf(config);
+    if (!sdfFont_.loadSdf(config))
+        return false;
+    // The raster changed: cached SDF uploads and layouts belong to the old
+    // font. (Old device textures are released at shutdown; re-upload below
+    // allocates fresh ones.)
+    glyphTextureIds_.clear();
+    clearLayoutCache();
+    return true;
 }
 
 bool TextEngine::loadShxRegularFont(const std::string &shxPath)
@@ -165,6 +172,54 @@ std::vector<TextEngine::GlyphPlacement> TextEngine::layoutGlyphs(
     return placements;
 }
 
+// FNV-1a over every request field that can change the planar layout.
+static std::uint64_t hashLayoutFields(const TextRequest &request)
+{
+    std::uint64_t hash = 0xcbf29ce484222325ull;
+    auto mix = [&hash](const void *data, size_t size) {
+        const unsigned char *bytes = static_cast<const unsigned char *>(data);
+        for (size_t i = 0; i < size; ++i)
+        {
+            hash ^= bytes[i];
+            hash *= 0x100000001b3ull;
+        }
+    };
+    mix(&request.position, sizeof(glm::dvec3));
+    mix(&request.normal, sizeof(glm::dvec3));
+    mix(&request.direction, sizeof(glm::dvec3));
+    mix(&request.height, sizeof(double));
+    mix(&request.xScale, sizeof(double));
+    mix(request.message.data(), request.message.size());
+    return hash;
+}
+
+const std::vector<TextEngine::GlyphPlacement> &TextEngine::glyphLayout(
+    const TextRequest &request, const glm::dvec3 &cameraPos,
+    const glm::dvec3 &cameraRight, const glm::dvec3 &cameraUp,
+    const glm::dvec3 &cameraFront)
+{
+    if (request.billboard)
+    {
+        // Billboard orientation follows the camera: no stable cache key.
+        billboardLayout_ =
+            layoutGlyphs(request, cameraPos, cameraRight, cameraUp,
+                         cameraFront);
+        return billboardLayout_;
+    }
+    // Planar layouts are camera-independent. Requests are stable within a
+    // tessellation epoch (the queue is cleared on rebuild), and the field
+    // hash guards any in-place mutation.
+    const std::uint64_t fieldsHash = hashLayoutFields(request);
+    auto [it, inserted] = layoutCache_.try_emplace(&request);
+    if (inserted || it->second.fieldsHash != fieldsHash)
+    {
+        it->second.fieldsHash = fieldsHash;
+        it->second.placements = layoutGlyphs(request, cameraPos, cameraRight,
+                                             cameraUp, cameraFront);
+    }
+    return it->second.placements;
+}
+
 int TextEngine::drawText(TextDevice &device,
                          const glm::mat4 &view, const glm::mat4 &projection,
                          const glm::dvec3 &cameraPos,
@@ -174,9 +229,10 @@ int TextEngine::drawText(TextDevice &device,
                          const TextRequest &request,
                          bool selectionHighlight)
 {
-    const std::vector<GlyphPlacement> placements =
-        layoutGlyphs(request, cameraPos, cameraRight, cameraUp,
-                     cameraFront);
+    const std::vector<GlyphPlacement> &placements =
+        glyphLayout(request, cameraPos, cameraRight, cameraUp, cameraFront);
+    if (placements.empty())
+        return 0;
 
     int glyphsDrawn = 0;
     for (const GlyphPlacement &placement : placements)
@@ -319,13 +375,15 @@ std::vector<unsigned char> toBigfontBytes(const std::string &utf8)
     const int wideLength =
         MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), int(utf8.size()),
                             nullptr, 0);
-    std::wstring wide;
-    if (wideLength > 0)
-        wide.resize(size_t(wideLength));
+    if (wideLength <= 0)
+        return {};
+    std::wstring wide(size_t(wideLength), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), int(utf8.size()),
                         wide.data(), wideLength);
     const int byteLength = WideCharToMultiByte(
         936, 0, wide.c_str(), wideLength, nullptr, 0, nullptr, nullptr);
+    if (byteLength <= 0)
+        return {};
     std::vector<unsigned char> bytes(size_t(byteLength), 0);
     WideCharToMultiByte(936, 0, wide.c_str(), wideLength,
                         reinterpret_cast<char *>(bytes.data()), byteLength,
