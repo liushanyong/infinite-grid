@@ -103,11 +103,6 @@ vec3 presentSelection(vec2 uv, vec3 color)
         : left != selectedId || right != selectedId ||
           down != selectedId || up != selectedId;
 
-    if (selected && !boundary)
-    {
-        vec3 selectedColor = mix(color, vec3(0.15, 0.55, 1.0), 0.60);
-        color = mix(color, selectedColor, 0.90);
-    }
     if (boundary)
         color = mix(color, u_outline_color.rgb,
                     0.48 * u_outline_color.a);
