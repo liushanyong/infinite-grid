@@ -104,11 +104,6 @@ namespace TextSdfShaders
 #include "text/shaders/vs_text_sdf.h"
 #include "text/shaders/fs_text_sdf.h"
 } // namespace TextSdfShaders
-namespace SelectionOutlineShaders
-{
-#include "shaders/selectionOutline/fs_outline_overlay.h"
-} // namespace SelectionOutlineShaders
-
 namespace rendering
 {
 namespace
@@ -206,9 +201,8 @@ constexpr bgfx::ViewId kViewWire = 4;
 constexpr bgfx::ViewId kViewOverlay = 5;
 constexpr bgfx::ViewId kViewGpuPick = 6;
 constexpr bgfx::ViewId kViewGpuPickBlit = 7;
-// Above kViewText (12) and kViewSelectionOutline (14): both compose into
-// the scene target now, so the resolve must include them. Below the
-// backbuffer compositors that sample the resolved image:
+// Above kViewText (12): the resolve must include the SDF glyph pass. Below
+// the backbuffer compositors that sample the resolved image:
 // kViewGpuPickDebugPresent (18), kViewPipComposite (19) and the host UI
 // view (20).
 constexpr bgfx::ViewId kViewPresent = 17;
@@ -225,11 +219,6 @@ constexpr bgfx::ViewId kViewGpuPickDebugPresent = 18;
 // frame, or the readback captures the previous registry generation.
 constexpr bgfx::ViewId kViewGpuPickPixelBlit = 16;
 constexpr bgfx::ViewId kViewText = 12;
-// Own view id: sharing 12 with kViewText made the outline fullscreen
-// quad execute with the text view transform (both passes configure
-// the same bgfx view; the last configuration wins and BOTH draw call
-// sets run), splattering the sampled ID texture over the scene.
-constexpr bgfx::ViewId kViewSelectionOutline = 14;
 constexpr uint32_t kGpuPickDebugSize = 512;
 
 bool gpuPickDebugEnabled()
@@ -1079,15 +1068,21 @@ void BgfxRenderer::shutdown()
         bgfx::destroy(m_pointBuffer);
     m_pointBuffer = BGFX_INVALID_HANDLE;
 
-    if (bgfx::isValid(m_selectionOutlineProgram))
-        bgfx::destroy(m_selectionOutlineProgram);
-    m_selectionOutlineProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_presentProgram))
         bgfx::destroy(m_presentProgram);
     m_presentProgram = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(m_presentQuadBuffer))
         bgfx::destroy(m_presentQuadBuffer);
     m_presentQuadBuffer = BGFX_INVALID_HANDLE;
+    for (int slot = 0; slot < 2; ++slot)
+    {
+        if (bgfx::isValid(m_finalFrameBuffer[slot]))
+            bgfx::destroy(m_finalFrameBuffer[slot]);
+        m_finalFrameBuffer[slot] = BGFX_INVALID_HANDLE;
+        if (bgfx::isValid(m_finalTexture[slot]))
+            bgfx::destroy(m_finalTexture[slot]);
+        m_finalTexture[slot] = BGFX_INVALID_HANDLE;
+    }
     destroySceneFrameBuffer();
     if (bgfx::isValid(m_pipFrameBuffer))
         bgfx::destroy(m_pipFrameBuffer);
@@ -1160,6 +1155,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_meshEdgeOverride);
     destroyUniform(m_meshEdgeRibbonParams);
     destroyUniform(m_presentSampler);
+    destroyUniform(m_presentIdSampler);
     destroyUniform(m_selectionOutlineParams);
     destroyUniform(m_selectionOutlineColor);
     destroyUniform(m_presentParams);
@@ -1324,6 +1320,7 @@ void BgfxRenderer::compositePip()
                                                 0.0f};
     bgfx::setUniform(m_presentParams, presentParams.data());
     bgfx::setTexture(0, m_presentSampler, pipColor);
+    setPresentSelectionState(false);
     bgfx::setVertexBuffer(0, m_presentQuadBuffer);
     bgfx::submit(kViewPipComposite, m_presentProgram);
 }
@@ -1704,7 +1701,12 @@ void BgfxRenderer::compositeFrame()
         const bgfx::TextureHandle sceneColor = bgfx::getTexture(m_sceneFrameBuffer);
         if (bgfx::isValid(sceneColor))
         {
+            const std::uint16_t sceneW =
+                std::uint16_t(m_sceneW ? m_sceneW : m_width);
+            const std::uint16_t sceneH =
+                std::uint16_t(m_sceneH ? m_sceneH : m_height);
             bgfx::setViewFrameBuffer(kViewPresent, BGFX_INVALID_HANDLE);
+            bgfx::setViewRect(kViewPresent, 0, 0, sceneW, sceneH);
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                            BGFX_STATE_MSAA);
             float fxaaEnabled = 0.0f;
@@ -1714,12 +1716,13 @@ void BgfxRenderer::compositeFrame()
             }
             const std::array<float, 4> presentParams = {
                 fxaaEnabled,
-                1.0f / static_cast<float>(m_width),
-                1.0f / static_cast<float>(m_height),
+                1.0f / static_cast<float>(sceneW),
+                1.0f / static_cast<float>(sceneH),
                 0.0f,
             };
             bgfx::setUniform(m_presentParams, presentParams.data());
             bgfx::setTexture(0, m_presentSampler, sceneColor);
+            setPresentSelectionState(true);
             bgfx::setVertexBuffer(0, m_presentQuadBuffer);
             bgfx::submit(kViewPresent, m_presentProgram);
         }
@@ -1764,6 +1767,7 @@ void BgfxRenderer::compositeFrame()
             0.0f,
         };
         bgfx::setUniform(m_presentParams, debugPresentParams.data());
+        setPresentSelectionState(false);
         if (m_gpuPickSceneDebug)
         {
             // Present the ID target directly; readback stays for CPU inspection.
@@ -1784,8 +1788,6 @@ void BgfxRenderer::compositeFrame()
         bgfx::setVertexBuffer(0, m_presentQuadBuffer);
         bgfx::submit(kViewGpuPickDebugPresent, m_presentProgram);
     }
-
-    renderSelectionOutlinePass();
 
     bgfx::frame();
 }
@@ -1876,29 +1878,48 @@ void BgfxRenderer::blitSceneToSlot(int slot)
     const std::uint32_t width = m_sceneW ? m_sceneW : m_width;
     const std::uint32_t height = m_sceneH ? m_sceneH : m_height;
     bgfx::TextureHandle &finalTexture = m_finalTexture[slot];
-    if (!bgfx::isValid(finalTexture) || m_finalWidth[slot] != width ||
+    if (!bgfx::isValid(finalTexture) ||
+        !bgfx::isValid(m_finalFrameBuffer[slot]) ||
+        m_finalWidth[slot] != width ||
         m_finalHeight[slot] != height)
     {
+        if (bgfx::isValid(m_finalFrameBuffer[slot]))
+            bgfx::destroy(m_finalFrameBuffer[slot]);
+        m_finalFrameBuffer[slot] = BGFX_INVALID_HANDLE;
         if (bgfx::isValid(finalTexture))
             bgfx::destroy(finalTexture);
         finalTexture = bgfx::createTexture2D(
             std::uint16_t(width), std::uint16_t(height), false, 1,
             bgfx::TextureFormat::BGRA8,
-            BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP |
+            BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                 BGFX_SAMPLER_V_CLAMP);
+        if (bgfx::isValid(finalTexture))
+        {
+            m_finalFrameBuffer[slot] =
+                bgfx::createFrameBuffer(1, &finalTexture, false);
+        }
         m_finalWidth[slot] = width;
         m_finalHeight[slot] = height;
     }
-    //fprintf(stderr, "[B] dst ok\n");
-    if (!bgfx::isValid(finalTexture))
+    if (!bgfx::isValid(finalTexture) ||
+        !bgfx::isValid(m_finalFrameBuffer[slot]))
         return;
 
     constexpr bgfx::ViewId kViewFinalBlit = 22;
     bgfx::setViewName(kViewFinalBlit, "CAD Final Blit");
-    //fprintf(stderr, "[B] blit call\n");
-    bgfx::touch(kViewFinalBlit);
-    bgfx::blit(kViewFinalBlit, finalTexture, 0, 0, sceneColor);
-    //fprintf(stderr, "[B] blit done\n");
+    bgfx::setViewFrameBuffer(kViewFinalBlit, m_finalFrameBuffer[slot]);
+    bgfx::setViewRect(kViewFinalBlit, 0, 0,
+                      std::uint16_t(width), std::uint16_t(height));
+    bgfx::setViewClear(kViewFinalBlit, BGFX_CLEAR_NONE, 0, 1.0f, 0);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                   BGFX_STATE_MSAA);
+    const float presentParams[4] = {
+        0.0f, 1.0f / float(width), 1.0f / float(height), 0.0f};
+    bgfx::setUniform(m_presentParams, presentParams);
+    bgfx::setTexture(0, m_presentSampler, sceneColor);
+    setPresentSelectionState(true);
+    bgfx::setVertexBuffer(0, m_presentQuadBuffer);
+    bgfx::submit(kViewFinalBlit, m_presentProgram);
 }
 
 void BgfxRenderer::present()
@@ -1993,52 +2014,30 @@ void BgfxRenderer::setSelectionOutlineAll(bool enabled)
     }
 }
 
-void BgfxRenderer::renderSelectionOutlinePass()
+void BgfxRenderer::setPresentSelectionState(bool enabled)
 {
-    if (!bgfx::isValid(m_gpuPickDebugFrameBuffer))
-    {
-        return;
-    }
-    if (!bgfx::isValid(m_selectionOutlineProgram))
-    {
-        return;
-    }
-    if (!bgfx::isValid(m_presentQuadBuffer))
-    {
-        return;
-    }
-    if (!m_selectionOutlineAll)
-    {
-        if (m_selectionOutlineId == 0)
-        {
-            return;
-        }
-    }
-
-    // Compose into the scene target alongside the text pass: the outline
-    // must track the viewport image, not window-backbuffer coordinates.
-    const std::uint16_t sceneW =
-        std::uint16_t(m_sceneW ? m_sceneW : m_width);
-    const std::uint16_t sceneH =
-        std::uint16_t(m_sceneH ? m_sceneH : m_height);
-    bgfx::setViewName(kViewSelectionOutline, "CAD Selection Outline");
-    bgfx::setViewFrameBuffer(kViewSelectionOutline, m_sceneFrameBuffer);
-    bgfx::setViewRect(kViewSelectionOutline, 0, 0, sceneW, sceneH);
-    bgfx::setViewClear(kViewSelectionOutline, BGFX_CLEAR_NONE,
-                       0x00000000u, 1.0f, 0);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_MSAA |
-                   BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
-                                         BGFX_STATE_BLEND_INV_SRC_ALPHA));
-    const float params[4] = {float(m_selectionOutlineId), m_selectionOutlineAll ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const bool hasIdTexture = enabled &&
+        bgfx::isValid(m_gpuPickDebugFrameBuffer);
+    const float idWidth = hasIdTexture
+        ? float(std::max<uint16_t>(1, m_gpuPickDebugWidth))
+        : float(std::max<uint16_t>(1, m_width));
+    const float idHeight = hasIdTexture
+        ? float(std::max<uint16_t>(1, m_gpuPickDebugHeight))
+        : float(std::max<uint16_t>(1, m_height));
+    const float params[4] = {
+        hasIdTexture ? float(m_selectionOutlineId) : 0.0f,
+        hasIdTexture && m_selectionOutlineAll ? 1.0f : 0.0f,
+        1.0f / idWidth,
+        1.0f / idHeight,
+    };
     bgfx::setUniform(m_selectionOutlineParams, params);
     const glm::vec4 outlineColor(1.0f, 0.55f, 0.05f, 1.0f);
     bgfx::setUniform(m_selectionOutlineColor,
                      glm::value_ptr(outlineColor));
-    bgfx::setTexture(0, m_presentSampler,
-                     bgfx::getTexture(m_gpuPickDebugFrameBuffer, 0));
-    bgfx::setVertexBuffer(0, m_presentQuadBuffer);
-    bgfx::submit(kViewSelectionOutline, m_selectionOutlineProgram);
+    const bgfx::TextureHandle idTexture = hasIdTexture
+        ? bgfx::getTexture(m_gpuPickDebugFrameBuffer, 0)
+        : m_whiteTexture;
+    bgfx::setTexture(1, m_presentIdSampler, idTexture);
 }
 
 void BgfxRenderer::drawGrid(const GridRenderData &data)
@@ -3390,8 +3389,8 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
             ? GpuPickPrimitive::Kind::Edge
             : GpuPickPrimitive::Kind::Mesh;
 
-    // The outlined entity must always reach the ID buffer or its
-    // outline silently disappears, so it may exceed the soft cap.
+    // The selected entity must always reach the ID buffer so presentation
+    // shading can find its visible pixels, even beyond the soft cap.
     const bool meshCapacityFull =
         kind == GpuPickPrimitive::Kind::Mesh &&
         m_gpuPickQueueStats.queuedMeshes >= kMaxGpuPickInstances &&
@@ -3447,8 +3446,8 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
                                         uint8_t occlusionRank)
 {
     const size_t triangleCount = m_gpuPickQueueStats.queuedTriangles;
-    // The outlined entity must always reach the ID buffer or its
-    // outline silently disappears, so it may exceed the soft cap.
+    // The selected entity must always reach the ID buffer so presentation
+    // shading can find its visible pixels, even beyond the soft cap.
     const bool triangleCapacityFull =
         triangleCount >= kMaxGpuPickTriangleBatches &&
         objectId != m_selectionOutlineId;
@@ -4315,16 +4314,6 @@ bool BgfxRenderer::createRenderResources()
     // The generated header uses the source filename, not a manual
     // "_fragment" suffix. selectShaderBinary() already handles Vulkan vs.
     // the other backends.
-    const auto selectionFragmentBinary =
-        SELECT_SHADER_BINARY(SelectionOutlineShaders, fs_outline_overlay);
-    const bgfx::ShaderHandle selectionFragment = createShader(
-        selectionFragmentBinary.data, selectionFragmentBinary.size,
-        "selection_outline_fs");
-    const bgfx::ShaderHandle selectionVertex = createShader(
-        presentVertexBinary.data, presentVertexBinary.size,
-        "selection_outline_vs");
-    m_selectionOutlineProgram = bgfx::createProgram(
-        selectionVertex, selectionFragment, true);
     const auto fillVertexBinary =
         SELECT_SHADER_BINARY(PrimFilledShaders, vs_filled);
     const auto fillFragmentBinary =
@@ -4457,6 +4446,7 @@ m_curveLayout.begin()
         m_cadStrokeParams = createUniformHandle("u_strokeParams", bgfx::UniformType::Vec4);
         m_cadFlatShade = createUniformHandle("u_flatShade", bgfx::UniformType::Vec4);
         m_presentSampler = createUniformHandle("s_texColor", bgfx::UniformType::Sampler);
+        m_presentIdSampler = createUniformHandle("s_texId", bgfx::UniformType::Sampler);
         m_presentParams = createUniformHandle("uPresentParams", bgfx::UniformType::Vec4);
         m_selectionOutlineParams = createUniformHandle(
             "u_outline_params", bgfx::UniformType::Vec4);
@@ -4531,6 +4521,7 @@ m_curveLayout.begin()
                 bgfx::isValid(m_cadStrokeParams) &&
                 bgfx::isValid(m_cadFlatShade) &&
                 bgfx::isValid(m_presentSampler) &&
+                bgfx::isValid(m_presentIdSampler) &&
                 bgfx::isValid(m_primParams) &&
                 bgfx::isValid(m_presentParams) &&
                 bgfx::isValid(m_selectionOutlineParams) &&
@@ -4638,7 +4629,6 @@ m_curveLayout.begin()
                 bgfx::isValid(m_pointBuffer) &&
                 bgfx::isValid(m_presentQuadBuffer) &&
                 bgfx::isValid(m_presentProgram) &&
-                bgfx::isValid(m_selectionOutlineProgram) &&
                 bgfx::isValid(m_gpuPickProgram) &&
                 createSceneFrameBuffer();
         if (!ready)
