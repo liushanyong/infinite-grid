@@ -949,7 +949,7 @@ std::optional<GpuPickEntity> outlineEntity;
 bool outlineLockTest = false;
 bool outlineAllTest = false;
 // Startup override for automated validation: GRID_OUTLINE_ALL=1 enables
-// the full-scene selection-outline overlay without a key press.
+// the full-scene selection compositor without a key press.
 const bool outlineAllAtStartup = [] {
   const char *value = std::getenv("GRID_OUTLINE_ALL");
   return value != nullptr && std::strcmp(value, "0") != 0;
@@ -2509,7 +2509,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         continue;
       acgsView().drawFillBoundary(
           tess, range.begin, range.count,
-          0.5f * acgs::outlineWidthWorld(pixelSizeWorld), rangeColor);
+          1.5f * pixelSizeWorld, rangeColor);
     }
   }
   for (const VisibilityCandidate *candidate : visibleCad)
@@ -6651,7 +6651,7 @@ void render()
         .logDepth = logDepth,
     };
     // Publish the outline id before queueing so the renderer can
-    // prioritize the outlined entity if the queue ever hits capacity.
+    // prioritize the selected entity if the queue ever hits capacity.
     // Ids are stable across frames for the same scene state, and the
     // post-queue lookup below corrects the value before endFrame.
     if (outlineEntity)

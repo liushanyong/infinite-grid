@@ -219,10 +219,6 @@ constexpr bgfx::ViewId kViewGpuPickDebugPresent = 18;
 // frame, or the readback captures the previous registry generation.
 constexpr bgfx::ViewId kViewGpuPickPixelBlit = 16;
 constexpr bgfx::ViewId kViewText = 12;
-// Own view id: sharing 12 with kViewText made the outline fullscreen
-// quad execute with the text view transform (both passes configure
-// the same bgfx view; the last configuration wins and BOTH draw call
-// sets run), splattering the sampled ID texture over the scene.
 constexpr uint32_t kGpuPickDebugSize = 512;
 
 bool gpuPickDebugEnabled()
@@ -1705,7 +1701,12 @@ void BgfxRenderer::compositeFrame()
         const bgfx::TextureHandle sceneColor = bgfx::getTexture(m_sceneFrameBuffer);
         if (bgfx::isValid(sceneColor))
         {
+            const std::uint16_t sceneW =
+                std::uint16_t(m_sceneW ? m_sceneW : m_width);
+            const std::uint16_t sceneH =
+                std::uint16_t(m_sceneH ? m_sceneH : m_height);
             bgfx::setViewFrameBuffer(kViewPresent, BGFX_INVALID_HANDLE);
+            bgfx::setViewRect(kViewPresent, 0, 0, sceneW, sceneH);
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                            BGFX_STATE_MSAA);
             float fxaaEnabled = 0.0f;
@@ -3388,8 +3389,8 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
             ? GpuPickPrimitive::Kind::Edge
             : GpuPickPrimitive::Kind::Mesh;
 
-    // The outlined entity must always reach the ID buffer or its
-    // outline silently disappears, so it may exceed the soft cap.
+    // The selected entity must always reach the ID buffer so presentation
+    // shading can find its visible pixels, even beyond the soft cap.
     const bool meshCapacityFull =
         kind == GpuPickPrimitive::Kind::Mesh &&
         m_gpuPickQueueStats.queuedMeshes >= kMaxGpuPickInstances &&
@@ -3445,8 +3446,8 @@ void BgfxRenderer::queueGpuTrianglePick(uint64_t geometryKey,
                                         uint8_t occlusionRank)
 {
     const size_t triangleCount = m_gpuPickQueueStats.queuedTriangles;
-    // The outlined entity must always reach the ID buffer or its
-    // outline silently disappears, so it may exceed the soft cap.
+    // The selected entity must always reach the ID buffer so presentation
+    // shading can find its visible pixels, even beyond the soft cap.
     const bool triangleCapacityFull =
         triangleCount >= kMaxGpuPickTriangleBatches &&
         objectId != m_selectionOutlineId;
