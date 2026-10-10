@@ -78,7 +78,8 @@ bool AcGsSelectionManager::pickEnabled()
 void AcGsSelectionManager::queueSoupChunks(
     const std::vector<rendering::FillVertex> &vertices,
     const glm::mat4 &view, const glm::mat4 &pickProjection,
-    const glm::vec4 &logDepth, std::uint32_t objectId, bool active) const
+    const glm::vec4 &logDepth, std::uint32_t objectId, bool active,
+    std::uint8_t occlusionRank) const
 {
     if (!active || objectId == 0 || vertices.size() < 3)
         return;
@@ -92,7 +93,8 @@ void AcGsSelectionManager::queueSoupChunks(
         acgsGetManager()->device()->queueGpuTrianglePick(
             0, vertices.data() + first,
                                      std::uint32_t(count), view,
-                                     pickProjection, logDepth, objectId);
+                                     pickProjection, logDepth, objectId,
+                                     occlusionRank);
     }
 }
 

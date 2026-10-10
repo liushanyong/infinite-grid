@@ -2189,13 +2189,18 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const bool gpuPickQueueActive =
       acgs::acgsGetManager()->deviceReady() && gpuPickEnabled() &&
       (gpuPickFocus.waitingResult || gpuPickSceneDebugQueueActive);
+  const char *lineLayerValue = std::getenv("GRID_LINE_LAYER");
+  const uint8_t linePickOcclusionRank =
+      lineLayerValue && std::atof(lineLayerValue) > 0.0 ? 3 : 2;
   const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
       : rendering::RenderModeFlags{};
-  auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId) {
+  auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId,
+                          uint8_t occlusionRank) {
     gpuPickManager().queueSoupChunks(gpuPickVertices,
                                      view, pickProjection, logDepth,
-                                     objectId, gpuPickQueueActive);
+                                     objectId, gpuPickQueueActive,
+                                     occlusionRank);
   };
   // Match the centered visible AcGi ribbon and its symmetric edge shader.
   // A one-sided pick quad would offset the ID buffer from the rendered pixels.
@@ -2353,7 +2358,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
             idColor, halfWidth);
       }
     }
-    queueGpuSoup(overlayProjection, objectId);
+    queueGpuSoup(overlayProjection, objectId, linePickOcclusionRank);
   };
   auto queueCadPoint = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
@@ -2373,7 +2378,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
           float(3.0 * pointWorldPerPixel(point.location)));
       appendPickPoint(glm::vec3(point.location - cameraPos), radius, idColor);
     }
-    queueGpuSoup(overlayProjection, objectId);
+    queueGpuSoup(overlayProjection, objectId, 2);
   };
   auto queueCadCurve = [&](const VisibilityCandidate &candidate) {
     if (!candidate.curve)
@@ -2387,7 +2392,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       appendCenteredPickRibbon(
           glm::vec3(points[i] - cameraPos),
           glm::vec3(points[i + 1] - cameraPos), idColor);
-    queueGpuSoup(overlayProjection, objectId);
+    queueGpuSoup(overlayProjection, objectId, linePickOcclusionRank);
   };
   auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
     if (!candidate.cadRange || !candidate.cadRange->count)
@@ -2405,7 +2410,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         : minimumRadius;
     appendPickPoint(glm::vec3(candidate.center - cameraPos),
                     std::max(pointRadius, minimumRadius), idColor);
-    queueGpuSoup(overlayProjection, objectId);
+    queueGpuSoup(overlayProjection, objectId, 2);
   };
 
   strokeVisible.assign(tess.strokes.size(), false);
