@@ -1044,11 +1044,16 @@ static rendering::MeshInstance &cachedMeshInstance(
   entry.position = entity.worldPosition;
   entry.size = entity.size;
   entry.color = color;
+  entry.material = material;
   entry.instance = makeMeshInstance(
       entity.size, glm::vec3(color), color.a,
       rendering::encodeDoubleSingle(entity.worldPosition), material);
-  auto inserted = cache.emplace(&entity, std::move(entry));
-  return inserted.first->second.instance;
+  if (found != cache.end())
+  {
+    found->second = std::move(entry);
+    return found->second.instance;
+  }
+  return cache.emplace(&entity, std::move(entry)).first->second.instance;
 }
 
 static void queueGpuMeshEntity(const MeshEntityRecord &entity,
