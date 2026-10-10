@@ -3,8 +3,11 @@ $input v_uv
 #include <bgfx_shader.sh>
 
 SAMPLER2D(s_texColor, 0);
+SAMPLER2D(s_texId, 1);
 
 uniform vec4 uPresentParams;
+uniform vec4 u_outline_params;
+uniform vec4 u_outline_color;
 
 float presentLuma(vec3 color)
 {
@@ -13,7 +16,7 @@ float presentLuma(vec3 color)
 
 vec3 presentFxaa(vec2 uv)
 {
-    vec2 texel = vec2(uPresentParams.y, uPresentParams.z);
+    vec2 texel = u_outline_params.zw;
     vec3 rgbNW = texture2D(s_texColor, uv + vec2(-1.0, -1.0) * texel).rgb;
     vec3 rgbNE = texture2D(s_texColor, uv + vec2( 1.0, -1.0) * texel).rgb;
     vec3 rgbSW = texture2D(s_texColor, uv + vec2(-1.0,  1.0) * texel).rgb;
@@ -71,12 +74,55 @@ vec3 presentIdDebug(vec2 uv)
                 0.30 + 0.70 * (1.0 - abs(normalized * 2.0 - 1.0)));
 }
 
+float presentReadId(vec2 uv)
+{
+    vec4 bytes = texture2D(s_texId, uv) * 255.0;
+    return bytes.b + bytes.g * 256.0 +
+           bytes.r * 65536.0 + bytes.a * 16777216.0;
+}
+
+vec3 presentSelection(vec2 uv, vec3 color)
+{
+    float id = presentReadId(uv);
+    vec4 idBytes = texture2D(s_texId, uv) * 255.0;
+    bool background = min(min(idBytes.r, idBytes.g),
+                          min(idBytes.b, idBytes.a)) > 254.5;
+    bool outlineAll = u_outline_params.y > 0.5;
+    float selectedId = u_outline_params.x;
+    bool selected = !outlineAll && selectedId > 0.5 && id == selectedId;
+    if (!selected && (!outlineAll || background))
+        return color;
+
+    vec2 texel = vec2(uPresentParams.y, uPresentParams.z);
+    float left = presentReadId(uv - vec2(texel.x, 0.0));
+    float right = presentReadId(uv + vec2(texel.x, 0.0));
+    float down = presentReadId(uv - vec2(0.0, texel.y));
+    float up = presentReadId(uv + vec2(0.0, texel.y));
+    bool boundary = outlineAll
+        ? left != id || right != id || down != id || up != id
+        : left != selectedId || right != selectedId ||
+          down != selectedId || up != selectedId;
+
+    if (selected && !boundary)
+    {
+        vec3 selectedColor = mix(color, vec3(0.15, 0.55, 1.0), 0.60);
+        color = mix(color, selectedColor, 0.90);
+    }
+    if (boundary)
+        color = mix(color, u_outline_color.rgb,
+                    0.48 * u_outline_color.a);
+    return color;
+}
+
 void main()
 {
-    vec3 color = uPresentParams.w > 0.5
+    bool idDebug = uPresentParams.w > 0.5;
+    vec3 color = idDebug
         ? presentIdDebug(v_uv)
         : (uPresentParams.x > 0.5
             ? presentFxaa(v_uv)
             : texture2D(s_texColor, v_uv).rgb);
+    if (!idDebug)
+        color = presentSelection(v_uv, color);
     gl_FragColor = vec4(color, 1.0);
 }
