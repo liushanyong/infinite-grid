@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>external/ 开源依赖图谱 · infinite-grid</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c232c; --line:#2a323d;
+  --fg:#e6edf3; --dim:#8b949e; --accent:#58a6ff;
+  --ok:#3fb950; --warn:#d29922; --bad:#f85149; --unk:#6e7681;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif}
+header{padding:16px 20px;border-bottom:1px solid var(--line);background:var(--panel);
+  position:sticky;top:0;z-index:10}
+h1{margin:0 0 4px;font-size:17px;font-weight:600}
+.sub{color:var(--dim);font-size:12px}
+.sub code{background:var(--panel2);padding:1px 5px;border-radius:3px;color:var(--accent)}
+#search{width:100%;margin-top:12px;padding:9px 12px;background:var(--bg);
+  border:1px solid var(--line);border-radius:6px;color:var(--fg);font-size:13px}
+#search:focus{outline:none;border-color:var(--accent)}
+.filters{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{padding:3px 10px;border:1px solid var(--line);border-radius:20px;
+  background:var(--panel2);color:var(--dim);font-size:11.5px;cursor:pointer;user-select:none}
+.chip:hover{border-color:var(--dim);color:var(--fg)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+main{display:grid;grid-template-columns:390px 1fr;gap:0;height:calc(100vh - 148px)}
+#list{border-right:1px solid var(--line);overflow-y:auto;padding:8px}
+#detail{overflow-y:auto;padding:20px 26px}
+.item{padding:9px 11px;border:1px solid transparent;border-radius:6px;cursor:pointer;margin-bottom:3px}
+.item:hover{background:var(--panel)}
+.item.sel{background:var(--panel2);border-color:var(--accent)}
+.item .t{font-weight:600;font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.item .m{color:var(--dim);font-size:11px;margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+.b-permissive{background:var(--ok)} .b-weak_copyleft{background:var(--warn)}
+.b-strong_copyleft{background:var(--bad)} .b-unknown{background:var(--unk)}
+h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+h3{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);
+  margin:22px 0 8px;border-bottom:1px solid var(--line);padding-bottom:5px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--dim);width:118px;white-space:nowrap}
+ul{margin:6px 0;padding-left:20px} li{margin:3px 0}
+.tag{display:inline-block;padding:1px 7px;margin:2px 3px 2px 0;background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px;font-size:11px;color:var(--dim)}
+.pill{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.p-permissive{background:rgba(63,185,80,.15);color:var(--ok)}
+.p-weak_copyleft{background:rgba(210,153,34,.15);color:var(--warn)}
+.p-strong_copyleft{background:rgba(248,81,73,.15);color:var(--bad)}
+.p-unknown{background:rgba(110,118,129,.2);color:var(--unk)}
+.edge{border-left:2px solid var(--accent);padding:6px 0 6px 11px;margin:8px 0;background:var(--panel)}
+.edge .ty{color:var(--accent);font-size:11px;font-weight:600}
+.edge .nt{font-size:12px;color:var(--dim);margin-top:2px}
+.badge{display:inline-block;padding:1px 7px;border-radius:3px;background:var(--panel2);
+  border:1px solid var(--line);font-size:10.5px;color:var(--dim);margin-left:5px}
+.hi{background:rgba(88,166,255,.25);border-radius:2px}
+.ev{font-size:11.5px;color:var(--unk);font-family:ui-monospace,Consolas,monospace}
+#empty{padding:40px;color:var(--dim);text-align:center}
+@media(max-width:900px){main{grid-template-columns:1fr;height:auto}#list{border-right:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>external/ 开源依赖图谱</h1>
+  <div class="sub">infinite-grid · 扫描根 <code>E:/infinite-grid/external</code> · 24 个项目 · 生成于 2026-10-11 ·
+  由 read/glob/grep 手工构建（graphify CLI 不可用，bash 工具在本机失效）</div>
+  <input id="search" placeholder="搜索：项目名 / 能力 / 算法 / 标签 / 依赖 …（如 NURBS、OpenGL、拾取、Shewchuk）">
+  <div class="filters" id="filters"></div>
+</header>
+<main>
+  <div id="list"></div>
+  <div id="detail"><div id="empty">← 从左侧选择一个项目</div></div>
+</main>
+
+<script>
+const DATA = {
+projects: [
+{id:"predicates",n:"predicates",d:"自适应精度精确算术 + orient2d/3d/incircle/insphere，约 4300 行零依赖 C。",l:["C"],lic:"public-domain",b:"permissive",c:"robustness",rel:"high",h:"已编译接入",hcls:"compiled-in",
+ t:["exact-predicates","orient2d","orient3d","incircle","insphere","degeneracy"],
+ cap:["exactinit() 一次性初始化静态滤波/误差界表","orient2d / orient3d 二三维定向符号判定","incircle / insphere","自适应精度浮点展开运算：精度不够就自动升级直到符号确定","编译期可选 double（默认）或 float（LIBIGL_PREDICATES_USE_FLOAT）"],
+ alg:["Shewchuk 自适应精度展开","静态滤波表","误差界 (CMU-CS-96-140)"],
+ dep:["无"],
+ bld:"CMake add_library(predicates predicates.c predicates.h)，静态，POSITION_INDEPENDENT_CODE，generate_export_header() 在 configure 期生成 predicates_export.h",
+ ev:["predicates/README.md","predicates/predicates.h","predicates/predicates.c","predicates/CMakeLists.txt","CMakeLists.txt:201-215"],
+ rk:["只有 4 个谓词：没有鲁棒线段求交、没有共面/多面体谓词","若将来引入 libigl，直接用 libigl 自带副本即可"]},
+
+{id:"mcut",n:"MCUT (mesh cutting)",d:"零依赖 C 库：检测并求解两个三角网格之间的相交，CSG 布尔 / 切片 / 剖分。",l:["C++11","C"],lic:"LGPL-3.0-or-later（双许可：LGPL 开源 或 CutDigital 商业授权）",b:"weak_copyleft",c:"mesh-processing",rel:"high",h:"仅参考",hcls:"ref",
+ t:["csg","boolean","slice","section","halfedge","bvh"],
+ cap:["布尔 union/subtraction/intersection，产出合法闭合实体","Stenciling 精确切出、intersection curves、开放面局部切","平面剖分、拆分、拼接","异步事件驱动 API（mcEnqueueDispatch / mcWaitForEvents）","可选任意精度模式（MCUT_WITH_ARBITRARY_PRECISION_NUMBERS）","内置共享线程池"],
+ alg:["Shewchuk 鲁棒谓词（内置 source/shewchuk.c）","BVH 加速","半边网格表示 + 连通分量重建","自研线程池"],
+ dep:["核心：无（bloat-free）","测试：mio + GoogleTest（FetchContent）"],
+ bld:"CMake >=3.12，静态或共享；MSVC 调优 /fp:strict 与 /bigobj",
+ ev:["mcut/README.md","mcut/COPYING","mcut/COPYING.LESSER","mcut/CMakeLists.txt","mcut/include/mcut/mcut.h"],
+ rk:["LGPL-3 弱 copyleft：闭源 CAD 产品需要购买 CutDigital 商业许可","与独立 predicates 同时链接会符号冲突（orient2d/insphere）"]},
+
+{id:"LNLib",n:"LNLib",d:"自包含 NURBS 算法库（曲线/曲面/体），完整实现《The NURBS Book》第二版。",l:["C++17"],lic:"LGPL-2.1",b:"weak_copyleft",c:"nurbs",rel:"high-as-reference",h:"已决策不集成",hcls:"closed",
+ t:["nurbs","bspline","bezier","knot-vector","tessellation","triangulation","loft","sweep","gordon","coons","offset"],
+ cap:["NURBS Book 第 1-12 章全覆盖：基函数、Bezier/B 样条/NURBS 曲线与曲面、节点插入/细化/移除、次数升降","点反求、参数化重映射、圆弧/二次曲线构造","双线性/柱面/直纹/旋转/倒角圆角曲面","全局与局部插值、逼近","扫掠/放样/Gordon/Coons 曲面（第 10 章）","书外补充：曲率/挠率、split/merge/offset、近似弧长、Tessellate、Triangulate、Octree/Voronoi"],
+ alg:["A4.1 GetPointOnCurve","A4.2 ComputeRationalCurveDerivatives","A5.1 InsertKnot","A5.2 GetPointOnCurveByCornerCut","A5.4 RefineKnotVector","A5.6 DecomposeToBeziers","Newton 迭代点反求","Gordon/Coons 曲面混合"],
+ dep:["核心：无（根 CMakeLists 无 find_package）","可选：Emscripten、Python 绑定、.NET via CApi.dll"],
+ bld:"CMake >=3.16，默认共享库（LNLib_BUILD_SHARED=ON），静态变体定义 LNLIB_STATIC；偏 Windows",
+ ev:["LNLib/README.md","LNLib/LICENSE","LNLib/CMakeLists.txt","LNLib/src/LNLib/include/NurbsCurve.h","LNLib/src/LNLib/include/LNObject.h","docs/technical-plan.md:112-119"],
+ rk:["LGPL-2.1 copyleft，静态链接进闭源引擎有义务","单一作者，未见 CI；单元测试自述仅覆盖 Windows 原生 C++ API"]},
+
+{id:"gbs",n:"gbs",d:"Header-only C++23 NURBS/B 样条库，带全新原生 B-rep arena 与可选 OCCT 互操作。",l:["C++23"],lic:"LGPL-3.0",b:"weak_copyleft",c:"nurbs",rel:"high-as-reference",h:"仅参考",hcls:"ref",
+ t:["nurbs","bspline","brep","topology","halfedge","offset","loft","intersection","delaunay","cuda"],
+ cap:["B 样条/NURBS 曲线与曲面：求值、插值、逼近、变形（shaping）、分析、工具","曲线-曲面求交、曲线在曲面上、曲线偏移（2D 变偏移）、曲面偏移、旋转曲面","Loft（gbs/loft/*）、解算器、极值、鲁棒 orient2d/incircle","全新原生 BREP 核心 gbs::brep::Model<T> arena：带类型 id（VertexId/EdgeId…）、按使用定向、pcurve、erase/compact/append、explore.h 拓扑查询（流形/可定向）","半边网格（gbs-mesh/halfedgemesh.h）+ 平滑","IO：IGES / JSON / 文本；CUDA 基函数；Python 绑定"],
+ alg:["无分配 O(p²) NURBS 求值器，单遍多阶导数 + span 缩减（每调用约 4× OCCT）","并行批量求值（12-30× OCCT）","NURBS Book A2.1 find_span 半开节点约定","Loft 蒙皮方向默认取 NURBS Book 10.3 平均弦长","MSVC 上显式禁用 /fp:fast（会破坏谓词）"],
+ dep:["可选模块：eigen>=3.3.9、nlopt、boost、rapidjson、TBB、libiges、VTK>=9.0（gbs-render）、OCCT 7/8（gbs-occt）、pybind11"],
+ bld:"CMake >=3.28 + ninja，可选 C++ Modules；header-only 基础部分无需编译（全树摩擦最低）",
+ ev:["gbs-master/ReadMe.md","gbs-master/News.md","gbs-master/LICENSE.LGPLv3","gbs-master/CMakeLists.txt"],
+ rk:["LGPL-3 约束静态链接进闭源引擎","C++23 要求排除较老工具链","完全不含 OpenGL/Vulkan 渲染（VTK 模块仅调试用）"]},
+
+{id:"qaws",n:"qaws",d:"大型可移植线程安全 C 曲线/曲面库，一份源码可重编译为 C / HLSL / GLSL / Halide。",l:["C"],lic:"未知 —— 全树严格 grep Copyright|SPDX|Licen[cs]e|Redistribution 零命中",b:"unknown",c:"nurbs",rel:"high-as-reference",h:"仅参考",hcls:"ref",
+ t:["nurbs","bspline","hermite","catmull-rom","arc-length","subdivision","chaikin","offset","svg","glsl","hlsl","halide","clothoid"],
+ cap:["14 种曲线：Bezier / Hermite / Catmull-Rom / B 样条 / NURBS / 轨迹 / 'yuksel' / 有理 Bezier / 复合 / 圆弧 / 多项式 / clothoid / 细分 / 重参数化","5 种曲面：Bezier / B 样条 / NURBS / 扫掠 / 直纹，求值标志覆盖 position、∂u、∂v、单位法向、∂uu、∂uv、∂vv","自适应与曲率加权采样；曲面网格采样","运动遍历：等速、等加速、梯形、S 曲线（含 jerk）、自定义速度回调、11 种缓动、clamp/loop/ping-pong 包裹","细分方案：Chaikin(C1)、Lane–Riesenfeld 3(C2)、Lane–Riesenfeld 4(C3)","2D 偏移/平行曲线 3 级修剪，第 2 级把自交环拆成独立闭合曲线","split/join；查找表做弧长重参数化","SVG 导入与导出（Hermite/Catmull-Rom 转三次 Bezier）","自定义分配器钩子；栈上 qaws_curve_inline（512 字节，次数<=7）"],
+ alg:["de Casteljau（core/qaws_decasteljau_core.h）","Horner（core/qaws_horner_core.h）","B 样条基函数 + span 搜索","NURBS 有权求值","弧长表 + Gauss 式积分","span 缓存","曲率加权点分布"],
+ dep:["C 后端：仅 math.h","可选：Halide","acgi/ 与 acge/ 头文件暗示 ACIS 风格互操作，但不是构建依赖"],
+ bld:"无构建系统 —— 需自行编译约 30 个 .c + 40 个 .h，或补一个 CMake target。后端由 __HLSL_VERSION / GL_core_profile / HALIDE_HALIDERUNTIME_H 自动探测",
+ ev:["qaws/qaws.h","qaws/qaws_platform.h","qaws/qaws_core_types.h","qaws/qaws_types.h","qaws/qaws_curve.h","qaws/qaws_surface.h","qaws/qaws_sampling.h","qaws/qaws_subdivision.h","qaws/qaws_status.h"],
+ rk:["无许可证 —— 硬阻塞，来源确认前不能 vendor","无构建系统","未观察到曲线-曲面求交模块（CAD 内核需要）","'yuksel' 曲线种类与 acgi/acge 互操作头文件暗示来源可能部分私有或未公开"]},
+
+{id:"simpline",n:"simpline",d:"小型模板库：对 3D 点做等速自然三次样条插值。",l:["C++11"],lic:"未知 —— 全树仅 9 个文件，无 LICENSE",b:"unknown",c:"utility",rel:"medium",h:"验证基准",hcls:"ref",
+ t:["spline","interpolation","arc-length","gauss-legendre","animation"],
+ cap:["ParametrizedSpline：给定参数的自然三次样条，每个节点存一阶/二阶/三阶导数","ConstantSpeedSpline：弧长重参数化到等速遍历，getDuration/getSpeed/getValue/getGradient","部分弧长 getLength(start, end)","24 点 Gauss-Legendre 求积（Constants.h 中的表，epsilon = 1e-4）","computeFiniteDifference 弦长参数化，memoize 在 std::map"],
+ alg:["C2 连续自然三次样条","有限差分/弦长参数化","Gauss-Legendre 弧长求积"],
+ dep:["Eigen3 >= 3.3（find_package REQUIRED NO_MODULE）"],
+ bld:"CMake，仅 SHARED，安装 simplineConfig.cmake；cmake_minimum_required(2.8.3) —— CMake 4.x 拒绝低于 3.5，必须先改",
+ ev:["simpline/README.md","simpline/CMakeLists.txt","simpline/simpline/Simpline.h","simpline/simpline/Constants.h","docs/technical-plan.md:12"],
+ rk:["无许可证文件，不可直接 vendor","为约 200 行代码强依赖 Eigen","其全部生态位已被 qaws 以文档化 API 覆盖"]},
+
+{id:"KrisLibrary-master",n:"KrisLibrary",d:"宽口径 C++17 数学/几何/机器人库，内嵌一套（年代久远的）OpenGL 显示层。",l:["C++17"],lic:"BSD-3-Clause (c) 2013 the Trustees of Indiana University",b:"permissive",c:"utility",rel:"medium-high",h:"仅参考",hcls:"ref",
+ t:["camera","frustum","display-list","convex-hull","collision","dcel","arrangement","kd-tree","meshing","marching-cubes","tsdf","geodesic"],
+ cap:["16 个 package 编译成一个库：camera geometry GLdraw graph image math math3d meshing optimization planning robotics spline statistics structs utils","计算几何：ConvexHull3D、MonotoneChain(2D 凸包)、DCEL.h + Arrangement1D、KDTree、BallTree、NeighborGraph","碰撞套件：CollisionMesh / ConvexHull / PointCloud / ImplicitSurface / Heightmap / OccupancyGrid","网格：TriMesh、TriMeshTopology、TriMeshAtlas、MarchingCubes、Geodesic、LSConformalMapping、Voxelize","体数据：SparseVolumeGrid、MultiVolumeGrid、TSDFReconstruction","显示：GLdraw/GLDisplayList.h、GLView、离屏上下文、GLUT/GLUI 导航控件"],
+ alg:["PQP 鲁棒三角-三角求交（内置）","HACD 凸分解（内置）","测地线","最小二乘共形映射","Marching Cubes","TSDF 重建"],
+ dep:["OpenGL 必需","可选 GLUT/GLUI、GLPK、TinyXML、GSL、Assimp、BLAS/LAPACK、Log4CXX、FreeImage、OMPL","内置：PQP、HACD、solid3"],
+ bld:"CMake >=3.5，单一 library target，静态或共享；大量 Find*.cmake 模块",
+ ev:["KrisLibrary-master/README.md","KrisLibrary-master/LICENSE","KrisLibrary-master/CMakeLists.txt","KrisLibrary-master/CMakeModules/CompilerSettings.cmake","KrisLibrary-master/GLdraw/GLDisplayList.h"],
+ rk:["GLdraw 是 OpenGL 1.x-2.0 固定管线时代代码，不宜直接复用；只有 frustum/裁剪数学值得取","README 自认有 cruft（optimization/LCP 是差质量实现、无移动语义）","历史跨度十年以上，当参考不当依赖"]},
+
+{id:"cadcore-master",n:"cadcore",d:"纯 Rust 精确解析 CAD 几何内核（arena B-rep、解析扫掠、STEP 写出、分阶段 Boolean）—— 不是 C++。",l:["Rust"],lic:"MIT (c) 2025-2026 Dmytro Yatskovskyi",b:"permissive",c:"cad-kernel",rel:"high-as-reference",h:"仅参考",hcls:"ref",
+ t:["brep","topology","exact-geometry","sweep","step","ap214","dcel","boolean","wasm"],
+ cap:["Arena B-rep 拓扑：Solid→Shell→Face→Loop→CoEdge→Edge→Vertex，各层级独立编译期 id 类型，slotmap 支撑的扁平类型化数组","精确解析几何，全 Copy + f64，零堆分配：曲线 Line3/Circle3/Ellipse3/BezierCubic，曲面 Plane3/CylSurf/SphereSurf/TorusSurf/ConeSurf，各 1:1 对应 STEP 实体","O(N) 解析扫掠直接生成 B-rep 实体（免 Boolean 并集），带 G1 环面倒圆与精确斜接平面","half_space_cut_brep 裁剪；水密 STEP AP203/AP214 写出器","分阶段 Boolean 引擎（cadcore-union crate）：面对分类、预测-校正求交、投影/细化预言机、每面 uv DCEL 剖分、4 道校验闸"],
+ alg:["DCEL 剖分 + keep/drop 面组分类","预测-校正 曲线/曲面求交","AP214 边共享不变式（每条 EDGE_CURVE 恰好被用两次且方向相反）","cap↔cylinder 圆共享的有符号法向键归一化","容差阶梯（model/refine/weld/knit/sliver）"],
+ dep:["slotmap = 1（唯一）"],
+ bld:"Cargo workspace；原生 WASM 是主打特性；声称 <1 MB 体积",
+ ev:["cadcore-master/README.md","cadcore-master/CLAUDE.md","cadcore-master/Cargo.toml","cadcore-master/crates/cadcore-topo/README.md","cadcore-master/crates/cadcore-union/README.md"],
+ rk:["零 C++ 复用 —— 不同语言","范围窄（扫掠、灯丝/G 代码刀路、半空间裁剪），不是通用建模内核","很新（2025-2026）单一作者，4000 行遗留 union.rs 作者自述「逐个 case 长出来的」","README 只写了 6 个 crate，磁盘上的 cadcore-union 没写进 README"]},
+
+{id:"CZY3DKernel-main",n:"CZY3DKernel（炽橙 CZY3D）",d:"C++ 算法库：特征识别、多面体 Boolean、CAM 刀轨识别，构建在 OpenCASCADE 之上。",l:["C++17"],lic:"README 声称 LGPL-2.1，但树中不存在 LICENSE 文件",b:"unknown",c:"cad-kernel",rel:"high-as-reference",h:"仅参考",hcls:"ref",
+ t:["feature-recognition","aag","blend","chamfer","fillet","boolean","csg","kd-tree","r-tree","cam","occt"],
+ cap:["基于属性邻接图（AAG）的特征识别：FR_AAG、FR_AAGIterator、FR_AdjacencyMx（+Eigen 变体）、FR_Isomorphism、FR_FindFeatureHints","统一识别器协议 Perform(maxRadius) → GetResultIndices() → GetAAG()->GetFace(id)：钻孔（通/沉/锪/盲孔）、轴、圆角（柱面/环面/样条/二次曲线/边-面/球-顶点）、倒角（平面/二次曲线/孤立-连通顶点）、基准面、型腔","特征网络：BlendNetwork、ChamferNetwork、SmoothEdgesFinder、SpringEdgesFinder、CliffEdgesFinder、SupportFacesFinder、圆角/倒角链提取与生成顺序排序","自研多面体 B-Rep 布尔（UNION/INTERSECT/SUBTRACT）：内部 Topo、AABB 粗筛 → 精确点/线/面关系 → 有向 CoEdge 重建 → 面组构造 → In/On/Out 分类","CAM CuttingRails；UTILS KDtree + Rtree；DATA 回归样本（2.STEP / 626.IGS / 660.stp）"],
+ alg:["AAG 面分类","二面角类型判定","规范曲线转换","图同构形状匹配","对照 OCCT 验证：最大几何相对差约 1.0e-15，声称中位 13.38× / P95 17.46× 加速"],
+ dep:["OpenCASCADE >= 7.2.0（重量级、系统级）","Eigen 3.4.0"],
+ bld:"无构建系统 —— 全树 glob 未找到 CMakeLists.txt / .sln / .vcxproj / Makefile，必须手工编译",
+ ev:["CZY3DKernel-main/README.md","CZY3DKernel-main/CAD/Feature/README.md","CZY3DKernel-main/CAD/Boolean/README.md","CZY3DKernel-main/CAE/README.md"],
+ rk:["绑定 OCCT —— 不引 OCCT 就无法借用，与自研内核路线直接冲突","有 LGPL 声明却无 LICENSE 文件，再许可条款不清","无构建系统、无测试、无 CI","CAE/ 只有一个 README：网格自适应细分与形状优化只是宣布未交付"]},
+
+{id:"CAD-main",n:"CAD（目录 CAD-main）",d:"OpenGL + Dear ImGui + entt ECS 的 Bezier 曲线与基本体观察器 —— 是应用不是几何库。",l:["C++20"],lic:"未找到 —— 全树无 LICENSE/COPYING，按保留所有权利对待",b:"unknown",c:"viewer-app",rel:"low-medium",h:"仅参考",hcls:"ref",
+ t:["ecs","entt","imgui","opengl","picking","command-pattern","bezier","control-points"],
+ cap:["轨道相机（yaw/pitch/scale/translate）、透视 fov/near/far；正交分支被注释掉（Camera.h:38）","精简 OpenGL 封装：VAO/VBO/EBO/FBO/Shader/Program/Texture2D/ProgramFactory","entt ECS：Scene、Renderer、EntitiesFactory 及 8 个 System","交互：MouseSelectionSystem + SelectionSystem、输入事件、屏幕尺寸发布订阅","命令模式的组变换：Start/Change/Cancel/ApplyGroupTransformationCommand","Bernstein 多边形 / de Boor 控制点重建，用于交互式曲线编辑"],
+ alg:["三次 Bernstein 基求值","BernsteinPolygonMetrics 交互控制点重建","yaw/pitch 欧拉轨道相机"],
+ dep:["OpenGL、Dear ImGui、entt、GLM","GLFW/GLAD 未内置，依赖需预先安装"],
+ bld:"仅 MSVC CAD/CAD.vcxproj —— 无 CMake、无 Makefile；硬编码反斜杠 include；按现状无法移植到 Linux",
+ ev:["CAD-main/README.md","CAD-main/CAD/CAD.vcxproj","CAD-main/CAD/src/Camera.h","CAD-main/CAD/src/maths/Bernstein.h"],
+ rk:["完全无许可证 —— 作为源码来源在法律上不可用","仅 MSVC 工程文件，强耦合 Windows","原型级代码质量（static class Bernstein、YAW_ZERO 常量、正交被注释）","零可复用几何算法：无精确谓词、无求交、无裁剪"]},
+
+{id:"gl_cadscene_rendertechniques-master",n:"gl_cadscene_rendertechniques",d:"OpenGL 4 示例：对比测试多种渲染海量静态 CAD/DCC 场景的技术路线。",l:["C++（标准未声明）","GLSL"],lic:"Apache-2.0",b:"permissive",c:"renderer",rel:"highest",h:"仅参考",hcls:"ref",
+ t:["opengl","cad","culling","hiz","occlusion","drawcall","uborange","multi-draw-indirect","node-tree","gpu-scan"],
+ cap:["数据导向场景布局：Matrices / TreeNodes / Materials / Geometries / GeometryParts / Objects / ObjectParts，几乎 1:1 对应 CAD 装配","三种竞争性渲染器策略：uborange、ubosub、indexedmdi（ARB_multi_draw_indirect + 实例化索引属性），另有 token buffer/list/stream 与 tokensortcull","CullingSystem：METHOD_FRUSTUM / METHOD_HIZ / METHOD_RASTER，配 BITS_CURRENT / BITS_CURRENT_AND_LAST 时间位复用","ScanSystem：GPU 前缀和压实（GROUPSIZE 512）","compute shader：矩阵层级更新、xplode 动画、cull bitpack、token 尺寸、raster、downsample","Shademode solid / solid+edges / split-test；glBindBufferRange UBO 子区间绑定 vs shader 端 GL_TEXTURE_BUFFER 间接","按 (geometry, material, matrix) 三元组做 draw call 状态冗余过滤"],
+ alg:["Hi-Z 遮挡剔除 + 光栅遮挡，两帧时间滞回","GPU 前缀和扫描做 draw call 压实","NV_command_list token 流回放","双精度 CAD 矩阵拆分：README.md:197 建议 double 的 view-projection × double 的 world，只吐 float 矩阵"],
+ dep:["nvpro_core（硬依赖，缺失则 CMake 直接失败）","nvgl/nvh 头文件","可选：OpenGL、Dear ImGui、ZLIB","运行时依赖 NVIDIA 私有 GL 扩展"],
+ bld:"CMake 但非独立构建 —— 需要同级 nvpro_core 检出，并下载 geforce.csf.gz（README.md:222 明确限制再分发）；需 GL 4.x core，多条路径仅 NVIDIA 可用",
+ ev:["gl_cadscene_rendertechniques-master/README.md","gl_cadscene_rendertechniques-master/LICENSE","gl_cadscene_rendertechniques-master/renderer.hpp","gl_cadscene_rendertechniques-master/cullingsystem.hpp","gl_cadscene_rendertechniques-master/nodetree.hpp"],
+ rk:["示例级质量（作者自述 not production-level）","NVIDIA 扩展锁定","2014-2021 年代，早于现代 GL","无法独立构建，应作为参考代码而非依赖"]},
+
+{id:"VulkanSceneGraph-master",n:"VulkanSceneGraph (VSG)",d:"跨平台高性能 Vulkan 场景图与渲染框架，C++17。",l:["C++17"],lic:"MIT（include/vsg/vk/vulkan.h 为 Apache-2.0）",b:"permissive",c:"scene-graph",rel:"medium-high",h:"仅参考",hcls:"ref",
+ t:["vulkan","scene-graph","render-graph","lod","paged-lod","pbr","shadows","animation","ray-tracing","text","visitor","multithread"],
+ cap:["显式 Vulkan 命令图模型；RenderGraph / CommandGraph / SecondaryCommandGraph 录制与编译遍历","场景节点：Group、Transform、StateGroup、Switch、Bin、Layer、QuadGroup、DepthSorted、RegionOfInterest、TileDatabase、VertexDraw、InstanceNode","LOD：vsg::LOD、vsg::PagedLOD、CullGroup/CullNode","PBR 与 Phong 着色器集；阴影贴图（Hard/Soft/PercentageCloserSoftShadows）","动画：TransformSampler、JointSampler、MorphSampler、CameraSampler、AnimationManager","光追（BLAS/TLAS、RayTracingPipeline、TraceRays）、mesh shader","文本渲染（Font/Text/StandardLayout/GpuLayoutTechnique）；场景 IO + DatabasePager","多线程：OperationThreads、DeleteQueue、Affinity"],
+ alg:["RenderGraph 编译遍历，把状态依赖合并进 render pass","内存槽分配器（IntrusiveAllocator、MemorySlots）","d_cast<T>() 原生转换，比 dynamic_cast 快 2-3×","Paged-LOD 数据库分页"],
+ dep:["硬依赖：Vulkan::Vulkan、Threads::Threads","可选：glslang + SPIRV-Tools-opt、xcb/win32/Cocoa/UIKit 窗口后端"],
+ bld:"纯 CMake 静态库；Linux/Windows/Android/macOS-iOS(MoltenVk)。仅 Vulkan —— 完全没有 OpenGL 后端",
+ ev:["VulkanSceneGraph-master/README.md","VulkanSceneGraph-master/CMakeLists.txt","VulkanSceneGraph-master/src/vsg/CMakeLists.txt","VulkanSceneGraph-master/include/vsg/app/RenderGraph.h"],
+ rk:["仅 Vulkan 而宿主是 OpenGL —— 代码不可移植，只有架构可移植","约 500 个源文件，学习面很大","价值在设计模式而非代码复用"]},
+
+{id:"OpenCADStudio-main",n:"Open CAD Studio",d:"跨平台 2D 制图 / 3D 建模 CAD 应用，原生 DWG+DXF 读写，桌面端与 WASM Web 端共享同一编辑内核。",l:["Rust (2021)"],lic:"GPL-3.0",b:"strong_copyleft",c:"cad-app",rel:"high-as-reference",h:"首要设计参考（禁抄）",hcls:"ref",
+ t:["dwg","dxf","2d-drafting","3d-solid","snap","tracking","layers","blocks","xrefs","dimensions","viewport","wasm","webgpu","mcp"],
+ cap:["原生 DWG 与 DXF 读写 R14→2018；BAK/SV$ 打开","2D 制图：样条、填充、捕捉、追踪、图层、块、外部参照","标注：文字、尺寸、引线、公差、表格、模型/图纸空间、视口、CTB/STB 打印样式","3D 实体建模（外部内核 cadkernel）：拉伸、旋转、扫掠、放样、布尔、ACIS 细分","GPU 2D/3D 视口，正交 + 透视相机","OBJ/LandXML 导入，STL/STEP 导出，PDF 出图，CSV 提取","进程外插件 + CLI/无头服务（--export/--serve/--mcp），行式 JSON 自动化 API 与 MCP 端点；21 种界面语言"],
+ alg:["进程外 GPU 能力探测（--gpu-probe dx12|vulkan|gl|sw）+ 崩溃哨兵黑名单；GPU 缺 shader storage buffer 时自动启用 packed 兼容渲染器（gpu_backend.rs:1-50）","细分管线见 docs/tessellation.md"],
+ dep:["硬依赖：wgpu（钉死 iced git rev）、cadkernel + cadkernel-constraints + acadrust（git rev）、glam、bytemuck、rfd、clap、serde、i18n-embed/fluent、fontdb/ttf-parser/cosmic-text、lyon_tessellation、resvg","平台：windows-sys、libloading、ashpd、objc2"],
+ bld:"Cargo，非 CMake；桌面 cargo build --release --bin OpenCADStudio；Web 用 trunk serve",
+ ev:["OpenCADStudio-main/README.md","OpenCADStudio-main/Cargo.toml","OpenCADStudio-main/web-app.html","OpenCADStudio-main/src/gpu_backend.rs","docs/technical-plan.md:12","docs/opencadstudio-architecture-reference.md"],
+ rk:["GPL-3.0 强 copyleft —— 把代码抄进闭源 CAD 引擎属许可证违规","是 Rust 不是 C++","渲染走 wgpu，其 gl 后端是 GLES 转译而非桌面 OpenGL，渲染内部实现映射不到 C++/OpenGL 引擎"]},
+
+{id:"embree-master",n:"Intel Embree",d:"Intel 的 SIMD CPU 光追内核：BVH4/BVH8 构建、refit 与遍历，覆盖三角形、曲线、网格、四边形、点与细分曲面。",l:["C++"],lic:"Apache-2.0",b:"permissive",c:"ray-tracing",rel:"high",h:"仅参考",hcls:"ref",
+ t:["ray-tracing","bvh","bvh4","bvh8","sah","traversal","avx512","simd","picking","occlusion","curves","subdivision"],
+ cap:["BVH4 与 BVH8 节点；构建器 SAH、two-level BVH（动态场景）、Morton、hair、subdivision、spatial","节点类型：AABB、AABB motion blur、AABB4D、OBB QAABB、OBB-MB","按 ISA 粒度的遍历内核（4v/8v/16v 是 ray packet，4i/8i 是非相干单射线）","运行时 ISA 分发：embree_sse42/avx/avx2/avx512/apx 独立静态库 + 最低 ISA 共享 embree","动态场景 refit 与旋转","几何：三角形、四边形、grid、平面/圆/法向定向曲线（linear、Bezier、B-spline、Hermite、Catmull-Rom）、Catmull-Clark 细分、点/圆盘/球、用户几何、instancing、motion blur、ray masking、filter callback","ISPC 接口；SYCL/Level Zero 支持 Intel Xe GPU"],
+ alg:["SAH BVH 构建","动态场景两级空间索引","Morton 构建","hybrid packet + incoherent 遍历","运行时 SSE2→AVX-512 选择","OBB/QAABB 压缩节点包围盒"],
+ dep:["TBB 是默认且必需的任务系统（CMakeLists.txt:233，另有 INTERNAL / PPL）","可选 fetch：ISPC、Level Zero","OSPRay/OIDN/oneAPI 未以源码形式存在，只有许可声明文件"],
+ bld:"CMake >=3.10；Windows 32/64、Linux x64、macOS x64/arm；三平台支持 x86，ARM 仅 Linux/macOS；需 SSE2 以上 x86 或 Apple M1。摩擦大：六份 ISA 变体分别编译",
+ ev:["embree-master/README.md","embree-master/LICENSE.txt","embree-master/CMakeLists.txt","embree-master/kernels/CMakeLists.txt"],
+ rk:["已核实异常：.ispc 文件只存在于 tutorials/ —— 没有 kernels/traverse/ 与 kernels/geom/，kernels/CMakeLists.txt 零 ispc 引用。这份拷贝相对上游被裁剪/重排，尚未证明能构建。INSTALL.md 缺失","源码树非常大","默认硬依赖 TBB","Apache-2.0 再分发需保留声明"]},
+
+{id:"meshoptimizer",n:"meshoptimizer",d:"网格优化：LOD 生成、缓存/overdraw/fetch 优化、索引与顶点编解码、meshlet 聚簇。",l:["C++"],lic:"MIT (c) 2016-2024 Arseny Kapoulkine",b:"permissive",c:"mesh-processing",rel:"high",h:"仅参考",hcls:"ref",
+ t:["lod","simplification","vertex-cache","overdraw","vertex-fetch","meshlet","clustering","codec","quantization","stripify"],
+ cap:["LOD 简化：meshopt_simplify + simplifyScale（尺度感知边塌陷）","顶点缓存优化：optimizeVertexCache / _CacheStrip / _CacheFifo","overdraw 优化与 vertex fetch 优化","Meshlet/簇构建：buildMeshlets / _Scan / _Bound，带 cone_weight 法锥剔除","簇包围盒计算","索引/顶点编解码：encode/decodeIndexBuffer、encode/decodeVertexBuffer、oct/quat/exp 滤波","拓扑工具：stripify、generateAdjacencyIndexBuffer、generateShadowIndexBuffer、generateTessellationIndexBuffer、generateVertexRemap(Multi)","分析器：analyzeVertexCache / analyzeOverdraw / analyzeVertexFetch、spatialSortRemap、quantizeHalf/Float"],
+ alg:["二次误差度量（QEM）边塌陷简化","Tom Forsyth 风格线性速度顶点缓存优化（含 FIFO 变体）","空间/Hilbert 风格顶点重排","法锥 meshlet 聚簇","索引/顶点专用熵编码","八面体与四元数属性滤波"],
+ dep:["无 —— 纯 C++，仅 libc 头文件"],
+ bld:"无构建系统 —— 需自行把 18 个 src/*.cpp 加进静态库 target。meshlet API 由 MESHOPTIMIZER_EXPERIMENTAL 控制",
+ ev:["meshoptimizer/src/meshoptimizer.h","meshoptimizer/LICENSE.md"],
+ rk:["激进的边塌陷不保特征 —— 绝不可用于参数化特征几何，只能用于细分后的显示网格","无构建文件，容易接错"]},
+
+{id:"tinygltf",n:"tinygltf",d:"glTF 2.0 / GLB 导入导出器（头文件 + 单 TU），以静态库形式使用。",l:["C++11"],lic:"MIT（仅写在 tiny_gltf.h 头文件横幅里，本目录无独立 LICENSE 文件）",b:"permissive",c:"asset-io",rel:"medium",h:"仅参考",hcls:"ref",
+ t:["gltf","glb","draco","sparse-accessor","serializer"],
+ cap:["LoadASCIIFromFile(.gltf) 与 LoadBinaryFromFile(.glb) 载入 Model","WriteGltfSceneToFile 序列化回写","Draco 网格压缩解码钩子","稀疏 accessor、data URI 的 base64 解码","内嵌纹理经 stb_image 解码、stb_image_write 编码，带文件系统回退","完整 glTF 2.0 对象模型","req_* 回调允许宿主提供 IO、分配器与图像加载器"],
+ alg:["只做解析与 accessor 解交错；重活全部外包"],
+ dep:["内置 json.hpp 3.5.0（nlohmann/json）","stb_image / stb_image_write 未内置 —— 有 TINYGLTF_NO_STB_IMAGE / _NO_STB_IMAGE_WRITE / _NO_FS / _NO_INCLUDE_JSON 开关","Draco 可选且未内置"],
+ bld:"CMake >=3.10，STATIC target tiny-gltf。头文件自称 header-only 但这份拷贝会编译 tiny_gltf.cpp；WIN32 分支把 /MD 改写成 /MT",
+ ev:["tinygltf/include/tiny_gltf.h","tinygltf/CMakeLists.txt","tinygltf/include/json.hpp"],
+ rk:["陈旧 —— v2.2.0，2019 年代，上游已远超","无 LICENSE 文件","非上游的 4 文件裁剪布局，来源难核对与更新","CMake 不知道同目录下的 stb 在哪"]},
+
+{id:"stb",n:"stb 单文件库",d:"21 个 public-domain / MIT 单头文件 C 与 C++ 工具、图像、字体、音频库。",l:["C","C++"],lic:"双选：MIT (c) 2017 Sean Barrett 或 Public Domain (Unlicense)",b:"permissive",c:"utility",rel:"medium",h:"仅参考",hcls:"ref",
+ t:["image","png","jpeg","truetype","font","atlas","dxt","ogg-vorbis","hash-map","sprintf","perlin","connected-components"],
+ cap:["stb_image.h v2.30 —— JPEG/PNG/BMP/GIF/PSD/TGA/HDR/PIC/PNM 加载","stb_image_write.h v1.16；stb_image_resize2.h v2.14","stb_truetype.h v1.26（扫描线光栅化，二次曲线展平）；stb_easy_font.h；stb_rect_pack.h v1.01（字形图集）","stb_ds.h v0.67（动态数组/哈希/字符串 arena）；stb_textedit.h；stb_sprintf.h；stb_divide.h","stb_vorbis.c v1.22（Ogg Vorbis）；stb_hexwave.h；stb_dxt.h v1.12（Fabian \"ryg\" Giesen 的 DXT1/DXT5 压缩器）","stb_connected_components.h v0.96（并查集洪泛标记）","stb_voxel_render.h、stb_perlin.h、stb_c_lexer.h、stb_tilemap_editor.h、stb_herringbone_wang_tile.h、stb_leakcheck.h、stb_include.h"],
+ alg:["DXT1/DXT5 端点+索引块压缩","带二次曲线展平的扫描线 TrueType 光栅化","并查集连通分量","图像重采样滤波"],
+ dep:["无 —— 完全自包含单文件"],
+ bld:"无构建系统，直接丢头文件；唯一约束是每个模块只能有一个 TU 定义 STB_*_IMPLEMENTATION",
+ ev:["stb/LICENSE","stb/stb_image.h","stb/stb_sprintf.h"],
+ rk:["无 DDS 加载器也无 KTX/HDR —— 若资产管线要出 DirectX 表面格式需另找方案","两个 TU 同时定义同一模块会链接期重复符号"]},
+
+{id:"arcs-0.3.0",n:"arcs",d:"可扩展的 Rust ECS 框架，用于构建 2D CAD 应用 —— 不是几何内核，也不是 C/C++。",l:["Rust"],lic:"MIT OR Apache-2.0（双许可）",b:"permissive",c:"app-architecture",rel:"low",h:"仅参考",hcls:"ref",
+ t:["ecs","2d","arc","line","flattening","rdp","aabb-quadtree","euclid","coordinate-space","wasm"],
+ cap:["图元：Arc<S>（圆心/半径/起始角/张角、from_three_points、大小弧判定、point_at、contains_angle）与 Line<S>","基于容差的展平 Approximate trait → ApproximatedArc；RDP 抽稀 simplify(tolerance)","ClosestPoint/Closest（含多解圆弧）、Length、Bounded、Translate、Scale、ScaleNonUniform、AffineTransformable","ECS 组件：Layer、BoundingBox、Name、SpatialEntity、Dimension、Styles、Selected、viewport；系统：bounds、spatial_relation、name_table_bookkeeping","经 piet 画布渲染；#![forbid(unsafe_code)]"],
+ alg:["Ramer-Douglas-Peucker（明确引用，按最大垂直距离）","弦高容差圆弧展平","三点定外接圆心","Orientation::of 符号判定","euclid 幻影类型标注坐标系，避免「火星气候轨道器」式单位混淆"],
+ dep:["specs 0.15 + shred 0.9（ECS）","piet 0.0.7（渲染）","euclid 0.20.7、kurbo 0.5、cgmath 0.17、aabb-quadtree 0.2、anyhow、log、lazy_static"],
+ bld:"Cargo workspace；demo 需 wasm-pack + python3 -m http.server。无 CMake",
+ ev:["arcs-0.3.0/README.md","arcs-0.3.0/Cargo.toml","arcs-0.3.0/arcs/src/lib.rs","arcs-0.3.0/arcs/src/algorithms/mod.rs"],
+ rk:["对 C++/OpenGL 引擎零代码复用","依赖版本锁在 2020 年，今天大概率编不过","README 路线图上 B 样条、Bezier、椭圆截面全部未勾选 —— 非常早期"]},
+
+{id:"Spatialite-5.1",n:"SpatiaLite 5.1（CMake soft fork）",d:"SQLite 空间扩展：空间 SQL 函数、WKB/WKT、R-tree 空间索引。这份拷贝是「加了现代 CMake 支持的 soft fork，仍在进行中」。",l:["C"],lic:"MPL 三许可（MPL-2.0 / GPL-2 / LGPL-2.1，自选）",b:"weak_copyleft",c:"geospatial",rel:"low（已决策）",h:"已决策不配合",hcls:"closed",
+ t:["sqlite","spatial-sql","wkb","wkt","r-tree","epsg","proj","geos","rasterlite"],
+ cap:["SQLite 之上的空间 SQL 函数（ST_* 家族）","WKB/WKT 几何编码、解码、校验","R-tree 空间索引（SpatiaLite 的强项）","PROJ/EPSG 坐标系处理（epsg_inlined_21.c / _25.c）","Rasterlite 栅格支持","几何元数据虚表"],
+ alg:["R-tree 空间索引","PROJ 坐标变换"],
+ dep:["sqlite3、libxml2、libiconv、geos、freexl、librttopo（README 里的 vcpkg install 行）","proj"],
+ bld:"同时支持 autotools（上游路径）和新的 CMake >=3.23 + Ninja + vcpkg 路径（CMakePresets.json）；vcpkg 路径在 CMakePresets.json 里硬编码为 C: 盘",
+ ev:["Spatialite-5.1/Readme.md","Spatialite-5.1/README","Spatialite-5.1/CMakeLists.txt","docs/technical-plan.md:126-128"],
+ rk:["soft fork 自述 very much work in progress，README 说不要提 feature issue","vcpkg 路径硬编码 C: 盘","系统依赖链很重（GEOS/PROJ/freexl/librttopo）","MPL 三许可需选一种"]},
+
+{id:"Quake3e-latest",n:"Quake3e (Q3Arena)",d:"现代化的 Quake III Arena 引擎，含优化的 OpenGL 与 Vulkan 渲染器 —— 游戏引擎，不是 CAD 库。",l:["C"],lic:"GNU GPL v2",b:"strong_copyleft",c:"game-engine",rel:"medium（仅算法）",h:"仅参考",hcls:"ref",
+ t:["renderer","opengl","vulkan","reversed-depth","lightmap-atlas","bloom","hdr","zone-allocator","qvm","raw-input","offscreen"],
+ cap:["优化 OpenGL 渲染器与优化 Vulkan 渲染器（后者基于 Kenny Edition）","逐像素动态光照；极快光晕；各向异性过滤；合并 lightmap 图集；多重纹理；静态世界面缓存进 VBO","反转 Z 深度缓冲消除大地图 z-fighting","灵活顶点缓冲内存管理以加载超大地图；多命令缓冲；大幅降低调用/派发比","离屏渲染（r_fbo 1）：screenMap 环境反射、MSAA、SSAA、逐窗 gamma、HDR 渲染目标、bloom 后处理、任意分辨率","原始鼠标输入替代 DirectInput；QVM 重做；DoS 防护；单目录 20000 张地图上限","重做 Zone 内存分配器，不再有 out-of-memory"],
+ alg:["大地图深度精度的反转 Z 深度缓冲","lightmap 图集合并","screenMap 屏幕空间反射捕获"],
+ dep:["SDL2 后端（编译期可选）","ffmpeg（可选，\\video-pipe）","OpenGL 或 Vulkan"],
+ bld:"CMake；另有 Makefile；macOS 有 make-macosx-ub2.sh / make-macosx-app.sh。不含游戏内容，二进制需放进已有 Q3A 安装目录",
+ ev:["Quake3e-latest/README.md","Quake3e-latest/BUILD.md","Quake3e-latest/COPYING.txt"],
+ rk:["GPL-2 强 copyleft —— 不能抄进闭源引擎","游戏引擎：有用的部分（反转 Z、lightmap 图集、Zone 分配器）是大而无关系代码库里埋的约 3 个算法","除深度精度外与 CAD 无关"]},
+
+{id:"large-coordinate-rendering",n:"Precision-Safe Rendering of Large-Coordinate CAD Drawings in Three.js",d:"Web 演示，讲解大坐标精度的两层策略：CPU 侧 Geometry Rebase + GPU 侧 Split-Translation Relative-to-Eye。",l:["JavaScript","GLSL","Three.js"],lic:"LICENSE 文件存在（本次未核实内容）",b:"unknown",c:"large-coordinate",rel:"high",h:"仅参考（强耦合）",hcls:"ref",
+ t:["double-precision","float32","rebase","rte","relative-to-eye","ulp","cad","gis","cesium"],
+ cap:["三种渲染模式并排演示：Raw（坏）/ Rebased（基本修好）/ Rebased + Relative-to-Eye（完全稳）","根因分析：数据一进 Float32Array 就不可逆地损坏，所以 rebase 必须发生在创建几何之前 —— 之后再 applyMatrix4 也救不回来","Split Translation RTE：modelMatrix 拆成 R（旋转缩放，进 GPU）与 T（平移，留在 CPU 用 double 算）","shader 补丁：清零平移分量 → 只用旋转缩放变换 → 加 CPU 算的相对偏移 → 只用旋转的 view 矩阵 → 投影","uDemoRelativeWorldPosition = objectWorld - cameraWorld（CPU double）；uDemoViewRotationMatrix = 去平移的 view 矩阵","测试场景故意放在 (4e9, 4e9, 0)，配 64 单位台阶折线与 64×64 检查框暴露 ULP 塌陷","与 CesiumJS 的显式对比表：两者都有 rebase 与相机相对渲染，Cesium 另有高低精度拆分与矩阵拆分"],
+ alg:["Geometry rebase（创建 BufferGeometry 前减去世界基点）","Split Translation RTE（把大平移彻底从 GPU 侧移除）","用场景图 position 恢复世界位置（rootGroup.position = worldBasePoint）"],
+ dep:["Three.js","pnpm（存在 pnpm-lock.yaml）"],
+ bld:"网页，package.json 存在，无原生构建",
+ ev:["large-coordinate-rendering/README.md","large-coordinate-rendering/index.html","lib/coordinate/WorldRebase.h","docs/cad-rendering-porting-notes.md:3-5","docs/opencadstudio-architecture-reference.md:146"],
+ rk:["Three.js/WebGL 演示 —— 不是 C++ 也不是 bgfx","刻意只做到 rebase + RTE，未实现 Cesium 的高低精度拆分与矩阵拆分","这恰恰是宿主可能领先于参考实现的地方"]},
+
+{id:"openctm",n:"OpenCTM 1.0.3",d:"存储压缩三角网格的开放格式（.ctm），C99 实现，带 C API 与 C++ 包装类。",l:["C (C99)","C++ 包装"],lic:"zlib 式宽松许可（头文件横幅：以任何用途含商业应用使用、修改、再分发自由，附 3 项条件，法律上不要求署名）",b:"permissive",c:"mesh-io",rel:"low",h:"仅参考",hcls:"ref",
+ t:["mesh-compression","ctm","mg1","mg2","raw","weld","vertex-cache"],
+ cap:["基于 context 的压缩三角网格读写","压缩方案：MG（MG1、MG2）与 RAW","顶点焊接去重、法向与切线处理、条带化"],
+ alg:["MG1/MG2 有损网格压缩、RAW 无损","stream.c（compressMG1.c、compressMG2.c、compressRAW.c）"],
+ dep:["核心读写器未声明依赖"],
+ bld:"纯 C 源码（openctm.c + compress*.c + stream.c）；本目录无构建系统",
+ ev:["openctm/readme.txt","openctm/openctm.h"],
+ rk:["停更：最后改动 2010 年，版本 1.0.3","在现代管线中实际已被 glTF + Draco + meshopt 取代","glTF 2.0 现在也有 meshopt 风格的 EXT_meshopt_compression 路径，而 meshoptimizer 已在内"]},
+
+{id:"OpenGeode-master",n:"OpenGeode (Geode-solutions)",d:"表示与操作几何模型的开放框架，从简单网格到复杂边界表示，由 5 年研究平台 RINGMesh 产业化而来。",l:["C++17"],lic:"MIT",b:"permissive",c:"cad-kernel",rel:"low-medium",h:"仅参考",hcls:"ref",
+ t:["brep","topology","mesh","geodesy","framework","python-bindings","semantic-release","vcpkg"],
+ cap:["几何模型表示与操作，覆盖网格到边界表示","卫星项目生态：OpenGeode-IO（格式 IO）、OpenGeode-Geosciences + -IO（地学对象与算法）、OpenGeode-ModuleTemplate、OpenGeode-Inspector、Geode（可视化/建模）","Python 绑定便于快速原型（PyPI: opengeode-core）","semantic-release 版本管理"],
+ alg:["网格与 B-rep 建模；地学专用对象与算法（在 Geosciences 模块中）"],
+ dep:["支持 Windows、Ubuntu、Red Hat","vcpkg（CMakePresets 时代）、Python"],
+ bld:"CMake + C++17 + semantic-release CI；有 upgrade-guide.md",
+ ev:["OpenGeode-master/README.md","OpenGeode-master/upgrade-guide.md","OpenGeode-master/CMakeLists.txt"],
+ rk:["框架导向且卫星生态庞大 —— 引入它是一项承诺而非加个库","大量价值（地学对象）在 CAD 渲染范围之外","MIT 使它成为这里许可证最安全的 B-rep 框架"]},
+
+{id:"DB-CAD-master",n:"CAD_DB（目录 DB-CAD-master）",d:"Qt/C++ CAD 数据层：内嵌 HTTP 服务，把 CAD 前端桥接到 Neo4j，规划中以 FastAPI 作统一服务层。",l:["C++","Qt"],lic:"未找到",b:"unknown",c:"cad-data-layer",rel:"low",h:"仅参考",hcls:"ref",
+ t:["qt","neo4j","http-server","rest","fastapi","versions","model-repository","tcp"],
+ cap:["基于 QTcpServer/QTcpSocket 的内嵌 HTTP 服务，手写请求解析与 JSON 响应","REST 端点：health、建项目、取项目、按名取项目、建模型、取最新模型、取模型版本、列版本","Neo4j 存储后端，project → model → version 层级","backend_api_client 做对外服务调用","目标架构（copilot-instructions.md）：Qt 前端与后端服务彻底分离，由 FastAPI 作统一服务层；核心数据后端对接 Neo4j"],
+ alg:["裸 QTcpSocket 上的 HTTP/1.1 请求解析；JSON 序列化"],
+ dep:["Qt（Core、Network）","Neo4j C/C++ 驱动","_deps/ 已内置（vcpkg 风格），含 openssl"],
+ bld:"仅 MSVC 解决方案 + vcxproj（无 CMake）；_deps/ 已签入",
+ ev:["DB-CAD-master/.github/copilot-instructions.md","DB-CAD-master/CAD_DB/storage_bridge_service.h","DB-CAD-master/CAD_DB/STARTUP_CONFIG.md"],
+ rk:["无许可证","架构与宿主正相反：宿主是 SQLite + WAL + acdb 事务 + 有界撤销栈；这个是 Neo4j + FastAPI + 独立服务层","依赖 Qt；手写 HTTP 解析不是值得抄的模式","内置 _deps/ 体积臃肿"]}
+],
+
+edges:[
+{f:"infinite-grid",t:"predicates",ty:"compiled-in",st:"active",w:5,n:"CMakeLists.txt:201-215 —— 唯一真正被编译进 WINDOW target 的 external/ 项目。强制 /fp:precise，因为 fast-math 会摧毁精确性。"},
+{f:"infinite-grid",t:"OpenCADStudio-main",ty:"design-reference",st:"active",w:5,n:"technical-plan.md:12 参考实现（实体风格）；另有两份专门移植文档 opencadstudio-architecture-reference.md 与 opencadstudio-render-modes-bgfx-plan.md。只读，禁抄（GPL-3.0）。"},
+{f:"infinite-grid",t:"LNLib",ty:"decision-not-to-integrate",st:"closed",w:4,n:"technical-plan.md:112-119。决策：不集成。逐项自写而非引用 LNLib 代码，思路照搬《The NURBS Book》。仍列出的候选算法：节点向量工具、全局曲线插值、de Boor 求值、曲线-曲线求交、点-曲线投影。"},
+{f:"infinite-grid",t:"Spatialite-5.1",ty:"decision-not-to-integrate",st:"closed",w:3,n:"technical-plan.md:126-128。决策：不配合 —— R-tree（range query 强）与 kd-tree（k-NN 强）职责正交，叠加两层空间索引等于常数因子双重惩罚。"},
+{f:"infinite-grid",t:"simpline",ty:"validation-benchmark",st:"active",w:3,n:"technical-plan.md:12 拟合点插值验证基准。宿主此后已自行实现（3.5 节：Thomas 三对角 + Sherman-Morrison 周期变体、Newton 迭代在 Legendre 多项式上生成 24 点 Gauss-Legendre、16 项离线 MSVC 检查全过）。"},
+{f:"infinite-grid",t:"large-coordinate-rendering",ty:"technique-reference",st:"active",w:4,n:"与宿主 Rebase+RTE 是同一种思想的两个层面。宿主实现：lib/coordinate/WorldRebase.h，chunkSize 1e4，chunk 锚定重定基原点，逐物体 uModelRelativePosition。"},
+{f:"infinite-grid",t:"gl_cadscene_rendertechniques-master",ty:"technique-reference",st:"candidate",w:3,n:"文档未点名，但它是唯一的真桌面 OpenGL CAD 渲染器：draw call/状态削减、Hi-Z 遮挡剔除、双精度 CAD 矩阵拆分都直接对上宿主问题。"},
+{f:"infinite-grid",t:"embree-master",ty:"technique-reference",st:"candidate",w:3,n:"文档未引用。可作为宿主 GPU ID-buffer 拾取的替代：CPU 光追精确拾取与遮挡。但这份拷贝被裁剪（缺 kernels/traverse 与 kernels/geom），尚未证明能构建。"},
+{f:"infinite-grid",t:"meshoptimizer",ty:"technique-reference",st:"candidate",w:2,n:"文档未引用。候选用途：密集导入网格的 simplify + buildMeshlets，以及 optimizeVertexCache/Fetch 降低 OpenGL 绘制成本。必须限定在细分后的显示网格，绝不用于参数化特征几何。"},
+{f:"predicates",t:"mcut",ty:"duplicate-symbols",st:"hazard",w:4,n:"mcut/source/shewchuk.c 内置了完全相同的公开域谓词。同时链接会在 orient2d/insphere 上撞名。MCUT 其实可以改为消费独立那份。"},
+{f:"qaws",t:"simpline",ty:"subsumes",st:"active",w:3,n:"qaws 的弧长重参数化 + 等速遍历（S 曲线、11 种缓动、包裹模式）是 simpline 整个生态位的超集。"},
+{f:"qaws",t:"arcs-0.3.0",ty:"overlaps",st:"active",w:2,n:"都做基于容差的曲线展平。arcs 用明确引用的 RDP + 弦高容差；qaws 用曲率加权自适应采样。"},
+{f:"qaws",t:"LNLib",ty:"overlaps",st:"active",w:4,n:"全树共 4 个重叠的 NURBS/曲线库（qaws、LNLib、gbs、CAD-main 的单个 Bernstein 函数）。qaws 额外有 GLSL/HLSL/Halide 后端；LNLib 的 The NURBS Book 覆盖更全；gbs 多了 B-rep arena。"},
+{f:"gbs",t:"LNLib",ty:"overlaps",st:"active",w:4,n:"同为 LGPL（2.1 vs 3.0），都完整实现 NURBS Book 的曲线+曲面+偏移+放样。gbs 额外提供原生 B-rep arena 与半边网格。"},
+{f:"gbs",t:"qaws",ty:"overlaps",st:"active",w:3,n:"曲率/偏移/放样/求交重叠。gbs 有文档化算法与许可证；qaws 既无许可证也无构建系统。"},
+{f:"CZY3DKernel-main",t:"cadcore-master",ty:"duplicate-technique",st:"active",w:5,n:"两者都用 DCEL 剖分 + In/On/Out 面组分类实现多面体布尔。CZY3DKernel 是 C++/绑定 OCCT；cadcore 是 Rust/无 OCCT，且明确把自身定位为 OCCT 的替代品。把两者并排读是判断「引 OCCT 还是自研内核」最便宜的方式。"},
+{f:"KrisLibrary-master",t:"CZY3DKernel-main",ty:"duplicate-technique",st:"active",w:3,n:"都带一份 DCEL 实现（KrisLibrary geometry/DCEL.h vs CZY3DKernel CAD/Boolean/Topo.hxx）。"},
+{f:"KrisLibrary-master",t:"gbs",ty:"duplicate-technique",st:"active",w:3,n:"都带半边网格（KrisLibrary TriMeshTopology/MarchingCubes vs gbs-mesh/halfedgemesh.h）。"},
+{f:"CZY3DKernel-main",t:"gbs",ty:"duplicate-technique",st:"active",w:2,n:"都内置 KD-tree 与 R-tree（UTILS/KDtree,Rtree vs gbs 自带空间结构）。"},
+{f:"LNLib",t:"gbs",ty:"duplicate-technique",st:"active",w:3,n:"空间索引在全树重复三次：LNLib Octree/Voronoi、KrisLibrary KDTree/BallTree、CZY3DKernel KDtree/Rtree。选一个，别都 vendor。"},
+{f:"KrisLibrary-master",t:"CZY3DKernel-main",ty:"duplicate-technique",st:"active",w:2,n:"空间索引重叠（KDTree/BallTree vs KDtree/Rtree）。"},
+{f:"tinygltf",t:"stb",ty:"depends-on-optional",st:"gap",w:4,n:"tiny_gltf.h 依赖 stb_image/stb_image_write 处理内嵌纹理，而两者就在同一个 external/ 树里 —— 但 tinygltf 的 CMakeLists 找不到 stb 的路径。逃生开关：TINYGLTF_NO_STB_IMAGE / TINYGLTF_NO_STB_IMAGE_WRITE。两者都没有 README。"},
+{f:"meshoptimizer",t:"embree-master",ty:"producer-consumer",st:"candidate",w:3,n:"meshopt_buildMeshlets（法锥加权聚簇 + computeMeshletBounds）是 Embree 用 BVH4/BVH8 节点打包在消费侧解决的同一问题的生产侧。成立的链路：先抽稀+聚簇，再打进 Embree 场景。"},
+{f:"openctm",t:"meshoptimizer",ty:"superseded-by",st:"active",w:2,n:"OpenCTM（2009，停更）在现代管线中已被 glTF + Draco + meshopt 取代；glTF 2.0 现在也带 EXT_meshopt_compression 路径，而 meshoptimizer 已在树内。"},
+{f:"VulkanSceneGraph-master",t:"gl_cadscene_rendertechniques-master",ty:"alternative-approach",st:"active",w:4,n:"两者解决同一 CAD 问题（多零件装配的 draw call 与状态削减）但路径相反：VSG 用可移植的 RenderGraph 编译遍历；gl_cadscene 用 UBO 子区间绑定 + NVIDIA token 回放 + indexed MDI。两者都做遮挡剔除（VSG CullGroup/CullNode vs gl_cadscene Hi-Z + raster + 时间位），但只有 gl_cadscene 的文档详细到可以重实现。"},
+{f:"VulkanSceneGraph-master",t:"OpenCADStudio-main",ty:"renderer-alternative",st:"active",w:2,n:"本树中三条渲染栈互斥：VSG = 仅 Vulkan，OpenCADStudio = wgpu（其 gl 路径是 GLES 转译而非桌面 GL），gl_cadscene = 真桌面 OpenGL。宿主是 OpenGL，只有 gl_cadscene 的代码能落下来。"},
+{f:"gl_cadscene_rendertechniques-master",t:"VulkanSceneGraph-master",ty:"design-tension",st:"active",w:3,n:"VSG 保留可移植的 Object/Visitor/Switch/Bin/LOD 层级；gl_cadscene 刻意用扁平 NodeTree + 并行数组把这个层级换掉换速度。两面都值得读，正好是宿主 acgs 层架构选型的两面。"},
+{f:"Quake3e-latest",t:"infinite-grid",ty:"algorithm-borrow",st:"candidate",w:2,n:"三个可借鉴点，全部 GPL-2 故只能重实现不可抄：大地图深度精度的反转 Z 缓冲（宿主改用 log-depth / DoubleSingle）、lightmap 图集合并、Zone 分配器的无 OOM 策略。除深度精度外均与 CAD 无关。"},
+{f:"DB-CAD-master",t:"infinite-grid",ty:"architectural-antagonist",st:"informational",w:2,n:"持久化路线正相反：Neo4j 图存储 + FastAPI 服务层 vs 宿主的 SQLite + WAL + acdb 事务 + 有界撤销栈。仅可作为文档模型版本化（project→model→version）的对照案例。"},
+{f:"CAD-main",t:"arcs-0.3.0",ty:"overlaps-architecture",st:"informational",w:2,n:"都用 ECS 拆解 CAD 场景（entt vs specs/shred）并把拾取做成一个 System。CAD-main 多了命令模式的组变换；arcs 多了用 euclid 做坐标系类型标注。"},
+{f:"OpenGeode-master",t:"cadcore-master",ty:"alternative-approach",st:"active",w:2,n:"两者都是 MIT 的「从网格到 B-rep」框架但形态迥异：OpenGeode 是带卫星生态与 Python 绑定的模块框架；cadcore 是单个精确解析内核，带 slotmap arena 与 STEP 写出器。cadcore 额外记录了 AP214 流形不变式；OpenGeode 额外覆盖地学对象。"}
+],
+
+risks:[
+{id:"R1",sev:"high",title:"五个项目无许可证文件，法律上不可用",d:"qaws（严格 grep 全树零命中）、simpline（9 个文件无 LICENSE）、CAD-main（无 LICENSE/COPYING）、CZY3DKernel-main（README 声称 LGPL-2.1 但树里无 LICENSE 文件）、DB-CAD-master（无）。来源确认前，这五个只能读不能 vendor。",ps:["qaws","simpline","CAD-main","CZY3DKernel-main","DB-CAD-master"]},
+{id:"R2",sev:"high",title:"四份拷贝被裁剪或改版，无法验证来源与可构建性",d:"tinygltf 只有 4 个文件且无 README/LICENSE；stb 无 README；meshoptimizer 只有 LICENSE.md + src/ 无构建文件；embree-master 缺 kernels/traverse 与 kernels/geom，kernels/CMakeLists.txt 零 ispc 引用，INSTALL.md 缺失 —— 尚未证明能构建。Spatialite-5.1 是自述 work in progress 的 soft fork。",ps:["tinygltf","stb","meshoptimizer","embree-master","Spatialite-5.1"]},
+{id:"R3",sev:"medium",title:"同质化重复 + 符号冲突",d:"4 个 NURBS/曲线库、3 份 DCEL/半边、3 套空间索引、3 份 Shewchuk 谓词。全部 vendor 既无收益也会符号冲突（predicates 与 mcut 的 orient2d/insphere 直接撞名）。",ps:["LNLib","gbs","qaws","CAD-main","KrisLibrary-master","CZY3DKernel-main","mcut","predicates"]},
+{id:"R4",sev:"medium",title:"许可证风险分级",d:"可安全借鉴：predicates、meshoptimizer、stb、KrisLibrary、gl_cadscene、VulkanSceneGraph、embree、tinygltf、arcs、cadcore、OpenGeode、openctm。弱 copyleft 需动态链接或合规：LNLib(LGPL-2.1)、gbs(LGPL-3)、mcut(LGPL-3+)、Spatialite(MPL 三许可)。强 copyleft 禁抄：OpenCADStudio(GPL-3)、Quake3e(GPL-2)。",ps:["OpenCADStudio-main","Quake3e-latest","LNLib","gbs","mcut","Spatialite-5.1"]},
+{id:"R5",sev:"medium",title:"OCCT 路线分叉未决",d:"CZY3DKernel 绑定 OCCT>=7.2；cadcore 明确把自己定位为 OCCT 替代品但只覆盖 sweep/半空间裁剪。宿主自建内核要不要引 OCCT，读这两个是最便宜的方式。",ps:["CZY3DKernel-main","cadcore-master"]},
+{id:"R6",sev:"low",title:"资产管线缺口",d:"stb_image 不支持 DDS，tinygltf 也没有 DDS 路径。若资产管线要出 DirectX 表面格式需另找方案。tinygltf 的 CMake 也不知道同目录下 stb 在哪。",ps:["stb","tinygltf"]},
+{id:"R7",sev:"low",title:"24 个项目里只有 1 个真的被编译",d:"CMakeLists.txt 只编译 external/predicates。其余 23 个处于 vendored-but-unwired 状态：既不进构建，也没有注释说明引入原因。建议要么接线要么删减，否则 external/ 会持续膨胀成无人维护的参考堆。",ps:["predicates"]}
+]};
+
+const CATNAME={robustness:"鲁棒性","mesh-processing":"网格处理",nurbs:"NURBS",utility:"工具库","cad-kernel":"CAD 内核","viewer-app":"观察器应用",renderer:"渲染器","scene-graph":"场景图","cad-app":"CAD 应用","ray-tracing":"光追","asset-io":"资产 IO","app-architecture":"应用架构",geospatial:"地理空间","game-engine":"游戏引擎","large-coordinate":"大坐标","mesh-io":"网格 IO","cad-data-layer":"CAD 数据层"};
+const BKT={permissive:"可安全借鉴",weak_copyleft:"弱 copyleft",strong_copyleft:"强 copyleft 禁抄",unknown:"无许可证"};
+const SEV={high:"高",medium:"中",low:"低"};
+const relRank={"highest":0,high:1,"medium-high":2,"high-as-reference":3,medium:4,"low-medium":5,"low-medium (已决)":6,low:7,"low (已决)":8};
+
+let fc={},sel=null;
+
+function esc(s){return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+
+function buildFilters(){
+  const keys=["c","b","rel","hcls"];
+  const labels={c:"类别",b:"许可",rel:"相关度",hcls:"状态"};
+  const hostNames={"compiled-in":"已编译","closed":"已决策","ref":"仅参考"};
+  const el=document.getElementById("filters");
+  keys.forEach(k=>{
+    const vals=[...new Set(DATA.projects.map(p=>p[k]))].sort();
+    vals.forEach(v=>{
+      const d=document.createElement("div");
+      d.className="chip";d.dataset.k=k;d.dataset.v=v;
+      let txt=v;
+      if(k==="c")txt=CATNAME[v]||v;
+      if(k==="b")txt=BKT[v]||v;
+      if(k==="hcls")txt=hostNames[v]||v;
+      d.textContent=txt;
+      d.onclick=()=>{d.classList.toggle("on");fc[k]=d.classList.contains("on")?v:null;render();};
+      el.appendChild(d);
+    });
+  });
+  const r=document.createElement("div");
+  r.className="chip";r.textContent="↺ 重置";r.style.borderColor="#58a6ff";
+  r.onclick=()=>{fc={};document.querySelectorAll(".chip").forEach(x=>{if(x.dataset.k)x.classList.remove("on")});render();};
+  el.appendChild(r);
+}
+
+function match(p,q){
+  if(fc.c&&p.c!==fc.c)return false;
+  if(fc.b&&p.b!==fc.b)return false;
+  if(fc.hcls&&p.hcls!==fc.hcls)return false;
+  if(fc.rel&&p.rel!==fc.rel)return false;
+  if(!q)return true;
+  q=q.toLowerCase();
+  const hay=[p.id,p.n,p.d,p.l.join(" "),CATNAME[p.c]||p.c,BKT[p.b]||p.b,p.h,
+    p.t.join(" "),p.cap.join(" "),p.alg.join(" "),p.dep.join(" "),p.bld].join(" ").toLowerCase();
+  return hay.includes(q);
+}
+
+function hl(s,q){if(!q)return esc(s);const i=s.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0)return esc(s);return esc(s.slice(0,i))+'<span class="hi">'+esc(s.slice(i,i+q.length))+'</span>'+esc(s.slice(i+q.length));}
+
+function render(){
+  const q=document.getElementById("search").value.trim();
+  const list=DATA.projects.filter(p=>match(p,q))
+    .sort((a,b)=>(relRank[a.rel]??9)-(relRank[b.rel]??9));
+  const box=document.getElementById("list");
+  box.innerHTML=list.length?list.map(p=>{
+    const lbl=(p.rel==="highest"?"★ ":p.rel.startsWith("high")?"★ ":"")+p.n;
+    return '<div class="item'+(sel===p.id?" sel":"")+'" data-id="'+p.id+'">'+
+      '<div class="t"><span>'+hl(lbl,q)+'</span><span class="dot b-'+p.b+'"></span></div>'+
+      '<div class="m">'+hl(p.d,q)+'</div></div>';
+  }).join(""):'<div id="empty">没有匹配的项目</div>';
+  box.querySelectorAll(".item").forEach(el=>el.classList.toggle("sel",el.dataset.id===sel));
+  if(sel&&!list.find(p=>p.id===sel)){sel=null;document.getElementById("detail").innerHTML='<div id="empty">← 从左侧选择一个项目</div>';}
+}
+
+function detail(id){
+  const p=DATA.projects.find(x=>x.id===id);if(!p)return;
+  const my=DATA.edges.filter(e=>e.f===id||e.t===id);
+  const name=x=>{const o=DATA.projects.find(y=>y.id===x);return o?o.n:x;};
+  const arrow=e=>e.f===id?("→ <b>"+name(e.t)+"</b>"):("← <b>"+name(e.f)+"</b>");
+  const rs=DATA.risks.filter(r=>r.ps.includes(id));
+  let h='<h2><span class="dot b-'+p.b+'"></span>'+esc(p.n)+
+    '<span class="pill p-'+p.b+'">'+esc(BKT[p.b])+'</span>'+
+    '<span class="badge">'+esc(p.lic)+'</span></h2>'+
+    '<p style="color:#8b949e;margin:0 0 4px">'+esc(p.d)+'</p>'+
+    '<p style="margin:6px 0 0"><span class="badge">'+esc(p.l.join(" · "))+'</span>'+
+    '<span class="badge">'+esc(CATNAME[p.c]||p.c)+'</span>'+
+    '<span class="badge">相关度 '+esc(p.rel)+'</span>'+
+    '<span class="badge">宿主：'+esc(p.h)+'</span></p>'+
+    '<div style="margin-top:8px">'+p.t.map(t=>'<span class="tag">'+esc(t)+'</span>').join("")+'</div>';
+
+  h+='<h3>能力</h3><ul>'+p.cap.map(c=>'<li>'+esc(c)+'</li>').join("")+'</ul>';
+  h+='<h3>关键算法</h3><ul>'+p.alg.map(c=>'<li>'+esc(c)+'</li>').join("")+'</ul>';
+  h+='<h3>依赖</h3><ul>'+p.dep.map(c=>'<li>'+esc(c)+'</li>').join("")+'</ul>';
+  h+='<h3>构建</h3><p style="margin:4px 0">'+esc(p.bld)+'</p>';
+  if(my.length){
+    h+='<h3>图谱关系（'+my.length+'）</h3>';
+    h+=my.map(e=>'<div class="edge"><div class="ty">'+arrow(e)+' &nbsp;<span style="color:#8b949e">'+esc(e.ty)+'</span>'+
+      ' <span class="badge">'+esc(e.st)+'</span></div><div class="nt">'+esc(e.n)+'</div></div>').join("");
+  }
+  if(rs.length){
+    h+='<h3>涉及风险</h3>';
+    h+=rs.map(r=>'<div class="edge" style="border-color:'+({high:"#f85149",medium:"#d29922",low:"#6e7681"}[r.sev])+'">'+
+      '<div class="ty">'+esc(r.id)+' · '+SEV[r.sev]+' —— '+esc(r.title)+'</div>'+
+      '<div class="nt">'+esc(r.d)+'</div></div>').join("");
+  }
+  h+='<h3>风险</h3><ul>'+p.rk.map(c=>'<li>'+esc(c)+'</li>').join("")+'</ul>';
+  h+='<h3>证据路径</h3><div class="ev">'+p.ev.map(e=>esc(e)).join('<br>')+'</div>';
+  document.getElementById("detail").innerHTML=h;
+}
+
+document.getElementById("search").addEventListener("input",render);
+document.getElementById("list").addEventListener("click",e=>{
+  const it=e.target.closest(".item");if(!it)return;
+  sel=it.dataset.id;render();detail(sel);
+});
+buildFilters();
+sel=DATA.projects[0].id;
+render();
+detail(sel);
+</script>
+</body>
+</html>

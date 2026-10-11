@@ -30,12 +30,26 @@ A simple CAD viewport built using **SDL3** with pluggable **bgfx** and native **
 
 ### Project Structure
 ```
-/lib           -> Source (.cpp) and header (.h) files
-/lib/rendering -> Renderer backend interface, bgfx implementation, and native WebGPU implementation
-main.cpp       -> Entry point
-.gitignore     -> Git ignore rules
-CMakeLists.txt -> CMake build configuration
-README.md      -> Project documentation
+/lib               -> Project sources: rendering, acgs, acdb, acgi, brep, text, ge,
+                      coordinate, shaders, util
+/lib/rendering     -> Renderer backend interface, bgfx implementation, native WebGPU implementation
+/lib/shaders       -> bgfx .sc shader sources + generated embedded-bytecode headers
+/lib/cadui         -> View cube / UCS icon widgets (static lib, linked into WINDOW)
+/lib/SDL, /lib/bgfx, /lib/bimg, /lib/bx, /lib/glm, /lib/imgui,
+/lib/libredwg, /lib/SQLiteCpp, /lib/entt, /lib/wgpu
+                    -> Vendored third-party dependencies
+/external          -> predicates.c (Shewchuk robust predicates)
+/ports             -> OpenCADImGuiPort: native ImGui UI migration sandbox (not built
+                      by the root CMakeLists)
+/examples          -> Standalone examples, each with its own CMakeLists.txt
+/resources         -> Runtime assets: fonts (SHX), textures, presets
+/cmake             -> Shared CMake helpers (Standard.cmake)
+/docs              -> Design notes and implementation plans
+/.agents/skills    -> Agent skill definitions for this codebase
+main.cpp           -> Entry point
+CMakeLists.txt     -> CMake build configuration
+.gitignore         -> Git ignore rules
+README.md          -> Project documentation
 ```
 
 ### Renderer Status
@@ -44,8 +58,8 @@ README.md      -> Project documentation
 - `lib/rendering/BgfxRenderer.*` remains the default production backend.
 - `lib/rendering/WebGpuRenderer.*` implements the scene render path with WGSL pipelines for meshes, line ribbons, fills, points, and the grid.
 - Select the native WebGPU backend at runtime with `set WINDOW_RENDERER=webgpu` before starting `WINDOW.exe`.
-- bgfx shader sources are now migrated under `lib/shaders/bgfx/*/{vertex.sc,frag.sc}` for grid/cube/worldLine/targetPoint passes.
-- BgfxRenderer now loads and validates those bgfx shader source files during initialization before entering the render loop.
+- bgfx shaders use **embedded bytecode**: each pass `#include`s a generated header under `lib/shaders/<pass>/{vertex,frag}.h` that carries `spirv/dx11/dx12/glsl/mtl/essl` byte arrays, selected via `SELECT_SHADER_BINARY(...)`. There is no runtime `.sc` loading.
+- CMake does **not** generate these headers — they are committed to the repo and regenerated manually with `lib/compile_shaders_all.bat` (`-Filter <pass> -Force`). Edit the `.sc` source, recompile, then commit both.
 
 ## Controls
 - **Middle Mouse + Drag** — Pan the orbit target

@@ -69,6 +69,12 @@ CTestCostData.txt
 /close_app.py
 /list_titles.py
 /check_main.py
+# One-shot source-patch / screenshot scratch scripts (see docs/cleanup-audit-2026-10-11.md).
+# NOTE: verify_*.py is deliberately NOT ignored -- those are the live regression harnesses.
+/tools_*.py
+# One-time cleanup helper, delete it after use.
+/cleanup_redundant_files.ps1
+/run_cleanup.cmd
 /tmp_*
 /*.dis
 /*.spv
