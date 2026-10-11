@@ -23,7 +23,14 @@ namespace cadui
         constexpr float kRingZ = -1.0f;
         constexpr float kRingR0 = 1.40f;
         constexpr float kRingR1 = 1.74f;
-        constexpr float kCardinalR = 1.57f;
+        // The band midline is (1.40 + 1.74) / 2 == 1.57, which is where
+        // OpenCADStudio anchors R_CARD.  Measuring the rendered output shows the
+        // rasterised ink of W/E/S landing ~0.10..0.15 local units (~3..5 px) on
+        // the *inner* side of that midline, so the letters visibly float in the
+        // gap between the cube and the band.  The glyph is ~0.26 units wide
+        // radially, so 1.66 keeps the whole ink box inside 1.40..1.74 instead of
+        // straddling the inner edge.
+        constexpr float kCardinalR = 1.66f;
         constexpr float kLabelHeight = 0.46f;
         constexpr float kProjectionHalfExtent = 2000.0f;
 
@@ -335,10 +342,80 @@ namespace cadui
             drawList->AddText(centered, color, text);
         }
 
+        // ImGui lays a text run out on its *em* box: CalcTextSize reports a line
+        // height equal to the requested font size and the glyph X0/Y0 offsets
+        // are measured from that box's top-left.  OpenCADStudio instead
+        // rasterises every label into its ink box (viewcube_text_atlas.rs keeps
+        // the ink extents plus 3 px padding) and centres *that* box on the
+        // anchor.  Both renderers below route through measureInkBox() so a
+        // label sits on the ring midline exactly like the reference instead of
+        // riding about half a cap-height high, and so the ImGui fallback agrees
+        // with the depth-tested bgfx path.
+        struct InkBox
+        {
+            ImVec2 center{ 0.0f, 0.0f };
+            bool valid{ false };
+        };
+
+        InkBox measureInkBox(const char* text, float size)
+        {
+            InkBox box;
+            ImFont* font = ImGui::GetFont();
+            if (!font || !text || !*text)
+            {
+                return box;
+            }
+            const float scale = size / font->FontSize;
+            float minX = std::numeric_limits<float>::max();
+            float minY = std::numeric_limits<float>::max();
+            float maxX = std::numeric_limits<float>::lowest();
+            float maxY = std::numeric_limits<float>::lowest();
+            float pen = 0.0f;   // running pen position: glyph X0/X1 are per-glyph
+            const char* cursor = text;
+            const char* end = text + std::string::traits_type::length(text);
+            while (cursor < end)
+            {
+                unsigned int codepoint = 0;
+                const int bytes = ImTextCharFromUtf8(&codepoint, cursor, end);
+                if (bytes <= 0 || codepoint == 0)
+                {
+                    break;
+                }
+                cursor += bytes;
+                const ImFontGlyph* glyph = font->FindGlyph(static_cast<ImWchar>(codepoint));
+                if (!glyph)
+                {
+                    glyph = font->FindGlyph(static_cast<ImWchar>('?'));
+                }
+                if (!glyph || !glyph->Visible)
+                {
+                    pen += glyph ? glyph->AdvanceX : font->FallbackAdvanceX;
+                    continue;
+                }
+                minX = std::min(minX, pen + glyph->X0);
+                minY = std::min(minY, glyph->Y0);
+                maxX = std::max(maxX, pen + glyph->X1);
+                maxY = std::max(maxY, glyph->Y1);
+                pen += glyph->AdvanceX;
+            }
+            if (maxX < minX || maxY < minY)
+            {
+                return box;
+            }
+            box.center = ImVec2{ (minX + maxX) * 0.5f * scale, (minY + maxY) * 0.5f * scale };
+            box.valid = true;
+            return box;
+        }
+
         void drawTextWithHalo(ImDrawList* drawList, const ImVec2& position,
                               const char* text, ImU32 color, float size)
         {
-            const ImVec2 textSize = ImGui::CalcTextSize(text);
+            // CalcTextSize() always measures with the *current* font size; the
+            // label runs pass an explicit size, so ask the font directly.
+            ImFont* font = ImGui::GetFont();
+            const ImVec2 textSize = font && font->FontSize > 0.0f
+                                        ? font->CalcTextSizeA(size, std::numeric_limits<float>::max(), 0.0f, text)
+                                        : ImVec2(size, size);
             const ImVec2 centered{ position.x - textSize.x * 0.5f,
                                    position.y - textSize.y * 0.5f };
             constexpr ImU32 halo = IM_COL32(255, 255, 255, 175);
@@ -354,6 +431,13 @@ namespace cadui
             drawList->AddText(nullptr, size, centered, color, text);
         }
 
+        // The compass ring is a real 3D ring, not a screen-space circle: ViewCubeBgfx's
+        // buildRing() emits a quad at z = RING_Z whose *positions* go through
+        // uView = compassRotation, while frag.sc carves the 1.40..1.74 annulus
+        // from the un-rotated local XY carried in a_normal.  The band therefore
+        // foreshortens with the camera exactly like OpenCADStudio's triangle
+        // ring (build_ring), and the letters must be projected the same way —
+        // pin them to a screen-space circle and they slide off the band.
         void drawRingLabels(ImDrawList* drawList,
                             const glm::mat3& rotation,
                             const ImVec2& center,
@@ -366,11 +450,20 @@ namespace cadui
                 { 0.0f, -kCardinalR, kRingZ },
                 {-kCardinalR, 0.0f,  kRingZ }
             }};
+            // Same metric as the depth-tested path so the fallback cannot drift
+            // away from the bgfx renderer when the GPU path is unavailable.
+            const float size = kLabelHeight * radius;
             for (unsigned i = 0; i < 4; ++i)
             {
                 const glm::vec3 eye = rotation * directions[i];
-                drawTextWithHalo(drawList, { center.x + eye.x * radius, center.y - eye.y * radius },
-                                 names[i], IM_COL32(13, 20, 33, 255), 12.0f);
+                ImVec2 anchor{ center.x + eye.x * radius, center.y - eye.y * radius };
+                const InkBox ink = measureInkBox(names[i], size);
+                if (ink.valid)
+                {
+                    anchor.x -= ink.center.x;
+                    anchor.y -= ink.center.y;
+                }
+                drawTextWithHalo(drawList, anchor, names[i], IM_COL32(13, 20, 33, 255), size);
             }
         }
 
@@ -448,7 +541,8 @@ namespace cadui
                                         const glm::vec3& v,
                                         const char* text,
                                         ImU32 color,
-                                        float size)
+                                        float size,
+                                        bool inkCentered)
         {
             ImFont* font = ImGui::GetFont();
             if (!font || !text)
@@ -459,8 +553,13 @@ namespace cadui
             const float scale = size / font->FontSize;
             const ImVec2 textSize = font->CalcTextSizeA(
                 size, std::numeric_limits<float>::max(), 0.0f, text, nullptr, nullptr);
-            float x = -textSize.x * 0.5f;
-            const float y = -textSize.y * 0.5f;
+            // Face labels keep ImGui's em-box centring — that is what every
+            // other ImGui label in the app does.  Only the compass letters ask
+            // for ink-box centring, because they are anchored on the ring
+            // midline and an em box would ride about half a cap-height high.
+            const InkBox ink = inkCentered ? measureInkBox(text, size) : InkBox{};
+            float x = ink.valid ? -ink.center.x : -textSize.x * 0.5f;
+            const float y = ink.valid ? -ink.center.y : -textSize.y * 0.5f;
 
             const char* cursor = text;
             const char* end = text + std::string::traits_type::length(text);
@@ -574,27 +673,65 @@ namespace cadui
             }
         }
 
+        // OpenCADStudio assets/icons/ui/home.svg — a 24-unit viewBox outline
+        //   M12 3 L21.5 11.5 H18.5 V20.5 H14 V14.5 H10 V20.5 H5.5 V11.5 H2.5 Z
+        // rendered at 13 px (themed_home(13.0)) inside the 16 px button.  The
+        // outline is concave (door notch) and the previous point list also
+        // carried a stray (-9.5,-8.5) vertex that flattened the gable into a
+        // half-roof.  AddConvexPolyFilled only fills the convex core of a path,
+        // so the shape is emitted as three convex pieces (roof + two wall
+        // slabs) instead of one 12-gon: the door notch then survives.
         void drawHomeIcon(ImDrawList* drawList, const ImVec2& center, bool hovered)
         {
-            const float scale = 13.0f / 24.0f;
-            std::array<ImVec2, 12> polygon{{
-                iconPoint(center, scale, -9.5f, -8.5f),
-                iconPoint(center, scale, 0.0f, -8.5f),
-                iconPoint(center, scale, 9.5f, 0.0f),
-                iconPoint(center, scale, 6.5f, 0.0f),
-                iconPoint(center, scale, 6.5f, 8.5f),
-                iconPoint(center, scale, 2.0f, 8.5f),
-                iconPoint(center, scale, 2.0f, 2.5f),
-                iconPoint(center, scale, -2.0f, 2.5f),
-                iconPoint(center, scale, -2.0f, 8.5f),
-                iconPoint(center, scale, -6.5f, 8.5f),
-                iconPoint(center, scale, -6.5f, 0.0f),
-                iconPoint(center, scale, -9.5f, 0.0f)
+            constexpr float kHomeIconPx = 13.0f;
+            const float scale = kHomeIconPx / 24.0f;
+            const ImU32 color = hovered ? IM_COL32_WHITE : kIcon;
+
+            std::array<ImVec2, 3> roof{{
+                iconPoint(center, scale,  0.0f, -9.0f),
+                iconPoint(center, scale, -9.5f, -0.5f),
+                iconPoint(center, scale,  9.5f, -0.5f)
             }};
-            drawList->AddConvexPolyFilled(polygon.data(), static_cast<int>(polygon.size()), kIcon);
+            drawList->AddTriangleFilled(roof[0], roof[1], roof[2], color);
+
+            // Walls run from the eave line to the base; the 4-unit gap between
+            // x = -2 and x = 2 is the doorway.  Their top edge is pulled 0.2
+            // units above the roof base so the antialiased fills overlap
+            // instead of leaving a hairline seam.
+            std::array<ImVec2, 4> leftWall{{
+                iconPoint(center, scale, -6.5f, -0.7f),
+                iconPoint(center, scale, -2.0f, -0.7f),
+                iconPoint(center, scale, -2.0f,  8.5f),
+                iconPoint(center, scale, -6.5f,  8.5f)
+            }};
+            drawList->AddConvexPolyFilled(leftWall.data(), 4, color);
+
+            std::array<ImVec2, 4> rightWall{{
+                iconPoint(center, scale, 2.0f, -0.7f),
+                iconPoint(center, scale, 6.5f, -0.7f),
+                iconPoint(center, scale, 6.5f,  8.5f),
+                iconPoint(center, scale, 2.0f,  8.5f)
+            }};
+            drawList->AddConvexPolyFilled(rightWall.data(), 4, color);
+
             if (hovered)
             {
-                drawList->AddPolyline(polygon.data(), static_cast<int>(polygon.size()), IM_COL32_WHITE, ImDrawFlags_Closed, 1.0f);
+                std::array<ImVec2, 12> outline{{
+                    iconPoint(center, scale,  0.0f, -9.0f),
+                    iconPoint(center, scale,  9.5f, -0.5f),
+                    iconPoint(center, scale,  6.5f, -0.5f),
+                    iconPoint(center, scale,  6.5f,  8.5f),
+                    iconPoint(center, scale,  2.0f,  8.5f),
+                    iconPoint(center, scale,  2.0f,  2.5f),
+                    iconPoint(center, scale, -2.0f,  2.5f),
+                    iconPoint(center, scale, -2.0f,  8.5f),
+                    iconPoint(center, scale, -6.5f,  8.5f),
+                    iconPoint(center, scale, -6.5f, -0.5f),
+                    iconPoint(center, scale, -9.5f, -0.5f),
+                    iconPoint(center, scale,  0.0f, -9.0f)
+                }};
+                drawList->AddPolyline(outline.data(), static_cast<int>(outline.size()) - 1,
+                                      IM_COL32_WHITE, ImDrawFlags_Closed, 1.0f);
             }
         }
 
@@ -631,33 +768,42 @@ namespace cadui
             }
         }
 
+        // OpenCADStudio assets/icons/ui/tri_*.svg draw a *flat* triangle inside a
+        // 12-unit box — `M2 4.5 L10 4.5 L6 9 Z` — and the nav control renders
+        // that box at themed_arrow_*(8.0) inside the 9 px nudge button.  The old
+        // icon was a symmetric 8x8 px triangle that filled the whole button and
+        // read as a blob, so use the reference proportions: 8 * 8/12 px wide by
+        // 4.5 * 8/12 px tall.  Slots still point inward, exactly like the
+        // reference (top slot uses arrow_down, left slot uses arrow_right).
         void drawNudgeIcon(ImDrawList* drawList, const ImVec2& center, int direction, bool hovered)
         {
-            const float half = 4.0f;
+            constexpr float kNudgeIconPx = 8.0f;
+            const float halfWidth = 4.0f * kNudgeIconPx / 12.0f;
+            const float halfHeight = 4.5f * kNudgeIconPx / 24.0f;
             std::array<ImVec2, 3> points{};
             if (direction == 0)
             {
-                points[0] = { center.x, center.y + half };
-                points[1] = { center.x - half, center.y - half };
-                points[2] = { center.x + half, center.y - half };
+                points[0] = { center.x, center.y + halfHeight };
+                points[1] = { center.x - halfWidth, center.y - halfHeight };
+                points[2] = { center.x + halfWidth, center.y - halfHeight };
             }
             else if (direction == 1)
             {
-                points[0] = { center.x, center.y - half };
-                points[1] = { center.x - half, center.y + half };
-                points[2] = { center.x + half, center.y + half };
+                points[0] = { center.x, center.y - halfHeight };
+                points[1] = { center.x - halfWidth, center.y + halfHeight };
+                points[2] = { center.x + halfWidth, center.y + halfHeight };
             }
             else if (direction == 2)
             {
-                points[0] = { center.x + half, center.y };
-                points[1] = { center.x - half, center.y - half };
-                points[2] = { center.x - half, center.y + half };
+                points[0] = { center.x + halfWidth, center.y };
+                points[1] = { center.x - halfWidth, center.y - halfHeight };
+                points[2] = { center.x - halfWidth, center.y + halfHeight };
             }
             else
             {
-                points[0] = { center.x - half, center.y };
-                points[1] = { center.x + half, center.y - half };
-                points[2] = { center.x + half, center.y + half };
+                points[0] = { center.x - halfWidth, center.y };
+                points[1] = { center.x + halfWidth, center.y - halfHeight };
+                points[2] = { center.x + halfWidth, center.y + halfHeight };
             }
             drawList->AddTriangleFilled(points[0], points[1], points[2], hovered ? IM_COL32_WHITE : kIcon);
         }
@@ -839,6 +985,8 @@ namespace cadui
                         int cardinal = -1;
                         for (unsigned i = 0; i < 4; ++i)
                         {
+                            // Same 3D anchor the label is drawn with, so the hit
+                            // area follows the letters onto the foreshortened band.
                             const glm::vec3 direction = ViewCubeWidget::cardinalDirection(static_cast<int>(i));
                             const glm::vec3 eye = viewRotation * glm::vec3{ direction.x * kCardinalR, direction.y * kCardinalR, kRingZ };
                             const float distance = glm::length(glm::vec2{ mouse.x - (navCenter.x + eye.x * radius),
@@ -898,7 +1046,7 @@ namespace cadui
                     normal * 1.002f, u, v,
                     options.faceLabels[face],
                     IM_COL32(13, 20, 33, 255),
-                    kLabelHeight * radius);
+                    kLabelHeight * radius, false);
             }
 
             const std::array<const char*, 4> names{ "N", "E", "S", "W" };
@@ -908,6 +1056,10 @@ namespace cadui
             }};
             for (unsigned index = 0; index < directions.size(); ++index)
             {
+                // Project through the same view rotation the ring uses, so the
+                // letters ride the foreshortened band instead of a screen-space
+                // circle.  inkCentered: the reference centres the rasterised ink
+                // box of each label, not ImGui's em box.
                 const glm::vec3 center{
                     directions[index].x * kCardinalR,
                     directions[index].y * kCardinalR,
@@ -917,7 +1069,7 @@ namespace cadui
                     labelVertices, origin, cubeCenter, radius, viewRotation,
                     center, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f },
                     names[index], IM_COL32(13, 20, 33, 255),
-                    kLabelHeight * radius);
+                    kLabelHeight * radius, true);
             }
         }
 
