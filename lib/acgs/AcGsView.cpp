@@ -1144,14 +1144,73 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
 
     static std::vector<rendering::TargetPointInstance> points;
     points.clear();
+    polylineVertices.clear();
     for (const acdb::TessellatedPoint &point :
          drawList.geometry().points)
     {
         if (!point.common.visible)
             continue;
-        points.push_back({glm::vec3(point.location - ctx.cameraPos),
-                          glm::vec3(contrastColor(point.common.color)),
-                          float(point.pointSize)});
+        const glm::vec3 center(point.location - ctx.cameraPos);
+        const glm::vec3 color(contrastColor(point.common.color));
+        const float markerSize =
+            point.pointSize > 0.0 ? float(point.pointSize) : pointSize;
+        if (point.displayStyle == acge::PointDisplayStyle::Circle)
+        {
+            points.push_back({center, color, markerSize});
+            continue;
+        }
+
+        float markerPixelSizeWorld = pixelSizeWorld;
+        if (!ctx.ortho && ctx.viewportHeight > 0)
+        {
+            const float projectionScale = std::abs(ctx.projection[1][1]);
+            const float viewDepth =
+                -(ctx.view * glm::vec4(center, 1.0f)).z;
+            if (projectionScale > 1.0e-6f && viewDepth > 0.0f)
+            {
+                markerPixelSizeWorld =
+                    2.0f * viewDepth /
+                    (projectionScale * float(ctx.viewportHeight));
+            }
+        }
+        const float radius = markerSize * markerPixelSizeWorld;
+        const glm::vec3 right = glm::vec3(ctx.cameraRight) * radius;
+        const glm::vec3 up = glm::vec3(ctx.cameraUp) * radius;
+        auto addSymbolLine = [&](const glm::vec3 &from,
+                                 const glm::vec3 &to) {
+            appendAcGiRibbon(from, to, point.common.color,
+                             markerPixelSizeWorld * 0.5f, 0.0f, 1.0f);
+        };
+        switch (point.displayStyle)
+        {
+        case acge::PointDisplayStyle::Square:
+        case acge::PointDisplayStyle::Rectangle:
+        {
+            const glm::vec3 horizontal =
+                right * (point.displayStyle == acge::PointDisplayStyle::Rectangle
+                             ? 1.5f
+                             : 1.0f);
+            const std::array<glm::vec3, 4> corners{
+                center - horizontal - up, center + horizontal - up,
+                center + horizontal + up, center - horizontal + up};
+            for (std::size_t i = 0; i < corners.size(); ++i)
+                addSymbolLine(corners[i], corners[(i + 1) % corners.size()]);
+            break;
+        }
+        case acge::PointDisplayStyle::Plus:
+        case acge::PointDisplayStyle::Star:
+            addSymbolLine(center - right, center + right);
+            addSymbolLine(center - up, center + up);
+            if (point.displayStyle == acge::PointDisplayStyle::Plus)
+                break;
+            [[fallthrough]];
+        case acge::PointDisplayStyle::X:
+            addSymbolLine(center - right - up, center + right + up);
+            addSymbolLine(center - right + up, center + right - up);
+            break;
+        case acge::PointDisplayStyle::Circle:
+            break;
+        }
     }
     if (submitDebugFrameNow)
     {
@@ -1181,6 +1240,19 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             .logDepth = ctx.logDepth,
         };
         viewDevice()->drawTargetPointInstances(pointData);
+    }
+    if (!polylineVertices.empty())
+    {
+        const rendering::PolylineRenderData symbolData{
+            .view = ctx.view,
+            .projection = overlayProjection,
+            .vertices = polylineVertices.data(),
+            .vertexCount = static_cast<uint32_t>(polylineVertices.size()),
+            .logDepth = ctx.logDepth,
+            .edgeSoftness = edgeSoftness,
+            .layer = envLayer("GRID_LINE_LAYER"),
+        };
+        viewDevice()->drawPolylines(symbolData);
     }
 }
 
