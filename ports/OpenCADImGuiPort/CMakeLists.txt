@@ -120,6 +120,7 @@ add_executable(OpenCADImGuiPort
     src/ui/LayersPanel.cpp
     src/ui/OutlinePanel.cpp
     src/ui/DocumentPanel.cpp
+    src/ui/IconSet.cpp
     src/ui/ToolbarPanel.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/CommandLinePanel.cpp

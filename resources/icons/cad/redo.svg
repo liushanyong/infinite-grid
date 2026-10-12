@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Redo">
+  <!-- 重做 · C 族（通用符号）
+       undo.svg 沿 x=12 镜像：上横线经左侧逆时针半圆弧落到下短横线，
+       accent 右向雪佛龙指向被重放的历史方向。
+       几何对齐 OpenCADStudio assets/icons/ui/redo.svg（通用弯箭头语言），
+       色值/线宽沿用本目录 v2 规范。accent ≈ 26 单位² ≈ 4.5%。
+       光学尺寸 ≈ 19.8，工具栏级 18-22。 -->
+  <path d="M21.0 8.0 H10.0 A6.0 6.0 0 0 0 10.0 20.0 H12.0" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16.0 3.0 21.0 8.0 16.0 13.0" fill="none" stroke="#4FA3F2" stroke-width="1.75"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

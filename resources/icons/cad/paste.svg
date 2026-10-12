@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Paste">
+  <!-- 粘贴 · B 族（实体类）
+       neutral 剪贴板外框与夹子 + 板内 accent 实心页面。
+       accent 给"被贴进去的那张纸"（≈ 73 单位² ≈ 12.7%，B 族 18% 内）；
+       夹子用 neutral，避免和 paste 的落点抢焦点。
+       与 copy_clip.svg 区分：那个把 accent 给夹子（"进剪贴板"），这个给纸（"贴出来"）。
+       光学尺寸 18.3 / 19.3，工具栏级 18-22。 -->
+  <rect x="3.6" y="5.2" width="16.8" height="15.6" rx="1.2" fill="none"
+        stroke="#D8E0EA" stroke-width="1.5"/>
+  <rect x="8.8" y="3.0" width="6.4" height="3.8" rx="1.0" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <path d="M8.0 10.0 15.6 10.0 17.8 12.2 17.8 19.4 8.0 19.4 Z" fill="#4FA3F2"/>
+  <path d="M15.6 10.0 15.6 12.2 17.8 12.2" fill="none" stroke="#8B96A6"
+        stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

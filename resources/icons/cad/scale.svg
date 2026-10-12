@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Scale">
+  <!-- 缩放 · A 族（构造类）
+       大方轮廓 + muted 虚线缩放轴 + 右下 accent 实心小方（缩放结果）。
+       accent 给"缩完之后的那个"，面积 7.2 x 7.2 ≈ 52 ≈ 9.0%。
+       光学尺寸 18.3，工具栏级 18-22。 -->
+  <rect x="3.6" y="3.6" width="12.6" height="12.6" rx="0.8" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <path d="M4.8 19.2 19.2 4.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round" stroke-dasharray="2.2 1.8"/>
+  <rect x="14.0" y="14.0" width="7.2" height="7.2" rx="0.6" fill="#4FA3F2"/>
+</svg>

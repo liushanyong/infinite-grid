@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Menu">
+  <!-- 菜单 · C 族（通用 UI 符号）
+       三条横杠，只把中间一条设为 accent（当前所在的那一项）。
+       accent ≈ 24 单位² ≈ 4.1%，正好在参考集的中位面积上。
+       光学尺寸 16.4，状态栏级 14-18。 -->
+  <path d="M4.6 7.2 19.4 7.2" fill="none" stroke="#D8E0EA" stroke-width="1.6"
+        stroke-linecap="round"/>
+  <path d="M4.6 12.0 19.4 12.0" fill="none" stroke="#4FA3F2" stroke-width="1.6"
+        stroke-linecap="round"/>
+  <path d="M4.6 16.8 19.4 16.8" fill="none" stroke="#D8E0EA" stroke-width="1.6"
+        stroke-linecap="round"/>
+</svg>

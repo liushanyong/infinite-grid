@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Object snap">
+  <!-- 对象捕捉 · A 族（构造类）
+       四段 accent 十字臂（中央留空）+ neutral 捕捉目标框 + accent 中心 grip。
+       臂在中间断开是刻意的：断口让中心 grip 读成"正在吸附的那个点"。
+       臂端收到 4.2/19.8，含描边后光学尺寸 17.2，正好留在状态栏 14-18 内。
+       accent 合计 ≈ 29 单位² ≈ 4.9%。
+       光学尺寸 17.2，重心严格 (12,12)。 -->
+  <rect x="8.8" y="8.8" width="6.4" height="6.4" rx="0.6" fill="none"
+        stroke="#D8E0EA" stroke-width="1.5"/>
+  <path d="M12 7.6 12 4.2" fill="none" stroke="#4FA3F2" stroke-width="1.6"
+        stroke-linecap="round"/>
+  <path d="M12 16.4 12 19.8" fill="none" stroke="#4FA3F2" stroke-width="1.6"
+        stroke-linecap="round"/>
+  <path d="M7.6 12 4.2 12" fill="none" stroke="#4FA3F2" stroke-width="1.6"
+        stroke-linecap="round"/>
+  <path d="M16.4 12 19.8 12" fill="none" stroke="#4FA3F2" stroke-width="1.6"
+        stroke-linecap="round"/>
+  <rect x="10.7" y="10.7" width="2.6" height="2.6" rx="0.4" fill="#4FA3F2"/>
+</svg>

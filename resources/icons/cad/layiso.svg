@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Isolate layer">
+  <!-- 孤立图层 · A 族（构造类）
+       neutral 眼睛轮廓 + accent 虹膜。"只看这一层"就是可见性语义，
+       17px 下眼睛比灯泡（AutoCAD 历史上的画法）干净得多。
+       与 layers.svg 刻意区分开：那个是叠瓦的层栈，这个是取景的眼。
+       二次贝塞尔的顶点只到控制点的一半位置，所以控制点必须压到 y=7.6 / 26.0
+       才能把实际轮廓撑到 10.7 高；照着画布边界给控制点只会得到一条扁缝。
+       accent ≈ 25 单位² ≈ 4.3%。
+       光学尺寸 16.3 / 10.7，状态栏级 14-18。 -->
+  <path d="M4.6 12 Q12 7.6 19.4 12 Q12 26.0 4.6 12 Z" fill="none" stroke="#D8E0EA"
+        stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="12" cy="11.5" r="2.8" fill="#4FA3F2"/>
+</svg>

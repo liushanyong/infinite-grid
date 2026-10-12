@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Table">
+  <!-- 列表 · B 族（实体类）
+       accent 表头行 + neutral 外框 + muted 行分隔与列线。
+       实心表头让"这是一张有表头的数据表"一眼成立；行分隔线用 muted 避免抢焦点。
+       accent ≈ 67 单位² ≈ 11.7%，在 B 族 18% 内。
+       光学尺寸 17.5 / 14.7，状态栏级 14-18。 -->
+  <rect x="4.0" y="5.6" width="16.0" height="4.2" fill="#4FA3F2"/>
+  <rect x="4.0" y="5.6" width="16.0" height="13.2" rx="0.8" fill="none"
+        stroke="#D8E0EA" stroke-width="1.5"/>
+  <path d="M4.0 12.8 20.0 12.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M4.0 15.8 20.0 15.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M9.4 9.8 9.4 18.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+</svg>

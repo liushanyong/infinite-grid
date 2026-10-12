@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Text">
+  <!-- 文字 · A 族（构造类）
+       几何 "A" 轮廓 + 一根 accent 文本插入光标。
+       用光标而不是给 A 上色：文字命令的焦点是"插入点在哪"，这也让它区别于
+       任何形状像三角形的其他图标。
+       accent ≈ 8 x 1.8 ≈ 14.4 单位² ≈ 2.5%。
+       光学尺寸 18.5，工具栏级 18-22。 -->
+  <path d="M4.4 19.8 11.9 3.6 19.4 19.8" fill="none" stroke="#D8E0EA"
+        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M7.4 13.4 16.4 13.4" fill="none" stroke="#D8E0EA" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M21.3 8.4 21.3 16.4" fill="none" stroke="#4FA3F2" stroke-width="1.8"
+        stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Move">
+  <!-- 移动 · A 族（构造类）
+       四向箭头 + 中心 accent 方 grip。accent 只给中心点 ≈ 9 单位² ≈ 1.6%：
+       移动命令的焦点是"被抓住的那个点"，不是箭头本身。
+       光学尺寸 19.2，工具栏级 18-22，重心严格 (12,12)。 -->
+  <path d="M12 10.0 12 6.0" fill="none" stroke="#D8E0EA" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M12 14.0 12 18.0" fill="none" stroke="#D8E0EA" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M10.0 12 6.0 12" fill="none" stroke="#D8E0EA" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M14.0 12 18.0 12" fill="none" stroke="#D8E0EA" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M12 2.4 14.4 5.6 9.6 5.6 Z" fill="#D8E0EA"/>
+  <path d="M12 21.6 9.6 18.4 14.4 18.4 Z" fill="#D8E0EA"/>
+  <path d="M2.4 12 5.6 9.6 5.6 14.4 Z" fill="#D8E0EA"/>
+  <path d="M21.6 12 18.4 14.4 18.4 9.6 Z" fill="#D8E0EA"/>
+  <rect x="10.5" y="10.5" width="3.0" height="3.0" rx="0.4" fill="#4FA3F2"/>
+</svg>

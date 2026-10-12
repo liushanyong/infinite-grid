@@ -1,5 +1,5 @@
 #include "ToolbarPanel.hpp"
-#include "UiLayout.hpp"
+#include "IconSet.hpp"
 #include "UiLayout.hpp"
 
 #include <imgui.h>
@@ -13,36 +13,6 @@ namespace ui
 {
     namespace
     {
-        enum class Icon
-        {
-            New,
-            Open,
-            Save,
-            Undo,
-            Redo,
-            Line,
-            Polyline,
-            Circle,
-            Arc,
-            Rect,
-            Copy,
-            Move,
-            Rotate,
-            Scale,
-            Text,
-            Dimension,
-            Leader,
-            Layers,
-            MakeBlock,
-            InsertBlock,
-            Match,
-            Group,
-            Ungroup,
-            Paste,
-            Clipboard,
-            Measure
-        };
-
         ImU32 hoverColor(bool hovered, bool active)
         {
             if (active) return IM_COL32(68, 108, 164, 255);
@@ -50,148 +20,10 @@ namespace ui
             return IM_COL32(0, 0, 0, 0);
         }
 
-        void drawIcon(ImDrawList* dl, const ImVec2& c, Icon icon, ImU32 color)
-        {
-            const float s = 1.0f;
-            switch (icon)
-            {
-            case Icon::New:
-                dl->AddRect(ImVec2(c.x - 8, c.y - 10), ImVec2(c.x + 8, c.y + 10), color, 1.0f, 0, 1.6f);
-                dl->AddLine(ImVec2(c.x - 4, c.y + 3), ImVec2(c.x + 4, c.y + 3), color, 1.5f);
-                dl->AddLine(ImVec2(c.x - 4, c.y + 6), ImVec2(c.x + 2, c.y + 6), color, 1.5f);
-                break;
-            case Icon::Open:
-                dl->AddRect(ImVec2(c.x - 10, c.y - 6), ImVec2(c.x + 10, c.y + 8), color, 1.0f, 0, 1.6f);
-                dl->AddLine(ImVec2(c.x - 10, c.y - 6), ImVec2(c.x - 5, c.y - 10), color, 1.6f);
-                dl->AddLine(ImVec2(c.x - 5, c.y - 10), ImVec2(c.x + 1, c.y - 10), color, 1.6f);
-                dl->AddLine(ImVec2(c.x + 1, c.y - 10), ImVec2(c.x + 3, c.y - 6), color, 1.6f);
-                break;
-            case Icon::Save:
-                dl->AddRect(ImVec2(c.x - 9, c.y - 9), ImVec2(c.x + 9, c.y + 9), color, 1.0f, 0, 1.6f);
-                dl->AddRect(ImVec2(c.x - 4, c.y - 9), ImVec2(c.x + 4, c.y - 2), color, 0.0f, 0, 1.4f);
-                dl->AddRect(ImVec2(c.x - 5, c.y + 1), ImVec2(c.x + 5, c.y + 9), color, 0.0f, 0, 1.4f);
-                break;
-            case Icon::Undo:
-                dl->PathClear();
-                dl->PathArcTo(c, 7.0f, 0.55f, 4.2f, 16);
-                dl->PathStroke(color, 0, 1.8f);
-                dl->AddLine(ImVec2(c.x - 8, c.y - 5), ImVec2(c.x - 8, c.y + 2), color, 1.8f);
-                dl->AddLine(ImVec2(c.x - 8, c.y - 5), ImVec2(c.x - 1, c.y - 5), color, 1.8f);
-                break;
-            case Icon::Redo:
-                dl->PathClear();
-                dl->PathArcTo(c, 7.0f, -1.05f, 2.6f, 16);
-                dl->PathStroke(color, 0, 1.8f);
-                dl->AddLine(ImVec2(c.x + 8, c.y - 5), ImVec2(c.x + 8, c.y + 2), color, 1.8f);
-                dl->AddLine(ImVec2(c.x + 8, c.y - 5), ImVec2(c.x + 1, c.y - 5), color, 1.8f);
-                break;
-            case Icon::Line:
-                dl->AddCircleFilled(ImVec2(c.x - 12, c.y + 8), 3.0f, color);
-                dl->AddCircleFilled(ImVec2(c.x + 12, c.y - 8), 3.0f, color);
-                dl->AddLine(ImVec2(c.x - 10, c.y + 7), ImVec2(c.x + 10, c.y - 7), color, 2.3f);
-                break;
-            case Icon::Polyline:
-                dl->AddLine(ImVec2(c.x - 14, c.y + 7), ImVec2(c.x - 5, c.y - 6), color, 2.2f);
-                dl->AddLine(ImVec2(c.x - 5, c.y - 6), ImVec2(c.x + 4, c.y + 7), color, 2.2f);
-                dl->AddLine(ImVec2(c.x + 4, c.y + 7), ImVec2(c.x + 14, c.y - 7), color, 2.2f);
-                break;
-            case Icon::Circle:
-                dl->AddCircle(c, 12.0f, color, 56, 2.3f);
-                dl->AddLine(ImVec2(c.x, c.y), ImVec2(c.x + 9, c.y - 7), color, 1.6f);
-                break;
-            case Icon::Arc:
-                dl->PathClear();
-                dl->PathArcTo(ImVec2(c.x + 1, c.y + 4), 13.0f, -2.5f, -0.7f, 20);
-                dl->PathStroke(color, 0, 2.3f);
-                break;
-            case Icon::Rect:
-                dl->AddRect(ImVec2(c.x - 12, c.y - 8), ImVec2(c.x + 12, c.y + 8), color, 0.0f, 0, 2.2f);
-                break;
-            case Icon::Copy:
-                dl->AddRect(ImVec2(c.x - 9, c.y - 9), ImVec2(c.x + 4, c.y + 4), color, 0.0f, 0, 1.7f);
-                dl->AddRect(ImVec2(c.x - 4, c.y - 4), ImVec2(c.x + 9, c.y + 9), color, 0.0f, 0, 1.7f);
-                break;
-            case Icon::Move:
-                dl->AddLine(ImVec2(c.x - 10, c.y), ImVec2(c.x + 10, c.y), color, 1.8f);
-                dl->AddLine(ImVec2(c.x, c.y - 10), ImVec2(c.x, c.y + 10), color, 1.8f);
-                dl->AddLine(ImVec2(c.x + 6, c.y - 4), ImVec2(c.x + 10, c.y), color, 1.8f);
-                dl->AddLine(ImVec2(c.x + 6, c.y + 4), ImVec2(c.x + 10, c.y), color, 1.8f);
-                break;
-            case Icon::Rotate:
-                dl->PathClear();
-                dl->PathArcTo(c, 9.0f, -0.8f, 2.2f, 18);
-                dl->PathStroke(color, 0, 2.0f);
-                dl->AddLine(ImVec2(c.x + 9, c.y - 2), ImVec2(c.x + 4, c.y - 6), color, 2.0f);
-                break;
-            case Icon::Scale:
-                dl->AddRect(ImVec2(c.x - 9, c.y - 3), ImVec2(c.x - 1, c.y + 5), color, 0, 0, 1.6f);
-                dl->AddRect(ImVec2(c.x - 1, c.y - 8), ImVec2(c.x + 9, c.y + 8), color, 0, 0, 1.6f);
-                break;
-            case Icon::Text:
-                dl->AddLine(ImVec2(c.x - 10, c.y - 9), ImVec2(c.x + 10, c.y - 9), color, 2.2f);
-                dl->AddLine(ImVec2(c.x, c.y - 9), ImVec2(c.x, c.y + 9), color, 2.2f);
-                dl->AddLine(ImVec2(c.x - 6, c.y + 9), ImVec2(c.x + 6, c.y + 9), color, 2.2f);
-                break;
-            case Icon::Dimension:
-                dl->AddLine(ImVec2(c.x - 12, c.y), ImVec2(c.x + 12, c.y), color, 1.8f);
-                dl->AddLine(ImVec2(c.x - 12, c.y - 7), ImVec2(c.x - 12, c.y + 7), color, 1.8f);
-                dl->AddLine(ImVec2(c.x + 12, c.y - 7), ImVec2(c.x + 12, c.y + 7), color, 1.8f);
-                dl->AddLine(ImVec2(c.x - 8, c.y), ImVec2(c.x - 3, c.y), color, 2.4f);
-                break;
-            case Icon::Leader:
-                dl->AddLine(ImVec2(c.x - 10, c.y + 8), ImVec2(c.x + 5, c.y - 4), color, 2.0f);
-                dl->AddLine(ImVec2(c.x + 5, c.y - 4), ImVec2(c.x + 12, c.y - 4), color, 2.0f);
-                break;
-            case Icon::Layers:
-                for (int i = -1; i <= 1; ++i)
-                {
-                    dl->AddLine(ImVec2(c.x - 11, c.y + i * 7), ImVec2(c.x, c.y - 6 + i * 7), color, 1.9f);
-                    dl->AddLine(ImVec2(c.x, c.y - 6 + i * 7), ImVec2(c.x + 11, c.y + i * 7), color, 1.9f);
-                    dl->AddLine(ImVec2(c.x + 11, c.y + i * 7), ImVec2(c.x, c.y + 6 + i * 7), color, 1.9f);
-                    dl->AddLine(ImVec2(c.x, c.y + 6 + i * 7), ImVec2(c.x - 11, c.y + i * 7), color, 1.9f);
-                }
-                break;
-            case Icon::MakeBlock:
-                dl->AddRect(ImVec2(c.x - 11, c.y - 9), ImVec2(c.x + 11, c.y + 9), color, 1, 0, 1.8f);
-                dl->AddCircle(ImVec2(c.x - 3, c.y + 2), 4.0f, color, 20, 1.5f);
-                dl->AddRect(ImVec2(c.x + 1, c.y - 5), ImVec2(c.x + 7, c.y + 1), color, 0, 0, 1.4f);
-                break;
-            case Icon::InsertBlock:
-                dl->AddRect(ImVec2(c.x - 11, c.y - 9), ImVec2(c.x + 11, c.y + 9), color, 1, 0, 1.8f);
-                dl->AddLine(ImVec2(c.x - 3, c.y + 2), ImVec2(c.x + 5, c.y - 5), color, 1.8f);
-                dl->AddCircleFilled(ImVec2(c.x - 3, c.y + 2), 2.5f, color);
-                break;
-            case Icon::Match:
-                dl->AddRect(ImVec2(c.x - 7, c.y - 10), ImVec2(c.x + 5, c.y - 1), color, 0, 0, 1.6f);
-                dl->AddLine(ImVec2(c.x - 1, c.y - 1), ImVec2(c.x + 5, c.y + 10), color, 2.4f);
-                break;
-            case Icon::Group:
-                dl->AddRect(ImVec2(c.x - 12, c.y - 8), ImVec2(c.x + 2, c.y + 6), color, 0, 0, 1.6f);
-                dl->AddRect(ImVec2(c.x - 2, c.y - 8), ImVec2(c.x + 12, c.y + 6), color, 0, 0, 1.4f);
-                break;
-            case Icon::Ungroup:
-                dl->AddRect(ImVec2(c.x - 12, c.y - 8), ImVec2(c.x + 2, c.y + 6), color, 0, 0, 1.6f);
-                dl->AddLine(ImVec2(c.x + 4, c.y - 8), ImVec2(c.x + 12, c.y + 6), color, 1.6f);
-                break;
-            case Icon::Paste:
-                dl->AddRect(ImVec2(c.x - 8, c.y - 9), ImVec2(c.x + 8, c.y + 9), color, 1, 0, 1.7f);
-                dl->AddRect(ImVec2(c.x - 4, c.y - 11), ImVec2(c.x + 4, c.y - 6), color, 1, 0, 1.7f);
-                break;
-            case Icon::Clipboard:
-                dl->AddLine(ImVec2(c.x - 5, c.y + 8), ImVec2(c.x + 5, c.y - 8), color, 2.0f);
-                dl->AddLine(ImVec2(c.x + 5, c.y - 8), ImVec2(c.x + 8, c.y - 4), color, 1.7f);
-                break;
-            case Icon::Measure:
-                dl->PathClear();
-                dl->PathLineTo(ImVec2(c.x - 12, c.y + 9));
-                dl->PathLineTo(ImVec2(c.x + 2, c.y + 9));
-                dl->PathLineTo(ImVec2(c.x + 12, c.y - 9));
-                dl->PathStroke(color, 0, 2.2f);
-                break;
-            }
-        }
+        // Toolbar icons are drawn at this size inside their button cell.
+        constexpr float kIconSize = 26.0f;
 
-        bool iconAt(const char* id, const char* label, const ImVec2& origin, const ImVec2& size, Icon icon, bool enabled)
+        bool iconAt(const char* id, const char* label, const ImVec2& origin, const ImVec2& size, IconId icon, bool enabled)
         {
             ImGui::PushID(id);
             ImGui::SetCursorScreenPos(origin);
@@ -205,7 +37,8 @@ namespace ui
             const bool active = ImGui::IsItemActive();
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), hoverColor(hovered, active), 3.0f);
-            drawIcon(dl, ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f - (label ? 6.0f : 0.0f)), icon, IM_COL32(116, 195, 248, 255));
+            DrawIcon(dl, icon, ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f - (label ? 6.0f : 0.0f)),
+                     kIconSize, MakeToolbarPalette());
             if (label)
             {
                 const ImVec2 ts = ImGui::CalcTextSize(label);
@@ -221,14 +54,15 @@ namespace ui
             return pressed;
         }
 
-        bool miniIconAt(const char* id, const ImVec2& origin, const ImVec2& size, Icon icon)
+        bool miniIconAt(const char* id, const ImVec2& origin, const ImVec2& size, IconId icon)
         {
             ImGui::PushID(id);
             ImGui::SetCursorScreenPos(origin);
             bool pressed = ImGui::InvisibleButton(id, size);
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), hoverColor(ImGui::IsItemHovered(), ImGui::IsItemActive()), 3.0f);
-            drawIcon(dl, ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f), icon, IM_COL32(205, 215, 228, 255));
+            DrawIconMono(dl, icon, ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f), 18.0f,
+                         IM_COL32(205, 215, 228, 255));
             ImGui::PopID();
             return pressed;
         }
@@ -283,10 +117,10 @@ namespace ui
         const ImVec2 base = vp->WorkPos;
 
         // Quick-access row + ribbon tabs.
-        std::vector<std::pair<Icon, UiActionType>> quick = {
-            {Icon::New, UiActionType::None}, {Icon::Open, UiActionType::OpenFile},
-            {Icon::Save, UiActionType::Save}, {Icon::Undo, UiActionType::Undo},
-            {Icon::Redo, UiActionType::Redo}
+        std::vector<std::pair<IconId, UiActionType>> quick = {
+            {IconId::ToolNew, UiActionType::None}, {IconId::ToolOpen, UiActionType::OpenFile},
+            {IconId::ToolSave, UiActionType::Save}, {IconId::ToolUndo, UiActionType::Undo},
+            {IconId::ToolRedo, UiActionType::Redo}
         };
         float qx = base.x + 8.0f;
         for (size_t i = 0; i < quick.size(); ++i)
@@ -385,46 +219,46 @@ namespace ui
         {
             UiAction a; a.type = UiActionType::SetTool; a.payload = tool; controller.execute(a);
         };
-        if (iconAt("DrawLine", "直线", ImVec2(base.x + 10, by + 4), ImVec2(60, 88), Icon::Line, true)) setTool("Line");
-        if (iconAt("DrawPoly", "多段线", ImVec2(base.x + 74, by + 4), ImVec2(60, 88), Icon::Polyline, true)) setTool("Polyline");
-        if (iconAt("DrawCircle", "圆", ImVec2(base.x + 138, by + 4), ImVec2(60, 88), Icon::Circle, true)) setTool("Circle");
-        if (iconAt("DrawArc", "弧", ImVec2(base.x + 202, by + 4), ImVec2(60, 88), Icon::Arc, true)) setTool("Arc");
-        if (iconAt("DrawRect", "矩形", ImVec2(base.x + 266, by + 4), ImVec2(60, 88), Icon::Rect, true)) setTool("Rectangle");
+        if (iconAt("DrawLine", "直线", ImVec2(base.x + 10, by + 4), ImVec2(60, 88), IconId::ToolLine, true)) setTool("Line");
+        if (iconAt("DrawPoly", "多段线", ImVec2(base.x + 74, by + 4), ImVec2(60, 88), IconId::ToolPolyline, true)) setTool("Polyline");
+        if (iconAt("DrawCircle", "圆", ImVec2(base.x + 138, by + 4), ImVec2(60, 88), IconId::ToolCircle, true)) setTool("Circle");
+        if (iconAt("DrawArc", "弧", ImVec2(base.x + 202, by + 4), ImVec2(60, 88), IconId::ToolArc, true)) setTool("Arc");
+        if (iconAt("DrawRect", "矩形", ImVec2(base.x + 266, by + 4), ImVec2(60, 88), IconId::ToolRect, true)) setTool("Rectangle");
         groupCaption(dl, "绘制", base.x, 342.0f, capY);
 
-        if (iconAt("Copy", "复制", ImVec2(base.x + 350, by + 4), ImVec2(58, 88), Icon::Copy, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
-        if (iconAt("Move", "移动", ImVec2(base.x + 412, by + 4), ImVec2(58, 88), Icon::Move, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
+        if (iconAt("Copy", "复制", ImVec2(base.x + 350, by + 4), ImVec2(58, 88), IconId::ToolCopy, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
+        if (iconAt("Move", "移动", ImVec2(base.x + 412, by + 4), ImVec2(58, 88), IconId::ToolMove, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
         groupCaption(dl, "修改", base.x + 342.0f, 138.0f, capY);
 
-        if (iconAt("Text", "文字", ImVec2(base.x + 488, by + 4), ImVec2(58, 88), Icon::Text, false)) {}
-        if (iconAt("Dim", "尺寸", ImVec2(base.x + 550, by + 4), ImVec2(58, 88), Icon::Dimension, false)) {}
+        if (iconAt("Text", "文字", ImVec2(base.x + 488, by + 4), ImVec2(58, 88), IconId::ToolText, false)) {}
+        if (iconAt("Dim", "尺寸", ImVec2(base.x + 550, by + 4), ImVec2(58, 88), IconId::ToolDimension, false)) {}
         groupCaption(dl, "注释", base.x + 480.0f, 138.0f, capY);
 
-        if (iconAt("Layers", "图层", ImVec2(base.x + 626, by + 4), ImVec2(64, 88), Icon::Layers, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
+        if (iconAt("Layers", "图层", ImVec2(base.x + 626, by + 4), ImVec2(64, 88), IconId::ToolLayers, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
         comboLike("LayerMode", "随层", ImVec2(base.x + 698, by + 5), ImVec2(168, 23));
         comboLike("LayerPlot", "随层", ImVec2(base.x + 698, by + 33), ImVec2(168, 23));
         comboLike("LayerWide", "随层", ImVec2(base.x + 698, by + 61), ImVec2(168, 23));
         groupCaption(dl, "图层", base.x + 618.0f, 256.0f, capY);
 
-        if (iconAt("MakeBlock", "创建块", ImVec2(base.x + 882, by + 4), ImVec2(62, 88), Icon::MakeBlock, false)) {}
-        if (iconAt("InsertBlock", "插入块", ImVec2(base.x + 948, by + 4), ImVec2(62, 88), Icon::InsertBlock, false)) {}
+        if (iconAt("MakeBlock", "创建块", ImVec2(base.x + 882, by + 4), ImVec2(62, 88), IconId::ToolMakeBlock, false)) {}
+        if (iconAt("InsertBlock", "插入块", ImVec2(base.x + 948, by + 4), ImVec2(62, 88), IconId::ToolInsertBlock, false)) {}
         groupCaption(dl, "块", base.x + 874.0f, 118.0f, capY);
 
-        if (iconAt("Match", "匹配", ImVec2(base.x + 1000, by + 4), ImVec2(60, 88), Icon::Match, false)) {}
+        if (iconAt("Match", "匹配", ImVec2(base.x + 1000, by + 4), ImVec2(60, 88), IconId::ToolMatch, false)) {}
         comboLike("Prop1", "随层", ImVec2(base.x + 1066, by + 5), ImVec2(106, 23));
         comboLike("Prop2", "随层", ImVec2(base.x + 1066, by + 33), ImVec2(106, 23));
         comboLike("Prop3", "随层", ImVec2(base.x + 1066, by + 61), ImVec2(106, 23));
         groupCaption(dl, "特性", base.x + 992.0f, 188.0f, capY);
 
-        if (iconAt("Group", "组", ImVec2(base.x + 1188, by + 4), ImVec2(54, 88), Icon::Group, false)) {}
-        if (iconAt("Ungroup", "取消组", ImVec2(base.x + 1246, by + 4), ImVec2(54, 88), Icon::Ungroup, false)) {}
+        if (iconAt("Group", "组", ImVec2(base.x + 1188, by + 4), ImVec2(54, 88), IconId::ToolGroup, false)) {}
+        if (iconAt("Ungroup", "取消组", ImVec2(base.x + 1246, by + 4), ImVec2(54, 88), IconId::ToolUngroup, false)) {}
         groupCaption(dl, "组", base.x + 1180.0f, 118.0f, capY);
 
-        if (iconAt("Paste", "粘贴", ImVec2(base.x + 1306, by + 4), ImVec2(56, 88), Icon::Paste, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
-        miniIconAt("Cut", ImVec2(base.x + 1364, by + 8), ImVec2(24, 22), Icon::Clipboard);
+        if (iconAt("Paste", "粘贴", ImVec2(base.x + 1306, by + 4), ImVec2(56, 88), IconId::ToolPaste, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
+        miniIconAt("Cut", ImVec2(base.x + 1364, by + 8), ImVec2(24, 22), IconId::ToolClipboard);
         groupCaption(dl, "剪贴板", base.x + 1298.0f, 86.0f, capY);
 
-        if (iconAt("Measure", "测量", ImVec2(base.x + 1392, by + 4), ImVec2(62, 88), Icon::Measure, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
+        if (iconAt("Measure", "测量", ImVec2(base.x + 1392, by + 4), ImVec2(62, 88), IconId::ToolMeasure, true)) { UiAction a; a.type=UiActionType::None; controller.execute(a); }
         groupCaption(dl, "测量", base.x + 1384.0f, 90.0f, capY);
 
         // Document tab strip.

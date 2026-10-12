@@ -361,6 +361,7 @@ inline int runStoreSelfTest()
         // Block definition over two members + one reference.
         AcDbPoint memberA;
         memberA.location = {0.0, 0.0, 0.0};
+        memberA.displayStyle = acge::PointDisplayStyle::Star;
         blockMemberAHandle = document.addEntity(std::move(memberA));
         AcDbCircle memberB;
         memberB.center = {0.0, 0.0, 0.0};
@@ -423,6 +424,13 @@ inline int runStoreSelfTest()
                   common(*member).ownerHandle == blockDefinitionHandle,
               "loaded block member retains its owner");
     }
+    const AcDbEntityVariant *styledPoint =
+        loaded.getEntity(blockMemberAHandle);
+    check(styledPoint != nullptr &&
+              std::holds_alternative<AcDbPoint>(*styledPoint) &&
+              std::get<AcDbPoint>(*styledPoint).displayStyle ==
+                  acge::PointDisplayStyle::Star,
+          "point display style round-trips");
 
     // Fresh session, fresh mirror: the loaded document binds into a new
     // SceneStore through the bridge (SQLite 管句柄管文件 → ECS 管

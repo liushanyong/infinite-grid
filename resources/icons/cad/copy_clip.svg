@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Copy to clipboard">
+  <!-- 复制到剪贴板 · A 族（构造类）
+       neutral 板体轮廓 + muted 内容线 + accent 实心夹子。
+       accent 落在夹子上（≈ 23 单位² ≈ 4.0%）—— 命令名里的"剪贴板"就是它；
+       板体只是容器，不该抢焦点，所以只有轮廓没有填充。
+       光学尺寸 19.0，工具栏级 18-22。 -->
+  <rect x="4.0" y="5.0" width="16.0" height="16.4" rx="1.0" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <rect x="8.8" y="2.8" width="6.4" height="3.6" rx="1.0" fill="#4FA3F2"/>
+  <rect x="8.8" y="2.8" width="6.4" height="3.6" rx="1.0" fill="none"
+        stroke="#D8E0EA" stroke-width="1.2"/>
+  <path d="M8.0 12.2 16.0 12.2" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M8.0 16.0 13.4 16.0" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+</svg>

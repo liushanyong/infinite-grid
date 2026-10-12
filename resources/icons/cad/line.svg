@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Line">
+  <!-- 直线 · A 族（构造类）
+       细轮廓 + 两端实心方 grip。accent 只落在 grip 上（2 x 5.8 = 11.6 单位² ≈ 2.0%），
+       语义即"这条命令真正要你点的就是这两个端点"。
+       方 grip 而非圆点：方块是 CAD 抓取点的视觉约定，26px 下也比圆点利落。
+       光学尺寸 19.0，工具栏级 18-22，重心严格 (12,12)。 -->
+  <path d="M3.6 20.4 20.4 3.6" fill="none" stroke="#D8E0EA" stroke-width="1.4"
+        stroke-linecap="round"/>
+  <rect x="2.5" y="19.3" width="2.2" height="2.2" rx="0.4" fill="#4FA3F2"/>
+  <rect x="19.3" y="2.5" width="2.2" height="2.2" rx="0.4" fill="#4FA3F2"/>
+</svg>

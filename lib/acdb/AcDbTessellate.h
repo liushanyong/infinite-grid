@@ -74,6 +74,7 @@ struct TessellatedPoint
     glm::dvec3 location{0.0};
     AcDbEntity common;
     double pointSize = 7.0;
+    acge::PointDisplayStyle displayStyle{acge::PointDisplayStyle::Circle};
 };
 
 struct TessellatedEntity
@@ -632,7 +633,7 @@ inline void tessellate(const AcDbPolyFaceMesh &mesh, TessellatedEntity &result,
 inline void tessellate(const AcDbPoint &point, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
-    result.points.push_back({point.location});
+    result.points.push_back({point.location, {}, 7.0, point.displayStyle});
 }
 
 // An AcDbBlockReference carries no geometry of its own: its members are

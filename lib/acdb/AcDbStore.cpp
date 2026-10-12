@@ -2,6 +2,7 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
+#include <cmath>
 #include <type_traits>
 
 #include "acdb/AcDbJson.h"
@@ -184,6 +185,7 @@ Value encodePayload(const AcDbPoint &e)
 {
     Value out(json::Object{});
     out.set("location", point3ToJson(e.location));
+    out.set("displayStyle", static_cast<int>(e.displayStyle));
     return out;
 }
 
@@ -491,6 +493,15 @@ bool decodeInto(const Value &commonData, const Value &data,
     else if constexpr (std::is_same_v<Payload, AcDbPoint>)
     {
         payload.location = jsonToPoint3(data.find("location") ? *data.find("location") : Value());
+        if (const Value *v = data.find("displayStyle"))
+        {
+            const double style = v->asNumber();
+            if (std::isfinite(style) && style >= 0.0 && style <= 5.0 &&
+                std::floor(style) == style)
+                payload.displayStyle =
+                    static_cast<acge::PointDisplayStyle>(
+                        static_cast<std::uint8_t>(style));
+        }
     }
     else if constexpr (std::is_same_v<Payload, AcDbRay>)
     {

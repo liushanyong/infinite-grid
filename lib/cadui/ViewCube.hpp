@@ -61,7 +61,7 @@ namespace cadui
     struct ViewCubeOptions
     {
         // Localized face captions in region order: top/bottom/front/back/right/left.
-        std::array<const char*, 6> faceLabels{ "TOP", "BOTTOM", "FRONT", "BACK", "RIGHT", "LEFT" };
+        std::array<const char*, 6> faceLabels{ "TOP", "BOTTOM", "FRONT", "BACK", "RIGHT", "LEFT" };//可以添加中文，不过需要加载中文字库
         bool showControls{ true };
         bool showUcsPicker{ true };
         const char* activeUcs{ "WCS" };

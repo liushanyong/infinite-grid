@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Add">
+  <!-- 加号 · C 族（通用 UI 符号）
+       muted 虚线圆 + accent 实心十字。虚线圈给"在图纸上取一点"的 CAD 语境，
+       裸加号会退化成纯 UI 符号。accent ≈ 44 单位² ≈ 7.7%。
+       光学尺寸 17.4，状态栏级 14-18。 -->
+  <circle cx="12" cy="12" r="7.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+          stroke-dasharray="2.2 1.8"/>
+  <path d="M12 6.2 12 17.8" fill="none" stroke="#4FA3F2" stroke-width="1.9"
+        stroke-linecap="round"/>
+  <path d="M6.2 12 17.8 12" fill="none" stroke="#4FA3F2" stroke-width="1.9"
+        stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Rotate">
+  <!-- 旋转 · A 族（构造类）
+       顺时针大弧（缺口在左侧，从左上到左下） + 切向箭头 + 中心 accent 枢轴 grip。
+       弧用 neutral、枢轴用 accent：旋转的语义焦点是"绕哪个点转"，不是弧本身。
+       accent ≈ 9 单位² ≈ 1.6%。
+       r=8.9 是为把光学尺寸顶进工具栏 18-22 区间；箭头是填充，不参与描边膨胀，
+       所以整幅的宽由弧决定（21.7 含描边），高由弧顶到箭头底决定。
+       光学尺寸 18.21 / 19.95。 -->
+  <path d="M16.45 4.293 A8.9 8.9 0 1 1 5.183 17.723" fill="none" stroke="#D8E0EA"
+        stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M5.183 17.723 8.221 18.698 5.617 20.884 Z" fill="#D8E0EA"/>
+  <rect x="10.7" y="10.7" width="2.6" height="2.6" rx="0.4" fill="#4FA3F2"/>
+</svg>

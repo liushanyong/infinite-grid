@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Copy">
+  <!-- 复制 · B 族（实体类）
+       后页 neutral 轮廓 + 前页 accent 实心 + muted 折角线。
+       accent 给"新出现的那一份"，面积 7.4 x 11.8 ≈ 87 ≈ 15.2%，在 B 族 18% 内。
+       光学尺寸 18.3，工具栏级 18-22。 -->
+  <path d="M3.6 3.0 14.8 3.0 18.2 6.4 18.2 16.8 3.6 16.8 Z" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M14.8 3.0 14.8 6.4 18.2 6.4" fill="none" stroke="#D8E0EA"
+        stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M7.6 8.8 15.6 8.8 19.0 12.2 19.0 20.6 7.6 20.6 Z" fill="#4FA3F2"/>
+  <path d="M15.6 8.8 15.6 12.2 19.0 12.2" fill="none" stroke="#8B96A6"
+        stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Settings">
+  <!-- 设置 · C 族（通用 UI 符号）
+       齿圈用"底圆 + 6 根径向齿"而不是多段外轮廓：17px 下真正的齿轮路径会糊成一坨，
+       径向齿在缩小时仍然读得出锯齿。accent 只给中心轴毂 ≈ 16.6 单位² ≈ 2.9%。
+       光学尺寸 18.0，状态栏级 14-18，重心严格 (12,12)。 -->
+  <circle cx="12" cy="12" r="5.4" fill="none" stroke="#D8E0EA" stroke-width="1.5"/>
+  <path d="M17.4 12 20.0 12" fill="none" stroke="#D8E0EA" stroke-width="2.0"
+        stroke-linecap="round"/>
+  <path d="M14.7 16.676 16.0 18.928" fill="none" stroke="#D8E0EA" stroke-width="2.0"
+        stroke-linecap="round"/>
+  <path d="M9.3 16.676 8.0 18.928" fill="none" stroke="#D8E0EA" stroke-width="2.0"
+        stroke-linecap="round"/>
+  <path d="M6.6 12 4.0 12" fill="none" stroke="#D8E0EA" stroke-width="2.0"
+        stroke-linecap="round"/>
+  <path d="M9.3 7.324 8.0 5.072" fill="none" stroke="#D8E0EA" stroke-width="2.0"
+        stroke-linecap="round"/>
+  <path d="M14.7 7.324 16.0 5.072" fill="none" stroke="#D8E0EA" stroke-width="2.0"
+        stroke-linecap="round"/>
+  <circle cx="12" cy="12" r="2.3" fill="#4FA3F2"/>
+</svg>

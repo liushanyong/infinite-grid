@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="New document">
+  <!-- 新建 · B 族（实体类）
+       带折角的页面轮廓 + 两条 muted 内容线 + accent 加号。
+       加号是唯一的语义焦点，accent 面积 2 x 5.2 x 1.8 ≈ 18.7 单位² ≈ 3.2%，
+       远在 B 族 18% 预算之内 —— 实心块面在这里是错的，页面没有体积。
+       光学尺寸 20.7，工具栏级 18-22。 -->
+  <path d="M5.2 2.4 14.2 2.4 19.0 7.2 19.0 21.6 5.2 21.6 Z" fill="none"
+        stroke="#D8E0EA" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M14.2 2.4 14.2 7.2 19.0 7.2" fill="none" stroke="#D8E0EA"
+        stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M8.0 10.4 16.2 10.4" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M8.0 13.2 13.8 13.2" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M10.6 15.8 10.6 21.0" fill="none" stroke="#4FA3F2" stroke-width="1.8"
+        stroke-linecap="round"/>
+  <path d="M8.0 18.4 13.2 18.4" fill="none" stroke="#4FA3F2" stroke-width="1.8"
+        stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Ungroup">
+  <!-- 取消组合 · A 族（构造类）
+       两个 neutral 方框拉开到对角，中间一条断成两截的 accent 切割线。
+       断口是必须的：连续的一条线读起来像"关联"，断开才读得出"拆开"。
+       与 group.svg 共用同一对方框尺寸，一眼能看出是互逆操作。
+       光学尺寸 18.2，工具栏级 18-22。 -->
+  <rect x="3.6" y="3.6" width="8.0" height="8.0" rx="0.6" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <rect x="12.4" y="12.4" width="8.0" height="8.0" rx="0.6" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <path d="M7.0 17.0 10.2 13.8" fill="none" stroke="#4FA3F2" stroke-width="1.8"
+        stroke-linecap="round"/>
+  <path d="M13.8 10.2 17.0 7.0" fill="none" stroke="#4FA3F2" stroke-width="1.8"
+        stroke-linecap="round"/>
+</svg>

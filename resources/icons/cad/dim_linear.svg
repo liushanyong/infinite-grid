@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Linear dimension">
+  <!-- 线性标注 · A 族（构造类）
+       muted 尺寸界线与界线端点刻痕 + accent 尺寸线与双向箭头。
+       界线用 muted（它是延伸出来的辅助线），只有真正被读数的"跨距"用 accent，
+       面积 ≈ 33 单位² ≈ 5.8%，在 A 族 7% 预算内。
+       光学尺寸 18.8，工具栏级 18-22。 -->
+  <path d="M3.8 4.4 3.8 14.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M20.2 4.4 20.2 14.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M2.6 4.4 5.0 4.4" fill="none" stroke="#D8E0EA" stroke-width="1.4"
+        stroke-linecap="round"/>
+  <path d="M19.0 4.4 21.4 4.4" fill="none" stroke="#D8E0EA" stroke-width="1.4"
+        stroke-linecap="round"/>
+  <path d="M3.8 12.8 20.2 12.8" fill="none" stroke="#4FA3F2" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M3.8 12.8 6.4 11.1 6.4 14.5 Z" fill="#4FA3F2"/>
+  <path d="M20.2 12.8 17.6 11.1 17.6 14.5 Z" fill="#4FA3F2"/>
+</svg>

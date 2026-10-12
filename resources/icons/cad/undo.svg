@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Undo">
+  <!-- 撤销 · C 族（通用符号）
+       上横线经右侧顺时针半圆弧落到下短横线，构成"回退"的回转轨迹；
+       accent 左向雪佛龙是唯一语义焦点：指向被恢复的历史方向。
+       几何对齐 OpenCADStudio assets/icons/ui/undo.svg（通用弯箭头语言），
+       色值/线宽沿用本目录 v2 规范。accent ≈ 26 单位² ≈ 4.5%。
+       光学尺寸 ≈ 19.8，工具栏级 18-22。 -->
+  <path d="M3.0 8.0 H14.0 A6.0 6.0 0 0 1 14.0 20.0 H12.0" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M8.0 3.0 3.0 8.0 8.0 13.0" fill="none" stroke="#4FA3F2" stroke-width="1.75"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

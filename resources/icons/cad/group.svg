@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Group">
+  <!-- 组合 · A 族（构造类）
+       muted 虚线选择框 + 两个 neutral 成员方框 + 交叠处 accent 实心。
+       交叠区用 accent 是关键：它标出"这两个已经是一个整体"。
+       accent ≈ 10.2 单位² ≈ 1.8%。
+       光学尺寸 18.4，工具栏级 18-22，重心严格 (12,12)。 -->
+  <rect x="3.6" y="3.6" width="16.8" height="16.8" rx="0.8" fill="none"
+        stroke="#8B96A6" stroke-width="1.2" stroke-dasharray="2.4 2.0"/>
+  <rect x="5.4" y="5.4" width="8.2" height="8.2" rx="0.6" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <rect x="10.4" y="10.4" width="8.2" height="8.2" rx="0.6" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <rect x="10.4" y="10.4" width="3.2" height="3.2" fill="#4FA3F2"/>
+</svg>

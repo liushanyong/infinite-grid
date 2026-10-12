@@ -735,37 +735,48 @@ namespace cadui
             }
         }
 
+        // OpenCADStudio assets/icons/ui/undo.svg / redo.svg — 24-unit stroke
+        // icons (stroke-width 2.2, round caps): a chevron whose tip meets the
+        // start of a horizontal line, which dives through a half-circle drum
+        // into a short return stub.
+        //   undo: M8 3 L3 8 L8 13   M3 8 H14 A6 6 0 0 1 14 20 H12
+        //   redo: mirrored about x = 12.
+        // Coordinates below are the SVG units re-centred on the icon origin
+        // (x-12, y-12); kIcon happens to be the SVGs' own stroke colour
+        // #B4B6B9.  The previous geometry put the chevron tip 5 units inboard
+        // of the line start and the whole glyph ~6 units high, so the arrow
+        // rode on top of the drum instead of feeding it.
         void drawRollIcon(ImDrawList* drawList, const ImVec2& center, bool redo, bool hovered)
         {
-            const float scale = 12.0f / 24.0f;
+            constexpr float kRollIconPx = 13.0f;   // matches themed_home(13.0)
+            const float scale = kRollIconPx / 24.0f;
             const ImU32 color = hovered ? IM_COL32_WHITE : kIcon;
+            const float s = redo ? 1.0f : -1.0f;   // redo mirrors undo about x = 0
+
             drawList->PathClear();
+            drawList->PathLineTo(iconPoint(center, scale, s * 4.0f, -9.0f));
+            drawList->PathLineTo(iconPoint(center, scale, s * 9.0f, -4.0f));
+            drawList->PathLineTo(iconPoint(center, scale, s * 4.0f, 1.0f));
+            drawList->PathStroke(color, false, 2.2f * scale);
+
+            // Half-circle drum: undo's bulges right (sweep -pi/2 -> +pi/2
+            // through angle 0), redo's mirrors through angle -pi.  PathArcTo
+            // interpolates the angle linearly, so the reversed sweep works.
+            drawList->PathClear();
+            drawList->PathLineTo(iconPoint(center, scale, s * 9.0f, -4.0f));
+            drawList->PathLineTo(iconPoint(center, scale, s * -2.0f, -4.0f));
             if (!redo)
             {
-                drawList->PathLineTo(iconPoint(center, scale, 8.0f, -4.0f));
-                drawList->PathLineTo(iconPoint(center, scale, -2.0f, 1.0f));
-                drawList->PathLineTo(iconPoint(center, scale, 8.0f, 6.0f));
-                drawList->PathStroke(color, false, 2.2f);
-                drawList->PathClear();
-                drawList->PathLineTo(iconPoint(center, scale, -2.0f, 1.0f));
-                drawList->PathLineTo(iconPoint(center, scale, 8.0f, 1.0f));
-                drawList->PathArcTo(iconPoint(center, scale, 8.0f, 7.0f), 6.0f * scale, -1.5707963f, 1.5707963f, 12);
-                drawList->PathLineTo(iconPoint(center, scale, 7.0f, 13.0f));
-                drawList->PathStroke(color, false, 2.2f);
+                drawList->PathArcTo(iconPoint(center, scale, 2.0f, 2.0f), 6.0f * scale,
+                                    -1.5707963f, 1.5707963f, 12);
             }
             else
             {
-                drawList->PathLineTo(iconPoint(center, scale, -8.0f, -4.0f));
-                drawList->PathLineTo(iconPoint(center, scale, 2.0f, 1.0f));
-                drawList->PathLineTo(iconPoint(center, scale, -8.0f, 6.0f));
-                drawList->PathStroke(color, false, 2.2f);
-                drawList->PathClear();
-                drawList->PathLineTo(iconPoint(center, scale, 2.0f, 1.0f));
-                drawList->PathLineTo(iconPoint(center, scale, -8.0f, 1.0f));
-                drawList->PathArcTo(iconPoint(center, scale, -8.0f, 7.0f), 6.0f * scale, -1.5707963f, 1.5707963f, 12);
-                drawList->PathLineTo(iconPoint(center, scale, -7.0f, 13.0f));
-                drawList->PathStroke(color, false, 2.2f);
+                drawList->PathArcTo(iconPoint(center, scale, -2.0f, 2.0f), 6.0f * scale,
+                                    -1.5707963f, -4.7123890f, 12);
             }
+            drawList->PathLineTo(iconPoint(center, scale, 0.0f, 8.0f));
+            drawList->PathStroke(color, false, 2.2f * scale);
         }
 
         // OpenCADStudio assets/icons/ui/tri_*.svg draw a *flat* triangle inside a
@@ -1066,7 +1077,7 @@ namespace cadui
                     kRingZ + 0.004f
                 };
                 appendOrientedTextVertices(
-                    labelVertices, origin, cubeCenter, radius, viewRotation,
+                    labelVertices, origin, cubeCenter, radius + 1 , viewRotation,
                     center, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f },
                     names[index], IM_COL32(13, 20, 33, 255),
                     kLabelHeight * radius, true);

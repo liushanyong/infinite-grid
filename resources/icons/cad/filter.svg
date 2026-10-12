@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Filter">
+  <!-- 过滤 · B 族（实体类）
+       neutral 漏斗轮廓 + 两条 muted 进料线 + accent 落下的滤出点。
+       落点必须落在漏斗口之外才能读出"过滤"：画在斗里就只是一个点。
+       accent ≈ 8 单位² ≈ 1.4%，刻意极小。
+       光学尺寸 17.5 / 17.9，状态栏级 14-18。 -->
+  <path d="M4.0 5.0 20.0 5.0 14.4 11.8 14.4 18.0 9.6 18.0 9.6 11.8 Z" fill="none"
+        stroke="#D8E0EA" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M7.2 7.6 16.8 7.6" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M9.2 9.8 14.8 9.8" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <path d="M12 18.0 12 19.0" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round"/>
+  <circle cx="12" cy="20.6" r="1.6" fill="#4FA3F2"/>
+</svg>

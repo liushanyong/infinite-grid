@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Ortho">
+  <!-- 正交 · A 族（构造类）
+       accent 直角折线 + 两端 neutral 方 grip + muted 虚线对角（被禁止的自由方向）。
+       对角线是这枚图标的关键：没有它，直角只是一根弯线，看不出"正交"的意思。
+       折线整体右移到 x=5.6/18.0：L 形天然偏左下，不右移重心会掉到 (10.5, 13.5)。
+       accent ≈ 35 单位² ≈ 6.0%，在 A 族 7% 预算内。
+       光学尺寸 14.4 / 14.2，状态栏级 14-18，重心 (11.8, 12.1)。 -->
+  <path d="M5.6 18.2 5.6 6.0 18.0 6.0" fill="none" stroke="#4FA3F2"
+        stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M5.6 18.2 18.0 6.0" fill="none" stroke="#8B96A6" stroke-width="1.2"
+        stroke-linecap="round" stroke-dasharray="2.2 1.8"/>
+  <rect x="4.6" y="17.2" width="2.0" height="2.0" rx="0.4" fill="#D8E0EA"/>
+  <rect x="17.0" y="5.0" width="2.0" height="2.0" rx="0.4" fill="#D8E0EA"/>
+</svg>

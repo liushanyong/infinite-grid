@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Zoom extents">
+  <!-- 范围缩放 · A 族（构造类）
+       neutral 视口方框 + 四角 accent 括号（CAD 的 "Zoom Extents" 标准记法）。
+       四角括号比四面箭头更像"把内容撑满这一格"，也比重画四向箭头更省墨。
+       accent ≈ 33 单位² ≈ 5.8%，在 A 族 7% 预算内。
+       光学尺寸 16.4，状态栏级 14-18。 -->
+  <rect x="6.6" y="6.6" width="10.8" height="10.8" rx="0.8" fill="none"
+        stroke="#D8E0EA" stroke-width="1.4"/>
+  <path d="M4.6 7.2 4.6 4.6 7.2 4.6" fill="none" stroke="#4FA3F2"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16.8 4.6 19.4 4.6 19.4 7.2" fill="none" stroke="#4FA3F2"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M19.4 16.8 19.4 19.4 16.8 19.4" fill="none" stroke="#4FA3F2"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M7.2 19.4 4.6 19.4 4.6 16.8" fill="none" stroke="#4FA3F2"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
