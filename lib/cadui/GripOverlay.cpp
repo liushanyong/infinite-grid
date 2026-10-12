@@ -70,16 +70,24 @@ namespace cadui
             if (grip.shape == GripShape::GizmoAxis)
             {
                 const auto axes = gizmoScreenAxes(grip.world, projected, project);
-                const glm::vec2 axis = *axes[grip.shapeIndex % 3];
+                const auto &axis = axes[grip.shapeIndex % axes.size()];
+                if (!axis)
+                {
+                    return std::nullopt;
+                }
                 return std::pair{
-                    projected + axis * kGripGizmoAxisPixels,
+                    projected + *axis * kGripGizmoAxisPixels,
                     std::optional<glm::vec2>{
-                        glm::vec2(axis.x, -axis.y) }};
+                        glm::vec2(axis->x, -axis->y) }};
             }
             if (grip.shape == GripShape::GizmoPlane)
             {
                 const auto axes = gizmoScreenAxes(grip.world, projected, project);
                 const glm::u8vec2 pair = gripGizmoPlaneAxes(grip.shapeIndex);
+                if (!axes[pair.x] || !axes[pair.y])
+                {
+                    return std::nullopt;
+                }
                 const glm::vec2 a = *axes[pair.x];
                 const glm::vec2 b = *axes[pair.y];
                 return std::pair{
@@ -104,7 +112,7 @@ namespace cadui
             glm::vec2 position = projected;
             if (grip.shape == GripShape::Dropdown)
             {
-                position += { kDropdownOffsetX, kDropdownOffsetY };
+                position += glm::vec2{ kDropdownOffsetX, kDropdownOffsetY };
             }
             else if (grip.shape == GripShape::DropdownAdjacent)
             {
@@ -170,8 +178,7 @@ namespace cadui
         }
 
         void drawMoveGizmo(ImDrawList *drawList, const ImVec2 &origin,
-                           std::span<const GripMarker> markers,
-                           const GripOverlayStyle &style)
+                           std::span<const GripMarker> markers)
         {
             constexpr std::array<ImU32, 3> axisColors{
                 IM_COL32(230, 56, 51, 255),
@@ -271,7 +278,6 @@ namespace cadui
                 drawList->AddConvexPolyFilled(head.data(),
                                               static_cast<int>(head.size()), color);
             }
-            (void)style;
         }
 
         void drawGripMarker(ImDrawList *drawList, const ImVec2 &origin,
@@ -283,7 +289,12 @@ namespace cadui
                 return;
             }
 
-            const float half = std::clamp(style.size, 1.0f, 25.0f);
+            const float half = std::isfinite(style.size)
+                                   ? std::clamp(style.size, 1.0f, 25.0f)
+                                   : 5.0f;
+            const float outlineWidth = std::isfinite(style.outlineWidth)
+                                           ? std::max(style.outlineWidth, 0.0f)
+                                           : 0.0f;
             const ImVec2 center = toImVec2(marker.position, origin);
             const bool highlighted = marker.hot || marker.hovered;
             const ImU32 fill = marker.hot
@@ -356,7 +367,7 @@ namespace cadui
             }
             case GripShape::Circle:
                 drawList->AddCircleFilled(center, half, fill, 20);
-                drawList->AddCircle(center, half, outline, 0, style.outlineWidth);
+                drawList->AddCircle(center, half, outline, 0, outlineWidth);
                 return;
             case GripShape::Dropdown:
             case GripShape::DropdownAdjacent:
@@ -375,8 +386,8 @@ namespace cadui
             drawList->AddConvexPolyFilled(vertices.data(), vertexCount, fill);
             drawList->AddPolyline(vertices.data(), vertexCount, outline,
                                   ImDrawFlags_Closed,
-                                  highlighted ? std::max(style.outlineWidth, 1.5f)
-                                              : style.outlineWidth);
+                                  highlighted ? std::max(outlineWidth, 1.5f)
+                                              : outlineWidth);
         }
     } // namespace
 
@@ -477,7 +488,9 @@ namespace cadui
         bool polygonClosed)
     {
         if (drawList == nullptr || viewportSize.x <= 0.0f ||
-            viewportSize.y <= 0.0f)
+            viewportSize.y <= 0.0f || !std::isfinite(viewportMin.x) ||
+            !std::isfinite(viewportMin.y) || !std::isfinite(viewportSize.x) ||
+            !std::isfinite(viewportSize.y))
         {
             return;
         }
@@ -486,7 +499,7 @@ namespace cadui
         drawList->PushClipRect(viewportMin, viewportMax, true);
         drawControlPolygon(drawList, viewportMin, controlPolygon,
                            polygonClosed, style.controlPolygonColor);
-        drawMoveGizmo(drawList, viewportMin, markers, style);
+        drawMoveGizmo(drawList, viewportMin, markers);
         for (const GripMarker &marker : markers)
         {
             drawGripMarker(drawList, viewportMin, marker, style);
