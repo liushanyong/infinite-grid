@@ -4124,7 +4124,16 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                 std::fflush(stdout);
             }
         }
-        const float layerOffset[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        // Hidden-line CAD strokes can be coplanar with the depth-only face
+        // prepass. A small forward bias resolves equal-depth ID ties without
+        // allowing genuinely hidden lines through.
+        const float pickDepthBias =
+            m_renderMode.flags().hiddenLine && primitive.occlusionRank == 2
+                ? edgeDepthBiasUnits(
+                      orderedPickPrimitives[primitiveIndex].depth)
+                : 0.0f;
+        const float layerOffset[4] = {
+            pickDepthBias, 0.0f, 0.0f, 0.0f};
         bgfx::setUniform(m_layerOffset, layerOffset);
         const float identityMaterial[4] = {1.0f, 1.0f, 1.0f, 1.0f};
         bgfx::setUniform(m_realisticMaterial, identityMaterial);
