@@ -82,7 +82,8 @@ public:
     void drawCurves(const CurveRenderData &data) override;
     uint32_t requestGpuPick(const GpuPickRequest &request) override;
     void queueGpuMeshPick(const MeshInstance &instance,
-                          MeshType mesh, uint32_t objectId) override;
+                          MeshType mesh, uint32_t objectId,
+                          uint32_t staticMeshId = 0) override;
     GpuPickQueueStats gpuPickQueueStats() const override;
     void queueGpuTrianglePick(uint64_t geometryKey,
                               const FillVertex *vertices,
@@ -100,6 +101,11 @@ public:
     uint32_t requestGpuPickPixel(float ndcX, float ndcY) override;
     void cancelGpuPick() override;
     uint32_t loadMeshTexture(const std::string &path) override;
+    uint32_t loadMeshTextureFromMemory(const std::string &key,
+                                       const void *data,
+                                       std::size_t size) override;
+    uint32_t createStaticMesh(const StaticMeshVertices &vertices) override;
+    void destroyStaticMesh(uint32_t staticMeshId) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
 
 private:
@@ -231,6 +237,19 @@ private:
     RealisticLightsRenderData m_realisticLights;
     bgfx::TextureHandle m_whiteTexture = BGFX_INVALID_HANDLE;
     std::vector<bgfx::TextureHandle> m_meshTextures;
+    // Key-based dedupe for loadMeshTextureFromMemory (glTF embedded images).
+    std::unordered_map<std::string, uint32_t> m_meshTextureKeys;
+    // Uploaded static geometry (imported glTF models), keyed by the id
+    // handed out through createStaticMesh; draw/pick resolve the handles
+    // through this registry.
+    struct StaticMeshGpu
+    {
+        bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
+        uint32_t indexCount = 0;
+    };
+    std::unordered_map<uint32_t, StaticMeshGpu> m_staticMeshes;
+    uint32_t m_staticMeshNextId = 1;
     bgfx::VertexLayout m_polylineLayout;
     bgfx::VertexLayout m_fillLayout;
     bgfx::VertexLayout m_curveLayout;
@@ -304,6 +323,9 @@ private:
         Kind kind = Kind::Mesh;
         MeshInstance meshInstance;
         MeshType meshType = MeshType::Cube;
+        // Non-zero: the ID pass rasterizes uploaded static geometry for this
+        // primitive instead of the prototype buffer.
+        uint32_t staticMeshId = 0;
         uint64_t geometryKey = 0;
         glm::mat4 view;
         glm::mat4 projection;

@@ -93,6 +93,14 @@ public:
     void setSelectionOutlineId(std::uint32_t objectId);
     void setSelectionOutlineAll(bool all);
     int loadMeshTexture(const std::string &path);
+    // Memory variant for glTF embedded images; |key| dedupes repeat loads.
+    int loadMeshTextureFromMemory(const std::string &key, const void *data,
+                                  std::size_t size);
+    // Uploaded static geometry (imported glTF): non-zero id feeds
+    // MeshBatchCommand::staticMeshId; buffers live until destroyStaticMesh
+    // or device shutdown.
+    std::uint32_t createStaticMesh(const rendering::StaticMeshVertices &vertices);
+    void destroyStaticMesh(std::uint32_t staticMeshId);
     void requestDebugScreenshot(const std::string &path);
     // ---- picture-in-picture secondary scene target (optional) ----
     // Capability forwards; see RendererBackend for the contract.  The
@@ -132,7 +140,8 @@ public:
         std::uint32_t objectId, std::uint8_t occlusionRank = 2,
         const glm::vec4 &logDepthOverride = glm::vec4(0.0f));
     void queueGpuMeshPick(const rendering::MeshInstance &instance,
-                          rendering::MeshType mesh, std::uint32_t objectId);
+                          rendering::MeshType mesh, std::uint32_t objectId,
+                          std::uint32_t staticMeshId = 0);
 
     // ---- views (ObjectARX: AcGsManager::createView) ----
     AcGsView *createView();

@@ -32,6 +32,8 @@ inline constexpr const char *kPaperSpaceName = "*Paper_Space";
 
 class AcDbDatabase;
 
+struct AcDbFileIoReport;
+
 // ---- AcDbDatabaseReactor: mutation notifications (ObjectARX reactor) ----
 //
 // Minimal ARX-faithful lifecycle slice: append / erase / unerase /
@@ -287,6 +289,15 @@ public:
     // record's base point; identity when the record is missing.
     AcGeMatrix3d referenceTransform(
         const AcDbBlockReference &reference) const;
+
+    // ---- file IO (ObjectARX AcDbDatabase::readDwgFile/writeDwgFile/
+    // dxfIn/dxfOut; implemented in AcDbFileIo.cpp over the libredwg
+    // codec).  The readers APPEND into this database; the writers
+    // overwrite the target file. ----
+    bool readDwgFile(const char *filePath, AcDbFileIoReport *report = nullptr);
+    bool dxfIn(const char *filePath, AcDbFileIoReport *report = nullptr);
+    bool writeDwgFile(const char *filePath) const;
+    bool dxfOut(const char *filePath, bool binary = false) const;
 
     // ---- Named Objects Dictionary (ObjectARX NOD subtree) ----
 

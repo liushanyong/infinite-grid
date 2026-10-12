@@ -153,6 +153,8 @@ set(WINDOW_SOURCES
     lib/acgs/AcGsManager.cpp
     lib/acdb/AcDbDatabase.cpp
     lib/acdb/AcDbStore.cpp
+    lib/acdb/AcDbFileIo.cpp
+    lib/acdb/AcDbGltf.cpp
     lib/brep/BRep.cpp
     lib/acdb/AcDbTransaction.cpp
     lib/acgs/AcGsSelectionManager.cpp
@@ -186,17 +188,26 @@ target_link_libraries(WINDOW PRIVATE
     bimg_decode
 )
 # ---------------------------------------------------------------------------
-# libredwg -- DWG decode library (static, read-only, minimal build)
+# libredwg -- DWG/DXF codec library (static, minimal build)
+# DISABLE_WRITE must stay OFF: the file-IO bridge (lib/acdb/AcDbFileIo)
+# needs encode.c for dwg_write_file (binary DWG out) and in_dxf.c for
+# dxf_read_file (DXF in). out_dxf/out_dxfb are compiled regardless.
 # ---------------------------------------------------------------------------
 set(BUILD_SHARED_LIBS OFF)
 set(LIBREDWG_LIBONLY ON)
-set(LIBREDWG_DISABLE_WRITE ON)
+set(LIBREDWG_DISABLE_WRITE OFF)
 set(LIBREDWG_DISABLE_JSON ON)
 set(ENABLE_LTO OFF)
 add_subdirectory("${CMAKE_SOURCE_DIR}/lib/libredwg"
                  "${CMAKE_BINARY_DIR}/libredwg")
 
 target_link_libraries(WINDOW PRIVATE libredwg)
+# The DXF writer surface (out_dxf.h) sits behind the library-private
+# bits.h, which includes the generated config.h; expose both the source
+# dir (bits.h/out_dxf.h) and the build dir (config.h) to the facade.
+target_include_directories(WINDOW PRIVATE
+    "${CMAKE_SOURCE_DIR}/lib/libredwg/src"
+    "${CMAKE_BINARY_DIR}/libredwg/src")
 
 # Shewchuk robust predicates (public domain): exact-sign orient2d/3d,
 # incircle, insphere for CPU-side sign decisions (picking degeneracies,
@@ -215,7 +226,16 @@ endif()
 target_link_libraries(WINDOW PRIVATE predicates)
 
 # ---------------------------------------------------------------------------
-# entt — header-only ECS.  The scene/attribute layer (acgs::SceneStore)
+# tinygltf -- glTF 2.0 loader/writer (vendored, single-TU static lib).
+# Backs the acdb glTF bridge (lib/acdb/AcDbGltf): import decodes .glb/.gltf
+# into AcDbPolyFaceMesh entities, export serializes them back via
+# tinygltf::WriteGltfSceneToFile.
+# ---------------------------------------------------------------------------
+add_subdirectory("${CMAKE_SOURCE_DIR}/lib/tinygltf"
+                 "${CMAKE_BINARY_DIR}/lib/tinygltf")
+
+# ---------------------------------------------------------------------------
+# entt — header-only ECS. The scene/attribute layer (acgs::SceneStore)
 # keys its entities by AcDbHandle so the ECS never becomes a second ID
 # space; the topology layer stays in the brep arena per the roadmap
 # ("拓扑层不能上 ECS").
@@ -239,6 +259,26 @@ set(SQLITECPP_INTERNAL_SQLITE ON CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_SOURCE_DIR}/lib/SQLiteCpp"
                  "${CMAKE_BINARY_DIR}/SQLiteCpp")
 target_link_libraries(WINDOW PRIVATE SQLiteCpp)
+
+target_link_libraries(WINDOW PRIVATE tinygltf)
+
+# ---------------------------------------------------------------------------
+# fileio_repro -- minimal ASAN-instrumented repro for the DXF second-
+# generation write path (tools/fileio_repro.cpp).  Not part of WINDOW.
+# ---------------------------------------------------------------------------
+add_executable(fileio_repro tools/fileio_repro.cpp
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDatabase.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransaction.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbFileIo.cpp")
+target_include_directories(fileio_repro PRIVATE
+    "${CMAKE_SOURCE_DIR}/lib"
+    "${CMAKE_SOURCE_DIR}/lib/libredwg/src"
+    "${CMAKE_BINARY_DIR}/libredwg/src")
+target_link_libraries(fileio_repro PRIVATE libredwg glm::glm)
+if(MSVC)
+    target_compile_options(fileio_repro PRIVATE /fsanitize=address)
+    target_link_options(fileio_repro PRIVATE /INCREMENTAL:NO)
+endif()
 
 # wgpu-native is dynamically loaded so a missing optional runtime still allows
 # every legacy backend to build and run.

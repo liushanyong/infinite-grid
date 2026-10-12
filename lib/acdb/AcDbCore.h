@@ -158,6 +158,11 @@ public:
     std::string name;
     std::string layer = "0";
     glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    // Raw ACI index as carried by the file formats (DXF 62 / DWG CMC):
+    // 0 = ByBlock, 256 = ByLayer, 1..255 explicit (ObjectARX
+    // AcCmEntityColor carries index and RGB side by side; the file IO
+    // bridge treats the index as authoritative, `color` drives rendering).
+    int colorIndex = 256;
     std::string lineType = "ByLayer";
     double lineWeight = 0.0;
     bool visible = true;

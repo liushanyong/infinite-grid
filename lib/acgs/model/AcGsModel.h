@@ -43,10 +43,15 @@ struct AcGiMaterial
 struct MeshBatchCommand
 {
     rendering::MeshType prototype = rendering::MeshType::Cube;
+    // Non-zero: draw uploaded static geometry (imported glTF) instead of the
+    // prototype; ids are device-allocated (createStaticMesh).
+    std::uint32_t staticMeshId = 0;
     bool opaque = false;
     bool realistic = false;
     bool cadAlgorithm = false;
     glm::vec4 material{0.0f, 0.35f, 0.0f, 0.5f};
+    // 0 = scene default albedo texture; static-model batches set their own.
+    std::uint32_t diffuseTextureIndex = 0;
     AcGiMaterial acgiMaterial;
     std::vector<rendering::MeshInstance> instances;
 };
@@ -155,11 +160,16 @@ public:
                                    const glm::vec4 &material,
                                    const bool cadAlgorithm = false)
     {
-        meshBatches_.push_back(
-            {prototype, opaque, realistic, cadAlgorithm, material, {}});
-        meshBatches_.back().acgiMaterial.algorithm =
+        MeshBatchCommand batch;
+        batch.prototype = prototype;
+        batch.opaque = opaque;
+        batch.realistic = realistic;
+        batch.cadAlgorithm = cadAlgorithm;
+        batch.material = material;
+        batch.acgiMaterial.algorithm =
             realistic ? AcGiShaderAlgorithm::Realistic
                       : AcGiShaderAlgorithm::Shaded;
+        meshBatches_.push_back(std::move(batch));
         return meshBatches_.back();
     }
 

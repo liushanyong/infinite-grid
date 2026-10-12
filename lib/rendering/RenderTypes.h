@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -38,6 +39,18 @@ enum class MeshType
     Sphere,
     Cone,
     Torus
+};
+
+// CPU-side static geometry for imported models (glTF): interleaved at draw
+// time into the same Position4+Normal4 layout the prototype meshes use, with
+// the UV packed into the .w components.  Indexed, 32-bit indices.
+struct StaticMeshVertices
+{
+    std::vector<glm::vec4> positionU; // xyz = position, w = u
+    std::vector<glm::vec4> normalV;   // xyz = normal, w = v
+    std::vector<std::uint32_t> indices;
+
+    bool empty() const { return indices.empty(); }
 };
 
 struct MeshInstance
@@ -170,10 +183,16 @@ struct MeshInstancesRenderData
     const MeshInstance *instances = nullptr;
     uint32_t instanceCount = 0;
     MeshType mesh = MeshType::Cube;
+    // Non-zero: the batch draws uploaded static geometry (imported model)
+    // instead of a procedural prototype buffer.  Ids come from
+    // RendererBackend::createStaticMesh and stay valid until
+    // destroyStaticMesh.
+    uint32_t staticMeshId = 0;
     bool opaque = false;
     float layer = 0.0f;
     glm::vec4 logDepth;
     DoubleSingleVec3 eye;
+    // 0 = scene default texture; a batch may override the albedo slot.
     uint32_t diffuseTextureIndex = 0;
     float headlight = 1.0f;
     float triplanarUv = 0.0f;

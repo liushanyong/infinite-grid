@@ -5,8 +5,10 @@ set(CADUI_LIB_ROOT "${CADUI_REPO_ROOT}/lib")
 add_library(cadui STATIC
     GripOverlay.cpp
     UcsIcon.cpp
+    UcsIconOverlay.cpp
     ViewCube.cpp
     ViewCubeBgfx.cpp
+    ViewCubeOverlay.cpp
 )
 
 target_include_directories(cadui

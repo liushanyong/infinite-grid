@@ -871,6 +871,117 @@ uint32_t BgfxRenderer::loadMeshTexture(const std::string &path)
     m_meshTextures.push_back(texture);
     return static_cast<uint32_t>(m_meshTextures.size());
 }
+
+uint32_t BgfxRenderer::loadMeshTextureFromMemory(const std::string &key,
+                                                 const void *data,
+                                                 std::size_t size)
+{
+    if (!m_initialized || !data || size == 0 || size > UINT32_MAX)
+        return 0;
+    const auto cached = m_meshTextureKeys.find(key);
+    if (cached != m_meshTextureKeys.end())
+        return cached->second;
+
+    bx::DefaultAllocator allocator;
+    bx::Error error;
+    bimg::ImageContainer *image = bimg::imageParse(
+        &allocator, const_cast<void *>(data), static_cast<uint32_t>(size),
+        bimg::TextureFormat::BGRA8, &error);
+    if (!image || !image->m_data || image->m_size == 0)
+    {
+        if (image)
+            bimg::imageFree(image);
+        std::cerr << "Failed to decode mesh texture: " << key
+                  << " (size=" << size << ")" << std::endl;
+        return 0;
+    }
+
+    const bgfx::TextureHandle texture = bgfx::createTexture2D(
+        static_cast<uint16_t>(image->m_width),
+        static_cast<uint16_t>(image->m_height),
+        image->m_numMips > 1, 1,
+        static_cast<bgfx::TextureFormat::Enum>(image->m_format),
+        BGFX_TEXTURE_NONE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(image->m_data, image->m_size));
+    bimg::imageFree(image);
+    if (!bgfx::isValid(texture))
+    {
+        std::cerr << "Failed to create mesh texture: " << key << std::endl;
+        return 0;
+    }
+
+    m_meshTextures.push_back(texture);
+    const uint32_t index = static_cast<uint32_t>(m_meshTextures.size());
+    m_meshTextureKeys.emplace(key, index);
+    return index;
+}
+
+// Interleaves the static-model channels into the exact prototype layout:
+// Position(xyz,u) + Normal(xyz,v).  32-bit indices keep large imported
+// models intact.
+uint32_t BgfxRenderer::createStaticMesh(const StaticMeshVertices &vertices)
+{
+    if (!m_initialized || vertices.empty() ||
+        vertices.positionU.size() != vertices.normalV.size() ||
+        vertices.positionU.empty())
+    {
+        return 0;
+    }
+
+    std::vector<float> interleaved;
+    interleaved.reserve(vertices.positionU.size() * 8);
+    for (size_t i = 0; i < vertices.positionU.size(); ++i)
+    {
+        const glm::vec4 &position = vertices.positionU[i];
+        const glm::vec4 &normal = vertices.normalV[i];
+        interleaved.insert(interleaved.end(), {position.x, position.y,
+                                               position.z, position.w,
+                                               normal.x, normal.y, normal.z,
+                                               normal.w});
+    }
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 4, bgfx::AttribType::Float)
+        .end();
+    const bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(
+        bgfx::copy(interleaved.data(),
+                   uint32_t(interleaved.size() * sizeof(float))),
+        layout);
+    const bgfx::IndexBufferHandle indexBuffer = bgfx::createIndexBuffer(
+        bgfx::copy(vertices.indices.data(),
+                   uint32_t(vertices.indices.size() *
+                            sizeof(std::uint32_t))),
+        BGFX_BUFFER_INDEX32);
+    if (!bgfx::isValid(vertexBuffer) || !bgfx::isValid(indexBuffer))
+    {
+        if (bgfx::isValid(vertexBuffer))
+            bgfx::destroy(vertexBuffer);
+        if (bgfx::isValid(indexBuffer))
+            bgfx::destroy(indexBuffer);
+        return 0;
+    }
+
+    StaticMeshGpu gpu;
+    gpu.vertexBuffer = vertexBuffer;
+    gpu.indexBuffer = indexBuffer;
+    gpu.indexCount = uint32_t(vertices.indices.size());
+    const uint32_t id = m_staticMeshNextId++;
+    m_staticMeshes.emplace(id, gpu);
+    return id;
+}
+
+void BgfxRenderer::destroyStaticMesh(uint32_t staticMeshId)
+{
+    const auto found = m_staticMeshes.find(staticMeshId);
+    if (found == m_staticMeshes.end())
+        return;
+    if (bgfx::isValid(found->second.vertexBuffer))
+        bgfx::destroy(found->second.vertexBuffer);
+    if (bgfx::isValid(found->second.indexBuffer))
+        bgfx::destroy(found->second.indexBuffer);
+    m_staticMeshes.erase(found);
+}
 Uint32 BgfxRenderer::windowFlags() const
 {
     return 0;
@@ -1030,6 +1141,15 @@ void BgfxRenderer::shutdown()
             bgfx::destroy(texture);
     }
     m_meshTextures.clear();
+    m_meshTextureKeys.clear();
+    for (auto &entry : m_staticMeshes)
+    {
+        if (bgfx::isValid(entry.second.vertexBuffer))
+            bgfx::destroy(entry.second.vertexBuffer);
+        if (bgfx::isValid(entry.second.indexBuffer))
+            bgfx::destroy(entry.second.indexBuffer);
+    }
+    m_staticMeshes.clear();
     if (bgfx::isValid(m_whiteTexture))
         bgfx::destroy(m_whiteTexture);
     m_whiteTexture = BGFX_INVALID_HANDLE;
@@ -2505,6 +2625,21 @@ void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
         break;
     }
 
+    // Imported-model batches draw uploaded indexed geometry instead of a
+    // procedural prototype; an unknown id means the upload was torn down.
+    bgfx::IndexBufferHandle meshIndexBuffer = BGFX_INVALID_HANDLE;
+    uint32_t meshIndexCount = 0;
+    if (data.staticMeshId != 0)
+    {
+        const auto staticMesh = m_staticMeshes.find(data.staticMeshId);
+        if (staticMesh == m_staticMeshes.end() ||
+            !bgfx::isValid(staticMesh->second.vertexBuffer))
+            return;
+        meshBuffer = staticMesh->second.vertexBuffer;
+        meshIndexBuffer = staticMesh->second.indexBuffer;
+        meshIndexCount = staticMesh->second.indexCount;
+    }
+
     constexpr uint16_t kStride = sizeof(MeshInstance);
     static_assert(kStride == 80,
                   "MeshInstance must carry 5 vec4s to leave room for UV vertex attributes");
@@ -2599,6 +2734,8 @@ void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
 
             bgfx::setState(state);
             bgfx::setVertexBuffer(0, buffer);
+            if (bgfx::isValid(meshIndexBuffer))
+                bgfx::setIndexBuffer(meshIndexBuffer, 0, meshIndexCount);
             bgfx::setInstanceDataBuffer(&idb);
             bgfx::submit(view, program, sortDepth);
             first += idb.num;
@@ -2617,8 +2754,10 @@ void BgfxRenderer::drawMeshInstances(const MeshInstancesRenderData &data)
         bgfx::setUniform(m_meshEdgeOverride, edgeOff);
         submitChunks(kViewSolidFill, fillProgram, meshBuffer, fillState);
     }
-    if (modeFlags.show3dEdges)
+    if (modeFlags.show3dEdges && data.staticMeshId == 0)
     {
+        // Imported models carry no procedural feature-edge buffer; their
+        // surfaces render per the visual style without synthesized ribbons.
         // Hardware PT_LINES had unreliable AA on D3D11.  Expand feature edges
         // into screen-space ribbons and reuse the same line AA path.
         drawEdgeRibbonsForInstances(
@@ -3410,13 +3549,20 @@ uint32_t BgfxRenderer::requestGpuPick(const GpuPickRequest &request)
 }
 
 void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
-                                    MeshType mesh, uint32_t objectId)
+                                    MeshType mesh, uint32_t objectId,
+                                    uint32_t staticMeshId)
 {
     const RenderModeFlags modeFlags = m_renderMode.flags();
+    const bool edgeKind =
+        !modeFlags.meshFill && modeFlags.show3dEdges;
+    // Imported models have no feature-edge ID buffer, so pure-wireframe
+    // styles (edges-only ID coverage) cannot represent them; skip instead
+    // of rasterizing a surface the visible pass does not draw.
+    if (staticMeshId != 0 && edgeKind)
+        return;
     const GpuPickPrimitive::Kind kind =
-        (!modeFlags.meshFill && modeFlags.show3dEdges)
-            ? GpuPickPrimitive::Kind::Edge
-            : GpuPickPrimitive::Kind::Mesh;
+        edgeKind ? GpuPickPrimitive::Kind::Edge
+                 : GpuPickPrimitive::Kind::Mesh;
 
     // The selected entity must always reach the ID buffer so presentation
     // shading can find its visible pixels, even beyond the soft cap.
@@ -3438,6 +3584,7 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
     primitive.kind = kind;
     primitive.meshInstance = instance;
     primitive.meshType = mesh;
+    primitive.staticMeshId = staticMeshId;
     primitive.objectId = objectId;
     // ID ownership follows geometric depth, not the mesh's display opacity.
     // A surface must occlude farther IDs even when its visible pass blends it.
@@ -3927,9 +4074,11 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                    primitiveIndex + batchSize < orderedPickPrimitives.size())
             {
                 const GpuPickPrimitive &nextPrimitive =
-                    *orderedPickPrimitives[primitiveIndex + batchSize].primitive;
+                    *orderedPickPrimitives[primitiveIndex + batchSize]
+                         .primitive;
                 if (nextPrimitive.kind != primitive.kind ||
                     nextPrimitive.meshType != primitive.meshType ||
+                    nextPrimitive.staticMeshId != primitive.staticMeshId ||
                     nextPrimitive.occlusionRank != primitive.occlusionRank)
                 {
                     break;
@@ -3941,22 +4090,41 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             const bool edgePass = primitive.kind == GpuPickPrimitive::Kind::Edge;
             bgfx::VertexBufferHandle buffer = m_gpuPickCubeBuffer;
             bgfx::VertexBufferHandle edgeBuffer = m_gpuPickCubeEdgeBuffer;
-            switch (primitive.meshType)
+            bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
+            uint32_t indexCount = 0;
+            if (primitive.staticMeshId != 0)
             {
-            case MeshType::Sphere:
-                buffer = m_gpuPickSphereBuffer;
-                edgeBuffer = m_gpuPickSphereEdgeBuffer;
-                break;
-            case MeshType::Cone:
-                buffer = m_gpuPickConeBuffer;
-                edgeBuffer = m_gpuPickConeEdgeBuffer;
-                break;
-            case MeshType::Torus:
-                buffer = m_gpuPickTorusBuffer;
-                edgeBuffer = m_gpuPickTorusEdgeBuffer;
-                break;
-            case MeshType::Cube:
-                break;
+                const auto staticMesh =
+                    m_staticMeshes.find(primitive.staticMeshId);
+                if (staticMesh == m_staticMeshes.end() ||
+                    !bgfx::isValid(staticMesh->second.vertexBuffer))
+                {
+                    primitiveIndex += batchSize;
+                    continue;
+                }
+                buffer = staticMesh->second.vertexBuffer;
+                indexBuffer = staticMesh->second.indexBuffer;
+                indexCount = staticMesh->second.indexCount;
+            }
+            else
+            {
+                switch (primitive.meshType)
+                {
+                case MeshType::Sphere:
+                    buffer = m_gpuPickSphereBuffer;
+                    edgeBuffer = m_gpuPickSphereEdgeBuffer;
+                    break;
+                case MeshType::Cone:
+                    buffer = m_gpuPickConeBuffer;
+                    edgeBuffer = m_gpuPickConeEdgeBuffer;
+                    break;
+                case MeshType::Torus:
+                    buffer = m_gpuPickTorusBuffer;
+                    edgeBuffer = m_gpuPickTorusEdgeBuffer;
+                    break;
+                case MeshType::Cube:
+                    break;
+                }
             }
             if (edgePass)
                 buffer = edgeBuffer;
@@ -3979,6 +4147,8 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
                              glm::value_ptr(m_gpuPickRequest.view));
             bgfx::setUniform(m_projection, glm::value_ptr(projection));
             bgfx::setVertexBuffer(0, buffer);
+            if (bgfx::isValid(indexBuffer))
+                bgfx::setIndexBuffer(indexBuffer, 0, indexCount);
             bgfx::setInstanceDataBuffer(&instanceBuffer);
             // Mesh surfaces write ID depth regardless of visual opacity;
             // overlapping IDs are resolved by geometric depth, not blending.

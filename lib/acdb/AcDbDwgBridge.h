@@ -1,17 +1,181 @@
 #pragma once
 
-// Conversion bridge from libredwg's DWG data model (include/dwg.h) to the
-// entities layer.  Each toEntity() overload maps one DWG entity struct onto
-// its acdb:: counterpart; field coverage tracks the DWG structures, so
-// gaps surface as compile errors when libredwg adds fields we do not carry.
+// Conversion bridge between libredwg's data model (include/dwg.h) and the
+// acdb layer.  Read direction (this header): one Dwg_Data -> AcDbDatabase
+// fill shared by every file entry point — DWG binary (dwg_read_file) and
+// DXF text/binary (dxf_read_file) decode into the same Dwg_Data, so
+// addDwgEntities() serves AcDbDatabase::readDwgFile and dxfIn alike.
+// The write direction lives in AcDbDwgWriteBridge.h.
+//
+// Each toEntity() overload maps one DWG entity struct onto its acdb::
+// counterpart; field coverage tracks the DWG structures, so gaps surface
+// as compile errors when libredwg adds fields we do not carry.  The
+// orchestration mirrors a failsafe reader: unsupported types are skipped
+// and counted, never fatal.
+
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "libredwg/include/dwg.h"
 
 #include "acdb/AcDbDatabase.h"
-#include "acdb/AcDbTessellate.h"
+#include "acdb/AcDbEntities.h"
 
 namespace acdb
 {
+
+// ---- ACI palette (DXF 62 / DWG CMC) ----
+//
+// AutoCAD's base 9 plus the 250..255 grayscale ramp; 0 = ByBlock,
+// 256 = ByLayer.  ACIs in 10..249 are the hue/shade ramp the demo does
+// not model — they import as white (the write side would re-derive them
+// only for entities that kept an explicit index).
+
+inline glm::vec4 aciToColor(int index)
+{
+    switch (index)
+    {
+    case 1: return {1.0f, 0.0f, 0.0f, 1.0f};
+    case 2: return {1.0f, 1.0f, 0.0f, 1.0f};
+    case 3: return {0.0f, 1.0f, 0.0f, 1.0f};
+    case 4: return {0.0f, 1.0f, 1.0f, 1.0f};
+    case 5: return {0.0f, 0.0f, 1.0f, 1.0f};
+    case 6: return {1.0f, 0.0f, 1.0f, 1.0f};
+    case 7: return {1.0f, 1.0f, 1.0f, 1.0f};
+    case 8: return {0.5f, 0.5f, 0.5f, 1.0f};
+    case 9: return {0.75f, 0.75f, 0.75f, 1.0f};
+    case 250: return {0.2f, 0.2f, 0.2f, 1.0f};
+    case 251: return {0.357f, 0.357f, 0.357f, 1.0f};
+    case 252: return {0.517f, 0.517f, 0.517f, 1.0f};
+    case 253: return {0.678f, 0.678f, 0.678f, 1.0f};
+    case 254: return {0.839f, 0.839f, 0.839f, 1.0f};
+    case 255: return {1.0f, 1.0f, 1.0f, 1.0f};
+    default: return {1.0f, 1.0f, 1.0f, 1.0f};
+    }
+}
+
+// Write-side companion: nearest palette entry for a display color whose
+// ACI was never recorded (demo-authored entities carry rgba only).
+inline int nearestAciIndex(const glm::vec4 &color)
+{
+    static constexpr std::pair<int, glm::vec3> kPalette[] = {
+        {1, {1, 0, 0}},   {2, {1, 1, 0}},   {3, {0, 1, 0}},
+        {4, {0, 1, 1}},   {5, {0, 0, 1}},   {6, {1, 0, 1}},
+        {7, {1, 1, 1}},   {8, {0.5, 0.5, 0.5}}, {9, {0.75, 0.75, 0.75}},
+        {250, {0.2, 0.2, 0.2}},       {251, {0.357, 0.357, 0.357}},
+        {252, {0.517, 0.517, 0.517}}, {253, {0.678, 0.678, 0.678}},
+        {254, {0.839, 0.839, 0.839}}, {255, {1, 1, 1}},
+    };
+    int best = 7;
+    double bestDistance = 1.0e30;
+    for (const auto &[index, rgb] : kPalette)
+    {
+        const glm::dvec3 delta = glm::dvec3(color) - glm::dvec3(rgb);
+        const double distance = glm::dot(delta, delta);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = index;
+        }
+    }
+    return best;
+}
+
+// The ACI a payload carries into a file: explicit index when set, else
+// derived from the rgba display color.
+inline int fileColorIndex(const AcDbEntity &common)
+{
+    if (common.colorIndex > 0 && common.colorIndex < 256)
+        return common.colorIndex;
+    if (common.colorIndex == 0)
+        return 0; // ByBlock stays ByBlock
+    return nearestAciIndex(common.color);
+}
+
+// ---- symbol-table reference resolution (null-safe) ----
+//
+// Table records all carry the COMMON_TABLE_FIELDS `name`; the Dwg_Object
+// union member matches the fixed type token.
+
+inline const char *symbolTableName(const Dwg_Object *object,
+                                   Dwg_Object_Type type)
+{
+    if (object == nullptr || object->supertype != DWG_SUPERTYPE_OBJECT ||
+        object->fixedtype != type || object->tio.object == nullptr)
+        return nullptr;
+    switch (type)
+    {
+    case DWG_TYPE_LAYER: return object->tio.object->tio.LAYER->name;
+    case DWG_TYPE_LTYPE: return object->tio.object->tio.LTYPE->name;
+    case DWG_TYPE_STYLE: return object->tio.object->tio.STYLE->name;
+    case DWG_TYPE_BLOCK_HEADER:
+        return object->tio.object->tio.BLOCK_HEADER->name;
+    default: return nullptr;
+    }
+}
+
+// Per-import lookup context.  A freshly decoded Dwg_Data leaves part of
+// its references unresolved (ref->obj null, dirty_refs), so every
+// resolution falls back to a one-shot handle index built here.
+struct DwgImportContext
+{
+    const Dwg_Data *dwg = nullptr;
+    std::unordered_map<std::uint64_t, const Dwg_Object *> byHandle;
+
+    explicit DwgImportContext(const Dwg_Data &data) : dwg(&data)
+    {
+        for (BITCODE_BL i = 0; i < dwg->num_objects; ++i)
+            byHandle.emplace(dwg->object[i].handle.value, &dwg->object[i]);
+    }
+
+    const Dwg_Object *resolve(const Dwg_Object_Ref *ref) const
+    {
+        if (ref == nullptr)
+            return nullptr;
+        if (ref->obj != nullptr)
+            return ref->obj;
+        const auto found = byHandle.find(ref->absolute_ref);
+        return found != byHandle.end() ? found->second : nullptr;
+    }
+};
+
+inline const char *layerNameOf(const DwgImportContext &ctx,
+                               const Dwg_Object_Entity &ent)
+{
+    return symbolTableName(ctx.resolve(ent.layer), DWG_TYPE_LAYER);
+}
+
+inline const char *lineTypeNameOf(const DwgImportContext &ctx,
+                                  const Dwg_Object_Entity &ent)
+{
+    return symbolTableName(ctx.resolve(ent.ltype), DWG_TYPE_LTYPE);
+}
+
+inline const char *blockHeaderNameOf(const DwgImportContext &ctx,
+                                     const Dwg_Object_Ref *ref)
+{
+    return symbolTableName(ctx.resolve(ref), DWG_TYPE_BLOCK_HEADER);
+}
+
+// Model/paper space block records never become user-visible block
+// definitions (libredwg spells them "*MODEL_SPACE"/"*PAPER_SPACE"; DWG
+// files use the mixed-case "*Model_Space" form).
+inline bool isModelOrPaperSpaceName(const std::string &name)
+{
+    std::string upper;
+    upper.reserve(name.size());
+    for (const char c : name)
+        upper.push_back(c >= 'a' && c <= 'z' ? char(c - 'a' + 'A') : c);
+    return upper.rfind("*MODEL_SPACE", 0) == 0 ||
+           upper.rfind("*PAPER_SPACE", 0) == 0;
+}
+
+// ---- entity field mapping (common block filled by applyCommon) ----
 
 inline AcDbLine toEntity(const Dwg_Entity_LINE &dwg)
 {
@@ -79,32 +243,355 @@ inline AcDbRay toEntity(const Dwg_Entity_RAY &dwg)
     return ray;
 }
 
-
-// ACI color index -> RGBA (AutoCAD's base 9 + grayscale ramp), aligned
-// with the demo's aciColor table.
-inline glm::vec4 aciToColor(int index)
+// 2D fill quad (SOLID); corners are OCS 2D + a shared elevation.
+inline AcDbSolid toEntity(const Dwg_Entity_SOLID &dwg)
 {
-    switch (index)
+    AcDbSolid solid;
+    const double z = dwg.elevation;
+    solid.firstCorner = AcGePoint3d(dwg.corner1.x, dwg.corner1.y, z);
+    solid.secondCorner = AcGePoint3d(dwg.corner2.x, dwg.corner2.y, z);
+    solid.thirdCorner = AcGePoint3d(dwg.corner3.x, dwg.corner3.y, z);
+    solid.fourthCorner = AcGePoint3d(dwg.corner4.x, dwg.corner4.y, z);
+    return solid;
+}
+
+// 3DFACE keeps per-corner depth, so it lands in the same quad payload.
+inline AcDbSolid toEntity(const Dwg_Entity__3DFACE &dwg)
+{
+    AcDbSolid solid;
+    solid.firstCorner =
+        AcGePoint3d(dwg.corner1.x, dwg.corner1.y, dwg.corner1.z);
+    solid.secondCorner =
+        AcGePoint3d(dwg.corner2.x, dwg.corner2.y, dwg.corner2.z);
+    solid.thirdCorner =
+        AcGePoint3d(dwg.corner3.x, dwg.corner3.y, dwg.corner3.z);
+    solid.fourthCorner =
+        AcGePoint3d(dwg.corner4.x, dwg.corner4.y, dwg.corner4.z);
+    return solid;
+}
+
+// LWPOLYLINE: optimized 2D polyline; bulges align with the leading
+// vertices (num_bulges <= num_points per the DWG coding).
+inline AcDbPolyline toEntity(const Dwg_Entity_LWPOLYLINE &dwg)
+{
+    AcDbPolyline polyline;
+    polyline.elevation = dwg.elevation;
+    polyline.thickness = dwg.thickness;
+    polyline.closed = (dwg.flag & 512) != 0;
+    polyline.normal = AcGeVector3d(dwg.extrusion.x, dwg.extrusion.y,
+                                   dwg.extrusion.z);
+    polyline.vertices.reserve(dwg.num_points);
+    for (BITCODE_BL i = 0; i < dwg.num_points; ++i)
+        polyline.vertices.push_back(
+            AcGePoint2d(dwg.points[i].x, dwg.points[i].y));
+    polyline.bulges.assign(dwg.num_points, 0.0);
+    const BITCODE_BL bulgeCount =
+        std::min<BITCODE_BL>(dwg.num_bulges, dwg.num_points);
+    for (BITCODE_BL i = 0; i < bulgeCount; ++i)
+        polyline.bulges[i] = dwg.bulges[i];
+    return polyline;
+}
+
+inline AcDbText toEntity(const Dwg_Entity_TEXT &dwg)
+{
+    AcDbText text;
+    text.insertion = AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.elevation);
+    text.height = dwg.height;
+    text.rotation = dwg.rotation;
+    text.text = dwg.text_value ? dwg.text_value : "";
+    return text;
+}
+
+inline AcDbMText toEntity(const Dwg_Entity_MTEXT &dwg)
+{
+    AcDbMText mtext;
+    mtext.insertion =
+        AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.ins_pt.z);
+    mtext.direction = AcGeVector3d(dwg.x_axis_dir.x, dwg.x_axis_dir.y,
+                                   dwg.x_axis_dir.z);
+    mtext.width = dwg.rect_width;
+    mtext.height = dwg.text_height;
+    mtext.text = dwg.text ? dwg.text : "";
+    return mtext;
+}
+
+inline AcDbSpline toEntity(const Dwg_Entity_SPLINE &dwg)
+{
+    AcDbSpline spline;
+    spline.degree = dwg.degree > 0 ? dwg.degree : 3;
+    spline.closed = dwg.closed_b;
+    spline.controlPoints.reserve(dwg.num_ctrl_pts);
+    for (BITCODE_BL i = 0; i < dwg.num_ctrl_pts; ++i)
+        spline.controlPoints.push_back(
+            AcGePoint3d(dwg.ctrl_pts[i].x, dwg.ctrl_pts[i].y,
+                        dwg.ctrl_pts[i].z));
+    spline.knots.reserve(dwg.num_knots);
+    for (BITCODE_BL i = 0; i < dwg.num_knots; ++i)
+        spline.knots.push_back(dwg.knots[i]);
+    spline.fitPoints.reserve(dwg.num_fit_pts);
+    for (BITCODE_BL i = 0; i < dwg.num_fit_pts; ++i)
+        spline.fitPoints.push_back(AcGePoint3d(dwg.fit_pts[i].x,
+                                               dwg.fit_pts[i].y,
+                                               dwg.fit_pts[i].z));
+    return spline;
+}
+
+inline AcDbMline toEntity(const Dwg_Entity_MLINE &dwg)
+{
+    AcDbMline mline;
+    mline.scale = AcGeVector3d(dwg.scale, dwg.scale, dwg.scale);
+    mline.closed = (dwg.flags & 1) != 0;
+    mline.vertices.reserve(dwg.num_verts);
+    for (BITCODE_BS i = 0; i < dwg.num_verts; ++i)
+        mline.vertices.push_back(
+            AcGePoint3d(dwg.verts[i].vertex.x, dwg.verts[i].vertex.y,
+                        dwg.verts[i].vertex.z));
+    return mline;
+}
+
+// INSERT; the referenced record name resolves through the DWG block
+// header handle, so the database-owning caller fills blockTableRecordName.
+inline AcDbBlockReference toEntity(const Dwg_Entity_INSERT &dwg)
+{
+    AcDbBlockReference reference;
+    reference.position =
+        AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.ins_pt.z);
+    reference.scale = AcGeVector3d(dwg.scale.x, dwg.scale.y, dwg.scale.z);
+    reference.rotation = dwg.rotation;
+    reference.normal = AcGeVector3d(dwg.extrusion.x, dwg.extrusion.y,
+                                    dwg.extrusion.z);
+    return reference;
+}
+
+// HATCH: only polyline boundary paths map onto the simplified acdb::
+// payload; edge-defined (spline/arc) loops are counted unsupported.
+// Returns nullopt when no boundary survived.
+inline std::optional<AcDbHatch> tryToEntity(const Dwg_Entity_HATCH &dwg)
+{
+    AcDbHatch hatch;
+    hatch.solidFill = dwg.is_solid_fill;
+    hatch.patternName = dwg.name ? dwg.name : "SOLID";
+    hatch.patternScale = dwg.scale_spacing;
+    hatch.patternAngle = dwg.angle;
+    bool outerTaken = false;
+    for (BITCODE_BL i = 0; i < dwg.num_paths; ++i)
     {
-    case 1: return {1.0f, 0.0f, 0.0f, 1.0f};
-    case 2: return {1.0f, 1.0f, 0.0f, 1.0f};
-    case 3: return {0.0f, 1.0f, 0.0f, 1.0f};
-    case 4: return {0.0f, 1.0f, 1.0f, 1.0f};
-    case 5: return {0.0f, 0.0f, 1.0f, 1.0f};
-    case 6: return {1.0f, 0.0f, 1.0f, 1.0f};
-    case 7: return {1.0f, 1.0f, 1.0f, 1.0f};
-    case 8: return {0.5f, 0.5f, 0.5f, 1.0f};
-    case 9: return {0.75f, 0.75f, 0.75f, 1.0f};
-    default: return {1.0f, 1.0f, 1.0f, 1.0f};
+        const Dwg_HATCH_Path &path = dwg.paths[i];
+        if ((path.flag & 2) == 0)
+            continue; // edge-defined path (arc/spline/ellipse loops)
+        std::vector<AcGePoint3d> loop;
+        loop.reserve(path.num_segs_or_paths);
+        for (BITCODE_BL j = 0; j < path.num_segs_or_paths; ++j)
+            loop.push_back(
+                AcGePoint3d(path.polyline_paths[j].point.x,
+                            path.polyline_paths[j].point.y,
+                            dwg.elevation));
+        if (loop.size() < 2)
+            continue;
+        if (!outerTaken)
+        {
+            hatch.outerLoop = std::move(loop);
+            outerTaken = true;
+        }
+        else
+        {
+            hatch.innerLoops.push_back(std::move(loop));
+        }
+    }
+    if (!outerTaken)
+        return std::nullopt;
+    return hatch;
+}
+
+// ---- POLYLINE children (VERTEX_* owned-handle chain) ----
+//
+// POLYLINE_2D/3D/PFACE/MESH share the COMMON_ENTITY_POLYLINE prologue
+// (num_owned + vertex[]), but the union member is typed per entity, so
+// the accessor switches on the fixed type.
+
+inline const Dwg_Object_Ref *polylineVertexRef(const Dwg_Object &polyline,
+                                               BITCODE_BL index)
+{
+    const Dwg_Object_Entity &ent = *polyline.tio.entity;
+    const Dwg_Object_Ref *ref = nullptr;
+    switch (polyline.fixedtype)
+    {
+    case DWG_TYPE_POLYLINE_2D:
+        if (index < ent.tio.POLYLINE_2D->num_owned)
+            ref = ent.tio.POLYLINE_2D->vertex[index];
+        break;
+    case DWG_TYPE_POLYLINE_3D:
+        if (index < ent.tio.POLYLINE_3D->num_owned)
+            ref = ent.tio.POLYLINE_3D->vertex[index];
+        break;
+    case DWG_TYPE_POLYLINE_PFACE:
+        if (index < ent.tio.POLYLINE_PFACE->num_owned)
+            ref = ent.tio.POLYLINE_PFACE->vertex[index];
+        break;
+    case DWG_TYPE_POLYLINE_MESH:
+        if (index < ent.tio.POLYLINE_MESH->num_owned)
+            ref = ent.tio.POLYLINE_MESH->vertex[index];
+        break;
+    default:
+        break;
+    }
+    return ref;
+}
+
+template <typename VertexFn>
+inline void forEachPolylineVertex(const DwgImportContext &ctx,
+                                  const Dwg_Object &polyline, VertexFn &&fn)
+{
+    for (BITCODE_BL i = 0;; ++i)
+    {
+        const Dwg_Object *vertex = ctx.resolve(polylineVertexRef(polyline, i));
+        if (vertex == nullptr || vertex->supertype != DWG_SUPERTYPE_ENTITY)
+            break;
+        fn(*vertex);
     }
 }
 
+// Fallback for decodes that leave num_owned/vertex[] empty while the
+// children themselves survive: scan for VERTEX_* entities owned by the
+// polyline (file order preserves the vertex sequence).
+template <typename Fn>
+inline void forEachVertexByOwner(const DwgImportContext &ctx,
+                                 const Dwg_Object &polyline, Fn &&fn)
+{
+    if (ctx.dwg == nullptr)
+        return;
+    for (BITCODE_BL i = 0; i < ctx.dwg->num_objects; ++i)
+    {
+        const Dwg_Object &object = ctx.dwg->object[i];
+        if (object.supertype != DWG_SUPERTYPE_ENTITY ||
+            object.tio.entity == nullptr)
+            continue;
+        const Dwg_Object_Entity &ent = *object.tio.entity;
+        if (ent.ownerhandle == nullptr ||
+            ent.ownerhandle->absolute_ref != polyline.handle.value)
+            continue;
+        fn(object);
+    }
+}
 
-// ---- direct fill: DWG file -> AcDbDatabase (ObjectARX readDwg shape) ----
+// Runs |walk| (the owned-handle chain); if it yields no children, falls
+// back to the ownerhandle scan.
+template <typename Fn>
+inline void forEachPolylineChild(const DwgImportContext &ctx,
+                                 const Dwg_Object &polyline, Fn &&fn)
+{
+    bool any = false;
+    forEachPolylineVertex(ctx, polyline, [&](const Dwg_Object &vertex) {
+        any = true;
+        fn(vertex);
+    });
+    if (!any)
+        forEachVertexByOwner(ctx, polyline, fn);
+}
 
-// Registers a layer record for |name| when missing (OpenCADStudio's
-// ensure_layer: a table record without a real handle cannot survive a
-// handle-based file format).
+// 2D POLYLINE: heavy polyline with per-vertex bulges and widths.
+inline AcDbPolyline polyline2dFromChildren(const DwgImportContext &ctx,
+                                           const Dwg_Object &polyline)
+{
+    AcDbPolyline result;
+    const Dwg_Entity_POLYLINE_2D &poly =
+        *polyline.tio.entity->tio.POLYLINE_2D;
+    result.closed = (poly.flag & 1) != 0;
+    result.elevation = poly.elevation;
+    result.thickness = poly.thickness;
+    result.normal = AcGeVector3d(poly.extrusion.x, poly.extrusion.y,
+                                 poly.extrusion.z);
+    forEachPolylineChild(ctx, polyline,
+                          [&](const Dwg_Object &vertex) {
+        if (vertex.fixedtype != DWG_TYPE_VERTEX_2D ||
+            vertex.tio.entity == nullptr ||
+            vertex.tio.entity->tio.VERTEX_2D == nullptr)
+            return;
+        const Dwg_Entity_VERTEX_2D &v =
+            *vertex.tio.entity->tio.VERTEX_2D;
+        result.vertices.push_back(AcGePoint2d(v.point.x, v.point.y));
+        result.bulges.push_back(v.bulge);
+    });
+    return result;
+}
+
+// 3D POLYLINE: straight 3D segments; DXF flag 70 bit 32 = closed.
+inline AcDb3dPolyline polyline3dFromChildren(const DwgImportContext &ctx,
+                                             const Dwg_Object &polyline)
+{
+    AcDb3dPolyline result;
+    const Dwg_Entity_POLYLINE_3D &poly =
+        *polyline.tio.entity->tio.POLYLINE_3D;
+    result.closed = (poly.flag & FLAG_POLYLINE_CLOSED) != 0; // bit 1
+    forEachPolylineChild(ctx, polyline,
+                          [&](const Dwg_Object &vertex) {
+        if (vertex.fixedtype != DWG_TYPE_VERTEX_3D ||
+            vertex.tio.entity == nullptr ||
+            vertex.tio.entity->tio.VERTEX_3D == nullptr)
+            return;
+        const Dwg_Entity_VERTEX_3D &v =
+            *vertex.tio.entity->tio.VERTEX_3D;
+        result.vertices.push_back(AcGePoint3d(v.point.x, v.point.y,
+                                              v.point.z));
+    });
+    return result;
+}
+
+// Polyface mesh: numverts VERTEX_PFACE positions followed by numfaces
+// VERTEX_PFACE_FACE records (1-based vertind, 0 = absent corner,
+// negative = invisible edge).  Faces triangulate as (a,b,c)+(a,c,d).
+inline std::optional<AcDbPolyFaceMesh> pfaceFromChildren(
+    const DwgImportContext &ctx, const Dwg_Object &polyline)
+{
+    AcDbPolyFaceMesh mesh;
+    mesh.style = MeshStyle::Cad;
+    BITCODE_BL positionCount = 0;
+    forEachPolylineChild(ctx, polyline,
+                          [&](const Dwg_Object &vertex) {
+        if (vertex.tio.entity == nullptr)
+            return;
+        if (vertex.fixedtype == DWG_TYPE_VERTEX_PFACE &&
+            vertex.tio.entity->tio.VERTEX_PFACE)
+        {
+            const Dwg_Entity_VERTEX_3D &v =
+                *vertex.tio.entity->tio.VERTEX_PFACE;
+            mesh.geometry.positions.push_back(
+                AcGePoint3d(v.point.x, v.point.y, v.point.z));
+        }
+        else if (vertex.fixedtype == DWG_TYPE_VERTEX_PFACE_FACE &&
+                 vertex.tio.entity->tio.VERTEX_PFACE_FACE)
+        {
+            // vertind is BITCODE_BS[4] (unsigned; 0 = absent corner, the
+            // spec's negative invisible-edge flag maps to a signed view).
+            const BITCODE_BSd *ind = reinterpret_cast<const BITCODE_BSd *>(
+                vertex.tio.entity->tio.VERTEX_PFACE_FACE->vertind);
+            const std::uint32_t a = ind[0] > 0 ? std::uint32_t(ind[0] - 1) : 0;
+            const std::uint32_t b = ind[1] > 0 ? std::uint32_t(ind[1] - 1) : 0;
+            const std::uint32_t c = ind[2] > 0 ? std::uint32_t(ind[2] - 1) : 0;
+            const std::uint32_t d = ind[3] > 0 ? std::uint32_t(ind[3] - 1) : 0;
+            if (ind[0] > 0 && ind[1] > 0 && ind[2] > 0)
+            {
+                mesh.geometry.indices.insert(
+                    mesh.geometry.indices.end(), {a, b, c});
+            }
+            if (ind[3] > 0 && ind[0] > 0 && ind[2] > 0)
+            {
+                mesh.geometry.indices.insert(
+                    mesh.geometry.indices.end(), {a, c, d});
+            }
+        }
+    });
+    positionCount = std::uint32_t(mesh.geometry.positions.size());
+    if (positionCount == 0 || mesh.geometry.indices.empty())
+        return std::nullopt;
+    for (const std::uint32_t index : mesh.geometry.indices)
+        if (index >= positionCount)
+            return std::nullopt; // dangling face index: corrupt source
+    return mesh;
+}
+
+// ---- common entity properties ----
+
 inline void ensureLayer(AcDbDatabase &database, const std::string &name)
 {
     if (name.empty() || database.layerTable().contains(name))
@@ -112,102 +599,344 @@ inline void ensureLayer(AcDbDatabase &database, const std::string &name)
     database.layerTable().add(name, database.allocateHandle());
 }
 
-// Walks every DWG entity, converts the supported set through toEntity(),
-// and inserts it into the database with its ACI color.  Unsupported
-// entity types are skipped and counted, mirroring a failsafe reader.
-// Returns the number of entities added.
-inline std::size_t addDwgEntities(AcDbDatabase &database,
-                                  const Dwg_Data &dwg)
+inline void ensureLineType(AcDbDatabase &database, const std::string &name)
 {
-    std::size_t added = 0;
+    if (name.empty() || database.linetypeTable().contains(name))
+        return;
+    database.linetypeTable().add(name, database.allocateHandle());
+}
+
+inline void ensureTextStyle(AcDbDatabase &database, const std::string &name)
+{
+    if (name.empty() || database.textStyleTable().contains(name))
+        return;
+    database.textStyleTable().add(name, database.allocateHandle());
+}
+
+// Layer records import first so entity colors can resolve ByLayer through
+// the real record and layers keep their ACI.
+inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
+{
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
     {
         const Dwg_Object &object = dwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_OBJECT ||
+            object.fixedtype != DWG_TYPE_LAYER || object.tio.object == nullptr)
+            continue;
+        const Dwg_Object_LAYER &layer = *object.tio.object->tio.LAYER;
+        if (layer.name == nullptr)
+            continue;
+        const std::string name = layer.name;
+        if (name.empty() || database.layerTable().contains(name))
+            continue;
+        AcDbLayerTableRecord &record =
+            database.layerTable().add(name, database.allocateHandle());
+        const int aci = static_cast<int>(layer.color.index);
+        record.color = aciToColor(aci == 256 || aci == 0 ? 7 : aci);
+        record.isOff = aci < 0; // CMC: negative index = layer off
+        record.isFrozen = layer.frozen;
+        record.isPlottable = layer.plotflag != 0;
+        ensureLineType(database, layer.ltype && layer.ltype->obj
+                                     ? std::string(symbolTableName(
+                                           layer.ltype->obj, DWG_TYPE_LTYPE))
+                                     : std::string());
+    }
+}
+
+// Fills the common-properties block from the DWG entity common data:
+// layer, color (raw ACI kept in colorIndex, rgba resolved for rendering),
+// linetype, visibility, and the display name.
+template <typename Payload>
+void applyCommon(Payload &payload, const DwgImportContext &ctx,
+                 const Dwg_Object &object, AcDbDatabase &database)
+{
+    const Dwg_Object_Entity &ent = *object.tio.entity;
+    AcDbEntity &common = payload.common;
+
+    if (const char *layer = layerNameOf(ctx, ent))
+        common.layer = layer;
+    ensureLayer(database, common.layer);
+
+    const int aci = static_cast<int>(ent.color.index);
+    common.colorIndex = (aci >= 0 && aci <= 256) ? aci : 256;
+    if (aci == 256)
+    {
+        // ByLayer: resolve the display color through the layer record.
+        if (const AcDbLayerTableRecord *record =
+                database.layerTable().get(common.layer))
+            common.color = record->color;
+        else
+            common.color = aciToColor(7);
+    }
+    else if (aci == 0)
+    {
+        common.color = aciToColor(7); // ByBlock render fallback
+    }
+    else
+    {
+        common.color = aciToColor(aci);
+    }
+
+    if (const char *ltype = lineTypeNameOf(ctx, ent))
+        if (ltype != std::string("ByLayer"))
+        {
+            common.lineType = ltype;
+            ensureLineType(database, common.lineType);
+        }
+
+    common.visible = ent.invisible == 0;
+    common.name =
+        std::string("DWG_") + (object.dxfname ? object.dxfname : "ENTITY");
+}
+
+// ---- direct fill: DWG/DXF file -> AcDbDatabase (ARX readDwgFile shape) ----
+
+struct AcDbDwgImportReport
+{
+    std::size_t added = 0;
+    std::size_t unsupported = 0;
+};
+
+// Walks every DWG object, converts the supported entity set through
+// toEntity(), routes model/paper-space entities into the database and
+// rebuilds user block records from their owned members.  Unsupported
+// entity types are skipped and counted (failsafe-reader semantics).
+inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
+                                          const Dwg_Data &dwg)
+{
+    AcDbDwgImportReport report;
+    const DwgImportContext ctx(dwg);
+    importLayerRecords(database, dwg);
+
+    // Deferred block members keyed by the owning BLOCK_HEADER handle;
+    // records are created in a second pass so duplicate names merge and
+    // base points arrive before members.
+    std::unordered_map<std::uint64_t, std::vector<AcDbEntityVariant>>
+        blockMembers;
+
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        const Dwg_Object &object = dwg.object[i];
+        if (object.supertype == DWG_SUPERTYPE_OBJECT)
+            continue; // table records handled above / by the block pass
         if (object.supertype != DWG_SUPERTYPE_ENTITY || !object.tio.entity)
             continue;
-        const glm::vec4 entityColor =
-            aciToColor(static_cast<int>(object.tio.entity->color.index));
 
-        switch (object.type)
+        const Dwg_Object_Entity &ent = *object.tio.entity;
+
+        // Structural companions of polylines and blocks are not entities
+        // in the acdb model.
+        switch (object.fixedtype)
         {
-        case DWG_TYPE_LINE:
-        {
-            AcDbLine line = toEntity(*object.tio.entity->tio.LINE);
-            line.common.name = "DWG_LINE";
-            line.common.color = entityColor;
-            ensureLayer(database, line.common.layer);
-            database.addEntity(std::move(line));
-            ++added;
-            break;
-        }
-        case DWG_TYPE_ARC:
-        {
-            AcDbArc arc = toEntity(*object.tio.entity->tio.ARC);
-            arc.common.name = "DWG_ARC";
-            arc.common.color = entityColor;
-            ensureLayer(database, arc.common.layer);
-            database.addEntity(std::move(arc));
-            ++added;
-            break;
-        }
-        case DWG_TYPE_CIRCLE:
-        {
-            AcDbCircle circle = toEntity(*object.tio.entity->tio.CIRCLE);
-            circle.common.name = "DWG_CIRCLE";
-            circle.common.color = entityColor;
-            ensureLayer(database, circle.common.layer);
-            database.addEntity(std::move(circle));
-            ++added;
-            break;
-        }
-        case DWG_TYPE_ELLIPSE:
-        {
-            AcDbEllipse ellipse = toEntity(*object.tio.entity->tio.ELLIPSE);
-            ellipse.common.name = "DWG_ELLIPSE";
-            ellipse.common.color = entityColor;
-            ensureLayer(database, ellipse.common.layer);
-            database.addEntity(std::move(ellipse));
-            ++added;
-            break;
-        }
-        case DWG_TYPE_POINT:
-        {
-            AcDbPoint point = toEntity(*object.tio.entity->tio.POINT);
-            point.common.name = "DWG_POINT";
-            point.common.color = entityColor;
-            ensureLayer(database, point.common.layer);
-            database.addEntity(std::move(point));
-            ++added;
-            break;
-        }
-        case DWG_TYPE_RAY:
-        {
-            AcDbRay ray = toEntity(*object.tio.entity->tio.RAY);
-            ray.common.name = "DWG_RAY";
-            ray.common.color = entityColor;
-            ensureLayer(database, ray.common.layer);
-            database.addEntity(std::move(ray));
-            ++added;
-            break;
-        }
-        case DWG_TYPE_XLINE:
-        {
-            const AcDbRay ray = toEntity(*object.tio.entity->tio.RAY);
-            AcDbXline xline;
-            xline.common.name = "DWG_XLINE";
-            xline.point = ray.start;
-            xline.direction = ray.direction;
-            xline.common.color = entityColor;
-            ensureLayer(database, xline.common.layer);
-            database.addEntity(std::move(xline));
-            ++added;
-            break;
-        }
+        case DWG_TYPE_VERTEX_2D:
+        case DWG_TYPE_VERTEX_3D:
+        case DWG_TYPE_VERTEX_PFACE:
+        case DWG_TYPE_VERTEX_PFACE_FACE:
+        case DWG_TYPE_SEQEND:
+        case DWG_TYPE_BLOCK:
+        case DWG_TYPE_ENDBLK:
+        case DWG_TYPE__3DLINE:
+            continue;
         default:
             break;
         }
+
+        // nullopt (not an empty variant — that would default-construct an
+        // AcDbLine) marks "type unsupported".
+        std::optional<AcDbEntityVariant> converted;
+        switch (object.type)
+        {
+        case DWG_TYPE_LINE:
+            converted = toEntity(*ent.tio.LINE);
+            break;
+        case DWG_TYPE_ARC:
+            converted = toEntity(*ent.tio.ARC);
+            break;
+        case DWG_TYPE_CIRCLE:
+            converted = toEntity(*ent.tio.CIRCLE);
+            break;
+        case DWG_TYPE_ELLIPSE:
+            converted = toEntity(*ent.tio.ELLIPSE);
+            break;
+        case DWG_TYPE_POINT:
+            converted = toEntity(*ent.tio.POINT);
+            break;
+        case DWG_TYPE_RAY:
+            converted = toEntity(*ent.tio.RAY);
+            break;
+        case DWG_TYPE_XLINE:
+        {
+            const AcDbRay ray = toEntity(*ent.tio.RAY);
+            AcDbXline xline;
+            xline.point = ray.start;
+            xline.direction = ray.direction;
+            converted = std::move(xline);
+            break;
+        }
+        case DWG_TYPE_SOLID:
+            converted = toEntity(*ent.tio.SOLID);
+            break;
+        case DWG_TYPE__3DFACE:
+            converted = toEntity(*ent.tio._3DFACE);
+            break;
+        case DWG_TYPE_LWPOLYLINE:
+            converted = toEntity(*ent.tio.LWPOLYLINE);
+            break;
+        case DWG_TYPE_POLYLINE_2D:
+            converted = polyline2dFromChildren(ctx, object);
+            break;
+        case DWG_TYPE_POLYLINE_3D:
+            converted = polyline3dFromChildren(ctx, object);
+            break;
+        case DWG_TYPE_POLYLINE_PFACE:
+            converted = pfaceFromChildren(ctx, object);
+            if (!converted)
+                ++report.unsupported;
+            break;
+        case DWG_TYPE_SPLINE:
+            converted = toEntity(*ent.tio.SPLINE);
+            break;
+        case DWG_TYPE_TEXT:
+            converted = toEntity(*ent.tio.TEXT);
+            break;
+        case DWG_TYPE_MTEXT:
+            converted = toEntity(*ent.tio.MTEXT);
+            break;
+        case DWG_TYPE_MLINE:
+            converted = toEntity(*ent.tio.MLINE);
+            break;
+        case DWG_TYPE_HATCH:
+            converted = tryToEntity(*ent.tio.HATCH);
+            if (!converted)
+                ++report.unsupported;
+            break;
+        case DWG_TYPE_INSERT:
+        {
+            if (const char *name =
+                    blockHeaderNameOf(ctx, ent.tio.INSERT->block_header))
+            {
+                AcDbBlockReference reference = toEntity(*ent.tio.INSERT);
+                reference.blockTableRecordName = name;
+                converted = std::move(reference);
+            }
+            else
+            {
+                ++report.unsupported; // dangling block reference
+            }
+            break;
+        }
+        default:
+            ++report.unsupported;
+            break;
+        }
+        if (!converted)
+            continue;
+        AcDbEntityVariant payload = std::move(*converted);
+
+        std::visit(
+            [&](auto &typed) { applyCommon(typed, ctx, object, database); },
+            payload);
+
+        // TEXT carries its style by record name; MTEXT's payload has no
+        // style slot, so its style falls back to the database default.
+        if (auto *text = std::get_if<AcDbText>(&payload))
+        {
+            if (const char *style =
+                    symbolTableName(ctx.resolve(ent.tio.TEXT->style),
+                                    DWG_TYPE_STYLE);
+                style != nullptr && *style != '\0')
+            {
+                ensureTextStyle(database, style);
+                text->styleName = style;
+            }
+        }
+
+        // Membership: entmode 1 = PSPACE, 2 = MSPACE (implicit owner),
+        // 3 = explicit ownerhandle; a DXF-sourced decode can leave
+        // entmode 0 while still setting ownerhandle, so the ownerhandle
+        // decides whenever it names a user block header.
+        Dwg_Object_Ref *ownerHandle = ent.ownerhandle;
+        const char *ownerBlockName =
+            blockHeaderNameOf(ctx, ownerHandle);
+        const bool ownedByBlock =
+            ownerBlockName != nullptr &&
+            !isModelOrPaperSpaceName(ownerBlockName);
+
+        // Bulk-load path (insertLoadedEntity + record append): load-time
+        // inserts stay silent by design; a fresh load mirrors in bulk.
+        auto addToSpace = [&](AcDbEntityVariant &&resident,
+                              AcDbBlockTableRecord &space) {
+            AcDbEntity &commonRef = std::visit(
+                [](auto &typed) -> AcDbEntity & { return typed.common; },
+                resident);
+            commonRef.handle = database.allocateHandle();
+            const AcDbHandle handle = commonRef.handle;
+            if (database.insertLoadedEntity(std::move(resident)))
+            {
+                space.appendEntityHandle(handle);
+                ++report.added;
+            }
+        };
+
+        if (ent.entmode == 1)
+        {
+            // Paper space record (created by the database constructor).
+            if (AcDbBlockTableRecord *pspace =
+                    database.blockTable().getMutable(kPaperSpaceName))
+                addToSpace(std::move(payload), *pspace);
+        }
+        else if (ownedByBlock && ownerHandle != nullptr)
+        {
+            blockMembers[ownerHandle->absolute_ref].push_back(
+                std::move(payload));
+        }
+        else
+        {
+            addToSpace(std::move(payload), database.modelSpace());
+        }
     }
-    return added;
+
+    // Rebuild user block records in file order.
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        const Dwg_Object &object = dwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_OBJECT ||
+            object.fixedtype != DWG_TYPE_BLOCK_HEADER ||
+            object.tio.object == nullptr)
+            continue;
+        const Dwg_Object_BLOCK_HEADER &header =
+            *object.tio.object->tio.BLOCK_HEADER;
+        if (header.name == nullptr ||
+            isModelOrPaperSpaceName(header.name))
+            continue;
+        const std::string name = header.name;
+
+        AcDbBlockTableRecord *record =
+            database.blockTable().getMutable(name);
+        if (record == nullptr)
+        {
+            const AcDbHandle recordHandle = database.allocateHandle();
+            record = &database.blockTable().add(name, recordHandle);
+            record->handle = recordHandle;
+            record->setRecordName(name);
+            record->setBasePoint(AcGePoint3d(header.base_pt.x,
+                                             header.base_pt.y,
+                                             header.base_pt.z));
+        }
+        for (AcDbEntityVariant &payload : blockMembers[object.handle.value])
+        {
+            AcDbEntity &commonRef = std::visit(
+                [](auto &typed) -> AcDbEntity & { return typed.common; },
+                payload);
+            commonRef.handle = database.allocateHandle();
+            commonRef.ownerHandle = record->handle;
+            const AcDbHandle handle = commonRef.handle;
+            if (database.insertLoadedEntity(std::move(payload)))
+                record->appendEntityHandle(handle);
+        }
+    }
+
+    return report;
 }
 
 } // namespace acdb

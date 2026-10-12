@@ -211,6 +211,28 @@ int AcGsManager::loadMeshTexture(const std::string &path)
                : 0;
 }
 
+int AcGsManager::loadMeshTextureFromMemory(const std::string &key,
+                                           const void *data,
+                                           std::size_t size)
+{
+    return device_ != nullptr
+               ? static_cast<int>(
+                     device_->loadMeshTextureFromMemory(key, data, size))
+               : 0;
+}
+
+std::uint32_t AcGsManager::createStaticMesh(
+    const rendering::StaticMeshVertices &vertices)
+{
+    return device_ != nullptr ? device_->createStaticMesh(vertices) : 0;
+}
+
+void AcGsManager::destroyStaticMesh(std::uint32_t staticMeshId)
+{
+    if (device_ != nullptr)
+        device_->destroyStaticMesh(staticMeshId);
+}
+
 void AcGsManager::requestDebugScreenshot(const std::string &path)
 {
     if (device_ != nullptr)
@@ -350,10 +372,10 @@ void AcGsManager::queueGpuTrianglePick(
 
 void AcGsManager::queueGpuMeshPick(
     const rendering::MeshInstance &instance, rendering::MeshType mesh,
-    std::uint32_t objectId)
+    std::uint32_t objectId, std::uint32_t staticMeshId)
 {
     if (device_ != nullptr)
-        device_->queueGpuMeshPick(instance, mesh, objectId);
+        device_->queueGpuMeshPick(instance, mesh, objectId, staticMeshId);
 }
 
 // ---- views ----

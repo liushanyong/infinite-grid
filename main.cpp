@@ -1,7 +1,7 @@
 #include <SDL.h>
 
-#include <cadui/ViewCube.hpp>
-#include <cadui/ViewCubeBgfx.hpp>
+#include <cadui/ViewCubeOverlay.hpp>
+#include <cadui/UcsIconOverlay.hpp>
 #include <cadui/GripOverlay.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -14,11 +14,12 @@
 #include "coordinate/WorldRebase.h"
 #include "acdb/AcDbTessellate.h"
 #include "acdb/AcDbEntityWorldDraw.h"
-#include "libredwg/include/dwg.h"
-#include "acdb/AcDbDwgBridge.h"
+#include "acdb/AcDbFileIo.h"
+#include "acdb/AcDbGltf.h"
 #include "acdb/AcDbTransform.h"
 #include "brep/KernelSelfTest.h"
 #include "acdb/StoreSelfTest.h"
+#include "acdb/FileIoSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsSelectionManager.h"
@@ -61,8 +62,8 @@ namespace
 constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
 
-cadui::ViewCubeWidget viewCubeWidget;
-cadui::ViewCubeBgfxRenderer viewCubeRenderer;
+cadui::ViewCubeOverlay viewCubeOverlay;
+cadui::UcsIconOverlay ucsIconOverlay;
 bool imguiContextCreated = false;
 bool imguiPlatformInitialized = false;
 bool imguiOverlayEnabled = false;
@@ -455,9 +456,7 @@ bool init()
           std::uint32_t(uiClear.a * 255.0f));
       acgs::acgsGetManager()->setImGuiActive(true);
       imguiOverlayEnabled = true;
-      if (viewCubeRenderer.create())
-        viewCubeRenderer.setFontTexture(imguiBgfxGetFontTexture());
-      else
+      if (!viewCubeOverlay.create(imguiBgfxGetFontTexture()))
         std::cerr << "ViewCube BGFX renderer unavailable; using ImGui fallback"
                   << std::endl;
     }
@@ -565,7 +564,7 @@ void close()
 {
   if (imguiContextCreated)
   {
-    viewCubeRenderer.destroy();
+    viewCubeOverlay.destroy();
     if (imguiOverlayEnabled)
       imguiBgfxDestroy();
     if (imguiPlatformInitialized)
@@ -582,6 +581,10 @@ void close()
   SDL_Quit();
 }
 
+// The ViewCube overlay (window chrome, bgfx renderer, navigation actions and
+// their camera application) lives in cadui::ViewCubeOverlay; these two
+// wrappers only bridge what the class must not know: SDL window queries and
+// the ImGui-enabled gate.
 bool isViewCubeScreenPoint(float x, float y)
 {
   if (!imguiOverlayEnabled)
@@ -589,122 +592,45 @@ bool isViewCubeScreenPoint(float x, float y)
   int displayWidth = 0;
   int displayHeight = 0;
   SDL_GetWindowSize(window, &displayWidth, &displayHeight);
-  return x >= displayWidth - 198.0f && x <= displayWidth - 12.0f &&
-         y >= 0.0f && y <= 200.0f;
-}
-
-void setCameraEyeDirection(const glm::dvec3 &eyeDirection)
-{
-  if (glm::length(eyeDirection) < 1e-12)
-    return;
-  orbitCam.setViewDirection(-glm::normalize(eyeDirection));
-  orbitCam.setWorldUp(glm::dvec3(0.0, 0.0, 1.0));
-  acgsView().resetDepthSlabs();
-}
-
-void applyViewCubeAction(const cadui::ViewCubeAction &action)
-{
-  constexpr double quarterTurn = 1.57079632679489661923;
-  const glm::dvec3 eyeDirection =
-      glm::normalize(orbitCam.Rotation * glm::dvec3(0.0, 0.0, 1.0));
-  switch (action.kind)
-  {
-  case cadui::ViewCubeActionKind::Region:
-  {
-    // OpenCADStudio's snap_view_region flips to the opposite region when the
-    // camera already faces the clicked one, so re-clicking a region walks to
-    // the far side instead of doing nothing.
-    cadui::ViewCubeRegion target = action.region;
-    const glm::dvec3 targetDirection(
-        cadui::ViewCubeWidget::snapDirection(target));
-    if (glm::dot(eyeDirection, glm::normalize(targetDirection)) > 0.9999)
-      target = cadui::ViewCubeWidget::oppositeRegion(target);
-    setCameraEyeDirection(glm::dvec3(
-        cadui::ViewCubeWidget::snapDirection(target)));
-    break;
-  }
-  case cadui::ViewCubeActionKind::Cardinal:
-    setCameraEyeDirection(glm::dvec3(
-        cadui::ViewCubeWidget::cardinalDirection(action.region.index)));
-    break;
-  case cadui::ViewCubeActionKind::Home:
-    setCameraEyeDirection(glm::dvec3(0.0, 0.0, 1.0));
-    break;
-  case cadui::ViewCubeActionKind::RollLeft:
-  case cadui::ViewCubeActionKind::RollRight:
-  {
-    const double angle = action.kind == cadui::ViewCubeActionKind::RollLeft
-                             ? -quarterTurn
-                             : quarterTurn;
-    const glm::dvec3 rolledUp =
-        glm::angleAxis(angle, eyeDirection) * orbitCam.Up;
-    orbitCam.setWorldUp(rolledUp);
-    acgsView().resetDepthSlabs();
-    break;
-  }
-  case cadui::ViewCubeActionKind::NudgeUp:
-  case cadui::ViewCubeActionKind::NudgeDown:
-  case cadui::ViewCubeActionKind::NudgeLeft:
-  case cadui::ViewCubeActionKind::NudgeRight:
-  {
-    const bool horizontal = action.kind == cadui::ViewCubeActionKind::NudgeLeft ||
-                            action.kind == cadui::ViewCubeActionKind::NudgeRight;
-    const bool positive = action.kind == cadui::ViewCubeActionKind::NudgeDown ||
-                          action.kind == cadui::ViewCubeActionKind::NudgeRight;
-    const glm::dvec3 axis = horizontal ? orbitCam.Up : orbitCam.Right;
-    const double angle = positive ? quarterTurn : -quarterTurn;
-    setCameraEyeDirection(glm::angleAxis(angle, glm::normalize(axis)) *
-                          eyeDirection);
-    break;
-  }
-  default:
-    break;
-  }
+  return viewCubeOverlay.capturesScreenPoint(x, y, (float)displayWidth,
+                                             (float)displayHeight);
 }
 
 void drawViewCubeOverlay()
 {
   if (!imguiOverlayEnabled)
     return;
-
-  ImGuiIO &io = ImGui::GetIO();
-  constexpr float overlayWidth = 174.0f;
-  constexpr float overlayHeight = 188.0f;
-  ImGui::SetNextWindowPos(
-      ImVec2(io.DisplaySize.x - overlayWidth - 12.0f, 12.0f),
-      ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(overlayWidth, overlayHeight),
-                           ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.0f);
-  const ImGuiWindowFlags flags =
-      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-      ImGuiWindowFlags_NoBackground;
-  if (!ImGui::Begin("UcsViewCubeOverlay", nullptr, flags))
+  if (viewCubeOverlay.render(orbitCam))
   {
-    ImGui::End();
-    return;
+    acgsView().resetDepthSlabs();
   }
+}
 
-  viewCubeWidget.setBgfxRenderer(&viewCubeRenderer);
-  cadui::ViewCubeOptions options;
-  options.showControls = true;
-  options.showUcsPicker = false;
-  // The widget projects cube-local points with eye = rotation * local and
-  // +Z toward the camera, i.e. it needs the world->eye basis.  Rotation is
-  // the OpenCADStudio turntable quaternion (cam-local -> world, eye =
-  // Rotation * +Z), so pass its conjugate — the same matrix OpenCADStudio's
-  // view_rotation_mat() feeds its ViewCube.  Passing Rotation un-conjugated
-  // transposes the cube: hit tests resolve to the wrong regions and corner
-  // clicks snap to the wrong directions.
-  const glm::mat3 cameraRotation(
-      glm::mat3_cast(glm::conjugate(orbitCam.Rotation)));
-  const cadui::ViewCubeResult result = viewCubeWidget.render(
-      "UcsViewCube", ImVec2(160.0f, 160.0f), cameraRotation,
-      glm::mat3(1.0f), options);
-  applyViewCubeAction(result.action);
-  ImGui::End();
+// The UCS icon overlay (window chrome, tripod widget, grip-drag state, camera
+// chase) lives in cadui::UcsIconOverlay; these two wrappers only bridge what
+// the class must not know: SDL window queries and the ImGui-enabled gate.
+bool isUcsIconScreenPoint(float x, float y)
+{
+  if (!imguiOverlayEnabled)
+    return false;
+  int displayWidth = 0;
+  int displayHeight = 0;
+  SDL_GetWindowSize(window, &displayWidth, &displayHeight);
+  return ucsIconOverlay.capturesScreenPoint(x, y, (float)displayHeight);
+}
+
+int currentDrawableWidth();
+int currentDrawableHeight();
+
+void drawUcsIconOverlay()
+{
+  if (!imguiOverlayEnabled)
+    return;
+  if (ucsIconOverlay.render(orbitCam, acgs::kClearColor,
+                            currentDrawableHeight()))
+  {
+    acgsView().resetDepthSlabs();
+  }
 }
 
 void logCameraTargetIfChanged(const glm::dvec3 &target)
@@ -860,12 +786,35 @@ void appendScenePoint(acgs::AcGsModel &drawList,
 int currentDrawableWidth();
 int currentDrawableHeight();
 
+// Imported glTF geometry shared between tessellation rebuilds: the CPU
+// buffers parse once per model file and the GPU upload happens lazily on
+// the first draw with a live device.  The cache is keyed by file path (not
+// by tessellation-stored pointers) and its shared_ptrs are owned by the
+// records themselves, so rebuilds cannot dangle it -- it deliberately sits
+// outside invalidateTessellationKeyedCaches().
+struct GltfStaticMesh
+{
+  rendering::StaticMeshVertices cpu;
+  std::uint32_t gpuId = 0;
+};
+
 struct MeshEntityRecord
 {
   acdb::AcDbPolyFaceMesh entity;
   glm::dvec3 worldPosition;
   float size;
   rendering::MeshType mesh = rendering::MeshType::Cube;
+  // Non-null: draw/pick upload and rasterize this static geometry instead
+  // of the procedural prototype selected by |mesh|.
+  std::shared_ptr<GltfStaticMesh> staticMesh;
+  // Per-record albedo texture slot (0 = scene default texture).
+  std::uint32_t diffuseTextureIndex = 0;
+  // Instance scale for records whose geometry is authored at final world
+  // size (imported models bake their normalization in).  Prototype records
+  // keep 0 and scale by |size|, whose vertex radius is 0.5.
+  float renderScale = 0.0f;
+
+  float instanceScale() const { return renderScale > 0.0f ? renderScale : size; }
 
   bool realistic() const
   {
@@ -1138,10 +1087,11 @@ static rendering::MeshInstance &cachedMeshInstance(
       colorOverride
           ? glm::vec4(*colorOverride, meshEntityColor(entity).a)
           : meshEntityColor(entity);
+  const float scale = entity.instanceScale();
   auto found = g_meshInstanceCache.find(&entity);
   if (found != g_meshInstanceCache.end() &&
       found->second.position == entity.worldPosition &&
-      found->second.size == entity.size && found->second.color == color &&
+      found->second.size == scale && found->second.color == color &&
       found->second.material == material)
   {
     return found->second.instance;
@@ -1149,11 +1099,11 @@ static rendering::MeshInstance &cachedMeshInstance(
 
   MeshInstanceCacheEntry entry;
   entry.position = entity.worldPosition;
-  entry.size = entity.size;
+  entry.size = scale;
   entry.color = color;
   entry.material = material;
   entry.instance = makeMeshInstance(
-      entity.size, glm::vec3(color), color.a,
+      scale, glm::vec3(color), color.a,
       rendering::encodeDoubleSingle(entity.worldPosition), material);
   if (found != g_meshInstanceCache.end())
   {
@@ -1172,12 +1122,19 @@ static void queueGpuMeshEntity(const MeshEntityRecord &entity,
       !meshEntityVisible(entity) || objectId == 0)
     return;
 
+  // Imported models queue their own geometry; without a live upload the ID
+  // pass would rasterize a prototype cube, so skip rather than mis-pick.
+  if (entity.staticMesh && entity.staticMesh->gpuId == 0)
+    return;
+
   const rendering::DoubleSingleVec3 objectPosition =
       rendering::encodeDoubleSingle(entity.worldPosition);
   const glm::vec4 color = meshEntityColor(entity);
   const rendering::MeshInstance instance = makeMeshInstance(
-      entity.size, glm::vec3(color), color.a, objectPosition);
-  acgs::acgsGetManager()->queueGpuMeshPick(instance, entity.mesh, objectId);
+      entity.instanceScale(), glm::vec3(color), color.a, objectPosition);
+  acgs::acgsGetManager()->queueGpuMeshPick(
+      instance, entity.mesh, objectId,
+      entity.staticMesh ? entity.staticMesh->gpuId : 0);
 }
 
 static void queueGpuMeshEntity(const MeshEntityRecord *entity)
@@ -1199,15 +1156,38 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   if (!meshEntityVisible(entity))
     return;
 
+  // Imported glTF meshes upload once and draw indexed static geometry.
+  if (entity.staticMesh && entity.staticMesh->gpuId == 0)
+  {
+    if (acgs::acgsGetManager()->deviceReady())
+      entity.staticMesh->gpuId =
+          acgs::acgsGetManager()->createStaticMesh(entity.staticMesh->cpu);
+    if (entity.staticMesh->gpuId == 0)
+    {
+      static bool warnedStaticUpload = false;
+      if (!warnedStaticUpload)
+      {
+        warnedStaticUpload = true;
+        std::cerr << "glTF static mesh upload failed; model skipped"
+                  << std::endl;
+      }
+      return;
+    }
+  }
+
+  const bool imported = entity.staticMesh != nullptr;
   const glm::vec4 color =
       colorOverride
-          ? glm::vec4(*colorOverride, meshEntityColor(entity).a)
-          : meshEntityColor(entity);
+          ? glm::vec4(*colorOverride,
+                      imported ? entity.entity.common.color.a
+                               : meshEntityColor(entity).a)
+          : (imported ? entity.entity.common.color
+                      : meshEntityColor(entity));
   const glm::vec4 material = meshEntityRenderMaterial(entity);
   acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
-      entity.mesh, color.a >= 1.0f, entity.realistic(), material,
+      entity.mesh, color.a >= 1.0f, imported || entity.realistic(), material,
       cadAlgorithm);
-  batch.acgiMaterial.algorithm = entity.realistic()
+  batch.acgiMaterial.algorithm = (imported || entity.realistic())
       ? acgs::AcGiShaderAlgorithm::Realistic
       : acgs::AcGiShaderAlgorithm::Shaded;
   batch.acgiMaterial.baseColor = color;
@@ -1216,11 +1196,29 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   batch.acgiMaterial.roughness = entity.entity.material.roughnessFactor;
   batch.acgiMaterial.transparency = 1.0f - color.a;
   batch.acgiMaterial.lineWidth = float(entity.entity.common.lineWeight);
+  // Imported models keep their authored albedo colors: the contrast pass
+  // exists for flat demo colors against the CAD background and would tint
+  // dark PBR base colors.
+  if (imported)
+  {
+    batch.staticMeshId = entity.staticMesh->gpuId;
+    batch.diffuseTextureIndex = entity.diffuseTextureIndex;
+  }
   batch.instances.push_back(cachedMeshInstance(entity, material, colorOverride));
 }
 
 glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
 {
+  // fs_pbr_mesh uniform: x=metallic y=roughness z=emissive w=alphaCutoff.
+  // Imported glTF materials map 1:1 (alphaMask=1 marks a MASK material).
+  if (entity.staticMesh)
+  {
+    const acdb::AcDbMaterial &material = entity.entity.material;
+    return glm::vec4(
+        material.metallicFactor, material.roughnessFactor,
+        material.emissiveFactor.r,
+        material.alphaMask > 0.5f ? material.alphaMaskCutoff : 0.0f);
+  }
   return entity.realistic()
       ? glm::vec4(entity.entity.material.metallicFactor,
                   entity.entity.material.roughnessFactor, 0.0f, 0.0f)
@@ -1544,6 +1542,293 @@ static void addDemo(EntityType entity, const std::string &name,
   hints.pickShape = pickShape;
   acgs::replayHints()[name] = hints;
   acdbDocument().addEntity(std::move(entity));
+}
+
+// ---- glTF demo (GRID_GLTF / G key) ----------------------------------------
+//
+// A glTF model imports as one AcDbPolyFaceMesh per primitive (PBR factors +
+// base-color texture), normalizes around a demo placement, and renders
+// through the realistic mesh pipeline (albedo texture + metallic/roughness +
+// headlight/point lights).  GRID_GLTF=<file> loads at startup; G cycles the
+// models found in resources/models; Ctrl+G (or GRID_GLTF_EXPORT=1) writes
+// the loaded model back out as .glb and .gltf.
+
+constexpr double kGltfDemoTargetRadius = 240.0;
+
+static std::filesystem::path gGltfActivePath;
+static std::uint64_t gGltfModelSerial = 0;
+
+// GRID_GLTF=<path|file.glb> queues a model at startup: an absolute path, or
+// a bare file name resolved under resources/models.  GRID_GLTF=0 disables
+// imported models entirely; with no GRID_GLTF at all the demo loads
+// duck_textured.glb (falling back to duck.glb when the generated asset is
+// absent) at the large-coordinate placement, so the default startup scene
+// carries a textured imported model.
+static const bool gGltfEnvResolved = [] {
+  const char *value = std::getenv("GRID_GLTF");
+  if (value && std::strcmp(value, "0") == 0)
+    return false;
+  std::filesystem::path candidate;
+  if (value && *value != '\0')
+  {
+    candidate = value;
+    if (!std::filesystem::exists(candidate))
+      candidate = util::resourcePath("models") / candidate;
+    if (!std::filesystem::exists(candidate))
+    {
+      std::cout << "GRID_GLTF: model not found: " << value << std::endl;
+      return true;
+    }
+  }
+  else
+  {
+    const std::filesystem::path models = util::resourcePath("models");
+    candidate = models / "duck_textured.glb";
+    if (!std::filesystem::exists(candidate))
+      candidate = models / "duck.glb";
+    if (!std::filesystem::exists(candidate))
+      return false;
+  }
+  gGltfActivePath = candidate;
+  gGltfModelSerial = 1;
+  return true;
+}();
+
+static glm::dvec3 gltfDemoPlacement()
+{
+  // Inside the large-coordinate stress field, off to the side of the demo
+  // cube cluster so the startup fit-all camera frames the model.
+  return demoAnchorPoint() + glm::dvec3(768.0, -1024.0, 0.0);
+}
+
+static std::vector<std::filesystem::path> listGltfDemoModels()
+{
+  std::vector<std::filesystem::path> models;
+  std::error_code ec;
+  for (const std::filesystem::directory_entry &entry :
+       std::filesystem::directory_iterator(util::resourcePath("models"), ec))
+  {
+    const std::string extension = entry.path().extension().string();
+    const bool gltfFile = extension == ".glb" || extension == ".gltf";
+    if (gltfFile)
+      models.push_back(entry.path());
+  }
+  std::sort(models.begin(), models.end(),
+            [](const std::filesystem::path &a, const std::filesystem::path &b) {
+              return a.filename().string() < b.filename().string();
+            });
+  return models;
+}
+
+struct GltfDemoModelAsset
+{
+  acdb::AcDbGltfImport import;
+  std::vector<std::shared_ptr<GltfStaticMesh>> meshes; // per import.meshes
+  double scale = 1.0; // instance scale: target radius / model radius
+  bool valid = false;
+};
+
+// Parses once per model file (path-keyed); rebuilds copy records out of it.
+static const GltfDemoModelAsset &gltfDemoAsset(
+    const std::filesystem::path &path)
+{
+  static std::map<std::string, GltfDemoModelAsset> cache;
+  const std::string key = path.filename().string();
+  auto [entry, inserted] = cache.try_emplace(key);
+  if (!inserted)
+    return entry->second;
+
+  GltfDemoModelAsset &asset = entry->second;
+  std::string error;
+  if (!acdb::importGltf(path, asset.import, &error))
+  {
+    std::cerr << "GRID_GLTF: " << error << std::endl;
+    return asset;
+  }
+
+  const glm::dvec3 extent = asset.import.maximum - asset.import.minimum;
+  const double radius =
+      0.5 * std::max(extent.x, std::max(extent.y, extent.z));
+  asset.scale = radius > 0.0 ? kGltfDemoTargetRadius / radius : 1.0;
+
+  asset.meshes.resize(asset.import.meshes.size());
+  for (size_t i = 0; i < asset.import.meshes.size(); ++i)
+  {
+    const acdb::AcDbPolyFaceMeshGeometry &geometry =
+        asset.import.meshes[i].geometry;
+    auto staticMesh = std::make_shared<GltfStaticMesh>();
+    const size_t vertexCount = geometry.positions.size();
+    staticMesh->cpu.positionU.resize(vertexCount);
+    staticMesh->cpu.normalV.resize(vertexCount);
+    const bool hasUvs = geometry.uvs.size() == vertexCount;
+    const bool hasNormals = geometry.normals.size() == vertexCount;
+    for (size_t v = 0; v < vertexCount; ++v)
+    {
+      const AcGePoint3d &position = geometry.positions[v];
+      const glm::vec2 uv = hasUvs ? geometry.uvs[v] : glm::vec2(0.0f);
+      // The normalization scale bakes into the vertices so the rendered
+      // geometry is final-size and the instance only translates.
+      staticMesh->cpu.positionU[v] = glm::vec4(
+          float(position.x) * float(asset.scale),
+          float(position.y) * float(asset.scale),
+          float(position.z) * float(asset.scale), uv.x);
+      const glm::vec3 normal = hasNormals ? geometry.normals[v]
+                                          : glm::vec3(0.0f, 0.0f, 1.0f);
+      staticMesh->cpu.normalV[v] = glm::vec4(normal, uv.y);
+    }
+    staticMesh->cpu.indices = geometry.indices;
+    asset.meshes[i] = std::move(staticMesh);
+  }
+
+  asset.valid = true;
+  std::cout << "GRID_GLTF: imported " << asset.import.meshes.size()
+            << " primitives from " << path.filename().string();
+  if (!asset.import.textures.empty())
+    std::cout << ", " << asset.import.textures.size() << " textures";
+  if (!asset.import.skipped.empty())
+    std::cout << ", " << asset.import.skipped.size() << " skipped";
+  std::cout << std::endl;
+  return asset;
+}
+
+// Renderer texture slot per glTF texture key; the device owns the GPU
+// handles, the resolution cache is keyed by string and survives rebuilds.
+static std::uint32_t gltfDemoTextureIndex(const GltfDemoModelAsset &asset,
+                                          const std::string &key)
+{
+  static std::unordered_map<std::string, std::uint32_t> resolved;
+  if (key.empty())
+    return 0;
+  const auto found = resolved.find(key);
+  if (found != resolved.end())
+    return found->second;
+  if (!acgs::acgsGetManager()->deviceReady())
+    return 0;
+  for (const acdb::AcDbGltfTexture &texture : asset.import.textures)
+  {
+    if (texture.key != key)
+      continue;
+    const std::uint32_t index = acgs::acgsGetManager()->loadMeshTextureFromMemory(
+        key, texture.bytes.data(), texture.bytes.size());
+    if (index != 0)
+      resolved.emplace(key, index);
+    return index;
+  }
+  return 0;
+}
+
+// Exports glTF-imported records back to .glb and .gltf under
+// resources/models/export/.  Takes the records directly: the startup export
+// runs while the tessellation is still being built, so it must not re-query
+// the (not yet cached) draw list.
+static void exportGltfDemoRecords(
+    const std::vector<MeshEntityRecord> &records)
+{
+  std::vector<const acdb::AcDbPolyFaceMesh *> meshes;
+  for (const MeshEntityRecord &record : records)
+  {
+    if (record.staticMesh)
+      meshes.push_back(&record.entity);
+  }
+  if (meshes.empty())
+  {
+    std::cout << "GRID_GLTF: nothing to export (load a model with G first)"
+              << std::endl;
+    return;
+  }
+
+  const std::filesystem::path exportDir =
+      util::resourcePath("models") / "export";
+  std::error_code ec;
+  std::filesystem::create_directories(exportDir, ec);
+  const std::string stem = gGltfActivePath.empty()
+                               ? std::string("gltf_export")
+                               : gGltfActivePath.stem().string();
+
+  acdb::AcDbGltfExportOptions options;
+  std::string error;
+  const std::filesystem::path glbPath = exportDir / (stem + "_export.glb");
+  options.binary = true;
+  if (acdb::exportGltf(meshes, glbPath, options, &error))
+    std::cout << "GRID_GLTF: exported " << meshes.size() << " meshes -> "
+              << glbPath.string() << std::endl;
+  else
+    std::cerr << "GRID_GLTF: glb export failed: " << error << std::endl;
+
+  const std::filesystem::path gltfPath = exportDir / (stem + "_export.gltf");
+  options.binary = false;
+  if (acdb::exportGltf(meshes, gltfPath, options, &error))
+    std::cout << "GRID_GLTF: exported " << meshes.size() << " meshes -> "
+              << gltfPath.string() << std::endl;
+  else
+    std::cerr << "GRID_GLTF: gltf export failed: " << error << std::endl;
+}
+
+static void appendGltfDemoMeshes(VectorPrimitivesTessellation &target)
+{
+  if (gGltfActivePath.empty())
+    return;
+  const GltfDemoModelAsset &asset = gltfDemoAsset(gGltfActivePath);
+  if (!asset.valid)
+    return;
+
+  const glm::dvec3 placement = gltfDemoPlacement();
+  for (size_t i = 0; i < asset.import.meshes.size(); ++i)
+  {
+    MeshEntityRecord record;
+    record.entity = asset.import.meshes[i];
+    record.worldPosition = placement;
+    // |size| is the visibility-candidate extent (makeMeshCandidate uses
+    // size/2 as the half extent); the normalization already lives in the
+    // vertices, so the instance draws at scale 1.
+    record.size = float(2.0 * kGltfDemoTargetRadius);
+    record.renderScale = 1.0f;
+    record.staticMesh = asset.meshes[i];
+    record.diffuseTextureIndex = gltfDemoTextureIndex(
+        asset, record.entity.material.diffuseTexture);
+    target.meshes.push_back(std::move(record));
+  }
+
+  static const bool exportAtStartup = [] {
+    const char *value = std::getenv("GRID_GLTF_EXPORT");
+    return value != nullptr && *value != '\0' &&
+           std::strcmp(value, "0") != 0;
+  }();
+  static const bool exportedAtStartup = [&] {
+    if (exportAtStartup)
+      exportGltfDemoRecords(target.meshes);
+    return true;
+  }();
+  (void)exportedAtStartup;
+}
+
+static void cycleGltfDemoModel()
+{
+  const std::vector<std::filesystem::path> models = listGltfDemoModels();
+  if (models.empty())
+  {
+    std::cout << "GRID_GLTF: no .glb/.gltf files under resources/models"
+              << std::endl;
+    return;
+  }
+  std::filesystem::path next = models.front();
+  if (!gGltfActivePath.empty())
+  {
+    for (size_t i = 0; i < models.size(); ++i)
+    {
+      if (std::filesystem::equivalent(models[i], gGltfActivePath))
+      {
+        next = models[(i + 1) % models.size()];
+        break;
+      }
+    }
+  }
+  gGltfActivePath = next;
+  ++gGltfModelSerial; // bumps the draw-list key; rebuild imports the model
+  const glm::dvec3 placement = gltfDemoPlacement();
+  std::cout << "GRID_GLTF: queued " << next.filename().string()
+            << " (place at " << placement.x << ", " << placement.y << ", "
+            << placement.z << "; G cycles, Ctrl+G exports)" << std::endl;
 }
 
 
@@ -2074,24 +2359,42 @@ static void buildDemoDocument()
         bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
     addDemo(bezier, "Bezier");
 
-    // Decoded DWG models ride the document pipeline when GRID_DWG
-    // names a file: the parser fills the database directly.
+    // Decoded DWG/DXF models ride the document pipeline when GRID_DWG /
+    // GRID_DXF name a file: the ObjectARX file-IO facade fills the
+    // database directly.
     if (const char *dwgPath = std::getenv("GRID_DWG"))
     {
-      Dwg_Data dwg;
-      memset(&dwg, 0, sizeof(dwg));
-      if (dwg_read_file(dwgPath, &dwg) == 0)
-      {
-        const std::size_t inserted = acdb::addDwgEntities(document, dwg);
-        std::cout << "GRID_DWG: inserted " << inserted << " entities from "
-                  << dwgPath << std::endl;
-        dwg_free(&dwg);
-      }
+      acdb::AcDbFileIoReport report;
+      if (document.readDwgFile(dwgPath, &report))
+        std::cout << "GRID_DWG: inserted " << report.entitiesAdded
+                  << " entities (" << report.unsupportedSkipped
+                  << " unsupported) from " << dwgPath << std::endl;
       else
-      {
         std::cout << "GRID_DWG: failed to decode " << dwgPath << std::endl;
-      }
     }
+    if (const char *dxfPath = std::getenv("GRID_DXF"))
+    {
+      acdb::AcDbFileIoReport report;
+      if (document.dxfIn(dxfPath, &report))
+        std::cout << "GRID_DXF: inserted " << report.entitiesAdded
+                  << " entities (" << report.unsupportedSkipped
+                  << " unsupported) from " << dxfPath << std::endl;
+      else
+        std::cout << "GRID_DXF: failed to decode " << dxfPath << std::endl;
+    }
+
+    // File-IO write hooks: save the authored document through the
+    // ObjectARX writeDwgFile / dxfOut entry points.
+    if (const char *saveDwg = std::getenv("GRID_SAVE_DWG");
+        saveDwg && *saveDwg)
+      std::cout << "GRID_SAVE_DWG: "
+                << (document.writeDwgFile(saveDwg) ? "wrote " : "FAILED ")
+                << saveDwg << std::endl;
+    if (const char *saveDxf = std::getenv("GRID_SAVE_DXF");
+        saveDxf && *saveDxf)
+      std::cout << "GRID_SAVE_DXF: "
+                << (document.dxfOut(saveDxf) ? "wrote " : "FAILED ")
+                << saveDxf << std::endl;
 
     // Block references (GRID_BLOCKS=1): definition + three inserts.
     if (const char *blocks = std::getenv("GRID_BLOCKS");
@@ -2194,6 +2497,12 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     replayer.appendBlockInstances("DEMO_BRACKET", document, options,
                                   target);
 
+  // Imported glTF demo model (GRID_GLTF env / G key): one mesh record per
+  // primitive, rendered with its PBR material and albedo texture.  Placed
+  // ahead of the GRID_DEMO_MESHES gate so the glTF demo does not depend on
+  // the legacy prototype-mesh opt-in.
+  appendGltfDemoMeshes(target);
+
   if (!demoMeshesEnabled())
     return target;
 
@@ -2234,10 +2543,14 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
   // bumps its generation, so the draw list rebuilds exactly when the
   // document changed.  This is the dirty-document notification the
   // former constant cadDemoRevision always promised.
+  // The glTF serial folds into traitsVersion: G-key model switches change
+  // the mesh records without touching the document, so the cache key must
+  // move with them.
   static constexpr std::uint64_t cadDemoTraitsVersion = 1;
   static constexpr std::uint32_t cadDemoToleranceBucket = 0;
   const acgs::DrawListKey key{
-      demoSceneStore().revision(), cadDemoTraitsVersion,
+      demoSceneStore().revision(),
+      cadDemoTraitsVersion + gGltfModelSerial,
       vectorPrimitivesAnchor(), cadDemoToleranceBucket};
   static acgs::DrawListCache cache;
   return cache.get(key, buildVectorPrimitivesTessellation);
@@ -8152,6 +8465,7 @@ void render()
       acgs::acgsGetManager()->blitSceneToSlot(g_activeSceneSlot);
       //fprintf(stderr, "[P] blit ok\n");
       drawViewCubeOverlay();
+      drawUcsIconOverlay();
       ImGui::Render();
       {
         ImDrawData *dd = ImGui::GetDrawData();
@@ -8352,6 +8666,12 @@ int main(int argc, char *argv[])
     const int storeFails = acdb::runStoreSelfTest();
     return storeFails == 0 ? 0 : 1;
   }
+  if (const char *selfTest = std::getenv("GRID_SELFTEST");
+      selfTest && std::strcmp(selfTest, "fileio") == 0)
+  {
+    const int fileIoFails = acdb::runFileIoSelfTest();
+    return fileIoFails == 0 ? 0 : 1;
+  }
 
 
   if (!init())
@@ -8509,17 +8829,20 @@ int main(int argc, char *argv[])
         if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
             evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.button.x, evt.button.y);
+                          isViewCubeScreenPoint(evt.button.x, evt.button.y) ||
+                          isUcsIconScreenPoint(evt.button.x, evt.button.y);
         else if (evt.type == SDL_EVENT_MOUSE_MOTION)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y);
+                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y) ||
+                          isUcsIconScreenPoint(evt.motion.x, evt.motion.y);
         else if (evt.type == SDL_EVENT_MOUSE_WHEEL)
         {
           float mouseX = 0.0f;
           float mouseY = 0.0f;
           SDL_GetMouseState(&mouseX, &mouseY);
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(mouseX, mouseY);
+                          isViewCubeScreenPoint(mouseX, mouseY) ||
+                          isUcsIconScreenPoint(mouseX, mouseY);
         }
 
         if (evt.type == SDL_EVENT_QUIT)
@@ -8595,6 +8918,18 @@ int main(int argc, char *argv[])
             std::puts("Outline all: on");
           else
             std::puts("Outline all: off");
+        }
+        // G -- glTF demo: G loads/cycles models from resources/models,
+        // Ctrl+G exports the loaded model back out as .glb + .gltf.  The
+        // model switch bumps the draw-list glTF serial, so the next frame
+        // rebuilds the tessellation with the new records.
+        if (evt.key.scancode == SDL_SCANCODE_G)
+        {
+          if (evt.key.mod & SDL_KMOD_CTRL)
+            exportGltfDemoRecords(
+                getVectorPrimitivesTessellation().meshes);
+          else
+            cycleGltfDemoModel();
         }
         // V -- cycle the visual style through all render modes.
         if (evt.key.key == SDLK_V)

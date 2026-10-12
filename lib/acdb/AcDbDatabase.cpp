@@ -471,7 +471,11 @@ void AcDbDatabase::uneraseEntity(AcDbHandle handle)
 
 bool AcDbDatabase::isErased(AcDbHandle handle) const
 {
-    return erased_.count(handle) != 0;
+    // Presence alone is not erasure: insertLoadedEntity records loaded
+    // residents with an explicit false so a following write path can
+    // distinguish "alive" from "never heard of it".
+    const auto found = erased_.find(handle);
+    return found != erased_.end() && found->second;
 }
 
 bool AcDbDatabase::setActiveLayerName(const std::string &name)

@@ -137,7 +137,11 @@ public:
     // asynchronous readback is still pending.
     virtual uint32_t requestGpuPick(const GpuPickRequest &request) { return 0; }
     virtual void queueGpuMeshPick(const MeshInstance &instance,
-                                  MeshType mesh, uint32_t objectId) {}
+                                  MeshType mesh, uint32_t objectId,
+                                  uint32_t staticMeshId = 0)
+    {
+        (void)staticMeshId;
+    }
     virtual GpuPickQueueStats gpuPickQueueStats() const { return {}; }
     // Triangle vertices are expressed in the coordinate space represented by
     // view. A non-zero geometryKey marks reusable static geometry; transient
@@ -182,6 +186,29 @@ public:
     // Zero is a renderer-provided white texture; other ids are allocated by
     // the active backend and remain valid until shutdown().
     virtual uint32_t loadMeshTexture(const std::string &path) { return 0; }
+    // Memory variant for texture bytes that never touch disk (glTF embedded
+    // images).  |key| dedupes repeat loads of the same image.
+    virtual uint32_t loadMeshTextureFromMemory(const std::string &key,
+                                               const void *data,
+                                               std::size_t size)
+    {
+        (void)key;
+        (void)data;
+        (void)size;
+        return 0;
+    }
+    // Uploaded static geometry for imported models (glTF).  Returns a
+    // non-zero id used by MeshInstancesRenderData::staticMeshId, or 0 on
+    // failure.  Buffers stay valid until destroyStaticMesh or shutdown.
+    virtual uint32_t createStaticMesh(const StaticMeshVertices &vertices)
+    {
+        (void)vertices;
+        return 0;
+    }
+    virtual void destroyStaticMesh(uint32_t staticMeshId)
+    {
+        (void)staticMeshId;
+    }
     virtual void setRealisticLights(const RealisticLightsRenderData &lights) {}
 };
 
