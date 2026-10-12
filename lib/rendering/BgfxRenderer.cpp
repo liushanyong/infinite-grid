@@ -4125,8 +4125,8 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             }
         }
         // Hidden-line CAD strokes can be coplanar with the depth-only face
-        // prepass. Match the visible edge bias so a rendered stroke wins an
-        // equal-depth ID test without allowing genuinely hidden lines through.
+        // prepass. A small forward bias resolves equal-depth ID ties without
+        // allowing genuinely hidden lines through.
         const float pickDepthBias =
             m_renderMode.flags().hiddenLine && primitive.occlusionRank == 2
                 ? edgeDepthBiasUnits(
