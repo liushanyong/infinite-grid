@@ -3439,10 +3439,12 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
     primitive.meshInstance = instance;
     primitive.meshType = mesh;
     primitive.objectId = objectId;
+    const bool depthWritingStyle =
+        modeFlags.hiddenLine || m_renderMode.mode() == RenderMode::DepthBuffer;
     primitive.occlusionRank =
         primitive.kind == GpuPickPrimitive::Kind::Edge
             ? 1
-            : (instance.positionHigh.w >= 0.999f ? 0 : 1);
+            : (depthWritingStyle || instance.positionHigh.w >= 0.999f ? 0 : 1);
 
     // The pick pass does not need mesh color or opacity, so the four unused
     // instance scalars carry the objectId directly to the shader.
