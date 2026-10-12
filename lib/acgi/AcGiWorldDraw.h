@@ -85,7 +85,10 @@ public:
         return true;
     }
 
-    bool worldPoint(const AcGePoint3d &position)
+    bool worldPoint(
+        const AcGePoint3d &position,
+        acge::PointDisplayStyle displayStyle =
+            acge::PointDisplayStyle::Circle)
     {
         const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
         acdb::TessellatedPoint point;
@@ -93,6 +96,7 @@ public:
         point.common = traits.toEntityCommon();
         point.pointSize =
             traits.lineWeight > 0.0 ? traits.lineWeight : 7.0;
+        point.displayStyle = displayStyle;
         sink().appendPoint(point);
         return true;
     }

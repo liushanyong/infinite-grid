@@ -2,6 +2,7 @@
 
 #include <cadui/ViewCube.hpp>
 #include <cadui/ViewCubeBgfx.hpp>
+#include <cadui/GripOverlay.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_bgfx.h>
@@ -8247,6 +8248,51 @@ static void drawScenePanels()
 
     // Per-panel input routing (the panel owns its viewport's camera).
     acgs::AcGsView &panelView = *manager->views()[std::size_t(slot)];
+    if (outlineEntity && outlineEntity->kind == VisibilityKind::CadStroke &&
+        outlineEntity->cadRange)
+    {
+      const auto &strokes = getVectorPrimitivesTessellation().geometry.strokes;
+      const acgs::AcGsEntityRange &range = *outlineEntity->cadRange;
+      const std::size_t first = std::min(range.begin, strokes.size());
+      const std::size_t last =
+          std::min(range.begin + range.count, strokes.size());
+      std::vector<cadui::GripPoint> grips;
+      for (std::size_t strokeIndex = first; strokeIndex < last; ++strokeIndex)
+      {
+        const acdb::Stroke &stroke = strokes[strokeIndex];
+        if (!stroke.common.visible || stroke.points.empty() || stroke.closed)
+          continue;
+        const std::size_t pointCount =
+            stroke.semiInfinite ? 1 : stroke.points.size();
+        for (std::size_t pointIndex = 0; pointIndex < pointCount; ++pointIndex)
+        {
+          grips.push_back({grips.size(), stroke.points[pointIndex],
+                           cadui::GripShape::Square, 0, false, std::nullopt});
+          if (!stroke.semiInfinite && pointIndex + 1 < stroke.points.size())
+          {
+            grips.push_back({
+                grips.size(),
+                0.5 * (stroke.points[pointIndex] + stroke.points[pointIndex + 1]),
+                cadui::GripShape::Triangle, 0, true, std::nullopt});
+          }
+        }
+      }
+      const acgs::ViewFrameContext &frame = panelView.frame();
+      const cadui::GripProjector project =
+          [&](const glm::dvec3 &world) -> std::optional<glm::vec2> {
+        const glm::vec4 clip =
+            frame.overlayProjection * frame.view *
+            glm::vec4(glm::vec3(world - frame.cameraPos), 1.0f);
+        if (!(clip.w > 0.0f))
+          return std::nullopt;
+        const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        return glm::vec2((ndc.x * 0.5f + 0.5f) * avail.x,
+                         (0.5f - ndc.y * 0.5f) * avail.y);
+      };
+      const std::vector<cadui::GripMarker> markers =
+          cadui::projectGripMarkers(grips, project);
+      cadui::drawGripOverlay(ImGui::GetWindowDrawList(), cursor, avail, markers);
+    }
     if (!ImGui::IsWindowHovered())
     {
       ImGui::End();
