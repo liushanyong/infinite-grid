@@ -3649,6 +3649,7 @@ void BgfxRenderer::renderGpuPickPass()
     bgfx::setViewTransform(kViewGpuPick,
                            glm::value_ptr(m_gpuPickRequest.view),
                            glm::value_ptr(m_gpuPickRequest.projection));
+    bgfx::setViewMode(kViewGpuPick, bgfx::ViewMode::Sequential);
 
     const glm::mat4 projection = projectionForDirect3D(
         gpuPickProjection(m_gpuPickRequest));
@@ -3919,7 +3920,11 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             primitive.kind == GpuPickPrimitive::Kind::Edge)
         {
             size_t batchSize = 1;
-            while (primitiveIndex + batchSize < orderedPickPrimitives.size())
+            // Instanced primitives have no guaranteed per-instance ordering.
+            // Batch only opaque, depth-writing geometry; non-writing ranks
+            // rely on the CPU's back-to-front submission order to resolve IDs.
+            while (primitive.occlusionRank == 0 &&
+                   primitiveIndex + batchSize < orderedPickPrimitives.size())
             {
                 const GpuPickPrimitive &nextPrimitive =
                     *orderedPickPrimitives[primitiveIndex + batchSize].primitive;
@@ -4177,6 +4182,7 @@ void BgfxRenderer::renderGpuPickDebugPass(const glm::mat4 &projection)
     bgfx::setViewTransform(kViewGpuPickDebug,
                            glm::value_ptr(m_gpuPickRequest.view),
                            glm::value_ptr(debugProjection));
+    bgfx::setViewMode(kViewGpuPickDebug, bgfx::ViewMode::Sequential);
 
     if (m_gpuPickPrimitives.empty())
         bgfx::touch(kViewGpuPickDebug);
