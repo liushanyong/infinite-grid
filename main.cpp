@@ -2441,10 +2441,16 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // (CPU soup or GPU vertex buffer) grows without bound under the
     // continuous full-scene pass and eventually exhausts bgfx buffers
     // -- fills silently vanished from the ID view when that happened.
-    // CAD surfaces participate in occlusion. Transparent CAD fills behave like
-    // transparent meshes: they are visible through, but still receive picks.
-    const uint8_t fillOcclusionRank =
-        range.count && tess.fills[range.begin].common.color.a >= 0.999f ? 0 : 1;
+    // CAD fills that render write depth even when translucent; style-omitted
+    // fills remain pickable without acting as depth occluders.
+    const acdb::Triangle &firstFill = tess.fills[range.begin];
+    const bool fillWritesDepth = firstFill.is3DFace
+        ? renderFlags.face3dFill || renderFlags.hiddenLine
+        : renderFlags.show2dSolidFills;
+    // Visible CAD fills always write depth (including translucent fills).
+    // A fill omitted by the active visual style remains selectable, but must
+    // not occlude IDs for geometry that is actually rendered.
+    const uint8_t fillOcclusionRank = fillWritesDepth ? 0 : 1;
     constexpr size_t kMaxPickChunkVertices = 3 * 21000;
     for (size_t consumed = 0; consumed < range.count;)
     {
@@ -7067,9 +7073,10 @@ void render()
 
   // The full-scene ID pass re-renders every visible entity a second time,
   // so only refresh it when something that can change the ID buffer
-  // changes: view/projection, depth slab, viewport size, the outlined
-  // entity, or the debug view modes. While the camera is idle the outline
-  // keeps sampling the last rendered ID texture and skips the extra pass.
+  // changes: view/projection, depth slab, viewport size, scene revision,
+  // visual style, outlined entity, or debug view modes. While the camera is
+  // idle the outline keeps sampling the last rendered ID texture and skips
+  // the extra pass.
   static uint64_t lastSceneIdSignature = 0;
   static bool lastSceneIdSignatureValid = false;
   static uint32_t cachedOutlineObjectId = 0;
@@ -7094,6 +7101,13 @@ void render()
       sceneIdSignature, &activeFar, sizeof(activeFar));
   sceneIdSignature = hashGpuPickSceneBytes(
       sceneIdSignature, &logDepth, sizeof(logDepth));
+  const std::uint64_t sceneRevision = demoSceneStore().revision();
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, &sceneRevision, sizeof(sceneRevision));
+  const rendering::RenderMode activeRenderMode =
+      acgsView().visualStyle().mode();
+  sceneIdSignature = hashGpuPickSceneBytes(
+      sceneIdSignature, &activeRenderMode, sizeof(activeRenderMode));
   {
     const bool ortho = useOrthoProjection();
     const int viewport[2] = {drawableWidth, drawableHeight};
@@ -7132,7 +7146,7 @@ void render()
   // K/I views, selection shading, and cursor picking.  It re-renders the
   // whole scene, so it runs ONLY when its output can change: a pick is in
   // flight, a debug ID view needs live content, or the scene signature
-  // changed (camera/slab/viewport/selection). The freshly rendered ID image
+  // changed (camera/slab/viewport/scene/style/selection). The freshly rendered ID image
   // is copied into a persistent sampled texture (m_gpuPickIdSticky), which
   // keeps the highlight stable on gated frames at zero pass cost.
   bool gpuSceneIdPassRequested =
