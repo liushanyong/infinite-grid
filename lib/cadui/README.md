@@ -4,6 +4,7 @@ A small Dear ImGui-based CAD overlay widget library.
 
 Current widgets:
 
+- `cadui::drawGripOverlay` - clipped CAD grip markers, control polygons, and move gizmos; `projectGripMarkers` handles world-to-screen placement and gizmo screen axes.
 - `cadui::UcsIconWidget` - projected UCS tripod with axis hit testing and grips.
 - `cadui::ViewCubeWidget` - navigation cube with 26 selectable regions.
 - `cadui::ViewCubeBgfxRenderer` - optional offscreen BGFX renderer for the ViewCube body.

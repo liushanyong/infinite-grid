@@ -3,6 +3,7 @@ set(CADUI_REPO_ROOT "${CADUI_ROOT}/../..")
 set(CADUI_LIB_ROOT "${CADUI_REPO_ROOT}/lib")
 
 add_library(cadui STATIC
+    GripOverlay.cpp
     UcsIcon.cpp
     ViewCube.cpp
     ViewCubeBgfx.cpp
