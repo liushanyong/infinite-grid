@@ -3439,12 +3439,12 @@ void BgfxRenderer::queueGpuMeshPick(const MeshInstance &instance,
     primitive.meshInstance = instance;
     primitive.meshType = mesh;
     primitive.objectId = objectId;
-    const bool depthWritingStyle =
-        modeFlags.hiddenLine || m_renderMode.mode() == RenderMode::DepthBuffer;
+    // ID ownership follows geometric depth, not the mesh's display opacity.
+    // A surface must occlude farther IDs even when its visible pass blends it.
     primitive.occlusionRank =
         primitive.kind == GpuPickPrimitive::Kind::Edge
             ? 1
-            : (depthWritingStyle || instance.positionHigh.w >= 0.999f ? 0 : 1);
+            : 0;
 
     // The pick pass does not need mesh color or opacity, so the four unused
     // instance scalars carry the objectId directly to the shader.
@@ -3980,11 +3980,9 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
             bgfx::setUniform(m_projection, glm::value_ptr(projection));
             bgfx::setVertexBuffer(0, buffer);
             bgfx::setInstanceDataBuffer(&instanceBuffer);
-            // ID depth semantics mirror the VISIBLE pass per primitive
-            // class: only opaque surfaces (rank 0) write Z. Translucent
-            // surfaces (rank 1) must NOT — the visible pass blends them
-            // without a depth write, so geometry behind them stays pickable
-            // and highlights keep their original depth relationship.
+            // Mesh surfaces write ID depth regardless of visual opacity;
+            // overlapping IDs are resolved by geometric depth, not blending.
+            // Edge primitives remain non-depth-writing.
             const uint64_t primitiveState =
                 BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                 (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z
@@ -4142,9 +4140,8 @@ void BgfxRenderer::submitGpuPickPrimitives(bgfx::ViewId view,
         bgfx::setUniform(m_layerOffset, layerOffset);
         const float identityMaterial[4] = {1.0f, 1.0f, 1.0f, 1.0f};
         bgfx::setUniform(m_realisticMaterial, identityMaterial);
-        // Mirror the visible pass: only opaque soups (rank 0) write Z;
-        // translucent fills blend without a depth write there, so the ID
-        // pass must let geometry behind them keep (and win) the ID.
+        // Depth-occluding soups (rank 0) write Z; style-omitted fills and
+        // line-like soups retain their non-occluding rank.
         const uint64_t triangleState =
             BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
             (primitive.occlusionRank == 0 ? BGFX_STATE_WRITE_Z : uint64_t(0)) |
