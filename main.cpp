@@ -38,6 +38,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <cstdlib>
 #include <cstring>
@@ -1552,6 +1553,162 @@ static void reportDemoSceneMirror()
   std::cout << "scene mirror: revision=" << revision
             << " entities=" << store.count()
             << " dirty=" << store.dirtyCount() << std::endl;
+}
+
+static bool g_dwgDialogRequested = false;
+static std::filesystem::path g_dwgDialogDirectory;
+static std::filesystem::path g_dwgDialogSelection;
+static std::vector<std::filesystem::directory_entry> g_dwgDialogEntries;
+static std::string g_dwgDialogMessage;
+
+static std::string pathToUtf8(const std::filesystem::path &path)
+{
+  const std::u8string encoded = path.u8string();
+  return std::string(reinterpret_cast<const char *>(encoded.data()),
+                     encoded.size());
+}
+
+static void refreshDwgDialogEntries()
+{
+  g_dwgDialogEntries.clear();
+  std::error_code error;
+  std::filesystem::directory_iterator entry(g_dwgDialogDirectory, error);
+  const std::filesystem::directory_iterator end;
+  for (; !error && entry != end; entry.increment(error))
+  {
+    std::error_code statusError;
+    if (entry->is_directory(statusError))
+      g_dwgDialogEntries.push_back(*entry);
+    else if (!statusError && entry->is_regular_file(statusError))
+    {
+      std::string extension = entry->path().extension().string();
+      std::transform(extension.begin(), extension.end(), extension.begin(),
+                     [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                     });
+      if (!statusError && extension == ".dwg")
+        g_dwgDialogEntries.push_back(*entry);
+    }
+  }
+  std::sort(g_dwgDialogEntries.begin(), g_dwgDialogEntries.end(),
+            [](const auto &left, const auto &right) {
+              std::error_code leftError;
+              std::error_code rightError;
+              const bool leftDirectory = left.is_directory(leftError);
+              const bool rightDirectory = right.is_directory(rightError);
+              if (leftDirectory != rightDirectory)
+                return leftDirectory;
+              return pathToUtf8(left.path().filename()) <
+                     pathToUtf8(right.path().filename());
+            });
+}
+
+static void drawDwgFileDialog()
+{
+  if (!imguiOverlayEnabled)
+  {
+    g_dwgDialogRequested = false;
+    return;
+  }
+
+  constexpr const char *popupName = "Open DWG Drawing";
+  if (g_dwgDialogRequested)
+  {
+    std::error_code error;
+    g_dwgDialogDirectory = std::filesystem::current_path(error);
+    if (error)
+      g_dwgDialogDirectory = std::filesystem::path(".");
+    g_dwgDialogSelection.clear();
+    g_dwgDialogMessage.clear();
+    refreshDwgDialogEntries();
+    ImGui::OpenPopup(popupName);
+    g_dwgDialogRequested = false;
+  }
+
+  const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing,
+                          ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(ImVec2(760.0f, 520.0f), ImGuiCond_Appearing);
+  bool open = true;
+  if (!ImGui::BeginPopupModal(popupName, &open,
+                              ImGuiWindowFlags_NoSavedSettings))
+    return;
+
+  ImGui::TextUnformatted("DWG files");
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", pathToUtf8(g_dwgDialogDirectory).c_str());
+  if (ImGui::Button("Up") && g_dwgDialogDirectory.has_parent_path())
+  {
+    g_dwgDialogDirectory = g_dwgDialogDirectory.parent_path();
+    g_dwgDialogSelection.clear();
+    g_dwgDialogMessage.clear();
+    refreshDwgDialogEntries();
+  }
+
+  ImGui::Separator();
+  if (ImGui::BeginChild("##dwg-file-list", ImVec2(0.0f, -72.0f),
+                        ImGuiChildFlags_Border))
+  {
+    if (g_dwgDialogEntries.empty())
+      ImGui::TextDisabled("No folders or DWG files in this directory.");
+    for (const auto &entry : g_dwgDialogEntries)
+    {
+      const std::filesystem::path path = entry.path();
+      std::error_code statusError;
+      const bool isDirectory = entry.is_directory(statusError);
+      const std::string name = pathToUtf8(path.filename());
+      const bool selected = !isDirectory && path == g_dwgDialogSelection;
+      const std::string label =
+          std::string(isDirectory ? "[Folder] " : "[DWG] ") + name;
+      if (ImGui::Selectable(label.c_str(), selected))
+      {
+        if (isDirectory)
+        {
+          g_dwgDialogDirectory = path;
+          g_dwgDialogSelection.clear();
+          g_dwgDialogMessage.clear();
+          refreshDwgDialogEntries();
+          ImGui::SetScrollHereY(0.0f);
+          break;
+        }
+        g_dwgDialogSelection = path;
+      }
+    }
+  }
+  ImGui::EndChild();
+
+  if (!g_dwgDialogMessage.empty())
+    ImGui::TextWrapped("%s", g_dwgDialogMessage.c_str());
+  const bool canOpen = !g_dwgDialogSelection.empty();
+  ImGui::BeginDisabled(!canOpen);
+  if (ImGui::Button("Open"))
+  {
+    acdb::AcDbFileIoReport report;
+    const std::string filename = g_dwgDialogSelection.string();
+    if (acdbDocument().readDwgFile(filename.c_str(), &report))
+    {
+      // readDwgFile uses the silent bulk-load path; re-open the bridge so the
+      // live scene mirror and its tessellation revision include these entities.
+      openDemoScene();
+      std::cout << "DWG: inserted " << report.entitiesAdded << " entities ("
+                << report.unsupportedSkipped << " unsupported) from "
+                << filename << std::endl;
+      ImGui::CloseCurrentPopup();
+    }
+    else
+    {
+      g_dwgDialogMessage =
+          "Could not decode this DWG (error " +
+          std::to_string(report.errorCode) + ").";
+      std::cerr << "DWG: failed to decode " << filename << " (error "
+                << report.errorCode << ")" << std::endl;
+    }
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel"))
+    ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
 }
 
 
@@ -9085,8 +9242,15 @@ int main(int argc, char *argv[])
           setTargetPlaneConstraint(!targetPlaneConstraintEnabled);
         if (evt.key.key == SDLK_F)
         {
-          frustumCaptureRequested = true;
-          std::cout << "Frustum wireframe: captured" << std::endl;
+          if ((evt.key.mod & SDL_KMOD_SHIFT) != 0)
+          {
+            frustumCaptureRequested = true;
+            std::cout << "Frustum wireframe: captured" << std::endl;
+          }
+          else
+          {
+            g_dwgDialogRequested = true;
+          }
         }
         if (evt.key.key == SDLK_K)
         {
@@ -9372,6 +9536,7 @@ int main(int argc, char *argv[])
       //fprintf(stderr, "[P] NewFrame ok\n");
       drawScenePanels();
       drawFpsOverlay();
+      drawDwgFileDialog();
       //fprintf(stderr, "[P] panels ok\n");
     }
     render();
