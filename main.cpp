@@ -1564,17 +1564,18 @@ static std::vector<acdb::AcDbHandle> g_dwgImportedHandles;
 static void fitCameraToImportedEntities(
     const std::vector<acdb::AcDbHandle> &handles);
 
-static std::vector<acdb::AcDbHandle> modelSpaceHandlesNotIn(
-    const std::vector<acdb::AcDbHandle> &existing)
+static bool replaceDemoDocumentFromDwg(
+    const char *filename, acdb::AcDbFileIoReport *report)
 {
-  std::vector<acdb::AcDbHandle> added;
-  for (const acdb::AcDbHandle handle :
-       acdbDocument().modelSpace().entityHandles())
-  {
-    if (std::find(existing.begin(), existing.end(), handle) == existing.end())
-      added.push_back(handle);
-  }
-  return added;
+  acdb::AcDbDatabase replacement;
+  if (!replacement.readDwgFile(filename, report))
+    return false;
+
+  g_dwgImportedHandles = replacement.modelSpace().entityHandles();
+  // Replacement notifies the scene bridge, which mirrors the new document and
+  // advances the revision used to rebuild the CAD draw and visibility caches.
+  acdbDocument().replaceContents(std::move(replacement));
+  return true;
 }
 
 static std::string pathToUtf8(const std::filesystem::path &path)
@@ -1701,18 +1702,9 @@ static void drawDwgFileDialog()
   {
     acdb::AcDbFileIoReport report;
     const std::string filename = g_dwgDialogSelection.string();
-    const std::vector<acdb::AcDbHandle> existing =
-        acdbDocument().modelSpace().entityHandles();
-    if (acdbDocument().readDwgFile(filename.c_str(), &report))
+    if (replaceDemoDocumentFromDwg(filename.c_str(), &report))
     {
-      // readDwgFile uses the silent bulk-load path; re-open the bridge so the
-      // live scene mirror and its tessellation revision include these entities.
-      openDemoScene();
-      const std::vector<acdb::AcDbHandle> imported =
-          modelSpaceHandlesNotIn(existing);
-      g_dwgImportedHandles.insert(g_dwgImportedHandles.end(),
-                                  imported.begin(), imported.end());
-      fitCameraToImportedEntities(imported);
+      fitCameraToImportedEntities(g_dwgImportedHandles);
       std::cout << "DWG: inserted " << report.entitiesAdded << " entities ("
                 << report.unsupportedSkipped << " unsupported) from "
                 << filename << std::endl;
@@ -2716,17 +2708,12 @@ static void buildDemoDocument()
         bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
     addDemo(bezier, "Bezier");
 
-    // Decoded DWG/DXF models ride the document pipeline when GRID_DWG /
-    // GRID_DXF name a file: the ObjectARX file-IO facade fills the
-    // database directly.
+    // A GRID_DWG file replaces the demo document with its decoded contents.
     if (const char *dwgPath = std::getenv("GRID_DWG"))
     {
       acdb::AcDbFileIoReport report;
-      const std::vector<acdb::AcDbHandle> existing =
-          document.modelSpace().entityHandles();
-      if (document.readDwgFile(dwgPath, &report))
+      if (replaceDemoDocumentFromDwg(dwgPath, &report))
       {
-        g_dwgImportedHandles = modelSpaceHandlesNotIn(existing);
         std::cout << "GRID_DWG: inserted " << report.entitiesAdded
                   << " entities (" << report.unsupportedSkipped
                   << " unsupported) from " << dwgPath << std::endl;
@@ -4690,7 +4677,12 @@ protected:
 
 const CadRangeBvh &getCadRangeBvh()
 {
-    static const CadRangeBvh bvh = [] {
+    static std::uint64_t cachedRevision =
+        std::numeric_limits<std::uint64_t>::max();
+    static CadRangeBvh bvh;
+    const std::uint64_t revision = demoSceneStore().revision();
+    if (cachedRevision != revision)
+    {
         const std::vector<VisibilityCandidate> &candidates =
             cadRangeVisibilityCandidates();
         std::vector<const VisibilityCandidate *> ranges;
@@ -4701,10 +4693,9 @@ const CadRangeBvh &getCadRangeBvh()
                 ranges.push_back(&candidate);
         }
 
-        CadRangeBvh result;
-        result.build(std::move(ranges));
-        return result;
-    }();
+        bvh.build(std::move(ranges));
+        cachedRevision = revision;
+    }
     return bvh;
 }
 
@@ -6580,7 +6571,13 @@ VisibilityCandidate makeCadRangeCandidate(
 
 const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
 {
-  static const std::vector<VisibilityCandidate> candidates = [] {
+  static std::uint64_t cachedRevision =
+      std::numeric_limits<std::uint64_t>::max();
+  static std::vector<VisibilityCandidate> candidates;
+  const std::uint64_t revision = demoSceneStore().revision();
+  if (cachedRevision != revision)
+  {
+    candidates.clear();
     const VectorPrimitivesTessellation &cad =
         getVectorPrimitivesTessellation();
     std::vector<VisibilityCandidate> result;
@@ -6606,8 +6603,9 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
     }
     for (const acgs::CurveBatchCommand &curve : cad.curves)
       result.push_back(makeCurveCandidate(curve));
-    return result;
-  }();
+    candidates = std::move(result);
+    cachedRevision = revision;
+  }
   return candidates;
 }
 
