@@ -1078,6 +1078,97 @@ struct MeshInstanceCacheEntry
 static std::unordered_map<const MeshEntityRecord *, MeshInstanceCacheEntry>
     g_meshInstanceCache;
 
+// Wireframe chains for imported models: the mesh's unique edges chained
+// into greedy polylines, cached in world space per record pointer (cleared
+// by the same umbrella).  Wireframe styles draw these strokes because
+// imported models carry no procedural feature-edge buffer.
+static std::unordered_map<const MeshEntityRecord *,
+                          std::vector<std::vector<glm::dvec3>>>
+    g_gltfWireframeCache;
+
+static const std::vector<std::vector<glm::dvec3>> &gltfWireframeChains(
+    const MeshEntityRecord &entity)
+{
+  auto found = g_gltfWireframeCache.find(&entity);
+  if (found != g_gltfWireframeCache.end())
+    return found->second;
+
+  std::vector<std::vector<glm::dvec3>> chains;
+  const auto &positions = entity.staticMesh->cpu.positionU;
+  const auto &indices = entity.staticMesh->cpu.indices;
+
+  // Unique undirected edges of the index buffer.
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+  edges.reserve(indices.size());
+  for (size_t t = 0; t + 2 < indices.size(); t += 3)
+  {
+    for (int e = 0; e < 3; ++e)
+    {
+      const std::uint32_t a = indices[t + e];
+      const std::uint32_t b = indices[t + (e + 1) % 3];
+      if (a == b)
+        continue;
+      edges.emplace_back(std::min(a, b), std::max(a, b));
+    }
+  }
+  std::sort(edges.begin(), edges.end());
+  edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+
+  // Greedy chaining: walk from an unused edge through shared endpoints so
+  // the thousands of mesh edges collapse into a few hundred polylines.
+  std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> atVertex;
+  for (std::uint32_t e = 0; e < edges.size(); ++e)
+  {
+    atVertex[edges[e].first].push_back(e);
+    atVertex[edges[e].second].push_back(e);
+  }
+  std::vector<std::uint8_t> used(edges.size(), 0);
+  auto toWorld = [&entity, &positions](std::uint32_t index) {
+    const glm::vec3 &local = glm::vec3(positions[index]);
+    return entity.worldPosition + glm::dvec3(local);
+  };
+  for (std::uint32_t start = 0; start < edges.size(); ++start)
+  {
+    if (used[start])
+      continue;
+    used[start] = 1;
+    std::vector<glm::dvec3> chain{toWorld(edges[start].first),
+                                  toWorld(edges[start].second)};
+    for (int direction = 0; direction < 2; ++direction)
+    {
+      std::uint32_t cursor = direction == 0 ? edges[start].second
+                                            : edges[start].first;
+      for (;;)
+      {
+        std::uint32_t nextEdge = 0xffffffffu;
+        for (const std::uint32_t candidate : atVertex[cursor])
+        {
+          if (!used[candidate])
+          {
+            nextEdge = candidate;
+            break;
+          }
+        }
+        if (nextEdge == 0xffffffffu)
+          break;
+        used[nextEdge] = 1;
+        const std::uint32_t other =
+            edges[nextEdge].first == cursor ? edges[nextEdge].second
+                                            : edges[nextEdge].first;
+        if (direction == 0)
+          chain.push_back(toWorld(other));
+        else
+          chain.insert(chain.begin(), toWorld(other));
+        cursor = other;
+      }
+    }
+    if (chain.size() >= 2)
+      chains.push_back(std::move(chain));
+  }
+  return g_gltfWireframeCache.emplace(&entity, std::move(chains))
+      .first->second;
+}
+
 static rendering::MeshInstance &cachedMeshInstance(
     const MeshEntityRecord &entity,
     const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
@@ -1624,6 +1715,7 @@ struct GltfDemoModelAsset
 {
   acdb::AcDbGltfImport import;
   std::vector<std::shared_ptr<GltfStaticMesh>> meshes; // per import.meshes
+  std::string name;                                    // file stem
   double scale = 1.0; // instance scale: target radius / model radius
   bool valid = false;
 };
@@ -1645,6 +1737,7 @@ static const GltfDemoModelAsset &gltfDemoAsset(
     std::cerr << "GRID_GLTF: " << error << std::endl;
     return asset;
   }
+  asset.name = path.stem().string();
 
   const glm::dvec3 extent = asset.import.maximum - asset.import.minimum;
   const double radius =
@@ -1717,6 +1810,71 @@ static std::uint32_t gltfDemoTextureIndex(const GltfDemoModelAsset &asset,
   return 0;
 }
 
+// External naming-convention materials (the CADplatformer model set ships
+// textures next to the glb, not inside it): <name>_bcr carries RGB=baseColor
+// + A=roughness, <name>_nmao packs octahedral normal xy + metal + AO, and
+// parameter-sweep assets (sphere) live under a same-named folder indexed by
+// <i>_<j>.  Models without any matching file fall back to sphere/sphere_0_0
+// -- exactly how CADplatformer's levels dress duck.glb -- so every import
+// renders with the glossy red stand-in material.  Only the bcr slot feeds
+// the current PBR shader (albedo); the nmao channels wait for a normal-map
+// sampling path.
+static std::uint32_t gltfExternalTextureIndex(const std::string &name,
+                                              bool *isFallback = nullptr)
+{
+  static std::unordered_map<std::string,
+                            std::pair<std::uint32_t, bool>>
+      resolved; // name -> {texture index, came from the stand-in material}
+  if (isFallback)
+    *isFallback = false;
+  if (name.empty())
+    return 0;
+  const auto found = resolved.find(name);
+  if (found != resolved.end())
+  {
+    if (isFallback)
+      *isFallback = found->second.second;
+    return found->second.first;
+  }
+
+  const std::filesystem::path textures = util::resourcePath("textures");
+  const std::filesystem::path fallback = textures / "sphere" /
+                                         "sphere_0_0_bcr.png";
+  const std::filesystem::path candidates[] = {
+      textures / (name + "_bcr.png"),
+      textures / (name + "_bcr.dds"),
+      textures / name / (name + "_0_0_bcr.png"),
+      textures / name / (name + "_0_0_bcr.dds"),
+      fallback,
+      textures / "sphere" / "sphere_0_0_bcr.dds",
+  };
+  for (const std::filesystem::path &candidate : candidates)
+  {
+    std::error_code ec;
+    if (!std::filesystem::exists(candidate, ec))
+      continue;
+    const std::uint32_t index =
+        acgs::acgsGetManager()->loadMeshTexture(candidate.string());
+    if (index != 0)
+    {
+      const bool standIn =
+          candidate == fallback ||
+          candidate == textures / "sphere" / "sphere_0_0_bcr.dds";
+      resolved.emplace(name, std::make_pair(index, standIn));
+      if (isFallback)
+        *isFallback = standIn;
+      std::cout << "GRID_GLTF: external material texture for " << name
+                << " -> " << candidate.filename().string()
+                << " (index=" << index << ")" << std::endl;
+      return index;
+    }
+    std::cerr << "GRID_GLTF: failed to load external material texture "
+              << candidate.string() << std::endl;
+  }
+  resolved.emplace(name, std::make_pair(0, false));
+  return 0;
+}
+
 // Exports glTF-imported records back to .glb and .gltf under
 // resources/models/export/.  Takes the records directly: the startup export
 // runs while the tessellation is still being built, so it must not re-query
@@ -1784,8 +1942,27 @@ static void appendGltfDemoMeshes(VectorPrimitivesTessellation &target)
     record.size = float(2.0 * kGltfDemoTargetRadius);
     record.renderScale = 1.0f;
     record.staticMesh = asset.meshes[i];
-    record.diffuseTextureIndex = gltfDemoTextureIndex(
-        asset, record.entity.material.diffuseTexture);
+    const std::string &textureKey = record.entity.material.diffuseTexture;
+    if (!textureKey.empty())
+    {
+      record.diffuseTextureIndex = gltfDemoTextureIndex(asset, textureKey);
+    }
+    else
+    {
+      // No embedded texture: fall back to the external naming-convention
+      // material, then to CADplatformer's stand-in (sphere/sphere_0_0, the
+      // glossy red).  The convention packs roughness into the texture's
+      // alpha, which the current shader ignores, so the factors are chosen
+      // per hit: authored assets read matte, the stand-in reads glossy.
+      bool standIn = false;
+      record.diffuseTextureIndex =
+          gltfExternalTextureIndex(asset.name, &standIn);
+      if (record.diffuseTextureIndex != 0)
+      {
+        record.entity.material.metallicFactor = 0.05f;
+        record.entity.material.roughnessFactor = standIn ? 0.25f : 0.6f;
+      }
+    }
     target.meshes.push_back(std::move(record));
   }
 
@@ -2594,6 +2771,7 @@ static void invalidateTessellationKeyedCaches()
   g_curveSampleCache.clear();
   g_curveCenterCache.clear();
   g_meshInstanceCache.clear();
+  g_gltfWireframeCache.clear();
   // Registry entries and text identities alias the old tessellation too;
   // ids re-register (and stay stable) from the next queue refresh.
   gpuPickManager().clearRegistry();
@@ -3283,8 +3461,32 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // destroyed per candidate per frame).
     static acgs::AcGsModel meshDrawList;
     meshDrawList.clearKeepCapacity();
-    appendMeshEntityToScene(mesh, meshDrawList, false,
-                            meshSelected ? &kSelectionHighlightRGB : nullptr);
+
+    // Wireframe styles carry no mesh faces and imported models have no
+    // procedural feature-edge buffer, so their wireframe is drawn here as
+    // chained unique-edge strokes (selected recolor included).
+    if (mesh.staticMesh && !fillRenderFlags.meshFill)
+    {
+      const glm::vec4 wireColor =
+          meshSelected
+              ? glm::vec4(kSelectionHighlightRGB,
+                          meshEntityColor(mesh).a)
+              : meshEntityColor(mesh);
+      for (const std::vector<glm::dvec3> &chain : gltfWireframeChains(mesh))
+      {
+        acdb::Stroke stroke;
+        stroke.common.name = mesh.entity.common.name;
+        stroke.common.color = wireColor;
+        stroke.points = chain;
+        meshDrawList.geometry().strokes.push_back(std::move(stroke));
+      }
+    }
+    else
+    {
+      appendMeshEntityToScene(mesh, meshDrawList, false,
+                              meshSelected ? &kSelectionHighlightRGB
+                                           : nullptr);
+    }
     const rendering::DoubleSingleVec3 meshEye =
         rendering::encodeDoubleSingle(rebase);
     acgsView().submit(meshDrawList,

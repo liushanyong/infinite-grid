@@ -166,27 +166,51 @@ def main():
     assert roundtrip_shot.exists(), "roundtrip screenshot missing"
     assert image_bright_ratio(roundtrip_shot) > 0.02, "roundtrip looks empty"
 
-    # Embedded-texture path: duck_textured.glb (built by
-    # make_textured_glb.py) carries a red/black checkerboard as a
-    # bufferView image; verify the model renders with red pixels.
+    # Embedded-texture path: duck_textured.glb is generated on demand by
+    # make_textured_glb.py (duck geometry + a red/black checkerboard as a
+    # bufferView image) and removed afterwards, so the models directory
+    # stays clean and the default startup import keeps falling back to
+    # duck.glb with the glossy red stand-in material.
+    textured_model = ROOT / "resources" / "models" / "duck_textured.glb"
+    generator = ROOT / "tools" / "make_textured_glb.py"
+    import subprocess as _sp
+    gen = _sp.run([sys.executable, str(generator)], capture_output=True,
+                  text=True)
+    assert gen.returncode == 0 and textured_model.exists(), \
+        f"make_textured_glb failed: {gen.stderr}"
     textured_shot = shot_dir / "gltf_smoke_textured.png"
     if textured_shot.exists():
         textured_shot.unlink()
     imported = run_case("textured", "duck_textured.glb", textured_shot)
-    assert imported, "duck_textured.glb did not import"
-    assert textured_shot.exists(), "textured screenshot missing"
-    red = image_red_ratio(textured_shot)
+    ok = imported and textured_shot.exists()
+    red = image_red_ratio(textured_shot) if ok else 0.0
+    textured_model.unlink()
+    assert ok, "duck_textured.glb did not import"
     # An untextured import renders gray/white (ratio ~0); the checkerboard
     # keeps a clear red-dominant pixel population even with dark cells and
     # shading eating into it at close camera range.
     assert red > 0.003, f"textured model shows no albedo (red ratio {red:.4f})"
+
+    # The default startup model (duck.glb + sphere_0_0 stand-in, the
+    # CADplatformer red duck) must show the same red albedo.
+    default_shot = shot_dir / "gltf_smoke_default.png"
+    if default_shot.exists():
+        default_shot.unlink()
+    imported = run_case("default-duck", "duck.glb", default_shot)
+    assert imported, "duck.glb did not import"
+    assert default_shot.exists(), "default duck screenshot missing"
+    red = image_red_ratio(default_shot)
+    # The stand-in (sphere_0_0_bcr) is dark red; under demo lighting most
+    # red-dominant pixels land at r=64..95, so the brightness floor is low
+    # and dominance does the discrimination.
+    assert red > 0.05, f"stand-in red material missing (red ratio {red:.4f})"
 
     print("GLTF DEMO SMOKE PASSED")
 
 
 def image_red_ratio(path, sample_step=4):
     # Shares the BMP/PNG plumbing of image_bright_ratio but counts samples
-    # whose red channel clearly dominates, i.e. the checkerboard albedo.
+    # whose red channel clearly dominates, i.e. the red stand-in albedo.
     data = path.read_bytes()
     assert data[:2] == b"BM", "expected BMP screenshot"
     bits_offset = struct.unpack("<I", data[10:14])[0]
@@ -200,7 +224,7 @@ def image_red_ratio(path, sample_step=4):
             offset = row_offset + x * 4
             b, g, r = data[offset], data[offset + 1], data[offset + 2]
             sampled += 1
-            if r > 90 and r > g * 2 and r > b * 2:
+            if r > 45 and r > g * 1.8 and r > b * 1.8:
                 red += 1
     ratio = red / max(sampled, 1)
     print(f"  red-sample ratio={ratio:.4f}")

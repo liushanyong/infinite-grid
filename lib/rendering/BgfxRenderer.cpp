@@ -20,6 +20,7 @@
 #include <bx/allocator.h>
 #include <bx/error.h>
 #include <bimg/decode.h>
+#include <bimg/encode.h>
 namespace GridShaders
 {
 // Rebuild this translation unit whenever the embedded infinite-grid shader
@@ -853,6 +854,18 @@ uint32_t BgfxRenderer::loadMeshTexture(const std::string &path)
         std::cerr << "Failed to decode mesh texture: " << path << std::endl;
         return 0;
     }
+    // Albedo minification needs a mip chain: without one, high-frequency
+    // texture detail (checkerboards, decals) collapses to noise at distance.
+    bimg::ImageContainer *mipped = bimg::imageGenerateMips(&allocator, *image);
+    if (mipped && mipped->m_numMips > 1 && mipped->m_data && mipped->m_size)
+    {
+        bimg::imageFree(image);
+        image = mipped;
+    }
+    else if (mipped)
+    {
+        bimg::imageFree(mipped);
+    }
 
     const bgfx::TextureHandle texture = bgfx::createTexture2D(
         static_cast<uint16_t>(image->m_width),
@@ -894,6 +907,17 @@ uint32_t BgfxRenderer::loadMeshTextureFromMemory(const std::string &key,
         std::cerr << "Failed to decode mesh texture: " << key
                   << " (size=" << size << ")" << std::endl;
         return 0;
+    }
+    // Same mip-chain requirement as the file path (see loadMeshTexture).
+    bimg::ImageContainer *mipped = bimg::imageGenerateMips(&allocator, *image);
+    if (mipped && mipped->m_numMips > 1 && mipped->m_data && mipped->m_size)
+    {
+        bimg::imageFree(image);
+        image = mipped;
+    }
+    else if (mipped)
+    {
+        bimg::imageFree(mipped);
     }
 
     const bgfx::TextureHandle texture = bgfx::createTexture2D(
