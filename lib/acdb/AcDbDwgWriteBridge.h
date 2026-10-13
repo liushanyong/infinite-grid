@@ -45,9 +45,13 @@ struct AcDbDwgWriteReport
 struct DwgWriteContext
 {
     Dwg_Data dwg{};
+    // The exported database (set by fillDwgFromDatabase): attached
+    // ATTRIB entities resolve through it by handle.
+    const AcDbDatabase *database = nullptr;
     std::unordered_map<std::string, Dwg_Object_LAYER *> layers;
     std::unordered_map<std::string, Dwg_Object_LTYPE *> lineTypes;
     std::unordered_map<std::string, Dwg_Object_STYLE *> textStyles;
+    std::unordered_map<std::string, Dwg_Object_DIMSTYLE *> dimStyles;
     std::uint64_t maxHandle = 0;
     // Crash-position tracer (GRID_DWGWRITE_TRACE=<path>): the GUI
     // subsystem has no valid stderr, so forensics go to a real file.
@@ -178,6 +182,24 @@ inline Dwg_Object_Ref *textStyleRef(DwgWriteContext &ctx,
                              dwg_obj_generic_handlevalue(style), NULL);
 }
 
+inline Dwg_Object_Ref *dimStyleRef(DwgWriteContext &ctx,
+                                   const std::string &name)
+{
+    if (name.empty())
+        return nullptr;
+    const auto found = ctx.dimStyles.find(name);
+    if (found != ctx.dimStyles.end() && found->second != nullptr)
+        return dwg_add_handleref(&ctx.dwg, 5,
+                                 dwg_obj_generic_handlevalue(found->second),
+                                 NULL);
+    Dwg_Object_DIMSTYLE *style = dwg_add_DIMSTYLE(&ctx.dwg, name.c_str());
+    if (style == nullptr)
+        return nullptr;
+    ctx.dimStyles.emplace(name, style);
+    return dwg_add_handleref(&ctx.dwg, 5,
+                             dwg_obj_generic_handlevalue(style), NULL);
+}
+
 // Common properties: ACI color, layer/linetype as record references,
 // lineweight (100ths of a mm in DWG), and visibility.
 inline void applyCommon(DwgWriteContext &ctx, Dwg_Object_Entity *ent,
@@ -203,6 +225,208 @@ inline void applyCommon(DwgWriteContext &ctx, Dwg_Object_Entity *ent,
 }
 
 // ---- per-entity payload writers ----
+
+// libredwg owns every string it stores; the adders strdup their inputs,
+// so post-hoc assignments hand over a heap copy the same way.
+inline char *dupString(const std::string &text)
+{
+#if defined(_WIN32)
+    return _strdup(text.c_str());
+#else
+    return strdup(text.c_str());
+#endif
+}
+
+// dwg_find_tablehandle resolves through the BLOCK_CONTROL entries, whose
+// bookkeeping the adder macros do not keep reliably (the same quirk that
+// leaves the dwg->block_control snapshot stale); scan the object list
+// directly instead.
+inline Dwg_Object *findBlockHeaderByName(Dwg_Data &dwg,
+                                         const std::string &name)
+{
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        Dwg_Object &object = dwg.object[i];
+        if (object.fixedtype != DWG_TYPE_BLOCK_HEADER ||
+            object.tio.object == nullptr)
+            continue;
+        const Dwg_Object_BLOCK_HEADER *header =
+            object.tio.object->tio.BLOCK_HEADER;
+        if (header != nullptr && header->name != nullptr &&
+            name == header->name)
+            return &object;
+    }
+    return nullptr;
+}
+
+// dwg_add_INSERT maintains blkhdr->inserts[] only when its own table
+// lookup succeeds; with the explicit resolution above the list must be
+// maintained here so the DXF BLOCK_RECORD BLKREFS lists survive.
+template <typename DwgInsert>
+inline void registerInsertReference(DwgWriteContext &ctx,
+                                    Dwg_Object *headerObject,
+                                    DwgInsert *insert)
+{
+    Dwg_Object_BLOCK_HEADER *header =
+        headerObject->tio.object->tio.BLOCK_HEADER;
+    if (header == nullptr)
+        return;
+    int error = 0;
+    const Dwg_Object *insertObject =
+        dwg_obj_generic_to_object(insert, &error);
+    if (insertObject == nullptr || error != 0)
+        return;
+    // dwg_add_INSERT's internal name lookup runs through the unreliable
+    // BLOCK_CONTROL iteration and can append this reference to the WRONG
+    // header; scrub it from every other header before registering the
+    // resolved one.
+    for (BITCODE_BL i = 0; i < ctx.dwg.num_objects; ++i)
+    {
+        Dwg_Object &object = ctx.dwg.object[i];
+        if (object.fixedtype != DWG_TYPE_BLOCK_HEADER ||
+            object.tio.object == nullptr ||
+            object.tio.object->tio.BLOCK_HEADER == nullptr ||
+            &object == headerObject)
+            continue;
+        Dwg_Object_BLOCK_HEADER &other =
+            *object.tio.object->tio.BLOCK_HEADER;
+        BITCODE_BL kept = 0;
+        for (BITCODE_BL j = 0; j < other.num_inserts; ++j)
+        {
+            const BITCODE_H entry =
+                other.inserts != nullptr ? other.inserts[j] : nullptr;
+            if (entry != nullptr &&
+                entry->absolute_ref == insertObject->handle.value)
+                continue; // drop the misfiled reference
+            if (kept != j && other.inserts != nullptr)
+                other.inserts[kept] = entry;
+            ++kept;
+        }
+        other.num_inserts = kept;
+    }
+    // Skip duplicates when the adder's lookup landed correctly.
+    for (BITCODE_BL j = 0; j < header->num_inserts; ++j)
+        if (header->inserts != nullptr &&
+            header->inserts[j] != nullptr &&
+            header->inserts[j]->absolute_ref ==
+                insertObject->handle.value)
+            return;
+    header->num_inserts++;
+    header->inserts = (BITCODE_H *)realloc(
+        header->inserts, header->num_inserts * sizeof(BITCODE_H));
+    if (header->inserts != nullptr)
+        header->inserts[header->num_inserts - 1] =
+            dwg_add_handleref(&ctx.dwg, 4, insertObject->handle.value,
+                              NULL);
+}
+
+// Stamps the INSERT's owned ATTRIB payloads after the INSERT itself.
+inline void writeAttachedAttributes(
+    DwgWriteContext &ctx, Dwg_Entity_INSERT *insert,
+    const std::vector<AcDbHandle> &attributeHandles)
+{
+    std::vector<std::uint64_t> attachedAttribHandles;
+    // dwg_add_ATTRIB overwrites insert->block_header with the OWNING
+    // block (model space) - capture the definition reference and restore
+    // it afterwards.
+    Dwg_Object_Ref *definition = insert->block_header;
+    for (const AcDbHandle handle : attributeHandles)
+    {
+        if (ctx.database == nullptr)
+            return;
+        const AcDbEntityVariant *payload =
+            ctx.database->getEntity(handle);
+        if (payload == nullptr || ctx.database->isErased(handle))
+            continue;
+        if (const AcDbAttribute *attribute =
+                std::get_if<AcDbAttribute>(payload))
+        {
+            const dwg_point_3d insertion = toDwgPoint(attribute->insertion);
+            const int flags = attribute->invisible ? 1 : 0;
+            Dwg_Entity_ATTRIB *attrib = dwg_add_ATTRIB(
+                insert, attribute->height, flags, &insertion,
+                attribute->tag.c_str(), attribute->textValue.c_str());
+            if (attrib == nullptr)
+                continue;
+            attrib->rotation = attribute->rotation;
+            if (attribute->widthFactor > 0.0)
+                attrib->width_factor = attribute->widthFactor;
+            if (!attribute->styleName.empty() &&
+                attribute->styleName != "Standard")
+                attrib->style = textStyleRef(ctx, attribute->styleName);
+            // add_attrib_links leaves the ATTRIB owned implicitly by
+            // the model-space header (entmode 2); force the explicit
+            // ATTRIB -> INSERT owner link instead, so both the DWG
+            // object stream and (when present) the DXF ENTITIES section
+            // carry the ownership.
+            int ownerError = 0;
+            if (Dwg_Object *attribObject =
+                    dwg_obj_generic_to_object(attrib, &ownerError))
+            {
+                Dwg_Object *insertObject =
+                    dwg_obj_generic_to_object(insert, &ownerError);
+                if (insertObject != nullptr)
+                {
+                    attribObject->tio.entity->entmode = 0;
+                    attribObject->tio.entity->ownerhandle =
+                        dwg_add_handleref(&ctx.dwg, 3,
+                                          insertObject->handle.value,
+                                          NULL);
+                }
+            }
+            applyCommon(ctx, attrib->parent, attribute->common);
+            trackHandle(ctx, attrib);
+            if (Dwg_Object *attribObject =
+                    dwg_obj_generic_to_object(attrib, &ownerError))
+                attachedAttribHandles.push_back(
+                    attribObject->handle.value);
+        }
+    }
+    // add_attrib_links captures the ATTRIB/SEQEND handles before the
+    // adder assigns them, so insert->first_attrib lands on the poisoned
+    // (4,0) ref and the encoder's chain rebuild writes abs 0 — the DXF
+    // INSERT writer then refuses to emit the followers.  Rebuild every
+    // link from the real handle values.
+    if (!attachedAttribHandles.empty())
+    {
+        Dwg_Object *seqendObject = nullptr;
+        for (BITCODE_BL i = ctx.dwg.num_objects; i > 0; --i)
+        {
+            Dwg_Object &object = ctx.dwg.object[i - 1];
+            if (object.fixedtype != DWG_TYPE_SEQEND ||
+                object.supertype != DWG_SUPERTYPE_ENTITY ||
+                object.tio.entity == nullptr)
+                continue;
+            if (object.tio.entity->ownerhandle != nullptr &&
+                object.tio.entity->ownerhandle->absolute_ref ==
+                    dwg_obj_generic_handlevalue(insert))
+            {
+                seqendObject = &object;
+                break;
+            }
+        }
+        const std::size_t count = attachedAttribHandles.size();
+        insert->has_attribs = 1;
+        insert->num_owned = BITCODE_BL(count);
+        insert->attribs = (BITCODE_H *)calloc(count, sizeof(BITCODE_H));
+        if (insert->attribs != nullptr)
+        {
+            for (std::size_t i = 0; i < count; ++i)
+                insert->attribs[i] = dwg_add_handleref(
+                    &ctx.dwg, 4, attachedAttribHandles[i], NULL);
+            insert->first_attrib = insert->attribs[0];
+            insert->last_attrib = insert->attribs[count - 1];
+        }
+        if (seqendObject != nullptr)
+            insert->seqend = dwg_add_handleref(
+                &ctx.dwg, 3, seqendObject->handle.value, NULL);
+    }
+    insert->block_header = definition;
+    // has_attribs stays set: out_dxf's INSERT writer emits the
+    // ATTRIB ... SEQEND followers from it, and the binary DWG stream
+    // carries the ATTRIB objects themselves.  The read bridge
+    // re-attaches through the ATTRIB's ownerhandle either way.
+}
 
 inline bool writePayload(DwgWriteContext &ctx,
                          Dwg_Object_BLOCK_HEADER *hdr, const AcDbLine &line)
@@ -614,10 +838,290 @@ inline bool writePayload(DwgWriteContext &ctx,
         reference.rotation);
     if (obj == nullptr)
         return false;
+    if (Dwg_Object *headerObject = findBlockHeaderByName(
+            ctx.dwg, reference.blockTableRecordName))
+    {
+        obj->block_header =
+            dwg_add_handleref(&ctx.dwg, 5, headerObject->handle.value,
+                              NULL);
+        registerInsertReference(ctx, headerObject, obj);
+    }
     if (!isDefaultNormal(reference.normal))
         assign3rd(obj->extrusion, toDwgVector(reference.normal));
     applyCommon(ctx, obj->parent, reference.common);
     trackHandle(ctx, obj);
+    writeAttachedAttributes(ctx, obj, reference.attributeHandles);
+    return true;
+}
+
+// Every Dwg_Entity_DIMENSION_* expands DIMENSION_COMMON flat; the shared
+// annotation fields map through one template.
+template <typename DwgDimension>
+inline void fillDwgDimension(DwgWriteContext &ctx, DwgDimension *obj,
+                             const AcDbDimension &dimension)
+{
+    // text_midpt is a 2RD pair (z rides the shared elevation).
+    obj->text_midpt.x = dimension.textPosition.x;
+    obj->text_midpt.y = dimension.textPosition.y;
+    if (!dimension.dimensionText.empty())
+        obj->user_text = dupString(dimension.dimensionText);
+    obj->text_rotation = dimension.textRotation;
+    obj->act_measurement = dimension.actualMeasurement;
+    if (Dwg_Object_Ref *ref = dimStyleRef(ctx, dimension.dimensionStyleName))
+        obj->dimstyle = ref;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbRotatedDimension &dimension)
+{
+    const dwg_point_3d xline1 = toDwgPoint(dimension.xLine1Point);
+    const dwg_point_3d xline2 = toDwgPoint(dimension.xLine2Point);
+    const dwg_point_3d linePoint = toDwgPoint(dimension.dimensionLinePoint);
+    Dwg_Entity_DIMENSION_LINEAR *obj = dwg_add_DIMENSION_LINEAR(
+        hdr, &xline1, &xline2, &linePoint, dimension.dimensionLineAngle);
+    if (obj == nullptr)
+        return false;
+    obj->oblique_angle = dimension.obliqueAngle;
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbAlignedDimension &dimension)
+{
+    const dwg_point_3d xline1 = toDwgPoint(dimension.xLine1Point);
+    const dwg_point_3d xline2 = toDwgPoint(dimension.xLine2Point);
+    const dwg_point_3d textPt = toDwgPoint(dimension.dimension.textPosition);
+    Dwg_Entity_DIMENSION_ALIGNED *obj =
+        dwg_add_DIMENSION_ALIGNED(hdr, &xline1, &xline2, &textPt);
+    if (obj == nullptr)
+        return false;
+    obj->oblique_angle = dimension.obliqueAngle;
+    assign3rd(obj->def_pt, toDwgPoint(dimension.dimensionLinePoint));
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDb2LineAngularDimension &dimension)
+{
+    const dwg_point_3d center = toDwgPoint(dimension.arcPoint);
+    const dwg_point_3d xline1end = toDwgPoint(dimension.xLine1EndPoint);
+    const dwg_point_3d xline2end = toDwgPoint(dimension.xLine2EndPoint);
+    const dwg_point_3d textPt = toDwgPoint(dimension.dimension.textPosition);
+    Dwg_Entity_DIMENSION_ANG2LN *obj = dwg_add_DIMENSION_ANG2LN(
+        hdr, &center, &xline1end, &xline2end, &textPt);
+    if (obj == nullptr)
+        return false;
+    assign3rd(obj->xline1start_pt, toDwgPoint(dimension.xLine1StartPoint));
+    assign3rd(obj->xline2start_pt, toDwgPoint(dimension.xLine2StartPoint));
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDb3PointAngularDimension &dimension)
+{
+    const dwg_point_3d center = toDwgPoint(dimension.centerPoint);
+    const dwg_point_3d xline1 = toDwgPoint(dimension.xLine1Point);
+    const dwg_point_3d xline2 = toDwgPoint(dimension.xLine2Point);
+    const dwg_point_3d textPt = toDwgPoint(dimension.dimension.textPosition);
+    Dwg_Entity_DIMENSION_ANG3PT *obj = dwg_add_DIMENSION_ANG3PT(
+        hdr, &center, &xline1, &xline2, &textPt);
+    if (obj == nullptr)
+        return false;
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbRadialDimension &dimension)
+{
+    const dwg_point_3d center = toDwgPoint(dimension.centerPoint);
+    const dwg_point_3d chord = toDwgPoint(dimension.radiusPoint);
+    Dwg_Entity_DIMENSION_RADIUS *obj = dwg_add_DIMENSION_RADIUS(
+        hdr, &center, &chord, dimension.leaderLength);
+    if (obj == nullptr)
+        return false;
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbDiametricDimension &dimension)
+{
+    const dwg_point_3d chord = toDwgPoint(dimension.chordPoint);
+    const dwg_point_3d farChord = toDwgPoint(dimension.farChordPoint);
+    Dwg_Entity_DIMENSION_DIAMETER *obj = dwg_add_DIMENSION_DIAMETER(
+        hdr, &chord, &farChord, dimension.leaderLength);
+    if (obj == nullptr)
+        return false;
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbOrdinateDimension &dimension)
+{
+    const dwg_point_3d feature = toDwgPoint(dimension.featureLocationPoint);
+    const dwg_point_3d leaderEnd = toDwgPoint(dimension.leaderEndPoint);
+    Dwg_Entity_DIMENSION_ORDINATE *obj = dwg_add_DIMENSION_ORDINATE(
+        hdr, &feature, &leaderEnd, dimension.useXAxis);
+    if (obj == nullptr)
+        return false;
+    // DXF group 70 carries the type bits (6 = ordinate, 32 = block
+    // reference); libredwg's own decoder records the X-axis choice as
+    // bit 0x80 in this flag, so mirror that for the DXF roundtrip.
+    obj->flag = BITCODE_RC(6 | 32 | (dimension.useXAxis ? 0x80 : 0));
+    fillDwgDimension(ctx, obj, dimension.dimension);
+    applyCommon(ctx, obj->parent, dimension.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbLeader &leader)
+{
+    if (leader.points.size() < 2)
+        return false;
+    std::vector<dwg_point_3d> points;
+    points.reserve(leader.points.size());
+    for (const AcGePoint3d &point : leader.points)
+        points.push_back(toDwgPoint(point));
+    Dwg_Entity_LEADER *obj =
+        dwg_add_LEADER(hdr, unsigned(points.size()), points.data(), NULL,
+                       LEADER_ANNOTTYPE_NO_ANNOT);
+    if (obj == nullptr)
+        return false;
+    obj->path_type = leader.splinePath ? LEADER_PATHTYPE_SPLINE
+                                       : LEADER_PATHTYPE_STRAIGHT;
+    obj->arrowhead_on = leader.hasArrowhead ? 1 : 0;
+    obj->hookline_on = leader.hasHookLine ? 1 : 0;
+    if (Dwg_Object_Ref *ref = dimStyleRef(ctx, leader.dimensionStyleName))
+        obj->dimstyle = ref;
+    applyCommon(ctx, obj->parent, leader.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr, const AcDbFcf &fcf)
+{
+    const dwg_point_3d insertion = toDwgPoint(fcf.insertion);
+    const dwg_point_3d direction = toDwgVector(fcf.direction);
+    Dwg_Entity_TOLERANCE *obj = dwg_add_TOLERANCE(
+        hdr, fcf.text.c_str(), &insertion, &direction);
+    if (obj == nullptr)
+        return false;
+    if (fcf.height > 0.0)
+        obj->height = fcf.height;
+    if (!isDefaultNormal(fcf.normal))
+        assign3rd(obj->extrusion, toDwgVector(fcf.normal));
+    applyCommon(ctx, obj->parent, fcf.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr, const AcDbShape &shape)
+{
+    const dwg_point_3d insertion = toDwgPoint(shape.insertion);
+    Dwg_Entity_SHAPE *obj = dwg_add_SHAPE(hdr, shape.shapeName.c_str(),
+                                          &insertion, shape.scale,
+                                          shape.obliqueAngle);
+    if (obj == nullptr)
+        return false;
+    obj->rotation = shape.rotation;
+    if (shape.widthFactor > 0.0)
+        obj->width_factor = shape.widthFactor;
+    obj->thickness = shape.thickness;
+    if (!shape.shapeName.empty())
+        obj->style = textStyleRef(ctx, shape.shapeName);
+    applyCommon(ctx, obj->parent, shape.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbAttributeDefinition &definition)
+{
+    const dwg_point_3d insertion = toDwgPoint(definition.insertion);
+    const int mode = (definition.invisible ? 1 : 0) |
+                     (definition.constant ? 2 : 0) |
+                     (definition.verify ? 4 : 0) |
+                     (definition.preset ? 8 : 0);
+    Dwg_Entity_ATTDEF *obj = dwg_add_ATTDEF(
+        hdr, definition.height, mode, definition.prompt.c_str(), &insertion,
+        definition.tag.c_str(), definition.textValue.c_str());
+    if (obj == nullptr)
+        return false;
+    obj->rotation = definition.rotation;
+    if (definition.widthFactor > 0.0)
+        obj->width_factor = definition.widthFactor;
+    if (definition.obliqueAngle != 0.0)
+        obj->oblique_angle = definition.obliqueAngle;
+    if (insertion.z != 0.0)
+    {
+        obj->dataflags |= 1; // elevation present
+        obj->elevation = insertion.z;
+    }
+    if (!definition.styleName.empty() && definition.styleName != "Standard")
+        obj->style = textStyleRef(ctx, definition.styleName);
+    applyCommon(ctx, obj->parent, definition.common);
+    trackHandle(ctx, obj);
+    return true;
+}
+
+inline bool writePayload(DwgWriteContext &ctx,
+                         Dwg_Object_BLOCK_HEADER *hdr,
+                         const AcDbMInsertBlock &insert)
+{
+    if (insert.blockTableRecordName.empty())
+        return false;
+    const dwg_point_3d position = toDwgPoint(insert.position);
+    Dwg_Entity_MINSERT *obj = dwg_add_MINSERT(
+        hdr, &position, insert.blockTableRecordName.c_str(),
+        insert.scale.x, insert.scale.y, insert.scale.z, insert.rotation,
+        insert.rowCount, insert.columnCount, insert.rowSpacing,
+        insert.columnSpacing);
+    if (obj == nullptr)
+        return false;
+    if (Dwg_Object *headerObject =
+            findBlockHeaderByName(ctx.dwg, insert.blockTableRecordName))
+    {
+        obj->block_header =
+            dwg_add_handleref(&ctx.dwg, 5, headerObject->handle.value,
+                              NULL);
+        registerInsertReference(ctx, headerObject, obj);
+    }
+    if (!isDefaultNormal(insert.normal))
+        assign3rd(obj->extrusion, toDwgVector(insert.normal));
+    applyCommon(ctx, obj->parent, insert.common);
+    trackHandle(ctx, obj);
+    // Attached ATTRIBs are not written back: dwg_add_ATTRIB only accepts
+    // a Dwg_Entity_INSERT*, and the two structs share no safe alias.
+    // MINSERT-with-attributes is rare; the read path handles it fully.
     return true;
 }
 
@@ -651,6 +1155,7 @@ inline AcDbDwgWriteReport fillDwgFromDatabase(DwgWriteContext &ctx,
     using detail::traceMark;
     AcDbDwgWriteReport report;
     memset(&ctx.dwg, 0, sizeof(Dwg_Data));
+    ctx.database = &database;
     // R_2000 (AC1015) is the newest binary write path LibreDWG fully
     // implements; every adder branches on this, so it must be set before
     // dwg_add_Document builds the standard tables.
@@ -684,6 +1189,9 @@ inline AcDbDwgWriteReport fillDwgFromDatabase(DwgWriteContext &ctx,
                     else if constexpr (std::is_same_v<T, AcDbPolyline> ||
                                        std::is_same_v<T, AcDb3dPolyline>)
                         return BITCODE_BL(typed.vertices.size() + 2);
+                    else if constexpr (std::is_same_v<T, AcDbBlockReference> ||
+                                       std::is_same_v<T, AcDbMInsertBlock>)
+                        return BITCODE_BL(typed.attributeHandles.size() + 2);
                     else
                         return 2; // entity + slack for markers
                 },
@@ -909,6 +1417,15 @@ inline AcDbDwgWriteReport fillDwgFromDatabase(DwgWriteContext &ctx,
                 continue;
             }
             const Dwg_Object_Entity &ent = *object.tio.entity;
+            if (object.fixedtype == DWG_TYPE_INSERT ||
+                object.fixedtype == DWG_TYPE_MINSERT)
+                std::fprintf(
+                    ctx.trace,
+                    "    insert definition absref=%llu\n",
+                    ent.tio.INSERT->block_header != nullptr
+                        ? (unsigned long long)
+                              ent.tio.INSERT->block_header->absolute_ref
+                        : 0ULL);
             std::fprintf(
                 ctx.trace, "  ent %-14s type=%d entmode=%d owner=%llu\n",
                 object.dxfname != nullptr ? object.dxfname : "?",

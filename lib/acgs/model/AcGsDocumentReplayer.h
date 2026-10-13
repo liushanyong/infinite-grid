@@ -13,6 +13,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -167,37 +168,34 @@ public:
   }
 
 private:
+  // Attribute values stamped on an INSERT/MINSERT draw under the
+  // instance: a copy translated to the instance origin, exactly the
+  // placement policy the block members themselves get (rotation/scale of
+  // member geometry degrade through the sampled forms and stay lossy by
+  // design).
   template <typename MetafileT>
-  void recordEntity(const acdb::AcDbDatabase &document,
-                    acdb::AcDbHandle handle,
-                    const acdb::TesselationOptions &options,
-                    MetafileT &target)
+  static void appendInstanceAttributes(
+      const acdb::AcDbDatabase &document,
+      const std::vector<acdb::AcDbHandle> &attributeHandles,
+      const std::string &instanceName, const AcGePoint3d &originWorld,
+      const acdb::TesselationOptions &options, MetafileT &target)
   {
-    const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
-    if (payload == nullptr || document.isErased(handle))
-      return;
-    if (const auto *reference =
-            std::get_if<acdb::AcDbBlockReference>(payload))
+    for (const acdb::AcDbHandle handle : attributeHandles)
     {
-      appendBlockReference(document, handle, *reference, options, target);
-      return;
+      const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
+      if (payload == nullptr || document.isErased(handle))
+        continue;
+      const auto *attribute = std::get_if<acdb::AcDbAttribute>(payload);
+      if (attribute == nullptr)
+        continue;
+      acdb::AcDbAttribute instance = *attribute;
+      instance.insertion += originWorld.asVector();
+      instance.common.name =
+          instanceName + "/" +
+          (attribute->tag.empty() ? "ATT" : attribute->tag);
+      appendEntity(instance, instance.common.name.c_str(), options,
+                   target);
     }
-    if (const auto *text = std::get_if<acdb::AcDbText>(payload);
-        text != nullptr && shxFontReady && text->styleName == "SHX")
-    {
-      appendShxText(*text, target);
-      return;
-    }
-    const std::string &name = acdb::common(*payload).name;
-    const AcGsReplayHints hints = replayHints().count(name)
-                                      ? replayHints()[name]
-                                      : AcGsReplayHints{};
-    std::visit(
-        [&](const auto &entity) {
-          appendEntity(entity, name.c_str(), options, target,
-                       hints.fillIs3DFace, hints.pickShape);
-        },
-        *payload);
   }
 
   template <typename MetafileT>
@@ -229,6 +227,112 @@ private:
               },
               instance);
         });
+    appendInstanceAttributes(
+        document, reference.attributeHandles, instanceName,
+        reference.position, options, target);
+  }
+
+  // MINSERT: the same walk per grid cell; the cell offset rotates with
+  // the reference (spacings are authored in drawing units along the
+  // insert's own axes).
+  template <typename MetafileT>
+  static void appendMInsertBlock(
+      const acdb::AcDbDatabase &document, acdb::AcDbHandle insertHandle,
+      const acdb::AcDbMInsertBlock &insert,
+      const acdb::TesselationOptions &options, MetafileT &target)
+  {
+    const std::string instanceName =
+        acdb::common(insert).name + "@" + std::to_string(insertHandle.value);
+    const AcGeVector3d axis =
+        insert.normal.lengthSq() > 1.0e-12
+            ? insert.normal.normal()
+            : AcGeVector3d(0.0, 0.0, 1.0);
+    const AcGeMatrix3d rotation =
+        insert.rotation != 0.0
+            ? AcGeMatrix3d::setToRotation(insert.rotation, axis,
+                                          AcGePoint3d(0.0, 0.0, 0.0))
+            : AcGeMatrix3d();
+    const int rows = std::clamp(insert.rowCount, 1, 32768);
+    const int columns = std::clamp(insert.columnCount, 1, 32768);
+    for (int row = 0; row < rows; ++row)
+    {
+      for (int column = 0; column < columns; ++column)
+      {
+        const AcGeVector3d offset = transformBy(
+            AcGeVector3d(double(column) * insert.columnSpacing,
+                         double(row) * insert.rowSpacing, 0.0),
+            rotation);
+        acdb::AcDbBlockReference cell;
+        cell.blockTableRecordName = insert.blockTableRecordName;
+        cell.position = insert.position + offset;
+        cell.rotation = insert.rotation;
+        cell.scale = insert.scale;
+        cell.normal = insert.normal;
+        const glm::dmat4 cellWorld =
+            glm::dmat4(document.referenceTransform(cell));
+        document.walkInsertInstances(
+            insert.blockTableRecordName, cellWorld,
+            [&](const glm::dmat4 &world, acdb::AcDbHandle memberHandle,
+                const acdb::AcDbEntityVariant &payload) {
+              (void)memberHandle;
+              const glm::dvec3 origin =
+                  glm::dvec3(world * glm::dvec4(0.0, 0.0, 0.0, 1.0));
+              acdb::AcDbEntityVariant instance = payload;
+              acdb::transformBy(instance, origin);
+              acdb::common(instance).name =
+                  instanceName + "/" + acdb::common(payload).name;
+              std::visit(
+                  [&](const auto &entity) {
+                    appendEntity(entity,
+                                 acdb::common(instance).name.c_str(),
+                                 options, target);
+                  },
+                  instance);
+            });
+        appendInstanceAttributes(document, insert.attributeHandles,
+                                 instanceName, cell.position, options,
+                                 target);
+      }
+    }
+  }
+
+  template <typename MetafileT>
+  void recordEntity(const acdb::AcDbDatabase &document,
+                    acdb::AcDbHandle handle,
+                    const acdb::TesselationOptions &options,
+                    MetafileT &target)
+  {
+    const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
+    if (payload == nullptr || document.isErased(handle))
+      return;
+    if (const auto *reference =
+            std::get_if<acdb::AcDbBlockReference>(payload))
+    {
+      appendBlockReference(document, handle, *reference, options, target);
+      return;
+    }
+    if (const auto *gridInsert =
+            std::get_if<acdb::AcDbMInsertBlock>(payload))
+    {
+      appendMInsertBlock(document, handle, *gridInsert, options, target);
+      return;
+    }
+    if (const auto *text = std::get_if<acdb::AcDbText>(payload);
+        text != nullptr && shxFontReady && text->styleName == "SHX")
+    {
+      appendShxText(*text, target);
+      return;
+    }
+    const std::string &name = acdb::common(*payload).name;
+    const AcGsReplayHints hints = replayHints().count(name)
+                                      ? replayHints()[name]
+                                      : AcGsReplayHints{};
+    std::visit(
+        [&](const auto &entity) {
+          appendEntity(entity, name.c_str(), options, target,
+                       hints.fillIs3DFace, hints.pickShape);
+        },
+        *payload);
   }
 };
 

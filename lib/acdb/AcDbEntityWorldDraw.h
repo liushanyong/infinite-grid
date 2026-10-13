@@ -2,8 +2,19 @@
 
 #include <glm/glm.hpp>
 
+#include <cmath>
+#include <cstdio>
+#include <string>
+
 #include "acgs/model/DrawContext.h"
 #include "../acgi/AcGiWorldDraw.h"
+#include "acdb/AcDbAttribute.h"
+#include "acdb/AcDbAttributeDefinition.h"
+#include "acdb/AcDbDimension.h"
+#include "acdb/AcDbFcf.h"
+#include "acdb/AcDbLeader.h"
+#include "acdb/AcDbMInsertBlock.h"
+#include "acdb/AcDbShape.h"
 #include "acdb/AcDbTessellate.h"
 
 namespace acdb
@@ -204,6 +215,589 @@ inline void worldDraw(const AcDb3dSolid &solid, acgs::ViewportDraw &draw,
     acdb::TessellatedEntity strokesOnly;
     strokesOnly.strokes = std::move(fragment.strokes);
     draw.sink().append(strokesOnly, edgeTraits, fillIs3DFace);
+}
+
+// ---- annotation family (dimension / leader / fcf / shape / attributes) ----
+//
+// All of these draw themselves through the AcGiWorldDraw callbacks like
+// ObjectARX entities do: dimension lines and extension lines are
+// worldLine callbacks, arrowheads are one worldTriangle each, and the
+// dimension text rides the text callback.  Appearance quantities that a
+// full implementation resolves through the referenced DIMSTYLE record
+// (arrow size, text height) derive from the entity geometry when the
+// per-entity fallback is unset.
+
+namespace dimdraw
+{
+
+constexpr double kTwoPi = 6.2831853071795864769;
+
+inline AcGeVector3d perpXY(const AcGeVector3d &direction)
+{
+    return AcGeVector3d(-direction.y, direction.x, 0.0);
+}
+
+// Projects |point| onto the line through |origin| along |direction|.
+inline AcGePoint3d projectOnLine(const AcGePoint3d &point,
+                                 const AcGePoint3d &origin,
+                                 const AcGeVector3d &direction)
+{
+    return origin + direction *
+                        ((point - origin).dotProduct(direction) /
+                         direction.lengthSq());
+}
+
+inline AcGeVector3d directionXY(double angle, double length = 1.0)
+{
+    return AcGeVector3d(std::cos(angle) * length, std::sin(angle) * length,
+                        0.0);
+}
+
+// The angle of |vector| in the XY plane.
+inline double angleOf(const AcGeVector3d &vector)
+{
+    return std::atan2(vector.y, vector.x);
+}
+
+// CCW-normalized sweep from |start| to |end|.
+inline double ccwSweep(double start, double end)
+{
+    double sweep = std::fmod(end - start, kTwoPi);
+    if (sweep < 0.0)
+        sweep += kTwoPi;
+    return sweep;
+}
+
+inline double deriveTextHeight(double span)
+{
+    const double height = span * 0.07;
+    return height > 1.0e-4 ? height : 1.0e-4;
+}
+
+inline double arrowSizeFor(double textHeight)
+{
+    return textHeight * 0.85;
+}
+
+// Filled arrowhead with its tip at |tip| pointing along |direction|.
+inline void arrowhead(AcGiWorldDraw &graphics, const AcGePoint3d &tip,
+                      const AcGeVector3d &direction, double size)
+{
+    const AcGeVector3d unit = direction.lengthSq() > 0.0
+                                  ? direction.normal()
+                                  : AcGeVector3d(1.0, 0.0, 0.0);
+    const AcGeVector3d side = perpXY(unit) * (size * 0.28);
+    const AcGePoint3d back = tip - unit * size;
+    graphics.worldTriangle(tip, back + side, back - side, false);
+}
+
+// Extension line from a feature point toward its dimension line end,
+// keeping the standard gap at the feature and a small overshoot.
+inline void extensionLine(AcGiWorldDraw &graphics,
+                          const AcGePoint3d &feature,
+                          const AcGePoint3d &lineEnd,
+                          const AcGeVector3d &overshoot,
+                          double gap)
+{
+    const AcGeVector3d run = lineEnd - feature;
+    const double length = run.length();
+    if (length <= gap + 1.0e-9)
+        return;
+    const AcGePoint3d start = feature + run * (gap / length);
+    graphics.worldLine(start, lineEnd + overshoot);
+}
+
+// Draws the dimension text (user override wins) at |position| aligned
+// with |direction|; |message| already carries the measurement value.
+inline void dimensionText(AcGiWorldDraw &graphics, const AcGePoint3d &position,
+                          const AcGeVector3d &direction,
+                          const AcDbDimension &dimension,
+                          const std::string &message)
+{
+    AcGiTextStyle style;
+    style.setTextSize(dimension.textHeight);
+    AcGeVector3d textDirection = direction.lengthSq() > 0.0
+                                     ? direction.normal()
+                                     : AcGeVector3d(1.0, 0.0, 0.0);
+    if (dimension.textRotation != 0.0)
+        textDirection = directionXY(dimension.textRotation);
+    graphics.text(position, AcGeVector3d(0.0, 0.0, 1.0), textDirection,
+                  message.c_str(), style);
+}
+
+// Formats the measurement when no user text override exists.
+inline std::string measurementMessage(const AcDbDimension &dimension,
+                                      double measured,
+                                      const char *prefix = "")
+{
+    if (!dimension.dimensionText.empty())
+        return dimension.dimensionText;
+    const double value = dimension.actualMeasurement != 0.0
+                             ? dimension.actualMeasurement
+                             : measured;
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%s%.6g", prefix, value);
+    return buffer;
+}
+
+// Strips the AutoCAD formatting codes a TOLERANCE string carries
+// ({\fArial|b0;...} font runs, \A1; alignment) leaving the glyphs.
+inline std::string stripFrameCodes(const std::string &text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();)
+    {
+        const char c = text[i];
+        if (c == '{' || c == '}')
+        {
+            ++i;
+            continue;
+        }
+        if (c == '\\' && i + 1 < text.size())
+        {
+            std::size_t j = i + 1;
+            while (j < text.size() &&
+                   ((text[j] >= 'a' && text[j] <= 'z') ||
+                    (text[j] >= 'A' && text[j] <= 'Z')))
+                ++j;
+            if (j > i + 1)
+            {
+                // \f, \A, \F...; style switches — skip up to the ';'.
+                while (j < text.size() && text[j] != ';')
+                    ++j;
+                i = j < text.size() ? j + 1 : j;
+                continue;
+            }
+        }
+        out.push_back(c);
+        ++i;
+    }
+    return out;
+}
+
+// ---- shared linear-dimension construction (rotated/aligned) ----
+
+inline void drawLinearDimension(
+    AcGiWorldDraw &graphics, const AcDbDimension &dimension,
+    const AcGePoint3d &xLine1, const AcGePoint3d &xLine2,
+    const AcGePoint3d &dimensionLinePoint, const AcGeVector3d &direction,
+    double measured, const char *prefix)
+{
+    AcDbDimension styled = dimension;
+    styled.textHeight =
+        dimension.textHeight > 0.0
+            ? dimension.textHeight
+            : deriveTextHeight(measured > 0.0 ? measured
+                                              : (xLine2 - xLine1).length());
+    const double textHeight = styled.textHeight;
+    const double arrowSize = arrowSizeFor(textHeight);
+    const AcGeVector3d unit = direction.lengthSq() > 0.0
+                                  ? direction.normal()
+                                  : AcGeVector3d(1.0, 0.0, 0.0);
+    const AcGeVector3d across = perpXY(unit);
+
+    // Foot of each extension line on the dimension line through
+    // |dimensionLinePoint|.
+    const AcGePoint3d foot1 = projectOnLine(xLine1, dimensionLinePoint, unit);
+    const AcGePoint3d foot2 = projectOnLine(xLine2, dimensionLinePoint, unit);
+    if ((foot2 - foot1).lengthSq() < 1.0e-12)
+        return;
+
+    extensionLine(graphics, xLine1, foot1, across * (textHeight * 0.2),
+                  textHeight * 0.15);
+    extensionLine(graphics, xLine2, foot2, across * (textHeight * 0.2),
+                  textHeight * 0.15);
+    graphics.worldLine(foot1, foot2);
+    arrowhead(graphics, foot1, unit, arrowSize);
+    arrowhead(graphics, foot2, -unit, arrowSize);
+
+    const AcGePoint3d textPosition =
+        styled.textPosition != AcGePoint3d(0.0, 0.0, 0.0)
+            ? styled.textPosition
+            : foot1 + (foot2 - foot1) * 0.5 + across * (textHeight * 0.5);
+    dimensionText(graphics, textPosition, unit, styled,
+                  measurementMessage(styled, measured, prefix));
+}
+
+// Shared angular arc: extension lines from the two feature rays, the arc
+// through |radius|, arrows at both ends, text at the arc mid-radial.
+// The drawn sector is the one containing the authored text position.
+inline void drawAngularDimension(AcGiWorldDraw &graphics,
+                                 const AcGePoint3d &center,
+                                 const AcGePoint3d &ray1Point,
+                                 const AcGePoint3d &ray2Point,
+                                 const AcDbDimension &dimension)
+{
+    const AcGeVector3d ray1 = ray1Point - center;
+    const AcGeVector3d ray2 = ray2Point - center;
+    if (ray1.lengthSq() < 1.0e-18 || ray2.lengthSq() < 1.0e-18)
+        return;
+    double startAngle = angleOf(ray1);
+    double sweep = ccwSweep(startAngle, angleOf(ray2));
+    const AcGePoint3d *startRayPoint = &ray1Point;
+    const AcGePoint3d *endRayPoint = &ray2Point;
+
+    double radius = std::min(ray1.length(), ray2.length()) * 0.5;
+    if (dimension.textPosition != AcGePoint3d(0.0, 0.0, 0.0))
+    {
+        radius = (dimension.textPosition - center).length();
+        const double textAngle = angleOf(dimension.textPosition - center);
+        if (ccwSweep(startAngle, textAngle) > sweep)
+        {
+            // The text sits on the complementary sector: draw CCW from
+            // ray 2 back to ray 1 instead (worldCircle rejects negative
+            // sweeps, so the flip re-anchors the arc rather than
+            // reversing it).
+            startAngle = angleOf(ray2);
+            sweep = kTwoPi - sweep;
+            std::swap(startRayPoint, endRayPoint);
+        }
+    }
+    if (sweep < 1.0e-9 || radius < 1.0e-9)
+        return;
+
+    AcDbDimension styled = dimension;
+    styled.textHeight = dimension.textHeight > 0.0
+                            ? dimension.textHeight
+                            : deriveTextHeight(radius * sweep);
+    const double textHeight = styled.textHeight;
+    const double arrowSize = arrowSizeFor(textHeight);
+
+    // Extension lines run from the arc out to the feature points.
+    const AcGeVector3d unit1(std::cos(startAngle), std::sin(startAngle), 0.0);
+    const AcGeVector3d unit2(std::cos(startAngle + sweep),
+                             std::sin(startAngle + sweep), 0.0);
+    graphics.worldLine(center + unit1 * radius,
+                       *startRayPoint + unit1 * (textHeight * 0.2));
+    graphics.worldLine(center + unit2 * radius,
+                       *endRayPoint + unit2 * (textHeight * 0.2));
+
+    graphics.worldCircle(AcGeCircArc3d(center, AcGeVector3d(0.0, 0.0, 1.0),
+                                       radius, startAngle,
+                                       startAngle + sweep));
+    // Arrows sit tangent to the arc at both ends, pointing inward.
+    arrowhead(graphics, center + unit1 * radius,
+              AcGeVector3d(-unit1.y, unit1.x, 0.0), arrowSize);
+    arrowhead(graphics, center + unit2 * radius,
+              AcGeVector3d(unit2.y, -unit2.x, 0.0), arrowSize);
+
+    const AcGePoint3d textPosition =
+        styled.textPosition != AcGePoint3d(0.0, 0.0, 0.0)
+            ? styled.textPosition
+            : center + AcGeVector3d(std::cos(startAngle + sweep * 0.5),
+                                    std::sin(startAngle + sweep * 0.5), 0.0) *
+                              (radius + textHeight * 0.5);
+    dimensionText(graphics, textPosition,
+                  AcGeVector3d(-std::sin(startAngle + sweep * 0.5),
+                               std::cos(startAngle + sweep * 0.5), 0.0),
+                  styled, measurementMessage(styled,
+                                             sweep * 180.0 /
+                                                 3.14159265358979323846));
+}
+
+} // namespace dimdraw
+
+// AcDbRotatedDimension: dimension line at |dimensionLineAngle| through
+// the definition point; measures the projected point distance.
+inline void worldDraw(const AcDbRotatedDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const AcGeVector3d unit =
+        dimdraw::directionXY(dimension.dimensionLineAngle);
+    const double measured = std::abs(
+        (dimension.xLine2Point - dimension.xLine1Point).dotProduct(unit));
+    dimdraw::drawLinearDimension(graphics, dimension.dimension,
+                                 dimension.xLine1Point,
+                                 dimension.xLine2Point,
+                                 dimension.dimensionLinePoint, unit, measured,
+                                 "");
+}
+
+// AcDbAlignedDimension: dimension line parallel to the measured points.
+inline void worldDraw(const AcDbAlignedDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const AcGeVector3d unit = dimension.xLine2Point - dimension.xLine1Point;
+    const double measured = unit.length();
+    dimdraw::drawLinearDimension(graphics, dimension.dimension,
+                                 dimension.xLine1Point,
+                                 dimension.xLine2Point,
+                                 dimension.dimensionLinePoint, unit, measured,
+                                 "");
+}
+
+// AcDb2LineAngularDimension: the arc center is the authored intersection
+// point; each line's farther endpoint anchors its extension line.
+inline void worldDraw(const AcDb2LineAngularDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const auto farther = [&dimension](const AcGePoint3d &a,
+                                      const AcGePoint3d &b) {
+        return (a - dimension.arcPoint).lengthSq() >
+                       (b - dimension.arcPoint).lengthSq()
+                   ? a
+                   : b;
+    };
+    dimdraw::drawAngularDimension(
+        graphics, dimension.arcPoint,
+        farther(dimension.xLine1StartPoint, dimension.xLine1EndPoint),
+        farther(dimension.xLine2StartPoint, dimension.xLine2EndPoint),
+        dimension.dimension);
+}
+
+// AcDb3PointAngularDimension: explicit center between two ray targets.
+inline void worldDraw(const AcDb3PointAngularDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    dimdraw::drawAngularDimension(graphics, dimension.centerPoint,
+                                  dimension.xLine1Point,
+                                  dimension.xLine2Point,
+                                  dimension.dimension);
+}
+
+// AcDbRadialDimension: center→circle stroke with the arrowhead on the
+// circle and the "R" callout on the landing side.
+inline void worldDraw(const AcDbRadialDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const AcGeVector3d run = dimension.radiusPoint - dimension.centerPoint;
+    const double measured = run.length();
+    if (measured < 1.0e-9)
+        return;
+    const AcGeVector3d unit = run.normal();
+    AcDbDimension styled = dimension.dimension;
+    styled.textHeight =
+        dimension.dimension.textHeight > 0.0
+            ? dimension.dimension.textHeight
+            : dimdraw::deriveTextHeight(measured);
+    const double textHeight = styled.textHeight;
+    graphics.worldLine(dimension.centerPoint, dimension.radiusPoint);
+    dimdraw::arrowhead(graphics, dimension.radiusPoint, unit,
+                       dimdraw::arrowSizeFor(textHeight));
+    const AcGePoint3d textPosition =
+        styled.textPosition != AcGePoint3d(0.0, 0.0, 0.0)
+            ? styled.textPosition
+            : dimension.radiusPoint +
+                  unit * std::max(dimension.leaderLength,
+                                  textHeight * 1.5);
+    dimdraw::dimensionText(graphics, textPosition,
+                           dimdraw::perpXY(unit),
+                           styled,
+                           dimdraw::measurementMessage(styled, measured,
+                                                       "R"));
+}
+
+// AcDbDiametricDimension: full chord, arrows on both ends, "Ø" callout.
+inline void worldDraw(const AcDbDiametricDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const AcGeVector3d run =
+        dimension.farChordPoint - dimension.chordPoint;
+    const double measured = run.length();
+    if (measured < 1.0e-9)
+        return;
+    const AcGeVector3d unit = run.normal();
+    AcDbDimension styled = dimension.dimension;
+    styled.textHeight =
+        dimension.dimension.textHeight > 0.0
+            ? dimension.dimension.textHeight
+            : dimdraw::deriveTextHeight(measured);
+    const double textHeight = styled.textHeight;
+    graphics.worldLine(dimension.chordPoint, dimension.farChordPoint);
+    dimdraw::arrowhead(graphics, dimension.chordPoint, -unit,
+                       dimdraw::arrowSizeFor(textHeight));
+    dimdraw::arrowhead(graphics, dimension.farChordPoint, unit,
+                       dimdraw::arrowSizeFor(textHeight));
+    const AcGePoint3d textPosition =
+        styled.textPosition != AcGePoint3d(0.0, 0.0, 0.0)
+            ? styled.textPosition
+            : dimension.chordPoint -
+                  unit * std::max(dimension.leaderLength,
+                                  textHeight * 1.5);
+    dimdraw::dimensionText(graphics, textPosition, dimdraw::perpXY(unit),
+                           styled,
+                           dimdraw::measurementMessage(styled, measured,
+                                                       "\xE2\x8C\x8D"));
+}
+
+// AcDbOrdinateDimension: datum coordinate with a jogged leader
+// (feature → axis-aligned run → leader end).
+inline void worldDraw(const AcDbOrdinateDimension &dimension,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const AcGePoint3d &feature = dimension.featureLocationPoint;
+    const AcGePoint3d &end = dimension.leaderEndPoint;
+    const AcGePoint3d corner = dimension.useXAxis
+                                   ? AcGePoint3d(end.x, feature.y, feature.z)
+                                   : AcGePoint3d(feature.x, end.y, feature.z);
+    graphics.worldPolyline(
+        std::vector<AcGePoint3d>{feature, corner, end}.data(), 3, false);
+    const double value = dimension.useXAxis ? feature.x : feature.y;
+    AcDbDimension styled = dimension.dimension;
+    styled.textHeight =
+        dimension.dimension.textHeight > 0.0
+            ? dimension.dimension.textHeight
+            : dimdraw::deriveTextHeight(
+                  std::max((end - feature).length(), 1.0));
+    dimdraw::dimensionText(graphics,
+                           corner + (end - corner) * 0.5 +
+                               dimdraw::perpXY(end - corner) *
+                                   (styled.textHeight * 0.6),
+                           end - corner, styled,
+                           dimdraw::measurementMessage(styled, value));
+}
+
+// AcDbLeader: the vertex polyline (a spline-fit path draws as its
+// control polygon until a fit engine lands here) plus the arrowhead at
+// points[0].  The annotation it references draws as its own entity.
+inline void worldDraw(const AcDbLeader &leader, acgs::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    if (leader.points.size() < 2)
+        return;
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    graphics.worldPolyline(leader.points.data(),
+                           static_cast<int>(leader.points.size()), false);
+    if (leader.hasArrowhead)
+    {
+        const AcGeVector3d launch = leader.points[1] - leader.points[0];
+        if (launch.lengthSq() > 0.0)
+        {
+            const double textHeight =
+                std::max(launch.length() * 0.1, 1.0e-3);
+            dimdraw::arrowhead(graphics, leader.points[0], launch.normal(),
+                               dimdraw::arrowSizeFor(textHeight));
+        }
+    }
+}
+
+// AcDbFcf: boxed feature-control frame; the formatting codes come off
+// and the plain glyph run rides the text callback.
+inline void worldDraw(const AcDbFcf &fcf, acgs::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    const std::string message = dimdraw::stripFrameCodes(fcf.text);
+    if (message.empty())
+        return;
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    AcGiTextStyle style;
+    const double height = fcf.height > 0.0 ? fcf.height : 1.0;
+    style.setTextSize(height);
+    const AcGeVector3d right = fcf.direction.lengthSq() > 0.0
+                                   ? fcf.direction.normal()
+                                   : AcGeVector3d(1.0, 0.0, 0.0);
+    const AcGeVector3d up =
+        fcf.normal.lengthSq() > 0.0
+            ? fcf.normal.normal().crossProduct(right).normal()
+            : AcGeVector3d(0.0, 1.0, 0.0);
+    graphics.text(fcf.insertion, fcf.normal, right, message.c_str(), style);
+
+    // Frame box sized like the text layout fallback: ~0.6 em per glyph.
+    std::size_t longest = 0;
+    std::size_t current = 0;
+    std::size_t lineCount = 1;
+    for (const char c : message)
+    {
+        if (c == 10)
+        {
+            longest = std::max(longest, current);
+            current = 0;
+            ++lineCount;
+        }
+        else
+            ++current;
+    }
+    longest = std::max(longest, current);
+    const double padding = height * 0.3;
+    const AcGeVector3d width = right * (double(longest) * height * 0.6 +
+                                        padding * 2.0);
+    const AcGeVector3d lift = up * (height * double(lineCount) +
+                                    padding * 2.0);
+    const AcGePoint3d origin = fcf.insertion - right * padding - up * padding;
+    graphics.worldLine(origin, origin + width);
+    graphics.worldLine(origin + width, origin + width + lift);
+    graphics.worldLine(origin + width + lift, origin + lift);
+    graphics.worldLine(origin + lift, origin);
+}
+
+// AcDbShape: placement marker (a cross of the shape's authored size) —
+// shape-file glyph lookup is not part of the stroke text engine yet.
+inline void worldDraw(const AcDbShape &shape, acgs::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    const double size = shape.scale > 0.0 ? shape.scale : 1.0;
+    const AcGeVector3d right = dimdraw::directionXY(shape.rotation, size);
+    const AcGeVector3d up = dimdraw::perpXY(right);
+    graphics.worldLine(shape.insertion - right, shape.insertion + right);
+    graphics.worldLine(shape.insertion - up, shape.insertion + up);
+}
+
+// AcDbAttributeDefinition: an ATTDEF displays its tag (the stamped
+// value shows up in the INSERT's attributes).
+inline void worldDraw(const AcDbAttributeDefinition &definition,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    if (definition.tag.empty())
+        return;
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    AcGiTextStyle style;
+    style.setTextSize(definition.height);
+    style.setXScale(definition.widthFactor > 0.0 ? definition.widthFactor
+                                                 : 1.0);
+    graphics.text(definition.insertion, AcGeVector3d(0.0, 0.0, 1.0),
+                  dimdraw::directionXY(definition.rotation),
+                  definition.tag.c_str(), style);
+}
+
+// AcDbAttribute: the stamped value text; coordinates live in the owning
+// INSERT's frame, and the replay applies the instance placement before
+// this draws.
+inline void worldDraw(const AcDbAttribute &attribute,
+                      acgs::ViewportDraw &draw, bool fillIs3DFace = false)
+{
+    if (attribute.textValue.empty())
+        return;
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    AcGiTextStyle style;
+    style.setTextSize(attribute.height);
+    style.setXScale(attribute.widthFactor > 0.0 ? attribute.widthFactor
+                                                : 1.0);
+    graphics.text(attribute.insertion, AcGeVector3d(0.0, 0.0, 1.0),
+                  dimdraw::directionXY(attribute.rotation),
+                  attribute.textValue.c_str(), style);
+}
+
+// AcDbMInsertBlock: the replay expands the row/column grid per cell, so
+// this only draws when a MINSERT sits nested inside a block definition
+// (where expansion is out of scope) — a placement marker keeps it
+// visible and pickable without claiming the full picture.
+inline void worldDraw(const AcDbMInsertBlock &insert, acgs::ViewportDraw &draw,
+                      bool fillIs3DFace = false)
+{
+    AcGiWorldDraw graphics(draw);
+    (void)fillIs3DFace;
+    graphics.worldPoint(insert.position);
 }
 
 } // namespace acdb

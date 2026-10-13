@@ -26,6 +26,12 @@
 #include "acdb/AcDbDatabase.h"
 #include "acdb/AcDbEntities.h"
 
+// libredwg lookup (dwg_api.h surface, declared here to avoid the full
+// API header in this bridge).
+extern "C" BITCODE_H dwg_find_tablehandle_silent(Dwg_Data *dwg,
+                                                 const char *name,
+                                                 const char *table);
+
 namespace acdb
 {
 
@@ -113,6 +119,8 @@ inline const char *symbolTableName(const Dwg_Object *object,
     case DWG_TYPE_LAYER: return object->tio.object->tio.LAYER->name;
     case DWG_TYPE_LTYPE: return object->tio.object->tio.LTYPE->name;
     case DWG_TYPE_STYLE: return object->tio.object->tio.STYLE->name;
+    case DWG_TYPE_DIMSTYLE:
+        return object->tio.object->tio.DIMSTYLE->name;
     case DWG_TYPE_BLOCK_HEADER:
         return object->tio.object->tio.BLOCK_HEADER->name;
     default: return nullptr;
@@ -361,6 +369,239 @@ inline AcDbBlockReference toEntity(const Dwg_Entity_INSERT &dwg)
     reference.normal = AcGeVector3d(dwg.extrusion.x, dwg.extrusion.y,
                                     dwg.extrusion.z);
     return reference;
+}
+
+// MINSERT shares the INSERT placement fields plus the row/column grid.
+inline AcDbMInsertBlock toEntity(const Dwg_Entity_MINSERT &dwg)
+{
+    AcDbMInsertBlock insert;
+    insert.position =
+        AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.ins_pt.z);
+    insert.scale = AcGeVector3d(dwg.scale.x, dwg.scale.y, dwg.scale.z);
+    insert.rotation = dwg.rotation;
+    insert.normal =
+        AcGeVector3d(dwg.extrusion.x, dwg.extrusion.y, dwg.extrusion.z);
+    insert.rowCount = dwg.num_rows;
+    insert.columnCount = dwg.num_cols;
+    insert.rowSpacing = dwg.row_spacing;
+    insert.columnSpacing = dwg.col_spacing;
+    return insert;
+}
+
+// ATTDEF: the block-resident attribute template.  Text alignment modes
+// (horiz/vert alignment) beyond left-baseline are out of scope; the
+// insertion point serves as the layout origin.
+inline AcDbAttributeDefinition toEntity(const Dwg_Entity_ATTDEF &dwg)
+{
+    AcDbAttributeDefinition definition;
+    definition.insertion =
+        AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.elevation);
+    definition.height = dwg.height;
+    definition.rotation = dwg.rotation;
+    definition.widthFactor = dwg.width_factor;
+    definition.obliqueAngle = dwg.oblique_angle;
+    definition.tag = dwg.tag ? dwg.tag : "";
+    definition.prompt = dwg.prompt ? dwg.prompt : "";
+    definition.textValue = dwg.default_value ? dwg.default_value : "";
+    definition.invisible = (dwg.flags & 1) != 0;
+    definition.constant = (dwg.flags & 2) != 0;
+    definition.verify = (dwg.flags & 4) != 0;
+    definition.preset = (dwg.flags & 8) != 0;
+    return definition;
+}
+
+// ATTRIB: the stamped value attached to an INSERT.
+inline AcDbAttribute toEntity(const Dwg_Entity_ATTRIB &dwg)
+{
+    AcDbAttribute attribute;
+    attribute.insertion =
+        AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.elevation);
+    attribute.height = dwg.height;
+    attribute.rotation = dwg.rotation;
+    attribute.widthFactor = dwg.width_factor;
+    attribute.tag = dwg.tag ? dwg.tag : "";
+    attribute.textValue = dwg.text_value ? dwg.text_value : "";
+    attribute.invisible = (dwg.flags & 1) != 0;
+    return attribute;
+}
+
+// LEADER: vertex path plus the arrow/hook switches.
+inline AcDbLeader toEntity(const Dwg_Entity_LEADER &dwg)
+{
+    AcDbLeader leader;
+    leader.points.reserve(dwg.num_points);
+    for (BITCODE_BL i = 0; i < dwg.num_points && dwg.points != nullptr; ++i)
+        leader.points.push_back(
+            AcGePoint3d(dwg.points[i].x, dwg.points[i].y, dwg.points[i].z));
+    leader.splinePath = dwg.path_type == LEADER_PATHTYPE_SPLINE;
+    leader.hasArrowhead = dwg.arrowhead_on != 0;
+    leader.hasHookLine = dwg.hookline_on != 0;
+    return leader;
+}
+
+// TOLERANCE: the feature control frame.
+inline AcDbFcf toEntity(const Dwg_Entity_TOLERANCE &dwg)
+{
+    AcDbFcf fcf;
+    fcf.insertion = AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.ins_pt.z);
+    fcf.direction = AcGeVector3d(dwg.x_direction.x, dwg.x_direction.y,
+                                 dwg.x_direction.z);
+    fcf.normal = AcGeVector3d(dwg.extrusion.x, dwg.extrusion.y,
+                              dwg.extrusion.z);
+    fcf.text = dwg.text_value ? dwg.text_value : "";
+    fcf.height = dwg.height > 0.0 ? dwg.height : 1.0;
+    return fcf;
+}
+
+// SHAPE: placement + the STYLE record that carries the shape file.
+inline AcDbShape toEntity(const Dwg_Entity_SHAPE &dwg)
+{
+    AcDbShape shape;
+    shape.insertion =
+        AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.ins_pt.z);
+    shape.scale = dwg.scale;
+    shape.rotation = dwg.rotation;
+    shape.widthFactor = dwg.width_factor;
+    shape.obliqueAngle = dwg.oblique_angle;
+    shape.thickness = dwg.thickness;
+    return shape;
+}
+
+// Every Dwg_Entity_DIMENSION_* expands DIMENSION_COMMON flat, so the
+// shared annotation fields map through one template.
+template <typename DwgDimension>
+inline void fillDimensionCommon(AcDbDimension &dimension,
+                                const DwgDimension &dwg)
+{
+    dimension.textPosition =
+        AcGePoint3d(dwg.text_midpt.x, dwg.text_midpt.y, dwg.elevation);
+    dimension.dimensionText = dwg.user_text ? dwg.user_text : "";
+    dimension.textRotation = dwg.text_rotation;
+    dimension.actualMeasurement = dwg.act_measurement;
+}
+
+template <typename DwgDimension>
+inline void applyDimensionStyle(const DwgImportContext &ctx,
+                                AcDbDimension &dimension,
+                                const DwgDimension &dwg)
+{
+    if (const char *style =
+            symbolTableName(ctx.resolve(dwg.dimstyle), DWG_TYPE_DIMSTYLE))
+        dimension.dimensionStyleName = style;
+}
+
+inline AcDbRotatedDimension toEntity(const Dwg_Entity_DIMENSION_LINEAR &dwg)
+{
+    AcDbRotatedDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    dimension.xLine1Point =
+        AcGePoint3d(dwg.xline1_pt.x, dwg.xline1_pt.y, dwg.xline1_pt.z);
+    dimension.xLine2Point =
+        AcGePoint3d(dwg.xline2_pt.x, dwg.xline2_pt.y, dwg.xline2_pt.z);
+    dimension.dimensionLinePoint =
+        AcGePoint3d(dwg.def_pt.x, dwg.def_pt.y, dwg.def_pt.z);
+    dimension.dimensionLineAngle = dwg.dim_rotation;
+    dimension.obliqueAngle = dwg.oblique_angle;
+    return dimension;
+}
+
+inline AcDbAlignedDimension toEntity(const Dwg_Entity_DIMENSION_ALIGNED &dwg)
+{
+    AcDbAlignedDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    dimension.xLine1Point =
+        AcGePoint3d(dwg.xline1_pt.x, dwg.xline1_pt.y, dwg.xline1_pt.z);
+    dimension.xLine2Point =
+        AcGePoint3d(dwg.xline2_pt.x, dwg.xline2_pt.y, dwg.xline2_pt.z);
+    dimension.dimensionLinePoint =
+        AcGePoint3d(dwg.def_pt.x, dwg.def_pt.y, dwg.def_pt.z);
+    dimension.obliqueAngle = dwg.oblique_angle;
+    return dimension;
+}
+
+inline AcDb2LineAngularDimension toEntity(
+    const Dwg_Entity_DIMENSION_ANG2LN &dwg)
+{
+    AcDb2LineAngularDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    dimension.xLine1StartPoint = AcGePoint3d(dwg.xline1start_pt.x,
+                                             dwg.xline1start_pt.y,
+                                             dwg.xline1start_pt.z);
+    dimension.xLine1EndPoint = AcGePoint3d(dwg.xline1end_pt.x,
+                                           dwg.xline1end_pt.y,
+                                           dwg.xline1end_pt.z);
+    dimension.xLine2StartPoint = AcGePoint3d(dwg.xline2start_pt.x,
+                                             dwg.xline2start_pt.y,
+                                             dwg.xline2start_pt.z);
+    dimension.xLine2EndPoint = AcGePoint3d(dwg.xline2end_pt.x,
+                                           dwg.xline2end_pt.y,
+                                           dwg.xline2end_pt.z);
+    dimension.arcPoint =
+        AcGePoint3d(dwg.def_pt.x, dwg.def_pt.y, dwg.def_pt.z);
+    return dimension;
+}
+
+inline AcDb3PointAngularDimension toEntity(
+    const Dwg_Entity_DIMENSION_ANG3PT &dwg)
+{
+    AcDb3PointAngularDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    dimension.centerPoint =
+        AcGePoint3d(dwg.center_pt.x, dwg.center_pt.y, dwg.center_pt.z);
+    dimension.xLine1Point =
+        AcGePoint3d(dwg.xline1_pt.x, dwg.xline1_pt.y, dwg.xline1_pt.z);
+    dimension.xLine2Point =
+        AcGePoint3d(dwg.xline2_pt.x, dwg.xline2_pt.y, dwg.xline2_pt.z);
+    return dimension;
+}
+
+inline AcDbRadialDimension toEntity(const Dwg_Entity_DIMENSION_RADIUS &dwg)
+{
+    AcDbRadialDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    dimension.centerPoint =
+        AcGePoint3d(dwg.def_pt.x, dwg.def_pt.y, dwg.def_pt.z);
+    dimension.radiusPoint =
+        AcGePoint3d(dwg.first_arc_pt.x, dwg.first_arc_pt.y,
+                    dwg.first_arc_pt.z);
+    dimension.leaderLength = dwg.leader_len;
+    return dimension;
+}
+
+inline AcDbDiametricDimension toEntity(
+    const Dwg_Entity_DIMENSION_DIAMETER &dwg)
+{
+    AcDbDiametricDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    // libredwg's data model (and adder) stores the far chord point in
+    // def_pt and the near one in first_arc_pt; mirror that so a written
+    // file reads back identically.
+    dimension.chordPoint =
+        AcGePoint3d(dwg.first_arc_pt.x, dwg.first_arc_pt.y,
+                    dwg.first_arc_pt.z);
+    dimension.farChordPoint =
+        AcGePoint3d(dwg.def_pt.x, dwg.def_pt.y, dwg.def_pt.z);
+    dimension.leaderLength = dwg.leader_len;
+    return dimension;
+}
+
+inline AcDbOrdinateDimension toEntity(
+    const Dwg_Entity_DIMENSION_ORDINATE &dwg)
+{
+    AcDbOrdinateDimension dimension;
+    fillDimensionCommon(dimension.dimension, dwg);
+    dimension.featureLocationPoint = AcGePoint3d(dwg.feature_location_pt.x,
+                                                 dwg.feature_location_pt.y,
+                                                 dwg.feature_location_pt.z);
+    dimension.leaderEndPoint =
+        AcGePoint3d(dwg.leader_endpt.x, dwg.leader_endpt.y,
+                    dwg.leader_endpt.z);
+    // DWG decode carries the axis bit in flag2; the DXF path leaves
+    // flag2 zero and records bit 0x80 in group 70's flag (libredwg's
+    // own decoder convention; bit 64 is the DXF spec spelling).
+    dimension.useXAxis = (dwg.flag2 & 1) != 0 ||
+                         (dwg.flag & 0x80) != 0 || (dwg.flag & 64) != 0;
+    return dimension;
 }
 
 // HATCH: only polyline boundary paths map onto the simplified acdb::
@@ -689,6 +930,97 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
         std::string("DWG_") + (object.dxfname ? object.dxfname : "ENTITY");
 }
 
+// ---- post-decode block-reference repair ----
+//
+// in_dxf registers every BLOCK_RECORD under the last record's handle
+// (the BLOCK_CONTROL entries all end up on one absref), which breaks
+// its own deferred group-2 resolution: INSERTs whose block_header name
+// failed to resolve decode with a NULL block_header and the name is
+// gone.  Rebuild the control entries from the actual BLOCK_HEADER
+// objects, then re-link the dangling INSERTs through the BLOCK_RECORD
+// BLKREFS lists (header->inserts[]), which decoded fine.
+inline void repairBlockReferences(const Dwg_Data &dwg)
+{
+    Dwg_Data &mutableDwg = const_cast<Dwg_Data &>(dwg);
+    Dwg_Object_BLOCK_CONTROL *control = nullptr;
+    std::vector<Dwg_Object *> headers;
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        Dwg_Object &object = mutableDwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_OBJECT ||
+            object.tio.object == nullptr)
+            continue;
+        if (object.fixedtype == DWG_TYPE_BLOCK_CONTROL)
+            control = object.tio.object->tio.BLOCK_CONTROL;
+        else if (object.fixedtype == DWG_TYPE_BLOCK_HEADER)
+            headers.push_back(&object);
+    }
+    if (control == nullptr || headers.empty())
+        return;
+
+    // Rebuild the control entry table (the previous array is owned by
+    // the decode and leaks here; dwg_free releases the replacement).
+    control->num_entries = BITCODE_BL(headers.size());
+    control->entries = (BITCODE_H *)calloc(headers.size(),
+                                           sizeof(BITCODE_H));
+    if (control->entries == nullptr)
+        return;
+    for (std::size_t i = 0; i < headers.size(); ++i)
+        control->entries[i] = dwg_add_handleref(
+            &mutableDwg, 5, headers[i]->handle.value, NULL);
+
+    // Re-link dangling INSERT/MINSERT references through the headers'
+    // inserts[] lists.
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        Dwg_Object &object = mutableDwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_ENTITY ||
+            object.tio.entity == nullptr)
+            continue;
+        if (object.fixedtype != DWG_TYPE_INSERT &&
+            object.fixedtype != DWG_TYPE_MINSERT)
+            continue;
+        Dwg_Object_Ref *blockHeader =
+            object.fixedtype == DWG_TYPE_INSERT
+                ? object.tio.entity->tio.INSERT->block_header
+                : object.tio.entity->tio.MINSERT->block_header;
+        // The header whose inserts[] list carries this reference is
+        // authoritative: in_dxf's deferred group-2 resolution can link
+        // the wrong record when the BLOCK_CONTROL entries collapse onto
+        // one handle, so it overrides a pre-linked block_header.
+        Dwg_Object *referencedBy = nullptr;
+        for (Dwg_Object *header : headers)
+        {
+            const Dwg_Object_BLOCK_HEADER &record =
+                *header->tio.object->tio.BLOCK_HEADER;
+            for (BITCODE_BL j = 0; j < record.num_inserts; ++j)
+            {
+                if (record.inserts == nullptr ||
+                    record.inserts[j] == nullptr)
+                    continue;
+                if (record.inserts[j]->absolute_ref != object.handle.value)
+                    continue;
+                if (blockHeader == nullptr ||
+                    blockHeader->absolute_ref != header->handle.value)
+                    referencedBy = header;
+                break;
+            }
+            if (referencedBy != nullptr)
+                break;
+        }
+        if (referencedBy == nullptr)
+            continue;
+        const Dwg_Object_Ref *link = dwg_add_handleref(
+            &mutableDwg, 5, referencedBy->handle.value, NULL);
+        if (object.fixedtype == DWG_TYPE_INSERT)
+            object.tio.entity->tio.INSERT->block_header =
+                const_cast<Dwg_Object_Ref *>(link);
+        else
+            object.tio.entity->tio.MINSERT->block_header =
+                const_cast<Dwg_Object_Ref *>(link);
+    }
+}
+
 // ---- direct fill: DWG/DXF file -> AcDbDatabase (ARX readDwgFile shape) ----
 
 struct AcDbDwgImportReport
@@ -705,14 +1037,26 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
                                           const Dwg_Data &dwg)
 {
     AcDbDwgImportReport report;
+    repairBlockReferences(dwg);
     const DwgImportContext ctx(dwg);
     importLayerRecords(database, dwg);
 
     // Deferred block members keyed by the owning BLOCK_HEADER handle;
     // records are created in a second pass so duplicate names merge and
-    // base points arrive before members.
-    std::unordered_map<std::uint64_t, std::vector<AcDbEntityVariant>>
+    // base points arrive before members.  The file handle rides along so
+    // INSERT/MINSERT members can join the attribute-attach map.
+    struct DeferredMember
+    {
+        std::uint64_t fileHandle = 0;
+        AcDbEntityVariant payload;
+    };
+    std::unordered_map<std::uint64_t, std::vector<DeferredMember>>
         blockMembers;
+    // ATTRIB payloads parked by owning INSERT/MINSERT file handle.
+    std::unordered_map<std::uint64_t, std::vector<AcDbAttribute>>
+        attributesByOwner;
+    // INSERT/MINSERT file handle -> database handle (both spaces).
+    std::unordered_map<std::uint64_t, AcDbHandle> insertDbHandles;
 
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
     {
@@ -725,7 +1069,7 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         const Dwg_Object_Entity &ent = *object.tio.entity;
 
         // Structural companions of polylines and blocks are not entities
-        // in the acdb model.
+        // in the acdb model; ATTRIBs park for the attach pass instead.
         switch (object.fixedtype)
         {
         case DWG_TYPE_VERTEX_2D:
@@ -739,6 +1083,32 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
             continue;
         default:
             break;
+        }
+
+        // ATTRIB values park under their owning INSERT/MINSERT file
+        // handle; the attach pass after the main loop links them into the
+        // reference's attributeHandles (binary decodes carry the ATTRIB's
+        // ownerhandle but not the insert's attribs[] chain).
+        if (object.fixedtype == DWG_TYPE_ATTRIB)
+        {
+            if (ent.ownerhandle == nullptr || ent.tio.ATTRIB == nullptr)
+            {
+                ++report.unsupported;
+                continue;
+            }
+            AcDbAttribute attribute = toEntity(*ent.tio.ATTRIB);
+            applyCommon(attribute, ctx, object, database);
+            if (const char *style =
+                    symbolTableName(ctx.resolve(ent.tio.ATTRIB->style),
+                                    DWG_TYPE_STYLE);
+                style != nullptr && *style != '\0')
+            {
+                ensureTextStyle(database, style);
+                attribute.styleName = style;
+            }
+            attributesByOwner[ent.ownerhandle->absolute_ref].push_back(
+                std::move(attribute));
+            continue;
         }
 
         // nullopt (not an empty variant — that would default-construct an
@@ -793,6 +1163,11 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
             if (!converted)
                 ++report.unsupported;
             break;
+        case DWG_TYPE_POLYLINE_MESH:
+            // MESH vertices arrive as VERTEX_* children; without a
+            // decoded mesh grid the entity carries no picture.
+            ++report.unsupported;
+            break;
         case DWG_TYPE_SPLINE:
             converted = toEntity(*ent.tio.SPLINE);
             break;
@@ -825,6 +1200,107 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
             }
             break;
         }
+        case DWG_TYPE_MINSERT:
+        {
+            if (const char *name =
+                    blockHeaderNameOf(ctx, ent.tio.MINSERT->block_header))
+            {
+                AcDbMInsertBlock insert = toEntity(*ent.tio.MINSERT);
+                insert.blockTableRecordName = name;
+                converted = std::move(insert);
+            }
+            else
+            {
+                ++report.unsupported;
+            }
+            break;
+        }
+        case DWG_TYPE_ATTDEF:
+            converted = toEntity(*ent.tio.ATTDEF);
+            break;
+        case DWG_TYPE_LEADER:
+            converted = toEntity(*ent.tio.LEADER);
+            break;
+        case DWG_TYPE_TOLERANCE:
+            converted = toEntity(*ent.tio.TOLERANCE);
+            break;
+        case DWG_TYPE_SHAPE:
+        {
+            AcDbShape shape = toEntity(*ent.tio.SHAPE);
+            if (const char *style =
+                    symbolTableName(ctx.resolve(ent.tio.SHAPE->style),
+                                    DWG_TYPE_STYLE);
+                style != nullptr && *style != '\0')
+            {
+                ensureTextStyle(database, style);
+                shape.shapeName = style;
+            }
+            converted = std::move(shape);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_LINEAR:
+        {
+            AcDbRotatedDimension dimension =
+                toEntity(*ent.tio.DIMENSION_LINEAR);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_LINEAR);
+            converted = std::move(dimension);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_ALIGNED:
+        {
+            AcDbAlignedDimension dimension =
+                toEntity(*ent.tio.DIMENSION_ALIGNED);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_ALIGNED);
+            converted = std::move(dimension);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_ANG2LN:
+        {
+            AcDb2LineAngularDimension dimension =
+                toEntity(*ent.tio.DIMENSION_ANG2LN);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_ANG2LN);
+            converted = std::move(dimension);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_ANG3PT:
+        {
+            AcDb3PointAngularDimension dimension =
+                toEntity(*ent.tio.DIMENSION_ANG3PT);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_ANG3PT);
+            converted = std::move(dimension);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_RADIUS:
+        {
+            AcDbRadialDimension dimension =
+                toEntity(*ent.tio.DIMENSION_RADIUS);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_RADIUS);
+            converted = std::move(dimension);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_DIAMETER:
+        {
+            AcDbDiametricDimension dimension =
+                toEntity(*ent.tio.DIMENSION_DIAMETER);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_DIAMETER);
+            converted = std::move(dimension);
+            break;
+        }
+        case DWG_TYPE_DIMENSION_ORDINATE:
+        {
+            AcDbOrdinateDimension dimension =
+                toEntity(*ent.tio.DIMENSION_ORDINATE);
+            applyDimensionStyle(ctx, dimension.dimension,
+                                *ent.tio.DIMENSION_ORDINATE);
+            converted = std::move(dimension);
+            break;
+        }
         default:
             ++report.unsupported;
             break;
@@ -839,16 +1315,27 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
 
         // TEXT carries its style by record name; MTEXT's payload has no
         // style slot, so its style falls back to the database default.
-        if (auto *text = std::get_if<AcDbText>(&payload))
+        // ATTDEF resolves its text style the same way.
+        const Dwg_Object_Ref *entityStyleRef = nullptr;
+        switch (object.fixedtype)
         {
-            if (const char *style =
-                    symbolTableName(ctx.resolve(ent.tio.TEXT->style),
-                                    DWG_TYPE_STYLE);
-                style != nullptr && *style != '\0')
-            {
-                ensureTextStyle(database, style);
+        case DWG_TYPE_TEXT: entityStyleRef = ent.tio.TEXT->style; break;
+        case DWG_TYPE_ATTDEF: entityStyleRef = ent.tio.ATTDEF->style; break;
+        default: break;
+        }
+        if (const char *style = entityStyleRef != nullptr
+                                    ? symbolTableName(
+                                          ctx.resolve(entityStyleRef),
+                                          DWG_TYPE_STYLE)
+                                    : nullptr;
+            style != nullptr && *style != '\0')
+        {
+            ensureTextStyle(database, style);
+            if (auto *text = std::get_if<AcDbText>(&payload))
                 text->styleName = style;
-            }
+            else if (auto *definition =
+                         std::get_if<AcDbAttributeDefinition>(&payload))
+                definition->styleName = style;
         }
 
         // Membership: entmode 1 = PSPACE, 2 = MSPACE (implicit owner),
@@ -865,7 +1352,7 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         // Bulk-load path (insertLoadedEntity + record append): load-time
         // inserts stay silent by design; a fresh load mirrors in bulk.
         auto addToSpace = [&](AcDbEntityVariant &&resident,
-                              AcDbBlockTableRecord &space) {
+                              AcDbBlockTableRecord &space) -> AcDbHandle {
             AcDbEntity &commonRef = std::visit(
                 [](auto &typed) -> AcDbEntity & { return typed.common; },
                 resident);
@@ -875,25 +1362,33 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
             {
                 space.appendEntityHandle(handle);
                 ++report.added;
+                return handle;
             }
+            return kNullHandle;
         };
 
+        const bool isInsertLike = object.fixedtype == DWG_TYPE_INSERT ||
+                                  object.fixedtype == DWG_TYPE_MINSERT;
+        AcDbHandle insertedHandle = kNullHandle;
         if (ent.entmode == 1)
         {
             // Paper space record (created by the database constructor).
             if (AcDbBlockTableRecord *pspace =
                     database.blockTable().getMutable(kPaperSpaceName))
-                addToSpace(std::move(payload), *pspace);
+                insertedHandle = addToSpace(std::move(payload), *pspace);
         }
         else if (ownedByBlock && ownerHandle != nullptr)
         {
             blockMembers[ownerHandle->absolute_ref].push_back(
-                std::move(payload));
+                {object.handle.value, std::move(payload)});
         }
         else
         {
-            addToSpace(std::move(payload), database.modelSpace());
+            insertedHandle = addToSpace(std::move(payload),
+                                        database.modelSpace());
         }
+        if (insertedHandle.isValid() && isInsertLike)
+            insertDbHandles[object.handle.value] = insertedHandle;
     }
 
     // Rebuild user block records in file order.
@@ -923,16 +1418,71 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
                                              header.base_pt.y,
                                              header.base_pt.z));
         }
-        for (AcDbEntityVariant &payload : blockMembers[object.handle.value])
+        for (DeferredMember &member : blockMembers[object.handle.value])
         {
             AcDbEntity &commonRef = std::visit(
                 [](auto &typed) -> AcDbEntity & { return typed.common; },
-                payload);
+                member.payload);
             commonRef.handle = database.allocateHandle();
             commonRef.ownerHandle = record->handle;
             const AcDbHandle handle = commonRef.handle;
-            if (database.insertLoadedEntity(std::move(payload)))
+            if (database.insertLoadedEntity(std::move(member.payload)))
+            {
                 record->appendEntityHandle(handle);
+                const bool memberIsInsertLike = std::visit(
+                    [](const auto &typed) {
+                        using T = std::decay_t<decltype(typed)>;
+                        return std::is_same_v<T, AcDbBlockReference> ||
+                               std::is_same_v<T, AcDbMInsertBlock>;
+                    },
+                    member.payload);
+                if (memberIsInsertLike)
+                    insertDbHandles[member.fileHandle] = handle;
+            }
+        }
+    }
+
+    // Attach pass: link parked ATTRIB payloads to their owning
+    // INSERT/MINSERT payloads.  Attributes become database residents
+    // without model-space membership.
+    for (auto &[ownerFileHandle, parked] : attributesByOwner)
+    {
+        const auto found = insertDbHandles.find(ownerFileHandle);
+        if (found == insertDbHandles.end())
+        {
+            report.unsupported += parked.size();
+            continue;
+        }
+        AcDbEntityVariant *stored = database.getEntityMutable(found->second);
+        if (stored == nullptr)
+        {
+            report.unsupported += parked.size();
+            continue;
+        }
+        AcDbBlockReference *reference =
+            std::get_if<AcDbBlockReference>(stored);
+        AcDbMInsertBlock *gridInsert =
+            reference != nullptr ? nullptr
+                                 : std::get_if<AcDbMInsertBlock>(stored);
+        if (reference == nullptr && gridInsert == nullptr)
+        {
+            report.unsupported += parked.size();
+            continue;
+        }
+        for (AcDbAttribute &attribute : parked)
+        {
+            attribute.common.handle = database.allocateHandle();
+            attribute.common.ownerHandle = found->second;
+            const AcDbHandle attributeHandle = attribute.common.handle;
+            if (database.insertLoadedEntity(
+                    AcDbEntityVariant(std::move(attribute))))
+            {
+                if (reference != nullptr)
+                    reference->attributeHandles.push_back(attributeHandle);
+                else
+                    gridInsert->attributeHandles.push_back(attributeHandle);
+                ++report.added;
+            }
         }
     }
 

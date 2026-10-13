@@ -361,6 +361,208 @@ Value encodePayload(const AcDbBlockReference &e)
     out.set("normal", Value(json::Array{Value(e.normal.x),
                                         Value(e.normal.y),
                                         Value(e.normal.z)}));
+    Value attributes(json::Array{});
+    for (const AcDbHandle handle : e.attributeHandles)
+        attributes.push(Value(double(handle.value)));
+    out.set("attributeHandles", std::move(attributes));
+    return out;
+}
+
+// ---- annotation payloads (dimension / leader / fcf / shape /
+// attribute / minsert) ----
+
+Value dimensionToJson(const AcDbDimension &d)
+{
+    Value out(json::Object{});
+    out.set("textPosition", point3ToJson(d.textPosition));
+    out.set("dimensionText", d.dimensionText);
+    out.set("textRotation", d.textRotation);
+    out.set("actualMeasurement", d.actualMeasurement);
+    out.set("dimensionStyleName", d.dimensionStyleName);
+    out.set("textHeight", d.textHeight);
+    return out;
+}
+
+void dimensionFromJson(const Value &data, AcDbDimension &d)
+{
+    if (const Value *v = data.find("textPosition"))
+        d.textPosition = jsonToPoint3(*v);
+    if (const Value *v = data.find("dimensionText"))
+        d.dimensionText = v->asString();
+    if (const Value *v = data.find("textRotation"))
+        d.textRotation = v->asNumber();
+    if (const Value *v = data.find("actualMeasurement"))
+        d.actualMeasurement = v->asNumber();
+    if (const Value *v = data.find("dimensionStyleName"))
+        d.dimensionStyleName = v->asString();
+    if (const Value *v = data.find("textHeight"))
+        d.textHeight = v->asNumber();
+}
+
+Value encodePayload(const AcDbRotatedDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("xLine1Point", point3ToJson(e.xLine1Point));
+    out.set("xLine2Point", point3ToJson(e.xLine2Point));
+    out.set("dimensionLinePoint", point3ToJson(e.dimensionLinePoint));
+    out.set("dimensionLineAngle", e.dimensionLineAngle);
+    out.set("obliqueAngle", e.obliqueAngle);
+    return out;
+}
+
+Value encodePayload(const AcDbAlignedDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("xLine1Point", point3ToJson(e.xLine1Point));
+    out.set("xLine2Point", point3ToJson(e.xLine2Point));
+    out.set("dimensionLinePoint", point3ToJson(e.dimensionLinePoint));
+    out.set("obliqueAngle", e.obliqueAngle);
+    return out;
+}
+
+Value encodePayload(const AcDb2LineAngularDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("xLine1StartPoint", point3ToJson(e.xLine1StartPoint));
+    out.set("xLine1EndPoint", point3ToJson(e.xLine1EndPoint));
+    out.set("xLine2StartPoint", point3ToJson(e.xLine2StartPoint));
+    out.set("xLine2EndPoint", point3ToJson(e.xLine2EndPoint));
+    out.set("arcPoint", point3ToJson(e.arcPoint));
+    return out;
+}
+
+Value encodePayload(const AcDb3PointAngularDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("centerPoint", point3ToJson(e.centerPoint));
+    out.set("xLine1Point", point3ToJson(e.xLine1Point));
+    out.set("xLine2Point", point3ToJson(e.xLine2Point));
+    return out;
+}
+
+Value encodePayload(const AcDbRadialDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("centerPoint", point3ToJson(e.centerPoint));
+    out.set("radiusPoint", point3ToJson(e.radiusPoint));
+    out.set("leaderLength", e.leaderLength);
+    return out;
+}
+
+Value encodePayload(const AcDbDiametricDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("chordPoint", point3ToJson(e.chordPoint));
+    out.set("farChordPoint", point3ToJson(e.farChordPoint));
+    out.set("leaderLength", e.leaderLength);
+    return out;
+}
+
+Value encodePayload(const AcDbOrdinateDimension &e)
+{
+    Value out(json::Object{});
+    out.set("dimension", dimensionToJson(e.dimension));
+    out.set("featureLocationPoint", point3ToJson(e.featureLocationPoint));
+    out.set("leaderEndPoint", point3ToJson(e.leaderEndPoint));
+    out.set("useXAxis", e.useXAxis);
+    return out;
+}
+
+Value encodePayload(const AcDbLeader &e)
+{
+    Value out(json::Object{});
+    out.set("points", pointsToJson(e.points));
+    out.set("splinePath", e.splinePath);
+    out.set("hasArrowhead", e.hasArrowhead);
+    out.set("hasHookLine", e.hasHookLine);
+    out.set("dimensionStyleName", e.dimensionStyleName);
+    return out;
+}
+
+Value encodePayload(const AcDbFcf &e)
+{
+    Value out(json::Object{});
+    out.set("insertion", point3ToJson(e.insertion));
+    out.set("direction", vec3ToJson(e.direction));
+    out.set("normal", vec3ToJson(e.normal));
+    out.set("text", e.text);
+    out.set("height", e.height);
+    return out;
+}
+
+Value encodePayload(const AcDbShape &e)
+{
+    Value out(json::Object{});
+    out.set("insertion", point3ToJson(e.insertion));
+    out.set("scale", e.scale);
+    out.set("rotation", e.rotation);
+    out.set("widthFactor", e.widthFactor);
+    out.set("obliqueAngle", e.obliqueAngle);
+    out.set("thickness", e.thickness);
+    out.set("shapeName", e.shapeName);
+    return out;
+}
+
+Value encodePayload(const AcDbAttributeDefinition &e)
+{
+    Value out(json::Object{});
+    out.set("insertion", point3ToJson(e.insertion));
+    out.set("height", e.height);
+    out.set("rotation", e.rotation);
+    out.set("widthFactor", e.widthFactor);
+    out.set("obliqueAngle", e.obliqueAngle);
+    out.set("tag", e.tag);
+    out.set("prompt", e.prompt);
+    out.set("textValue", e.textValue);
+    out.set("styleName", e.styleName);
+    out.set("invisible", e.invisible);
+    out.set("constant", e.constant);
+    out.set("verify", e.verify);
+    out.set("preset", e.preset);
+    return out;
+}
+
+Value encodePayload(const AcDbAttribute &e)
+{
+    Value out(json::Object{});
+    out.set("insertion", point3ToJson(e.insertion));
+    out.set("height", e.height);
+    out.set("rotation", e.rotation);
+    out.set("widthFactor", e.widthFactor);
+    out.set("tag", e.tag);
+    out.set("textValue", e.textValue);
+    out.set("styleName", e.styleName);
+    out.set("invisible", e.invisible);
+    return out;
+}
+
+Value encodePayload(const AcDbMInsertBlock &e)
+{
+    Value out(json::Object{});
+    out.set("blockTableRecordName", e.blockTableRecordName);
+    out.set("position", Value(json::Array{Value(e.position.x),
+                                          Value(e.position.y),
+                                          Value(e.position.z)}));
+    out.set("rotation", e.rotation);
+    out.set("scale", Value(json::Array{Value(e.scale.x), Value(e.scale.y),
+                                       Value(e.scale.z)}));
+    out.set("normal", Value(json::Array{Value(e.normal.x),
+                                        Value(e.normal.y),
+                                        Value(e.normal.z)}));
+    out.set("rowCount", e.rowCount);
+    out.set("columnCount", e.columnCount);
+    out.set("rowSpacing", e.rowSpacing);
+    out.set("columnSpacing", e.columnSpacing);
+    Value attributes(json::Array{});
+    for (const AcDbHandle handle : e.attributeHandles)
+        attributes.push(Value(double(handle.value)));
+    out.set("attributeHandles", std::move(attributes));
     return out;
 }
 
@@ -406,6 +608,58 @@ struct PayloadEncoder
     {
         return encodePayload(e);
     }
+    Value operator()(const AcDbRotatedDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbAlignedDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDb2LineAngularDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDb3PointAngularDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbRadialDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbDiametricDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbOrdinateDimension &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbLeader &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbFcf &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbShape &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbAttributeDefinition &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbAttribute &e) const
+    {
+        return encodePayload(e);
+    }
+    Value operator()(const AcDbMInsertBlock &e) const
+    {
+        return encodePayload(e);
+    }
 };
 
 const char *variantClassName(const AcDbEntityVariant &payload)
@@ -431,6 +685,19 @@ const char *variantClassName(const AcDbEntityVariant &payload)
     case 16: return "AcDb3dSolid";
     case 17: return "AcDbLight";
     case 18: return "AcDbBlockReference";
+    case 19: return "AcDbRotatedDimension";
+    case 20: return "AcDbAlignedDimension";
+    case 21: return "AcDb2LineAngularDimension";
+    case 22: return "AcDb3PointAngularDimension";
+    case 23: return "AcDbRadialDimension";
+    case 24: return "AcDbDiametricDimension";
+    case 25: return "AcDbOrdinateDimension";
+    case 26: return "AcDbLeader";
+    case 27: return "AcDbFcf";
+    case 28: return "AcDbShape";
+    case 29: return "AcDbAttributeDefinition";
+    case 30: return "AcDbAttribute";
+    case 31: return "AcDbMInsertBlock";
     }
     return "AcDbUnknown";
 }
@@ -728,6 +995,232 @@ bool decodeInto(const Value &commonData, const Value &data,
                     a[0].asNumber(), a[1].asNumber(),
                     a[2].asNumber());
         }
+        if (const Value *v = data.find("attributeHandles"))
+            for (const double handle : jsonToDoubles(*v))
+                payload.attributeHandles.push_back(
+                    AcDbHandle(std::uint64_t(handle)));
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbRotatedDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("xLine1Point"))
+            payload.xLine1Point = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine2Point"))
+            payload.xLine2Point = jsonToPoint3(*v);
+        if (const Value *v = data.find("dimensionLinePoint"))
+            payload.dimensionLinePoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("dimensionLineAngle"))
+            payload.dimensionLineAngle = v->asNumber();
+        if (const Value *v = data.find("obliqueAngle"))
+            payload.obliqueAngle = v->asNumber();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbAlignedDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("xLine1Point"))
+            payload.xLine1Point = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine2Point"))
+            payload.xLine2Point = jsonToPoint3(*v);
+        if (const Value *v = data.find("dimensionLinePoint"))
+            payload.dimensionLinePoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("obliqueAngle"))
+            payload.obliqueAngle = v->asNumber();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDb2LineAngularDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("xLine1StartPoint"))
+            payload.xLine1StartPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine1EndPoint"))
+            payload.xLine1EndPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine2StartPoint"))
+            payload.xLine2StartPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine2EndPoint"))
+            payload.xLine2EndPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("arcPoint"))
+            payload.arcPoint = jsonToPoint3(*v);
+    }
+    else if constexpr (std::is_same_v<Payload, AcDb3PointAngularDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("centerPoint"))
+            payload.centerPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine1Point"))
+            payload.xLine1Point = jsonToPoint3(*v);
+        if (const Value *v = data.find("xLine2Point"))
+            payload.xLine2Point = jsonToPoint3(*v);
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbRadialDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("centerPoint"))
+            payload.centerPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("radiusPoint"))
+            payload.radiusPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("leaderLength"))
+            payload.leaderLength = v->asNumber();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbDiametricDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("chordPoint"))
+            payload.chordPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("farChordPoint"))
+            payload.farChordPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("leaderLength"))
+            payload.leaderLength = v->asNumber();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbOrdinateDimension>)
+    {
+        if (const Value *v = data.find("dimension"))
+            dimensionFromJson(*v, payload.dimension);
+        if (const Value *v = data.find("featureLocationPoint"))
+            payload.featureLocationPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("leaderEndPoint"))
+            payload.leaderEndPoint = jsonToPoint3(*v);
+        if (const Value *v = data.find("useXAxis"))
+            payload.useXAxis = v->asBool(true);
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbLeader>)
+    {
+        if (const Value *v = data.find("points"))
+            payload.points = jsonToPoints3(*v);
+        if (const Value *v = data.find("splinePath"))
+            payload.splinePath = v->asBool();
+        if (const Value *v = data.find("hasArrowhead"))
+            payload.hasArrowhead = v->asBool(true);
+        if (const Value *v = data.find("hasHookLine"))
+            payload.hasHookLine = v->asBool();
+        if (const Value *v = data.find("dimensionStyleName"))
+            payload.dimensionStyleName = v->asString();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbFcf>)
+    {
+        if (const Value *v = data.find("insertion"))
+            payload.insertion = jsonToPoint3(*v);
+        if (const Value *v = data.find("direction"))
+            payload.direction = jsonToVec3(*v, {1.0, 0.0, 0.0});
+        if (const Value *v = data.find("normal"))
+            payload.normal = jsonToVec3(*v, {0.0, 0.0, 1.0});
+        if (const Value *v = data.find("text"))
+            payload.text = v->asString();
+        if (const Value *v = data.find("height"))
+            payload.height = v->asNumber(1.0);
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbShape>)
+    {
+        if (const Value *v = data.find("insertion"))
+            payload.insertion = jsonToPoint3(*v);
+        if (const Value *v = data.find("scale"))
+            payload.scale = v->asNumber(1.0);
+        if (const Value *v = data.find("rotation"))
+            payload.rotation = v->asNumber();
+        if (const Value *v = data.find("widthFactor"))
+            payload.widthFactor = v->asNumber(1.0);
+        if (const Value *v = data.find("obliqueAngle"))
+            payload.obliqueAngle = v->asNumber();
+        if (const Value *v = data.find("thickness"))
+            payload.thickness = v->asNumber();
+        if (const Value *v = data.find("shapeName"))
+            payload.shapeName = v->asString();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbAttributeDefinition>)
+    {
+        if (const Value *v = data.find("insertion"))
+            payload.insertion = jsonToPoint3(*v);
+        if (const Value *v = data.find("height"))
+            payload.height = v->asNumber(1.0);
+        if (const Value *v = data.find("rotation"))
+            payload.rotation = v->asNumber();
+        if (const Value *v = data.find("widthFactor"))
+            payload.widthFactor = v->asNumber(1.0);
+        if (const Value *v = data.find("obliqueAngle"))
+            payload.obliqueAngle = v->asNumber();
+        if (const Value *v = data.find("tag"))
+            payload.tag = v->asString();
+        if (const Value *v = data.find("prompt"))
+            payload.prompt = v->asString();
+        if (const Value *v = data.find("textValue"))
+            payload.textValue = v->asString();
+        if (const Value *v = data.find("styleName"))
+            payload.styleName = v->asString();
+        if (const Value *v = data.find("invisible"))
+            payload.invisible = v->asBool();
+        if (const Value *v = data.find("constant"))
+            payload.constant = v->asBool();
+        if (const Value *v = data.find("verify"))
+            payload.verify = v->asBool();
+        if (const Value *v = data.find("preset"))
+            payload.preset = v->asBool();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbAttribute>)
+    {
+        if (const Value *v = data.find("insertion"))
+            payload.insertion = jsonToPoint3(*v);
+        if (const Value *v = data.find("height"))
+            payload.height = v->asNumber(1.0);
+        if (const Value *v = data.find("rotation"))
+            payload.rotation = v->asNumber();
+        if (const Value *v = data.find("widthFactor"))
+            payload.widthFactor = v->asNumber(1.0);
+        if (const Value *v = data.find("tag"))
+            payload.tag = v->asString();
+        if (const Value *v = data.find("textValue"))
+            payload.textValue = v->asString();
+        if (const Value *v = data.find("styleName"))
+            payload.styleName = v->asString();
+        if (const Value *v = data.find("invisible"))
+            payload.invisible = v->asBool();
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbMInsertBlock>)
+    {
+        if (const Value *v = data.find("blockTableRecordName"))
+            payload.blockTableRecordName = v->asString();
+        if (const Value *v = data.find("position"))
+        {
+            const json::Array &a = v->asArray();
+            if (a.size() >= 3)
+                payload.position = AcGePoint3d(
+                    a[0].asNumber(), a[1].asNumber(),
+                    a[2].asNumber());
+        }
+        if (const Value *v = data.find("rotation"))
+            payload.rotation = v->asNumber();
+        if (const Value *v = data.find("scale"))
+        {
+            const json::Array &a = v->asArray();
+            if (a.size() >= 3)
+                payload.scale = AcGeVector3d(
+                    a[0].asNumber(1.0),
+                    a[1].asNumber(1.0),
+                    a[2].asNumber(1.0));
+        }
+        if (const Value *v = data.find("normal"))
+        {
+            const json::Array &a = v->asArray();
+            if (a.size() >= 3)
+                payload.normal = AcGeVector3d(
+                    a[0].asNumber(), a[1].asNumber(),
+                    a[2].asNumber());
+        }
+        if (const Value *v = data.find("rowCount"))
+            payload.rowCount = int(v->asNumber(1.0));
+        if (const Value *v = data.find("columnCount"))
+            payload.columnCount = int(v->asNumber(1.0));
+        if (const Value *v = data.find("rowSpacing"))
+            payload.rowSpacing = v->asNumber();
+        if (const Value *v = data.find("columnSpacing"))
+            payload.columnSpacing = v->asNumber();
+        if (const Value *v = data.find("attributeHandles"))
+            for (const double handle : jsonToDoubles(*v))
+                payload.attributeHandles.push_back(
+                    AcDbHandle(std::uint64_t(handle)));
     }
     else
     {
@@ -783,6 +1276,40 @@ bool decodeEntity(const std::string &className, const Value &data,
         return decodeInto<AcDbLight>(*commonData, *payloadData, out);
     if (className == "AcDbBlockReference")
         return decodeInto<AcDbBlockReference>(*commonData, *payloadData, out);
+    if (className == "AcDbRotatedDimension")
+        return decodeInto<AcDbRotatedDimension>(*commonData, *payloadData,
+                                                out);
+    if (className == "AcDbAlignedDimension")
+        return decodeInto<AcDbAlignedDimension>(*commonData, *payloadData,
+                                                out);
+    if (className == "AcDb2LineAngularDimension")
+        return decodeInto<AcDb2LineAngularDimension>(*commonData,
+                                                     *payloadData, out);
+    if (className == "AcDb3PointAngularDimension")
+        return decodeInto<AcDb3PointAngularDimension>(*commonData,
+                                                      *payloadData, out);
+    if (className == "AcDbRadialDimension")
+        return decodeInto<AcDbRadialDimension>(*commonData, *payloadData,
+                                               out);
+    if (className == "AcDbDiametricDimension")
+        return decodeInto<AcDbDiametricDimension>(*commonData, *payloadData,
+                                                  out);
+    if (className == "AcDbOrdinateDimension")
+        return decodeInto<AcDbOrdinateDimension>(*commonData, *payloadData,
+                                                 out);
+    if (className == "AcDbLeader")
+        return decodeInto<AcDbLeader>(*commonData, *payloadData, out);
+    if (className == "AcDbFcf")
+        return decodeInto<AcDbFcf>(*commonData, *payloadData, out);
+    if (className == "AcDbShape")
+        return decodeInto<AcDbShape>(*commonData, *payloadData, out);
+    if (className == "AcDbAttributeDefinition")
+        return decodeInto<AcDbAttributeDefinition>(*commonData, *payloadData,
+                                                   out);
+    if (className == "AcDbAttribute")
+        return decodeInto<AcDbAttribute>(*commonData, *payloadData, out);
+    if (className == "AcDbMInsertBlock")
+        return decodeInto<AcDbMInsertBlock>(*commonData, *payloadData, out);
     return false;
 }
 

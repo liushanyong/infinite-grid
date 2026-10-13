@@ -112,6 +112,58 @@ inline void transformBy(AcDbEntityVariant &payload, const glm::dvec3 &offset)
             for (auto &vertex : entity.vertices)
                 vertex += shift;
         }
+        else if constexpr (std::is_same_v<T, AcDbRotatedDimension> ||
+                           std::is_same_v<T, AcDbAlignedDimension>)
+        {
+            entity.xLine1Point += shift;
+            entity.xLine2Point += shift;
+            entity.dimensionLinePoint += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDb2LineAngularDimension>)
+        {
+            entity.xLine1StartPoint += shift;
+            entity.xLine1EndPoint += shift;
+            entity.xLine2StartPoint += shift;
+            entity.xLine2EndPoint += shift;
+            entity.arcPoint += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDb3PointAngularDimension>)
+        {
+            entity.centerPoint += shift;
+            entity.xLine1Point += shift;
+            entity.xLine2Point += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDbRadialDimension>)
+        {
+            entity.centerPoint += shift;
+            entity.radiusPoint += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDbDiametricDimension>)
+        {
+            entity.chordPoint += shift;
+            entity.farChordPoint += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDbOrdinateDimension>)
+        {
+            entity.featureLocationPoint += shift;
+            entity.leaderEndPoint += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDbLeader>)
+        {
+            for (auto &point : entity.points)
+                point += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDbFcf> ||
+                           std::is_same_v<T, AcDbShape> ||
+                           std::is_same_v<T, AcDbAttributeDefinition> ||
+                           std::is_same_v<T, AcDbAttribute>)
+        {
+            entity.insertion += shift;
+        }
+        else if constexpr (std::is_same_v<T, AcDbMInsertBlock>)
+        {
+            entity.position += shift;
+        }
         else
         {
             static_assert(sizeof(T) == 0, "unhandled AcDb entity type");

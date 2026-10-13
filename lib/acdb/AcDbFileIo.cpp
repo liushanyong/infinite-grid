@@ -106,14 +106,38 @@ bool AcDbDatabase::writeDwgFile(const char *filePath) const
         }
     }
     const AcDbDwgWriteReport built = fillDwgFromDatabase(ctx, *this);
-    if (ctx.trace != nullptr)
-        std::fclose(ctx.trace);
     if (!built.ok)
+    {
+        if (ctx.trace != nullptr)
+            std::fclose(ctx.trace);
         return false;
+    }
     // dwg_write_file refuses to overwrite an existing target.
     std::remove(filePath);
+    if (ctx.trace != nullptr)
+    {
+        std::fprintf(ctx.trace, "dwg_write_file enter\n");
+        std::fflush(ctx.trace);
+    }
     const int error = dwg_write_file(filePath, &ctx.dwg);
-    dwg_free(&ctx.dwg);
+    if (ctx.trace != nullptr)
+    {
+        std::fprintf(ctx.trace, "dwg_write_file done error=%d\n", error);
+        std::fflush(ctx.trace);
+    }
+    // dwg_free deliberately skipped: libredwg's free path releases the
+    // first_vertex/last_vertex/seqend refs per entity while the closing
+    // object-ref pool pass frees them again, which double-frees once the
+    // filled graph grows past the allocator's small-block tolerance (a
+    // ~550-child POLYLINE_PFACE reproducibly aborts in dwg_free after the
+    // file itself wrote cleanly).  The Dwg_Data is one-shot per export,
+    // so leaking it is bounded and strictly safer than the crash.
+    if (ctx.trace != nullptr)
+    {
+        std::fprintf(ctx.trace, "dwg_free skipped (leak)\n");
+        std::fflush(ctx.trace);
+        std::fclose(ctx.trace);
+    }
     return error == 0;
 }
 
@@ -141,10 +165,17 @@ bool AcDbDatabase::dxfOut(const char *filePath, bool binary) const
         }
     }
     const AcDbDwgWriteReport built = fillDwgFromDatabase(ctx, *this);
-    if (ctx.trace != nullptr)
-        std::fclose(ctx.trace);
     if (!built.ok)
+    {
+        if (ctx.trace != nullptr)
+            std::fclose(ctx.trace);
         return false;
+    }
+    if (ctx.trace != nullptr)
+    {
+        std::fprintf(ctx.trace, "dwg_write_dxf enter\n");
+        std::fflush(ctx.trace);
+    }
     Bit_Chain dat;
     memset(&dat, 0, sizeof(dat));
     dat.version = ctx.dwg.header.version;
@@ -158,7 +189,19 @@ bool AcDbDatabase::dxfOut(const char *filePath, bool binary) const
     const int error =
         binary ? dwg_write_dxfb(&dat, &ctx.dwg) : dwg_write_dxf(&dat, &ctx.dwg);
     std::fclose(dat.fh);
-    dwg_free(&ctx.dwg);
+    if (ctx.trace != nullptr)
+    {
+        std::fprintf(ctx.trace, "dwg_write_dxf done error=%d\n", error);
+        std::fflush(ctx.trace);
+    }
+    // dwg_free deliberately skipped: same libredwg double-free as the
+    // binary writer above.
+    if (ctx.trace != nullptr)
+    {
+        std::fprintf(ctx.trace, "dxf dwg_free skipped (leak)\n");
+        std::fflush(ctx.trace);
+        std::fclose(ctx.trace);
+    }
     return error < DWG_ERR_CRITICAL;
 }
 

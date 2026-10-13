@@ -1564,17 +1564,18 @@ static std::vector<acdb::AcDbHandle> g_dwgImportedHandles;
 static void fitCameraToImportedEntities(
     const std::vector<acdb::AcDbHandle> &handles);
 
-static std::vector<acdb::AcDbHandle> modelSpaceHandlesNotIn(
-    const std::vector<acdb::AcDbHandle> &existing)
+static bool replaceDemoDocumentFromDwg(
+    const char *filename, acdb::AcDbFileIoReport *report)
 {
-  std::vector<acdb::AcDbHandle> added;
-  for (const acdb::AcDbHandle handle :
-       acdbDocument().modelSpace().entityHandles())
-  {
-    if (std::find(existing.begin(), existing.end(), handle) == existing.end())
-      added.push_back(handle);
-  }
-  return added;
+  acdb::AcDbDatabase replacement;
+  if (!replacement.readDwgFile(filename, report))
+    return false;
+
+  g_dwgImportedHandles = replacement.modelSpace().entityHandles();
+  // Replacement notifies the scene bridge, which mirrors the new document and
+  // advances the revision used to rebuild the CAD draw and visibility caches.
+  acdbDocument().replaceContents(std::move(replacement));
+  return true;
 }
 
 static std::string pathToUtf8(const std::filesystem::path &path)
@@ -1701,18 +1702,9 @@ static void drawDwgFileDialog()
   {
     acdb::AcDbFileIoReport report;
     const std::string filename = g_dwgDialogSelection.string();
-    const std::vector<acdb::AcDbHandle> existing =
-        acdbDocument().modelSpace().entityHandles();
-    if (acdbDocument().readDwgFile(filename.c_str(), &report))
+    if (replaceDemoDocumentFromDwg(filename.c_str(), &report))
     {
-      // readDwgFile uses the silent bulk-load path; re-open the bridge so the
-      // live scene mirror and its tessellation revision include these entities.
-      openDemoScene();
-      const std::vector<acdb::AcDbHandle> imported =
-          modelSpaceHandlesNotIn(existing);
-      g_dwgImportedHandles.insert(g_dwgImportedHandles.end(),
-                                  imported.begin(), imported.end());
-      fitCameraToImportedEntities(imported);
+      fitCameraToImportedEntities(g_dwgImportedHandles);
       std::cout << "DWG: inserted " << report.entitiesAdded << " entities ("
                 << report.unsupportedSkipped << " unsupported) from "
                 << filename << std::endl;
@@ -2469,6 +2461,113 @@ static void buildDemoDocument()
     mtextLocator.end = mtext.insertion;
     addDemo(mtextLocator, "MTextLocator");
 
+    // ---- annotation family demos (dimension / leader / tolerance) ----
+    // The cluster sits right of the 3d-solid demo: a small plate outline
+    // with the dimension types AutoCAD drawings actually carry.
+    const glm::dvec3 dimAnchor = demoAnchor + glm::dvec3(2304.0, 0.0, 0.0);
+    const double dimTextHeight = 56.0;
+
+    acdb::AcDbLine plateA;
+    plateA.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateA.start = dimAnchor;
+    plateA.end = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    addDemo(plateA, "PlateBottom");
+    acdb::AcDbLine plateB;
+    plateB.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateB.start = dimAnchor + glm::dvec3(0.0, 512.0, 0.0);
+    plateB.end = dimAnchor + glm::dvec3(768.0, 512.0, 0.0);
+    addDemo(plateB, "PlateTop");
+    acdb::AcDbLine plateC;
+    plateC.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateC.start = dimAnchor;
+    plateC.end = dimAnchor + glm::dvec3(0.0, 512.0, 0.0);
+    addDemo(plateC, "PlateLeft");
+    acdb::AcDbLine plateD;
+    plateD.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateD.start = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    plateD.end = dimAnchor + glm::dvec3(768.0, 512.0, 0.0);
+    addDemo(plateD, "PlateRight");
+
+    acdb::AcDbRotatedDimension dimRotated;
+    dimRotated.common.color = glm::vec4(0.95f, 0.80f, 0.25f, 1.0f);
+    dimRotated.dimension.textHeight = dimTextHeight;
+    dimRotated.xLine1Point = dimAnchor;
+    dimRotated.xLine2Point = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    dimRotated.dimensionLinePoint = dimAnchor + glm::dvec3(384.0, -160.0, 0.0);
+    dimRotated.dimensionLineAngle = 0.0;
+    addDemo(dimRotated, "DimRotated");
+
+    acdb::AcDbAlignedDimension dimAligned;
+    dimAligned.common.color = glm::vec4(0.45f, 0.90f, 0.45f, 1.0f);
+    dimAligned.dimension.textHeight = dimTextHeight;
+    dimAligned.xLine1Point = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    dimAligned.xLine2Point = dimAnchor + glm::dvec3(768.0, 512.0, 0.0);
+    dimAligned.dimensionLinePoint =
+        dimAnchor + glm::dvec3(928.0, 256.0, 0.0);
+    addDemo(dimAligned, "DimAligned");
+
+    acdb::AcDbCircle dimCircle;
+    dimCircle.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    dimCircle.center = dimAnchor + glm::dvec3(192.0, 256.0, 0.0);
+    dimCircle.radius = 96.0;
+    addDemo(dimCircle, "DimBore");
+
+    acdb::AcDbRadialDimension dimRadial;
+    dimRadial.common.color = glm::vec4(0.95f, 0.55f, 0.30f, 1.0f);
+    dimRadial.dimension.textHeight = dimTextHeight;
+    dimRadial.centerPoint = dimCircle.center;
+    dimRadial.radiusPoint =
+        dimCircle.center + glm::dvec3(96.0 * 0.7071, 96.0 * 0.7071, 0.0);
+    dimRadial.leaderLength = 96.0;
+    addDemo(dimRadial, "DimRadial");
+
+    acdb::AcDbDiametricDimension dimDiameter;
+    dimDiameter.common.color = glm::vec4(0.95f, 0.45f, 0.55f, 1.0f);
+    dimDiameter.dimension.textHeight = dimTextHeight;
+    dimDiameter.chordPoint =
+        dimCircle.center - AcGeVector3d(96.0, 0.0, 0.0);
+    dimDiameter.farChordPoint =
+        dimCircle.center + AcGeVector3d(96.0, 0.0, 0.0);
+    dimDiameter.leaderLength = 128.0;
+    addDemo(dimDiameter, "DimDiameter");
+
+    acdb::AcDb3PointAngularDimension dimAngular;
+    dimAngular.common.color = glm::vec4(0.75f, 0.55f, 0.95f, 1.0f);
+    dimAngular.dimension.textHeight = dimTextHeight;
+    dimAngular.centerPoint = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    dimAngular.xLine1Point = dimAnchor + glm::dvec3(384.0, 0.0, 0.0);
+    dimAngular.xLine2Point = dimAnchor + glm::dvec3(768.0, 384.0, 0.0);
+    dimAngular.dimension.textPosition =
+        dimAnchor + glm::dvec3(560.0, 120.0, 0.0);
+    addDemo(dimAngular, "DimAngular");
+
+    acdb::AcDbOrdinateDimension dimOrdinate;
+    dimOrdinate.common.color = glm::vec4(0.85f, 0.85f, 0.35f, 1.0f);
+    dimOrdinate.dimension.textHeight = dimTextHeight;
+    dimOrdinate.featureLocationPoint = dimAnchor;
+    dimOrdinate.leaderEndPoint =
+        dimAnchor + glm::dvec3(-96.0, -224.0, 0.0);
+    dimOrdinate.useXAxis = true;
+    addDemo(dimOrdinate, "DimOrdinate");
+
+    acdb::AcDbLeader leader;
+    leader.common.color = glm::vec4(0.90f, 0.90f, 0.90f, 1.0f);
+    leader.points = {
+        dimAnchor + glm::dvec3(192.0, 256.0, 0.0) +
+            glm::dvec3(96.0 * 0.7071, 96.0 * 0.7071, 0.0),
+        dimAnchor + glm::dvec3(480.0, 704.0, 0.0),
+        dimAnchor + glm::dvec3(704.0, 704.0, 0.0)};
+    leader.hasArrowhead = true;
+    addDemo(leader, "Leader");
+
+    acdb::AcDbFcf fcf;
+    fcf.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    fcf.insertion = dimAnchor + glm::dvec3(716.0, 640.0, 0.0);
+    fcf.direction = glm::dvec3(1.0, 0.0, 0.0);
+    fcf.text = "{|0.05|A}";
+    fcf.height = dimTextHeight;
+    addDemo(fcf, "Fcf");
+
     acdb::AcDb3dSolid solid3d;
     solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
     solid3d.renderClass = acdb::RenderClass::Cad;
@@ -2716,17 +2815,12 @@ static void buildDemoDocument()
         bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
     addDemo(bezier, "Bezier");
 
-    // Decoded DWG/DXF models ride the document pipeline when GRID_DWG /
-    // GRID_DXF name a file: the ObjectARX file-IO facade fills the
-    // database directly.
+    // A GRID_DWG file replaces the demo document with its decoded contents.
     if (const char *dwgPath = std::getenv("GRID_DWG"))
     {
       acdb::AcDbFileIoReport report;
-      const std::vector<acdb::AcDbHandle> existing =
-          document.modelSpace().entityHandles();
-      if (document.readDwgFile(dwgPath, &report))
+      if (replaceDemoDocumentFromDwg(dwgPath, &report))
       {
-        g_dwgImportedHandles = modelSpaceHandlesNotIn(existing);
         std::cout << "GRID_DWG: inserted " << report.entitiesAdded
                   << " entities (" << report.unsupportedSkipped
                   << " unsupported) from " << dwgPath << std::endl;
@@ -4690,7 +4784,12 @@ protected:
 
 const CadRangeBvh &getCadRangeBvh()
 {
-    static const CadRangeBvh bvh = [] {
+    static std::uint64_t cachedRevision =
+        std::numeric_limits<std::uint64_t>::max();
+    static CadRangeBvh bvh;
+    const std::uint64_t revision = demoSceneStore().revision();
+    if (cachedRevision != revision)
+    {
         const std::vector<VisibilityCandidate> &candidates =
             cadRangeVisibilityCandidates();
         std::vector<const VisibilityCandidate *> ranges;
@@ -4701,10 +4800,9 @@ const CadRangeBvh &getCadRangeBvh()
                 ranges.push_back(&candidate);
         }
 
-        CadRangeBvh result;
-        result.build(std::move(ranges));
-        return result;
-    }();
+        bvh.build(std::move(ranges));
+        cachedRevision = revision;
+    }
     return bvh;
 }
 
@@ -6580,7 +6678,13 @@ VisibilityCandidate makeCadRangeCandidate(
 
 const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
 {
-  static const std::vector<VisibilityCandidate> candidates = [] {
+  static std::uint64_t cachedRevision =
+      std::numeric_limits<std::uint64_t>::max();
+  static std::vector<VisibilityCandidate> candidates;
+  const std::uint64_t revision = demoSceneStore().revision();
+  if (cachedRevision != revision)
+  {
+    candidates.clear();
     const VectorPrimitivesTessellation &cad =
         getVectorPrimitivesTessellation();
     std::vector<VisibilityCandidate> result;
@@ -6606,8 +6710,9 @@ const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates()
     }
     for (const acgs::CurveBatchCommand &curve : cad.curves)
       result.push_back(makeCurveCandidate(curve));
-    return result;
-  }();
+    candidates = std::move(result);
+    cachedRevision = revision;
+  }
   return candidates;
 }
 
@@ -9116,13 +9221,18 @@ int main(int argc, char *argv[])
   fitCameraToImportedEntities(g_dwgImportedHandles);
 
   // Debug helper: jump the startup camera straight to a world point.
-  // GRID_CAMERA_START_TARGET=x,y,z[,distance]
+  // GRID_CAMERA_START_TARGET=x,y,z[,distance[,gazeX,gazeY,gazeZ]]
   if (const char *startTarget = std::getenv("GRID_CAMERA_START_TARGET"))
   {
     double tx = 0.0, ty = 0.0, tz = 0.0, dist = 1500.0;
-    if (std::sscanf(startTarget, "%lf,%lf,%lf,%lf", &tx, &ty, &tz, &dist) >= 3)
+    double gx = 0.0, gy = 0.0, gz = 0.0;
+    const int fields = std::sscanf(startTarget, "%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+                                   &tx, &ty, &tz, &dist, &gx, &gy, &gz);
+    if (fields >= 3)
     {
       orbitCam.setOrbit(glm::dvec3(tx, ty, tz), std::max(1.0, dist));
+      if (fields >= 7)
+        orbitCam.setViewDirection(glm::dvec3(gx, gy, gz));
       std::cout << "Camera start target: (" << tx << ", " << ty << ", "
                 << tz << ") distance=" << dist << std::endl;
     }

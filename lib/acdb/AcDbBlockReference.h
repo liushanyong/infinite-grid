@@ -9,6 +9,8 @@
 
 #include <glm/glm.hpp>
 
+#include <vector>
+
 #include "acdb/AcDbCore.h"
 #include "ge/gematrix.h"
 
@@ -31,6 +33,10 @@ public:
     double rotation = 0.0; // radians, right-hand about |normal|
     AcGeVector3d scale{1.0, 1.0, 1.0};
     AcGeVector3d normal{0.0, 0.0, 1.0};
+
+    // ATTRIB entities owned by this reference (stamped attribute values);
+    // the payloads live in the database but never in model space.
+    std::vector<AcDbHandle> attributeHandles;
 
     // Local placement matrix relative to the referenced record's base
     // point: translate(position) * rotate * scale * translate(-basePoint).

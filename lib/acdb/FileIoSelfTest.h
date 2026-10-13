@@ -158,6 +158,120 @@ inline AcDbDatabase buildSampleDocument()
                       AcGePoint3d(160.0, 600.0, 0.0)};
     add(mline);
 
+    // ---- annotation family ----
+    AcDbRotatedDimension rotatedDim;
+    rotatedDim.dimension.textHeight = 8.0;
+    rotatedDim.xLine1Point = AcGePoint3d(0.0, -100.0, 0.0);
+    rotatedDim.xLine2Point = AcGePoint3d(100.0, -100.0, 0.0);
+    rotatedDim.dimensionLinePoint = AcGePoint3d(50.0, -140.0, 0.0);
+    rotatedDim.dimensionLineAngle = 0.0;
+    add(rotatedDim);
+
+    AcDbAlignedDimension alignedDim;
+    alignedDim.dimension.textHeight = 8.0;
+    alignedDim.xLine1Point = AcGePoint3d(140.0, -100.0, 0.0);
+    alignedDim.xLine2Point = AcGePoint3d(200.0, -140.0, 0.0);
+    alignedDim.dimensionLinePoint = AcGePoint3d(170.0, -120.0, 0.0);
+    add(alignedDim);
+
+    AcDbRadialDimension radialDim;
+    radialDim.dimension.textHeight = 8.0;
+    radialDim.centerPoint = AcGePoint3d(300.0, -100.0, 0.0);
+    radialDim.radiusPoint = AcGePoint3d(340.0, -100.0, 0.0);
+    radialDim.leaderLength = 10.0;
+    add(radialDim);
+
+    AcDbDiametricDimension diametricDim;
+    diametricDim.dimension.textHeight = 8.0;
+    diametricDim.chordPoint = AcGePoint3d(400.0, -140.0, 0.0);
+    diametricDim.farChordPoint = AcGePoint3d(480.0, -60.0, 0.0);
+    diametricDim.leaderLength = 10.0;
+    add(diametricDim);
+
+    AcDbOrdinateDimension ordinateDim;
+    ordinateDim.dimension.textHeight = 8.0;
+    ordinateDim.featureLocationPoint = AcGePoint3d(0.0, -200.0, 0.0);
+    ordinateDim.leaderEndPoint = AcGePoint3d(30.0, -230.0, 0.0);
+    ordinateDim.useXAxis = true;
+    add(ordinateDim);
+
+    AcDb3PointAngularDimension angularDim;
+    angularDim.dimension.textHeight = 8.0;
+    angularDim.centerPoint = AcGePoint3d(600.0, -100.0, 0.0);
+    angularDim.xLine1Point = AcGePoint3d(660.0, -100.0, 0.0);
+    angularDim.xLine2Point = AcGePoint3d(600.0, -40.0, 0.0);
+    angularDim.dimension.textPosition = AcGePoint3d(635.0, -135.0, 0.0);
+    add(angularDim);
+
+    AcDbLeader leader;
+    leader.points = {AcGePoint3d(700.0, -100.0, 0.0),
+                     AcGePoint3d(740.0, -140.0, 0.0),
+                     AcGePoint3d(780.0, -140.0, 0.0)};
+    leader.hasArrowhead = true;
+    add(leader);
+
+    AcDbFcf fcf;
+    fcf.insertion = AcGePoint3d(0.0, -300.0, 0.0);
+    fcf.text = "{\fArial|b0;i}0.05{A}";
+    fcf.height = 8.0;
+    add(fcf);
+
+    AcDbShape shape;
+    shape.insertion = AcGePoint3d(200.0, -300.0, 0.0);
+    shape.scale = 10.0;
+    shape.rotation = 0.3;
+    shape.shapeName = "Standard";
+    add(shape);
+
+    // Block with an attribute definition, placed with one stamped ATTRIB.
+    AcDbLine frameLine;
+    frameLine.start = AcGePoint3d(500.0, -300.0, 0.0);
+    frameLine.end = AcGePoint3d(560.0, -300.0, 0.0);
+    const AcDbHandle frameHandle = add(frameLine);
+    AcDbAttributeDefinition tagDef;
+    tagDef.insertion = AcGePoint3d(510.0, -290.0, 0.0);
+    tagDef.height = 8.0;
+    tagDef.tag = "PART_NO";
+    tagDef.prompt = "Enter part number";
+    tagDef.textValue = "A-000";
+    const AcDbHandle tagDefHandle = add(tagDef);
+    database.createBlockDefinition(
+        "TitleBlock", AcGePoint3d(500.0, -300.0, 0.0),
+        {frameHandle, tagDefHandle});
+    const AcDbHandle titleRef =
+        database.addBlockReference("TitleBlock",
+                                   AcGePoint3d(0.0, -400.0, 0.0));
+    AcDbAttribute stamped;
+    stamped.insertion = AcGePoint3d(510.0, -390.0, 0.0);
+    stamped.height = 8.0;
+    stamped.tag = "PART_NO";
+    stamped.textValue = "A-123";
+    stamped.common.handle = database.allocateHandle();
+    stamped.common.ownerHandle = titleRef;
+    const AcDbHandle stampedHandle = stamped.common.handle;
+    database.insertLoadedEntity(AcDbEntityVariant(std::move(stamped)));
+    if (AcDbEntityVariant *reference = database.getEntityMutable(titleRef))
+        if (auto *typed = std::get_if<AcDbBlockReference>(reference))
+            typed->attributeHandles.push_back(stampedHandle);
+
+    AcDbPolyFaceMesh pface;
+    pface.style = MeshStyle::Cad;
+    pface.geometry.positions = {AcGePoint3d(600.0, 300.0, 0.0),
+                                AcGePoint3d(660.0, 300.0, 0.0),
+                                AcGePoint3d(660.0, 360.0, 0.0),
+                                AcGePoint3d(600.0, 360.0, 0.0)};
+    pface.geometry.indices = {0, 1, 2, 0, 2, 3};
+    add(pface);
+
+    AcDbMInsertBlock minsert;
+    minsert.blockTableRecordName = "Bolt";
+    minsert.position = AcGePoint3d(500.0, -400.0, 0.0);
+    minsert.rowCount = 2;
+    minsert.columnCount = 2;
+    minsert.rowSpacing = 40.0;
+    minsert.columnSpacing = 60.0;
+    add(minsert);
+
     // Block definition from two model-space members + a transformed
     // reference.
     AcDbLine boltA;
@@ -316,6 +430,156 @@ inline void comparePayload(const Payload &a, const Payload &b, FILE *log,
                   closeEnough(a.scale.x, b.scale.x),
               "insert name/position/rotation/scale");
     }
+    else if constexpr (std::is_same_v<Payload, AcDbRotatedDimension>)
+    {
+        check(pointClose(a.xLine1Point, b.xLine1Point) &&
+                  pointClose(a.xLine2Point, b.xLine2Point) &&
+                  pointClose(a.dimensionLinePoint,
+                             b.dimensionLinePoint) &&
+                  closeEnough(a.dimensionLineAngle,
+                              b.dimensionLineAngle),
+              "rotated dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbAlignedDimension>)
+    {
+        check(pointClose(a.xLine1Point, b.xLine1Point) &&
+                  pointClose(a.xLine2Point, b.xLine2Point) &&
+                  pointClose(a.dimensionLinePoint,
+                             b.dimensionLinePoint),
+              "aligned dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDb2LineAngularDimension>)
+    {
+        check(pointClose(a.xLine1StartPoint, b.xLine1StartPoint) &&
+                  pointClose(a.xLine1EndPoint, b.xLine1EndPoint) &&
+                  pointClose(a.xLine2StartPoint, b.xLine2StartPoint) &&
+                  pointClose(a.xLine2EndPoint, b.xLine2EndPoint) &&
+                  pointClose(a.arcPoint, b.arcPoint),
+              "angular 2-line dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDb3PointAngularDimension>)
+    {
+        check(pointClose(a.centerPoint, b.centerPoint) &&
+                  pointClose(a.xLine1Point, b.xLine1Point) &&
+                  pointClose(a.xLine2Point, b.xLine2Point),
+              "angular 3-point dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbRadialDimension>)
+    {
+        check(pointClose(a.centerPoint, b.centerPoint) &&
+                  pointClose(a.radiusPoint, b.radiusPoint),
+              "radial dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbDiametricDimension>)
+    {
+        check(pointClose(a.chordPoint, b.chordPoint) &&
+                  pointClose(a.farChordPoint, b.farChordPoint),
+              "diametric dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbOrdinateDimension>)
+    {
+        check(pointClose(a.featureLocationPoint,
+                         b.featureLocationPoint) &&
+                  pointClose(a.leaderEndPoint, b.leaderEndPoint) &&
+                  a.useXAxis == b.useXAxis,
+              "ordinate dimension geometry");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbLeader>)
+    {
+        check(a.points.size() == b.points.size() && a.points.size() >= 2 &&
+                  pointClose(a.points.front(), b.points.front()) &&
+                  pointClose(a.points.back(), b.points.back()),
+              "leader vertex path");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbFcf>)
+    {
+        check(a.text == b.text && pointClose(a.insertion, b.insertion),
+              "fcf text/insertion");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbShape>)
+    {
+        check(pointClose(a.insertion, b.insertion) &&
+                  closeEnough(a.scale, b.scale) &&
+                  closeEnough(a.rotation, b.rotation),
+              "shape placement");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbAttributeDefinition>)
+    {
+        check(a.tag == b.tag && a.prompt == b.prompt &&
+                  a.textValue == b.textValue &&
+                  pointClose(a.insertion, b.insertion),
+              "attdef tag/prompt/default/insertion");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbAttribute>)
+    {
+        check(a.tag == b.tag && a.textValue == b.textValue &&
+                  pointClose(a.insertion, b.insertion),
+              "attribute tag/value/insertion");
+    }
+    else if constexpr (std::is_same_v<Payload, AcDbMInsertBlock>)
+    {
+        check(a.blockTableRecordName == b.blockTableRecordName &&
+                  a.rowCount == b.rowCount &&
+                  a.columnCount == b.columnCount &&
+                  closeEnough(a.rowSpacing, b.rowSpacing) &&
+                  closeEnough(a.columnSpacing, b.columnSpacing),
+              "minsert name/grid");
+    }
+}
+
+// INSERTs with stamped attributes: the ATTRIB payloads are database
+// residents outside model space, so their roundtrip is verified through
+// the owning reference's handle list.
+inline void compareInsertedAttributes(const AcDbDatabase &baseline,
+                                      const AcDbDatabase &loaded,
+                                      FILE *log, int &fails,
+                                      const char *label)
+{
+    auto check = [&](bool condition, const char *what) {
+        if (!condition)
+        {
+            ++fails;
+            std::fprintf(log, "FAIL %s: %s\n", label, what);
+            std::fflush(log);
+        }
+    };
+    const std::vector<AcDbHandle> &before =
+        baseline.modelSpace().entityHandles();
+    const std::vector<AcDbHandle> &after =
+        loaded.modelSpace().entityHandles();
+    const std::size_t count = std::min(before.size(), after.size());
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const AcDbEntityVariant *a = baseline.getEntity(before[i]);
+        const AcDbEntityVariant *b = loaded.getEntity(after[i]);
+        if (a == nullptr || b == nullptr || a->index() != b->index())
+            continue;
+        const auto *referenceA = std::get_if<AcDbBlockReference>(a);
+        const auto *referenceB = std::get_if<AcDbBlockReference>(b);
+        if (referenceA == nullptr || referenceB == nullptr)
+            continue;
+        check(referenceA->attributeHandles.size() ==
+                  referenceB->attributeHandles.size(),
+              "insert attribute count");
+        const std::size_t attributes = std::min(
+            referenceA->attributeHandles.size(),
+            referenceB->attributeHandles.size());
+        for (std::size_t k = 0; k < attributes; ++k)
+        {
+            const AcDbEntityVariant *payloadA = baseline.getEntity(
+                referenceA->attributeHandles[k]);
+            const AcDbEntityVariant *payloadB = loaded.getEntity(
+                referenceB->attributeHandles[k]);
+            const AcDbAttribute *attributeA =
+                payloadA ? std::get_if<AcDbAttribute>(payloadA) : nullptr;
+            const AcDbAttribute *attributeB =
+                payloadB ? std::get_if<AcDbAttribute>(payloadB) : nullptr;
+            check(attributeA != nullptr && attributeB != nullptr &&
+                      attributeA->tag == attributeB->tag &&
+                      attributeA->textValue == attributeB->textValue,
+                  "attribute tag/value roundtrip");
+        }
+    }
 }
 
 // Sequential model-space compare: same length, same per-slot type, and
@@ -417,6 +681,24 @@ inline void dumpStructure(const AcDbDatabase &database, FILE *log,
                 else if constexpr (std::is_same_v<T, AcDb3dPolyline>)
                     std::fprintf(log, "  %d: Polyline3d %zu verts\n", slot++,
                                  typed.vertices.size());
+                else if constexpr (std::is_same_v<T, AcDbBlockReference>)
+                    std::fprintf(log,
+                                 "  %d: Insert '%s' at (%g,%g)\n", slot++,
+                                 typed.blockTableRecordName.c_str(),
+                                 typed.position.x, typed.position.y);
+                else if constexpr (std::is_same_v<T, AcDbOrdinateDimension>)
+                    std::fprintf(log,
+                                 "  %d: Ordinate useX=%d feature (%g,%g)\n",
+                                 slot++, int(typed.useXAxis),
+                                 typed.featureLocationPoint.x,
+                                 typed.featureLocationPoint.y);
+                else if constexpr (std::is_same_v<T, AcDbDiametricDimension>)
+                    std::fprintf(log,
+                                 "  %d: Diameter chord (%g,%g) far (%g,%g)\n",
+                                 slot++, typed.chordPoint.x,
+                                 typed.chordPoint.y,
+                                 typed.farChordPoint.x,
+                                 typed.farChordPoint.y);
                 else
                     std::fprintf(log, "  %d: variant#%zu\n", slot++,
                                  payload->index());
@@ -463,6 +745,8 @@ inline int runFileIoSelfTest()
             dumpStructure(sample, report, "sample");
             dumpStructure(fromDwg, report, "fromDwg");
             compareModelSpace(sample, fromDwg, report, fails, "dwg");
+            compareInsertedAttributes(sample, fromDwg, report, fails,
+                                      "dwg");
         }
         else
         {
@@ -496,6 +780,8 @@ inline int runFileIoSelfTest()
                          ioReport.entitiesAdded, ioReport.unsupportedSkipped);
             dumpStructure(fromDxf, report, "fromDxf");
             compareModelSpace(sample, fromDxf, report, fails, "dxf");
+            compareInsertedAttributes(sample, fromDxf, report, fails,
+                                      "dxf");
 
             // ---- second-generation DXF stability: rewrite what was read,
             // read it again, compare generation to generation ----

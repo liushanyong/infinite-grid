@@ -10,18 +10,25 @@
 #include "acdb/AcDb3dPolyline.h"
 #include "acdb/AcDb3dSolid.h"
 #include "acdb/AcDbArc.h"
+#include "acdb/AcDbAttribute.h"
+#include "acdb/AcDbAttributeDefinition.h"
 #include "acdb/AcDbBlockReference.h"
 #include "acdb/AcDbCircle.h"
+#include "acdb/AcDbDimension.h"
 #include "acdb/AcDbEllipse.h"
+#include "acdb/AcDbFcf.h"
 #include "acdb/AcDbHatch.h"
+#include "acdb/AcDbLeader.h"
 #include "acdb/AcDbLight.h"
 #include "acdb/AcDbLine.h"
+#include "acdb/AcDbMInsertBlock.h"
 #include "acdb/AcDbMText.h"
 #include "acdb/AcDbMline.h"
 #include "acdb/AcDbPoint.h"
 #include "acdb/AcDbPolyFaceMesh.h"
 #include "acdb/AcDbPolyline.h"
 #include "acdb/AcDbRay.h"
+#include "acdb/AcDbShape.h"
 #include "acdb/AcDbSolid.h"
 #include "acdb/AcDbSpline.h"
 #include "acdb/AcDbText.h"
@@ -34,7 +41,14 @@ using AcDbEntityVariant = std::variant<
     AcDbLine, AcDbArc, AcDbCircle, AcDbEllipse, AcDbPoint, AcDbRay,
     AcDbXline, AcDbSolid, AcDbHatch, AcDb3dPolyline, AcDbPolyline,
     AcDbSpline, AcDbText, AcDbMText, AcDbMline, AcDbPolyFaceMesh,
-    AcDb3dSolid, AcDbLight, AcDbBlockReference>;
+    AcDb3dSolid, AcDbLight, AcDbBlockReference,
+    // Annotation family appended last: the variant index doubles as the
+    // persisted class key in AcDbStore, so existing indexes must never
+    // shift.
+    AcDbRotatedDimension, AcDbAlignedDimension, AcDb2LineAngularDimension,
+    AcDb3PointAngularDimension, AcDbRadialDimension,
+    AcDbDiametricDimension, AcDbOrdinateDimension, AcDbLeader, AcDbFcf,
+    AcDbShape, AcDbAttributeDefinition, AcDbAttribute, AcDbMInsertBlock>;
 
 // Read-write access to the common-properties member shared by every
 // payload type (all of them embed acdb::AcDbEntity as `common`).

@@ -19,8 +19,10 @@ project(WINDOW VERSION 1.0.0 LANGUAGES C CXX)
 
 # Options must be declared before the bundled targets are created.  bgfx
 # requires /Zc:__cplusplus on MSVC, and SDL3's non-ASCII headers need /utf-8.
+# /bigobj: main.cpp's entity dispatch (variant visitors + per-type demo
+# builders) outgrew the default ~64k-section object file limit (C1128).
 if(MSVC)
-    add_compile_options(/utf-8 /Zc:__cplusplus /Zc:preprocessor)
+    add_compile_options(/utf-8 /Zc:__cplusplus /Zc:preprocessor /bigobj)
 endif()
 
 # ---------------------------------------------------------------------------
