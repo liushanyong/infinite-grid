@@ -1560,6 +1560,22 @@ static std::filesystem::path g_dwgDialogDirectory;
 static std::filesystem::path g_dwgDialogSelection;
 static std::vector<std::filesystem::directory_entry> g_dwgDialogEntries;
 static std::string g_dwgDialogMessage;
+static std::vector<acdb::AcDbHandle> g_dwgImportedHandles;
+static void fitCameraToImportedEntities(
+    const std::vector<acdb::AcDbHandle> &handles);
+
+static std::vector<acdb::AcDbHandle> modelSpaceHandlesNotIn(
+    const std::vector<acdb::AcDbHandle> &existing)
+{
+  std::vector<acdb::AcDbHandle> added;
+  for (const acdb::AcDbHandle handle :
+       acdbDocument().modelSpace().entityHandles())
+  {
+    if (std::find(existing.begin(), existing.end(), handle) == existing.end())
+      added.push_back(handle);
+  }
+  return added;
+}
 
 static std::string pathToUtf8(const std::filesystem::path &path)
 {
@@ -1685,11 +1701,18 @@ static void drawDwgFileDialog()
   {
     acdb::AcDbFileIoReport report;
     const std::string filename = g_dwgDialogSelection.string();
+    const std::vector<acdb::AcDbHandle> existing =
+        acdbDocument().modelSpace().entityHandles();
     if (acdbDocument().readDwgFile(filename.c_str(), &report))
     {
       // readDwgFile uses the silent bulk-load path; re-open the bridge so the
       // live scene mirror and its tessellation revision include these entities.
       openDemoScene();
+      const std::vector<acdb::AcDbHandle> imported =
+          modelSpaceHandlesNotIn(existing);
+      g_dwgImportedHandles.insert(g_dwgImportedHandles.end(),
+                                  imported.begin(), imported.end());
+      fitCameraToImportedEntities(imported);
       std::cout << "DWG: inserted " << report.entitiesAdded << " entities ("
                 << report.unsupportedSkipped << " unsupported) from "
                 << filename << std::endl;
@@ -2699,10 +2722,15 @@ static void buildDemoDocument()
     if (const char *dwgPath = std::getenv("GRID_DWG"))
     {
       acdb::AcDbFileIoReport report;
+      const std::vector<acdb::AcDbHandle> existing =
+          document.modelSpace().entityHandles();
       if (document.readDwgFile(dwgPath, &report))
+      {
+        g_dwgImportedHandles = modelSpaceHandlesNotIn(existing);
         std::cout << "GRID_DWG: inserted " << report.entitiesAdded
                   << " entities (" << report.unsupportedSkipped
                   << " unsupported) from " << dwgPath << std::endl;
+      }
       else
         std::cout << "GRID_DWG: failed to decode " << dwgPath << std::endl;
     }
@@ -2823,13 +2851,6 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     curveArc.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
     curveArc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
 
-
-  // Block-reference instances (GRID_BLOCKS=1) render through the
-  // nested-instance walk.
-  if (const char *blocks = std::getenv("GRID_BLOCKS");
-      blocks && *blocks && std::strcmp(blocks, "0") != 0)
-    replayer.appendBlockInstances("DEMO_BRACKET", document, options,
-                                  target);
 
   // Imported glTF demo model (GRID_GLTF env / G key): one mesh record per
   // primitive, rendered with its PBR material and albedo texture.  Placed
@@ -4038,10 +4059,41 @@ static double currentDrawableAspect()
 static void fitCameraToBounds(const WorldAabb &bounds, const char *label)
 {
   acgsView().zoomExtents(bounds.min, bounds.max);
+  acgsView().resetDepthSlabs();
   std::cout << label << " center=(" << orbitCam.Target.x << ", "
             << orbitCam.Target.y << ", " << orbitCam.Target.z
             << ") distance=" << orbitCam.Distance
             << std::endl;
+}
+
+static void fitCameraToImportedEntities(
+    const std::vector<acdb::AcDbHandle> &handles)
+{
+  if (handles.empty())
+    return;
+
+  VectorPrimitivesTessellation imported;
+  acgs::AcGsDocumentReplayer replayer;
+  replayer.shxFontReady = gShxFontReady;
+  const std::size_t textRequestStart = acgi::textRequests().size();
+  replayer.recordHandles(acdbDocument(), handles,
+                         acdb::TesselationOptions{}, imported);
+
+  WorldAabb bounds;
+  expandCadTessellationBounds(bounds, imported);
+  std::vector<acgi::TextRequest> &requests = acgi::textRequests();
+  for (std::size_t index = textRequestStart; index < requests.size(); ++index)
+  {
+    const acgi::TextRequest &request = requests[index];
+    const double extent =
+        double(request.message.size() + 1) * request.height;
+    expandWorldAabb(bounds, request.position,
+                    glm::dvec3(extent, extent, request.height * 2.0));
+  }
+  requests.resize(textRequestStart);
+
+  if (bounds.valid)
+    fitCameraToBounds(bounds, "DWG fit-to-view:");
 }
 
 void fitCameraToRenderableObjects()
@@ -9061,6 +9113,7 @@ int main(int argc, char *argv[])
   cubeWorldPosition =
       LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
   fitCameraToStressField();
+  fitCameraToImportedEntities(g_dwgImportedHandles);
 
   // Debug helper: jump the startup camera straight to a world point.
   // GRID_CAMERA_START_TARGET=x,y,z[,distance]

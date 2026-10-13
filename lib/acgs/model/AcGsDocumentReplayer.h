@@ -90,30 +90,21 @@ public:
     for (const acdb::AcDbHandle handle :
          document.modelSpace().entityHandles())
     {
-      const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
-      if (payload == nullptr)
-        continue;
-      // Erased residents stay in the document for undo; they leave the
-      // picture here, which is what a dirty-driven rebuild shows.
-      if (document.isErased(handle))
-        continue;
-      if (const auto *text = std::get_if<acdb::AcDbText>(payload);
-          text != nullptr && shxFontReady && text->styleName == "SHX")
-      {
-        appendShxText(*text, target);
-        continue;
-      }
-      const std::string &name = acdb::common(*payload).name;
-      const AcGsReplayHints hints = replayHints().count(name)
-                                        ? replayHints()[name]
-                                        : AcGsReplayHints{};
-      std::visit(
-          [&](const auto &entity) {
-            appendEntity(entity, name.c_str(), options, target,
-                         hints.fillIs3DFace, hints.pickShape);
-          },
-          *payload);
+      recordEntity(document, handle, options, target);
     }
+  }
+
+  // Replays a subset of model-space residents. The host uses this for
+  // fit-to-drawing after an append-style DWG import without including the
+  // application's pre-existing scene.
+  template <typename MetafileT>
+  void recordHandles(const acdb::AcDbDatabase &document,
+                     const std::vector<acdb::AcDbHandle> &handles,
+                     const acdb::TesselationOptions &options,
+                     MetafileT &target)
+  {
+    for (const acdb::AcDbHandle handle : handles)
+      recordEntity(document, handle, options, target);
   }
 
   // Records one entity: worldDraw into the metafile fragment, then
@@ -175,55 +166,69 @@ public:
     }
   }
 
-  // Renders every model-space INSERT of |recordName|: the nested walk
-  // composes each member's world transform, the payload copy is
-  // translated (ObjectARX transformBy), and the instance feeds the same
-  // recording path as authored entities.  Rotations and non-uniform
-  // scales of curved geometry degrade through translation-only placement
-  // for now.
+private:
   template <typename MetafileT>
-  void appendBlockInstances(const std::string &recordName,
-                            const acdb::AcDbDatabase &document,
-                            const acdb::TesselationOptions &options,
-                            MetafileT &target)
+  void recordEntity(const acdb::AcDbDatabase &document,
+                    acdb::AcDbHandle handle,
+                    const acdb::TesselationOptions &options,
+                    MetafileT &target)
   {
-    for (const acdb::AcDbHandle insertHandle :
-         document.modelSpace().entityHandles())
+    const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
+    if (payload == nullptr || document.isErased(handle))
+      return;
+    if (const auto *reference =
+            std::get_if<acdb::AcDbBlockReference>(payload))
     {
-      const acdb::AcDbEntityVariant *topPayload =
-          document.getEntity(insertHandle);
-      if (topPayload == nullptr)
-        continue;
-      const auto *topReference =
-          std::get_if<acdb::AcDbBlockReference>(topPayload);
-      if (topReference == nullptr ||
-          topReference->blockTableRecordName != recordName)
-        continue;
-      const glm::dmat4 topWorld = glm::dmat4(
-          document.referenceTransform(*topReference));
-
-      document.walkInsertInstances(
-          recordName, topWorld,
-          [&](const glm::dmat4 &world, acdb::AcDbHandle memberHandle,
-              const acdb::AcDbEntityVariant &payload) {
-            (void)memberHandle;
-            if (std::holds_alternative<acdb::AcDbBlockReference>(payload))
-              return;
-            const glm::dvec3 origin =
-                glm::dvec3(world * glm::dvec4(0.0, 0.0, 0.0, 1.0));
-            acdb::AcDbEntityVariant instance = payload;
-            acdb::transformBy(instance, origin);
-            acdb::common(instance).name =
-                recordName + "/" + acdb::common(payload).name;
-            std::visit(
-                [&](const auto &entity) {
-                  appendEntity(entity,
-                               acdb::common(instance).name.c_str(),
-                               options, target);
-                },
-                instance);
-          });
+      appendBlockReference(document, handle, *reference, options, target);
+      return;
     }
+    if (const auto *text = std::get_if<acdb::AcDbText>(payload);
+        text != nullptr && shxFontReady && text->styleName == "SHX")
+    {
+      appendShxText(*text, target);
+      return;
+    }
+    const std::string &name = acdb::common(*payload).name;
+    const AcGsReplayHints hints = replayHints().count(name)
+                                      ? replayHints()[name]
+                                      : AcGsReplayHints{};
+    std::visit(
+        [&](const auto &entity) {
+          appendEntity(entity, name.c_str(), options, target,
+                       hints.fillIs3DFace, hints.pickShape);
+        },
+        *payload);
+  }
+
+  template <typename MetafileT>
+  static void appendBlockReference(
+      const acdb::AcDbDatabase &document, acdb::AcDbHandle insertHandle,
+      const acdb::AcDbBlockReference &reference,
+      const acdb::TesselationOptions &options, MetafileT &target)
+  {
+    const glm::dmat4 topWorld =
+        glm::dmat4(document.referenceTransform(reference));
+    const std::string instanceName =
+        acdb::common(reference).name + "@" +
+        std::to_string(insertHandle.value);
+    document.walkInsertInstances(
+        reference.blockTableRecordName, topWorld,
+        [&](const glm::dmat4 &world, acdb::AcDbHandle memberHandle,
+            const acdb::AcDbEntityVariant &payload) {
+          (void)memberHandle;
+          const glm::dvec3 origin =
+              glm::dvec3(world * glm::dvec4(0.0, 0.0, 0.0, 1.0));
+          acdb::AcDbEntityVariant instance = payload;
+          acdb::transformBy(instance, origin);
+          acdb::common(instance).name =
+              instanceName + "/" + acdb::common(payload).name;
+          std::visit(
+              [&](const auto &entity) {
+                appendEntity(entity, acdb::common(instance).name.c_str(),
+                             options, target);
+              },
+              instance);
+        });
   }
 };
 
