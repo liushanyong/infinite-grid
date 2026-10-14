@@ -25,10 +25,57 @@
 #include <vector>
 
 #include "acdb/AcDbDatabase.h"
+#include "acdb/AcDbEntities.h"
 #include "acgs/EcsScene.h"
 
 namespace acgs
 {
+
+struct DocumentEntityPayload
+{
+    acdb::AcDbEntityVariant value;
+};
+
+struct DocumentNonGraphicalPayload
+{
+    acdb::AcDbNonGraphicalObject value;
+};
+
+struct LayerTablePayload
+{
+    std::string name;
+    acdb::AcDbLayerTableRecord value;
+};
+
+struct LinetypeTablePayload
+{
+    std::string name;
+    acdb::AcDbLinetypeTableRecord value;
+};
+
+struct TextStyleTablePayload
+{
+    std::string name;
+    acdb::AcDbTextStyleTableRecord value;
+};
+
+struct BlockTablePayload
+{
+    std::string name;
+    acdb::AcDbBlockTableRecord value;
+};
+
+struct ViewportTablePayload
+{
+    std::string name;
+    acdb::AcDbViewportTableRecord value;
+};
+
+struct ViewTablePayload
+{
+    std::string name;
+    acdb::AcDbViewTableRecord value;
+};
 
 class DocumentSceneBridge : public acdb::AcDbDatabaseReactor
 {
@@ -49,18 +96,69 @@ public:
     void open()
     {
         std::unordered_set<std::uint64_t> residents;
-        document_.forEachEntity([&](acdb::AcDbHandle handle,
-                                    const acdb::AcDbEntityVariant &) {
+        entt::registry &registry = store_.registry();
+        auto assignOrReplace = [&](entt::entity entity, auto &&component) {
+            using Component = std::decay_t<decltype(component)>;
+            if (registry.has<Component>(entity))
+                registry.replace<Component>(
+                    entity, std::forward<decltype(component)>(component));
+            else
+                registry.assign<Component>(
+                    entity, std::forward<decltype(component)>(component));
+        };
+        auto mirrorRecord = [&](acdb::AcDbHandle handle, auto component) {
             residents.insert(handle.value);
-            store_.ensure(acdb::AcDbObjectId{handle});
+            const entt::entity entity =
+                store_.ensure(acdb::AcDbObjectId{handle});
+            assignOrReplace(entity, std::move(component));
+        };
+
+        document_.forEachEntity([&](acdb::AcDbHandle handle,
+                                    const acdb::AcDbEntityVariant &payload) {
+            residents.insert(handle.value);
+            const entt::entity entity =
+                store_.ensure(acdb::AcDbObjectId{handle});
+            assignOrReplace(entity, DocumentEntityPayload{payload});
             attachAttributes(handle);
             store_.markDirty(acdb::AcDbObjectId{handle});
         });
         document_.forEachNonGraphicalObject(
             [&](acdb::AcDbHandle handle,
-                const acdb::AcDbNonGraphicalObject &) {
-                residents.insert(handle.value);
-                store_.ensure(acdb::AcDbObjectId{handle});
+                const acdb::AcDbNonGraphicalObject &payload) {
+                mirrorRecord(handle, DocumentNonGraphicalPayload{payload});
+            });
+        document_.layerTable().forEach(
+            [&](const std::string &name,
+                const acdb::AcDbLayerTableRecord &record) {
+                mirrorRecord(record.handle, LayerTablePayload{name, record});
+            });
+        document_.linetypeTable().forEach(
+            [&](const std::string &name,
+                const acdb::AcDbLinetypeTableRecord &record) {
+                mirrorRecord(record.handle,
+                             LinetypeTablePayload{name, record});
+            });
+        document_.textStyleTable().forEach(
+            [&](const std::string &name,
+                const acdb::AcDbTextStyleTableRecord &record) {
+                mirrorRecord(record.handle,
+                             TextStyleTablePayload{name, record});
+            });
+        document_.blockTable().forEach(
+            [&](const std::string &name,
+                const acdb::AcDbBlockTableRecord &record) {
+                mirrorRecord(record.handle, BlockTablePayload{name, record});
+            });
+        document_.viewportTable().forEach(
+            [&](const std::string &name,
+                const acdb::AcDbViewportTableRecord &record) {
+                mirrorRecord(record.handle,
+                             ViewportTablePayload{name, record});
+            });
+        document_.viewTable().forEach(
+            [&](const std::string &name,
+                const acdb::AcDbViewTableRecord &record) {
+                mirrorRecord(record.handle, ViewTablePayload{name, record});
             });
         std::vector<acdb::AcDbObjectId> stale;
         store_.forEachObjectId([&](acdb::AcDbObjectId objectId) {
@@ -109,7 +207,11 @@ public:
         store_.markDirty(acdb::AcDbObjectId{handle});
     }
 
-    void databaseReplaced(const acdb::AcDbDatabase &) override { open(); }
+    void databaseReplaced(const acdb::AcDbDatabase &) override
+    {
+        store_.reset();
+        open();
+    }
 
 private:
     // Populates the attribute components of one mirrored entity from its
@@ -137,6 +239,7 @@ private:
                 registry.assign<Component>(
                     entity, std::forward<decltype(component)>(component));
         };
+        assignOrReplace(DocumentEntityPayload{*payload});
         assignOrReplace(LayerRef{acdb::common(*payload).getLayerName()});
         if (const auto *reference =
                 std::get_if<acdb::AcDbBlockReference>(payload))

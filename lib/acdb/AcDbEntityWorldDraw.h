@@ -128,9 +128,10 @@ inline void worldDraw(const AcDbHatch &hatch, acgs::ViewportDraw &draw,
     AcGiWorldDraw graphics(draw);
     if (hatch.solidFill || hatch.patternName == "SOLID")
     {
-        for (size_t i = 1; i + 1 < hatch.outerLoop.size(); ++i)
-            graphics.worldTriangle(hatch.outerLoop[0], hatch.outerLoop[i],
-                                   hatch.outerLoop[i + 1], fillIs3DFace);
+        for (const acdb::Triangle &triangle :
+             acdb::hatchSolidFillTriangles(hatch))
+            graphics.worldTriangle(triangle.a, triangle.b, triangle.c,
+                                   fillIs3DFace);
         return;
     }
     for (const auto &segment : hatchPatternSegments(hatch))

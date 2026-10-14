@@ -184,6 +184,8 @@ inline const char *symbolTableName(const Dwg_Object *object,
     case DWG_TYPE_STYLE: return object->tio.object->tio.STYLE->name;
     case DWG_TYPE_DIMSTYLE:
         return object->tio.object->tio.DIMSTYLE->name;
+    case DWG_TYPE_MLINESTYLE:
+        return object->tio.object->tio.MLINESTYLE->name;
     case DWG_TYPE_BLOCK_HEADER:
         return object->tio.object->tio.BLOCK_HEADER->name;
     default: return nullptr;
@@ -721,6 +723,18 @@ inline std::optional<AcDbHatch> tryToEntity(const Dwg_Entity_HATCH &dwg)
     hatch.patternName = dwg.name ? dwg.name : "SOLID";
     hatch.patternScale = dwg.scale_spacing;
     hatch.patternAngle = dwg.angle;
+    for (BITCODE_BS i = 0; i < dwg.num_deflines && dwg.deflines != nullptr; ++i)
+    {
+        const Dwg_HATCH_DefLine &source = dwg.deflines[i];
+        AcDbHatchPatternLine line;
+        line.angle = source.angle;
+        line.basePoint = AcGePoint2d(source.pt0.x, source.pt0.y);
+        line.offset = AcGeVector2d(source.offset.x, source.offset.y);
+        if (source.dashes != nullptr)
+            for (BITCODE_BS dash = 0; dash < source.num_dashes; ++dash)
+                line.dashes.push_back(source.dashes[dash]);
+        hatch.patternLines.push_back(std::move(line));
+    }
     bool outerTaken = false;
     for (BITCODE_BL i = 0; i < dwg.num_paths; ++i)
     {
@@ -961,9 +975,17 @@ inline void ensureTextStyle(AcDbDatabase &database, const std::string &name)
     database.textStyleTable().add(name, database.allocateHandle());
 }
 
+inline bool importedLayerIsVisible(const AcDbDatabase &database,
+                                   const std::string &name)
+{
+    const AcDbLayerTableRecord *record = database.layerTable().get(name);
+    return record == nullptr || (!record->isOff && !record->isFrozen);
+}
+
 // Layer records import first so entity colors can resolve ByLayer through
 // the real record and layers keep their ACI.
-inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
+inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg,
+                              const DwgImportContext &ctx)
 {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
     {
@@ -987,13 +1009,144 @@ inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
                                   ? aciToColor(7)
                                   : dwgColorToColor(layer.color);
         record->lineWeight = dwgLineWeightToPixels(layer.linewt);
-        record->isOff = aci < 0; // CMC: negative index = layer off
+        record->isOff = aci < 0 || layer.on == 0;
         record->isFrozen = layer.frozen;
         record->isPlottable = layer.plotflag != 0;
-        ensureLineType(database, layer.ltype && layer.ltype->obj
-                                     ? std::string(symbolTableName(
-                                           layer.ltype->obj, DWG_TYPE_LTYPE))
-                                     : std::string());
+        if (const char *lineType =
+                symbolTableName(ctx.resolve(layer.ltype), DWG_TYPE_LTYPE))
+        {
+            record->lineType = lineType;
+            ensureLineType(database, record->lineType);
+        }
+    }
+}
+
+inline void importLineTypeRecords(AcDbDatabase &database,
+                                  const Dwg_Data &dwg)
+{
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        const Dwg_Object &object = dwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_OBJECT ||
+            object.fixedtype != DWG_TYPE_LTYPE || object.tio.object == nullptr)
+            continue;
+        const Dwg_Object_LTYPE &source = *object.tio.object->tio.LTYPE;
+        if (source.name == nullptr || *source.name == '\0')
+            continue;
+        AcDbLinetypeTableRecord *record =
+            database.linetypeTable().getMutable(source.name);
+        if (record == nullptr)
+        {
+            database.linetypeTable().add(
+                source.name, database.allocateHandle());
+            record = database.linetypeTable().getMutable(source.name);
+        }
+        record->description =
+            source.description != nullptr ? source.description : "";
+        record->patternLength = source.pattern_len;
+        record->pattern.clear();
+        if (source.dashes != nullptr)
+            for (BITCODE_RC dash = 0; dash < source.numdashes; ++dash)
+                record->pattern.push_back(source.dashes[dash].length);
+    }
+}
+
+inline void importTextStyleRecords(AcDbDatabase &database,
+                                   const Dwg_Data &dwg)
+{
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        const Dwg_Object &object = dwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_OBJECT ||
+            object.fixedtype != DWG_TYPE_STYLE || object.tio.object == nullptr)
+            continue;
+        const Dwg_Object_STYLE &source = *object.tio.object->tio.STYLE;
+        if (source.name == nullptr || *source.name == '\0')
+            continue;
+        AcDbTextStyleTableRecord *record =
+            database.textStyleTable().getMutable(source.name);
+        if (record == nullptr)
+            record = &database.textStyleTable().add(
+                source.name, database.allocateHandle());
+        record->fileName =
+            source.font_file != nullptr ? source.font_file : "";
+        record->bigFontFileName =
+            source.bigfont_file != nullptr ? source.bigfont_file : "";
+        record->textSize = source.text_size;
+        record->obliqueAngle = source.oblique_angle;
+    }
+}
+
+inline void importMlineStyleRecords(AcDbDatabase &database,
+                                    const Dwg_Data &dwg,
+                                    const DwgImportContext &ctx)
+{
+    const AcDbHandle dictionaryHandle =
+        database.getDictionary(kAcadMlineStyleDictionary);
+    AcDbNonGraphicalObject *dictionaryObject =
+        database.getNonGraphicalObjectMutable(dictionaryHandle);
+    AcDbDictionary *dictionary =
+        dictionaryObject != nullptr
+            ? std::get_if<AcDbDictionary>(dictionaryObject)
+            : nullptr;
+    if (dictionary == nullptr)
+        return;
+
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i)
+    {
+        const Dwg_Object &object = dwg.object[i];
+        if (object.supertype != DWG_SUPERTYPE_OBJECT ||
+            object.fixedtype != DWG_TYPE_MLINESTYLE ||
+            object.tio.object == nullptr)
+            continue;
+        const Dwg_Object_MLINESTYLE &style =
+            *object.tio.object->tio.MLINESTYLE;
+        if (style.name == nullptr || *style.name == '\0')
+            continue;
+
+        AcDbHandle xrecordHandle = dictionary->getAt(style.name);
+        if (!xrecordHandle.isValid())
+            xrecordHandle =
+                database.createXRecord(dictionaryHandle, style.name);
+        AcDbNonGraphicalObject *stored =
+            database.getNonGraphicalObjectMutable(xrecordHandle);
+        AcDbXrecord *xrecord =
+            stored != nullptr ? std::get_if<AcDbXrecord>(stored) : nullptr;
+        if (xrecord == nullptr)
+            continue;
+
+        xrecord->setValue(1, std::string(style.description != nullptr
+                                             ? style.description
+                                             : ""));
+        xrecord->setValue(2, int(style.flag));
+        xrecord->setValue(
+            3, std::vector<double>{style.start_angle, style.end_angle});
+        const glm::vec4 fill = dwgColorToColor(style.fill_color);
+        xrecord->setValue(
+            4, std::vector<double>{fill.r, fill.g, fill.b, fill.a});
+        xrecord->setValue(5, int(style.num_lines));
+        for (BITCODE_RC lineIndex = 0;
+             lineIndex < style.num_lines && style.lines != nullptr;
+             ++lineIndex)
+        {
+            const Dwg_MLINESTYLE_line &line = style.lines[lineIndex];
+            const int key = 100 + int(lineIndex) * 3;
+            const glm::vec4 color = dwgColorToColor(line.color);
+            xrecord->setValue(
+                key, std::vector<double>{
+                         line.offset, color.r, color.g, color.b, color.a});
+            if (dwg.header.version >= R_2018)
+            {
+                const char *lineType = symbolTableName(
+                    ctx.resolve(line.lt.ltype), DWG_TYPE_LTYPE);
+                xrecord->setValue(key + 1, std::string(
+                    lineType != nullptr ? lineType : ""));
+            }
+            else
+            {
+                xrecord->setValue(key + 1, int(line.lt.index));
+            }
+        }
     }
 }
 
@@ -1054,7 +1207,8 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
             ensureLineType(database, common.lineType);
         }
 
-    common.visible = ent.invisible == 0;
+    common.visible = ent.invisible == 0 &&
+                     importedLayerIsVisible(database, common.layer);
     common.name =
         std::string("DWG_") + (object.dxfname ? object.dxfname : "ENTITY");
 }
@@ -1168,7 +1322,10 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
     AcDbDwgImportReport report;
     repairBlockReferences(dwg);
     const DwgImportContext ctx(dwg);
-    importLayerRecords(database, dwg);
+    importLineTypeRecords(database, dwg);
+    importTextStyleRecords(database, dwg);
+    importLayerRecords(database, dwg, ctx);
+    importMlineStyleRecords(database, dwg, ctx);
 
     // Deferred block members keyed by the owning BLOCK_HEADER handle;
     // records are created in a second pass so duplicate names merge and
@@ -1308,8 +1465,15 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
             converted = toEntity(*ent.tio.MTEXT);
             break;
         case DWG_TYPE_MLINE:
-            converted = toEntity(*ent.tio.MLINE);
+        {
+            AcDbMline mline = toEntity(*ent.tio.MLINE);
+            if (const char *style = symbolTableName(
+                    ctx.resolve(ent.tio.MLINE->mlinestyle),
+                    DWG_TYPE_MLINESTYLE))
+                mline.styleName = style;
+            converted = std::move(mline);
             break;
+        }
         case DWG_TYPE_HATCH:
             converted = tryToEntity(*ent.tio.HATCH);
             if (!converted)

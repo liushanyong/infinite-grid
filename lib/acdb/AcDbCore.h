@@ -193,6 +193,8 @@ struct AcDbLayerTableRecord : AcDbSymbolTableRecord
 struct AcDbLinetypeTableRecord : AcDbSymbolTableRecord
 {
     std::string description;
+    double patternLength = 0.0;
+    std::vector<double> pattern;
 };
 
 struct AcDbTextStyleTableRecord : AcDbSymbolTableRecord

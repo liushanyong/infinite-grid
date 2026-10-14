@@ -2245,11 +2245,21 @@ namespace bgfx
 
 		uint32_t getAvailTransientIndexBuffer(uint32_t _num, uint16_t _indexSize)
 		{
+			if (0 == _indexSize)
+			{
+				return 0;
+			}
 			const uint32_t offset = bx::strideAlign(m_iboffset, _indexSize);
-			uint32_t iboffset = offset + _num*_indexSize;
-			iboffset = bx::min<uint32_t>(iboffset, g_caps.limits.transientIbSize);
-			const uint32_t num = (iboffset-offset)/_indexSize;
-			return num;
+			const uint32_t limit = g_caps.limits.transientIbSize;
+			if (offset >= limit)
+			{
+				return 0;
+			}
+
+			const uint64_t requestedEnd =
+				uint64_t(offset) + uint64_t(_num) * _indexSize;
+			const uint32_t end = uint32_t(bx::min<uint64_t>(requestedEnd, limit));
+			return (end - offset) / _indexSize;
 		}
 
 		uint32_t allocTransientIndexBuffer(uint32_t& _num, uint16_t _indexSize)
@@ -2264,11 +2274,21 @@ namespace bgfx
 
 		uint32_t getAvailTransientVertexBuffer(uint32_t _num, uint16_t _stride)
 		{
-			uint32_t offset   = bx::strideAlign(m_vboffset, _stride);
-			uint32_t vboffset = offset + _num * _stride;
-			vboffset = bx::min<uint32_t>(vboffset, g_caps.limits.transientVbSize);
-			uint32_t num = (vboffset-offset)/_stride;
-			return num;
+			if (0 == _stride)
+			{
+				return 0;
+			}
+			const uint32_t offset = bx::strideAlign(m_vboffset, _stride);
+			const uint32_t limit = g_caps.limits.transientVbSize;
+			if (offset >= limit)
+			{
+				return 0;
+			}
+
+			const uint64_t requestedEnd =
+				uint64_t(offset) + uint64_t(_num) * _stride;
+			const uint32_t end = uint32_t(bx::min<uint64_t>(requestedEnd, limit));
+			return (end - offset) / _stride;
 		}
 
 		uint32_t allocTransientVertexBuffer(uint32_t& _num, uint16_t _stride)

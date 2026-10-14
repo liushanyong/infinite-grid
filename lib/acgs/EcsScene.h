@@ -114,6 +114,18 @@ public:
         ++revision_;
     }
 
+    void reset()
+    {
+        std::vector<acdb::AcDbObjectId> objects;
+        objects.reserve(byId_.size());
+        forEachObjectId(
+            [&](acdb::AcDbObjectId objectId) { objects.push_back(objectId); });
+        for (const acdb::AcDbObjectId objectId : objects)
+            forget(objectId);
+        pendingDirty_.clear();
+        ++revision_;
+    }
+
     void markDirty(acdb::AcDbObjectId objectId)
     {
         const entt::entity entity = ensure(objectId);
