@@ -580,6 +580,91 @@ inline std::vector<std::pair<AcGePoint3d, AcGePoint3d>> hatchPatternSegments(
     return segments;
 }
 
+inline std::vector<Triangle> hatchSolidFillTriangles(const AcDbHatch &hatch)
+{
+    std::vector<Triangle> triangles;
+    if (hatch.outerLoop.size() < 3)
+        return triangles;
+
+    std::vector<const std::vector<AcGePoint3d> *> loops{&hatch.outerLoop};
+    std::vector<double> yCoordinates;
+    auto appendLoop = [&](const std::vector<AcGePoint3d> &loop) {
+        if (loop.size() < 3)
+            return;
+        loops.push_back(&loop);
+        for (const AcGePoint3d &point : loop)
+            yCoordinates.push_back(point.y);
+    };
+    yCoordinates.reserve(hatch.outerLoop.size());
+    for (const AcGePoint3d &point : hatch.outerLoop)
+        yCoordinates.push_back(point.y);
+    for (const auto &loop : hatch.innerLoops)
+        appendLoop(loop);
+
+    std::sort(yCoordinates.begin(), yCoordinates.end());
+    yCoordinates.erase(std::unique(yCoordinates.begin(), yCoordinates.end()),
+                       yCoordinates.end());
+
+    struct Crossing
+    {
+        double middleX;
+        const AcGePoint3d *start;
+        const AcGePoint3d *end;
+    };
+    auto pointAtY = [](const Crossing &crossing, double y) {
+        const double t =
+            (y - crossing.start->y) / (crossing.end->y - crossing.start->y);
+        return AcGePoint3d(
+            crossing.start->x +
+                (crossing.end->x - crossing.start->x) * t,
+            y,
+            crossing.start->z +
+                (crossing.end->z - crossing.start->z) * t);
+    };
+
+    for (size_t band = 0; band + 1 < yCoordinates.size(); ++band)
+    {
+        const double bottom = yCoordinates[band];
+        const double top = yCoordinates[band + 1];
+        if (top - bottom <= 1.0e-12)
+            continue;
+        const double middle = bottom + (top - bottom) * 0.5;
+        std::vector<Crossing> crossings;
+        for (const auto *loop : loops)
+        {
+            if (loop->size() < 3)
+                continue;
+            for (size_t i = 0; i < loop->size(); ++i)
+            {
+                const AcGePoint3d &start = (*loop)[i];
+                const AcGePoint3d &end = (*loop)[(i + 1) % loop->size()];
+                if ((start.y > middle) == (end.y > middle))
+                    continue;
+                const double t = (middle - start.y) / (end.y - start.y);
+                crossings.push_back(
+                    {start.x + (end.x - start.x) * t, &start, &end});
+            }
+        }
+        std::sort(crossings.begin(), crossings.end(),
+                  [](const Crossing &left, const Crossing &right) {
+                      return left.middleX < right.middleX;
+                  });
+
+        for (size_t i = 0; i + 1 < crossings.size(); i += 2)
+        {
+            const AcGePoint3d bottomLeft = pointAtY(crossings[i], bottom);
+            const AcGePoint3d bottomRight =
+                pointAtY(crossings[i + 1], bottom);
+            const AcGePoint3d topLeft = pointAtY(crossings[i], top);
+            const AcGePoint3d topRight = pointAtY(crossings[i + 1], top);
+            triangles.push_back(
+                Triangle{{}, bottomLeft, bottomRight, topRight});
+            triangles.push_back(Triangle{{}, bottomLeft, topRight, topLeft});
+        }
+    }
+    return triangles;
+}
+
 inline void tessellate(const AcDbHatch &hatch, TessellatedEntity &result,
                        const TesselationOptions & = {})
 {
@@ -587,12 +672,10 @@ inline void tessellate(const AcDbHatch &hatch, TessellatedEntity &result,
         return;
     if (hatch.solidFill || hatch.patternName == "SOLID")
     {
-        for (size_t i = 1; i + 1 < hatch.outerLoop.size(); ++i)
-        {
-            result.fills.push_back(Triangle{{}, hatch.outerLoop[0],
-                                             hatch.outerLoop[i],
-                                             hatch.outerLoop[i + 1]});
-        }
+        std::vector<Triangle> fills = hatchSolidFillTriangles(hatch);
+        result.fills.insert(result.fills.end(),
+                            std::make_move_iterator(fills.begin()),
+                            std::make_move_iterator(fills.end()));
         return;
     }
     for (const auto &segment : hatchPatternSegments(hatch))

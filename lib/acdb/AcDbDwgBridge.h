@@ -961,6 +961,13 @@ inline void ensureTextStyle(AcDbDatabase &database, const std::string &name)
     database.textStyleTable().add(name, database.allocateHandle());
 }
 
+inline bool importedLayerIsVisible(const AcDbDatabase &database,
+                                   const std::string &name)
+{
+    const AcDbLayerTableRecord *record = database.layerTable().get(name);
+    return record == nullptr || (!record->isOff && !record->isFrozen);
+}
+
 // Layer records import first so entity colors can resolve ByLayer through
 // the real record and layers keep their ACI.
 inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
@@ -1054,7 +1061,8 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
             ensureLineType(database, common.lineType);
         }
 
-    common.visible = ent.invisible == 0;
+    common.visible = ent.invisible == 0 &&
+                     importedLayerIsVisible(database, common.layer);
     common.name =
         std::string("DWG_") + (object.dxfname ? object.dxfname : "ENTITY");
 }

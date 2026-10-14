@@ -117,6 +117,8 @@ public:
                            AcGsPickShape pickShape =
                                AcGsPickShape::Primitives)
   {
+    if (!entity.common.visible)
+      return;
     auto addRange = [name, pickShape](
                         std::vector<AcGsEntityRange> &ranges, std::size_t begin,
                         std::size_t end) {
@@ -303,7 +305,8 @@ private:
                     MetafileT &target)
   {
     const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
-    if (payload == nullptr || document.isErased(handle))
+    if (payload == nullptr || document.isErased(handle) ||
+        !acdb::common(*payload).visible)
       return;
     if (const auto *reference =
             std::get_if<acdb::AcDbBlockReference>(payload))
