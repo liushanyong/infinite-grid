@@ -209,6 +209,30 @@ inline int runKernelSelfTest()
                           0.0, 1.0, -0.5, 0.5}.isClosed(),
               "spherical patch is not closed");
 
+        const AcGeCircArc3d arc3d{{0.0, 0.0, 0.0},
+                                  {0.0, 0.0, 2.0}, 1.0, 0.0,
+                                  1.5707963267948966};
+        AcGePlane arcPlane;
+        arc3d.getPlane(arcPlane);
+        check(arc3d.startPoint().isEqualTo({1.0, 0.0, 0.0}) &&
+                  arc3d.endPoint().isEqualTo({0.0, 1.0, 0.0}) &&
+                  arc3d.isInside({0.7071067811865476,
+                                  0.7071067811865476, 0.0}) &&
+                  !arc3d.isInside({0.0, 0.0, 1.0}) &&
+                  arcPlane.isOn({0.0, 0.0, 0.0}),
+              "3D circular arc endpoints, membership, and plane");
+
+        const AcGeEllipArc3d ellipse{{0.0, 0.0, 0.0},
+                                    {2.0, 0.0, 0.0},
+                                    {0.0, 0.0, 1.0}, 0.5};
+        check(ellipse.majorRadius() == 2.0 && ellipse.minorRadius() == 1.0 &&
+                  ellipse.minorAxis().isEqualTo({0.0, 1.0, 0.0}) &&
+                  ellipse.startPoint().isEqualTo({2.0, 0.0, 0.0}) &&
+                  ellipse.endPoint().isEqualTo({2.0, 0.0, 0.0}) &&
+                  ellipse.isInside({0.0, 1.0, 0.0}) &&
+                  !ellipse.isCircular(),
+              "3D ellipse arc axes, radius, and membership");
+
         const AcGeInterval interval{1.0, 5.0};
         AcGeInterval overlap;
         check(interval.contains(1.0) && interval.contains(5.0) &&

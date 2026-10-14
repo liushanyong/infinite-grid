@@ -57,6 +57,10 @@ supports reference vectors, clockwise/CCW parameterization, endpoints, and
 point-on-arc tests. Curve-curve intersection remains the existing focused
 `ge::intersect` subset.
 
+`AcGeCircArc3d` and the newly exposed `AcGeEllipArc3d` name provide endpoint,
+plane, and point-on-curve helpers alongside parameter evaluation. The legacy
+`AcGeEllip3d` spelling remains an alias for the ellipse arc value type.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
