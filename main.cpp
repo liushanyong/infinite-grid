@@ -4353,15 +4353,15 @@ void switchProjectionMode()
             << std::endl;
 }
 
-glm::dvec3 normalizedNdcLine(const glm::dvec3 &line)
+AcGeVector3d normalizedNdcLine(const AcGeVector3d &line)
 {
   const double scale = std::max(std::abs(line.x), std::abs(line.y));
   if (!(scale > 0.0) || !std::isfinite(scale))
-    return glm::dvec3(0.0);
+    return AcGeVector3d(0.0, 0.0, 0.0);
   return line / scale;
 }
 
-bool lineIntersectsNdcSquare(const glm::dvec3 &line)
+bool lineIntersectsNdcSquare(const AcGeVector3d &line)
 {
   const double f00 = -line.x - line.y + line.z;
   const double f10 = line.x - line.y + line.z;
@@ -4372,16 +4372,16 @@ bool lineIntersectsNdcSquare(const glm::dvec3 &line)
   return minValue <= 0.0f && maxValue >= 0.0f;
 }
 
-glm::vec3 anchoredNdcLine(const glm::dvec3 &line)
+glm::vec3 anchoredNdcLine(const AcGeVector3d &line)
 {
   if (!lineIntersectsNdcSquare(line))
-    return glm::vec3(line);
+    return glm::vec3(float(line.x), float(line.y), float(line.z));
 
   // Re-anchor the infinite line at the midpoint of its segment inside the
   // NDC square.  The original constant can still contain a large world
   // coordinate; evaluating that constant in float32 causes cancellation and
   // flicker while panning.
-  glm::dvec2 anchors[4];
+  AcGePoint2d anchors[4];
   int anchorCount = 0;
   const double edgeEpsilon = 1e-12;
   const auto addAnchor = [&](double x, double y) {
@@ -4389,8 +4389,8 @@ glm::vec3 anchoredNdcLine(const glm::dvec3 &line)
         x >= -1.0 - edgeEpsilon && x <= 1.0 + edgeEpsilon &&
         y >= -1.0 - edgeEpsilon && y <= 1.0 + edgeEpsilon)
     {
-      anchors[anchorCount++] = glm::dvec2(glm::clamp(x, -1.0, 1.0),
-                                           glm::clamp(y, -1.0, 1.0));
+      anchors[anchorCount++] = AcGePoint2d(std::clamp(x, -1.0, 1.0),
+                                           std::clamp(y, -1.0, 1.0));
     }
   };
 
@@ -4405,14 +4405,14 @@ glm::vec3 anchoredNdcLine(const glm::dvec3 &line)
     addAnchor((-line.z - line.y) / line.x, 1.0);
   }
   if (anchorCount == 0)
-    return glm::vec3(line);
+    return glm::vec3(float(line.x), float(line.y), float(line.z));
 
-  glm::dvec2 anchor(0.0);
+  AcGeVector2d anchor(0.0, 0.0);
   for (int index = 0; index < anchorCount; ++index)
     anchor += anchors[index] / static_cast<double>(anchorCount);
 
-  return glm::vec3(line.x, line.y,
-                   -(line.x * anchor.x + line.y * anchor.y));
+  return glm::vec3(float(line.x), float(line.y),
+                   float(-(line.x * anchor.x + line.y * anchor.y)));
 }
 
 struct CameraSpaceAabb
@@ -7377,7 +7377,7 @@ void render()
   tinyCadDraws.clear();
   tinyCadDraws.reserve(visibilityCandidates.size());
   bool centerCubeInFrame = false;
-  const glm::dvec3 worldLineEnd = LARGE_COORDINATE_BASE_POINT;
+  const AcGePoint3d worldLineEnd = LARGE_COORDINATE_BASE_POINT;
   glm::dvec3 referenceLineStart = glm::dvec3(0.0);
   glm::dvec3 referenceLineEnd = worldLineEnd;
   bool referenceLineVisible = false;
@@ -7386,34 +7386,30 @@ void render()
   const glm::dvec3 &frontVec = orbitCam.Front;
   // The grid shader consumes GLM, while its persistent plane geometry uses
   // the AcGe point/vector interfaces.
-  const glm::dvec3 gridPlaneOriginRender =
-      static_cast<glm::dvec3>(gridPlaneOrigin);
-  const glm::dvec3 gridPlaneNormalRender =
-      static_cast<glm::dvec3>(gridPlaneNormal);
-  const glm::dvec3 gridPlaneStartAxisOriginRender =
-      static_cast<glm::dvec3>(gridPlaneStartAxisOrigin);
-  const glm::dvec3 gridPlaneStartAxisDirectionRender =
-      static_cast<glm::dvec3>(gridPlaneStartAxisDirection);
-  const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormalRender);
+  const AcGeVector3d cameraFrontGe(orbitCam.Front);
+  const AcGeVector3d cameraRightGe(orbitCam.Right);
+  const AcGeVector3d cameraUpGe(orbitCam.Up);
+  const AcGeVector3d planeNormal = gridPlaneNormal.normal();
   AcGeVector3d tangentUGe;
   AcGeVector3d tangentVGe;
   activePlaneTangents(tangentUGe, tangentVGe);
-  const glm::dvec3 tangentU = static_cast<glm::dvec3>(tangentUGe);
-  const glm::dvec3 tangentV = static_cast<glm::dvec3>(tangentVGe);
 
-  const double frontOnNormal = glm::dot(frontVec, planeNormal);
-  glm::dvec3 planeCenter;
+  const double frontOnNormal = cameraFrontGe.dotProduct(planeNormal);
+  AcGePoint3d planeCenter;
   if (std::abs(frontOnNormal) > 1e-6)
   {
       const double planeDistance =
-          glm::dot(gridPlaneOriginRender - cameraPos, planeNormal);
-      planeCenter = cameraPos + frontVec * (planeDistance / frontOnNormal);
+          (gridPlaneOrigin - AcGePoint3d(cameraPos)).dotProduct(planeNormal);
+      planeCenter = AcGePoint3d(cameraPos) +
+                    cameraFrontGe * (planeDistance / frontOnNormal);
   }
   else
   {
-      planeCenter = cameraPos -
+      planeCenter = AcGePoint3d(cameraPos) -
                     planeNormal *
-                        glm::dot(cameraPos - gridPlaneOriginRender, planeNormal);
+                        (AcGePoint3d(cameraPos) - gridPlaneOrigin)
+                            .asVector()
+                            .dotProduct(planeNormal);
   }
 
   if (useOrthoProjection())
@@ -8159,7 +8155,7 @@ void render()
   // cameraPos already declared at the top of render() for the shared
   // planeCenter computation -- reused here.
   const double s = (double)step;
-  glm::dvec3 originWorld(0.0);
+  AcGePoint3d originWorld(0.0, 0.0, 0.0);
   glm::vec3 planeOriginRelative(0.0f);
   glm::vec3 orthoPlaneCenter(0.0f);
   glm::vec3 orthoRight(0.0f);
@@ -8176,19 +8172,19 @@ void render()
   glm::vec3 startAxisDirection(0.0f);
   float startAxisVisible = 0.0f;
   glm::vec3 startAxisLine(0.0f);
-  glm::dvec3 normalizedAxisLineX(0.0);
-  glm::dvec3 normalizedAxisLineZ(0.0);
+  AcGeVector3d normalizedAxisLineX(0.0, 0.0, 0.0);
+  AcGeVector3d normalizedAxisLineZ(0.0, 0.0, 0.0);
   bool orthoPlaneValid = false;
 
   {
-      const glm::dvec3 planeDelta = planeCenter - gridPlaneOriginRender;
-      const double centerU = glm::dot(planeDelta, tangentU);
-      const double centerV = glm::dot(planeDelta, tangentV);
+      const AcGeVector3d planeDelta = planeCenter - gridPlaneOrigin;
+      const double centerU = planeDelta.dotProduct(tangentUGe);
+      const double centerV = planeDelta.dotProduct(tangentVGe);
       const double snappedU = std::round(centerU / s) * s;
       const double snappedV = std::round(centerV / s) * s;
-      originWorld = gridPlaneOriginRender +
-                    tangentU * snappedU +
-                    tangentV * snappedV;
+      originWorld = gridPlaneOrigin +
+                    tangentUGe * snappedU +
+                    tangentVGe * snappedV;
   }
 
   if (useOrthoProjection())
@@ -8211,12 +8207,14 @@ void render()
     // parallel to it, matching the perspective shader's grazing cutoff.
     orthoPlaneValid = std::abs(frontOnNormal) > kMinGridPlaneCos;
     {
-      const glm::dvec3 imageRight = right * halfW;
-      const glm::dvec3 imageUp = up * halfH;
-      const glm::dvec3 groundRight =
-          imageRight - front * (glm::dot(imageRight, planeNormal) / frontOnNormal);
-      const glm::dvec3 groundUp =
-          imageUp - front * (glm::dot(imageUp, planeNormal) / frontOnNormal);
+      const AcGeVector3d imageRight = cameraRightGe * halfW;
+      const AcGeVector3d imageUp = cameraUpGe * halfH;
+      const AcGeVector3d groundRight =
+          imageRight - cameraFrontGe *
+                           (imageRight.dotProduct(planeNormal) / frontOnNormal);
+      const AcGeVector3d groundUp =
+          imageUp - cameraFrontGe *
+                        (imageUp.dotProduct(planeNormal) / frontOnNormal);
       orthoRight = glm::vec3(groundRight);
       orthoUp = glm::vec3(groundUp);
       // The point is relative to the snapped plane anchor.  Its normal-axis
@@ -8230,13 +8228,13 @@ void render()
       // on the ortho image is planeCenter + groundRight*x + groundUp*y;
       // therefore the line coefficients are its tangent-space projections.
       normalizedAxisLineX = normalizedNdcLine(
-          glm::dvec3(glm::dot(groundRight, tangentU),
-                     glm::dot(groundUp, tangentU),
-                     glm::dot(planeCenter, tangentU)));
+          AcGeVector3d(groundRight.dotProduct(tangentUGe),
+                       groundUp.dotProduct(tangentUGe),
+                       planeCenter.asVector().dotProduct(tangentUGe)));
       normalizedAxisLineZ = normalizedNdcLine(
-          glm::dvec3(glm::dot(groundRight, tangentV),
-                     glm::dot(groundUp, tangentV),
-                     glm::dot(planeCenter, tangentV)));
+          AcGeVector3d(groundRight.dotProduct(tangentVGe),
+                       groundUp.dotProduct(tangentVGe),
+                       planeCenter.asVector().dotProduct(tangentVGe)));
       axisLineX = anchoredNdcLine(normalizedAxisLineX);
       axisLineZ = anchoredNdcLine(normalizedAxisLineZ);
       axisVisible = isSpecialGridPlane(gridPlane)
@@ -8262,7 +8260,7 @@ void render()
   // The shader receives the rebased offset and never sees the absolute
   // world coordinate; magnitude is bounded by chunkSize/2 instead of
   // step/2.
-  planeOriginRelative = glm::vec3(originWorld - rebase);
+  planeOriginRelative = glm::vec3(originWorld - AcGePoint3d(rebase));
   // The shader's p is already relative to the snapped grid anchor, so this
   // value intentionally stays grid-relative.  Resolving it against the frame
   // rebase would shift the world axes by one rebase chunk.
@@ -8272,17 +8270,16 @@ void render()
   // true world origin.  Float32 is still safe here because the active LOD
   // keeps one pixel worth of plane space at or above ULP(|constant|).
   {
-    const glm::dvec3 gridPlaneToAnchor =
-        gridPlaneOriginRender - originWorld;
-    const double axisU = glm::dot(gridPlaneToAnchor, tangentU);
-    const double axisV = glm::dot(gridPlaneToAnchor, tangentV);
+    const AcGeVector3d gridPlaneToAnchor = gridPlaneOrigin - originWorld;
+    const double axisU = gridPlaneToAnchor.dotProduct(tangentUGe);
+    const double axisV = gridPlaneToAnchor.dotProduct(tangentVGe);
     axisOriginGridRelative = glm::vec2(
         static_cast<float>(axisU),
         static_cast<float>(axisV));
   }
 
-  planeTangentU = glm::vec3(tangentU);
-  planeTangentV = glm::vec3(tangentV);
+  planeTangentU = glm::vec3(tangentUGe);
+  planeTangentV = glm::vec3(tangentVGe);
   if (gridPlane == GridPlaneType::XZ)
   {
       axisColorU = kAxisColorX;   // X red
@@ -8300,42 +8297,40 @@ void render()
   }
   else
   {
-      glm::dvec3 startAxisWorld = gridPlaneStartAxisOriginRender -
-          planeNormal * glm::dot(
-              gridPlaneStartAxisOriginRender - gridPlaneOriginRender,
-              planeNormal);
+      AcGePoint3d startAxisWorld = gridPlaneStartAxisOrigin -
+          planeNormal * (gridPlaneStartAxisOrigin - gridPlaneOrigin)
+                            .dotProduct(planeNormal);
       startAxisOrigin = glm::vec3(startAxisWorld - originWorld);
-      glm::dvec3 startAxisDirection =
-          gridPlaneStartAxisDirectionRender -
-          planeNormal * glm::dot(gridPlaneStartAxisDirectionRender,
-                                 planeNormal);
-      if (glm::length(startAxisDirection) < 1e-9)
-          startAxisDirection = tangentU;
-      startAxisDirection = glm::normalize(startAxisDirection);
+      AcGeVector3d startAxisDirection =
+          gridPlaneStartAxisDirection -
+          planeNormal * gridPlaneStartAxisDirection.dotProduct(planeNormal);
+      if (startAxisDirection.length() < 1e-9)
+          startAxisDirection = tangentUGe;
+      startAxisDirection.normalize();
       // Project a short segment around the point where the start axis is
       // closest to the camera's gaze.  This avoids endpoint/w-plane problems
       // while still producing the true infinite line's NDC coefficients.
-      const glm::dvec3 axisCenterOnPlane =
+      const AcGePoint3d axisCenterOnPlane =
           startAxisWorld +
           startAxisDirection *
-              glm::dot(planeCenter - startAxisWorld, startAxisDirection);
+              (planeCenter - startAxisWorld).dotProduct(startAxisDirection);
       const double axisSegmentLength =
-          0.1 * std::max(1.0, glm::length(planeCenter - cameraPos));
-      const glm::dvec3 axisPoint0 =
+          0.1 * std::max(1.0, planeCenter.distanceTo(AcGePoint3d(cameraPos)));
+      const AcGePoint3d axisPoint0 =
           axisCenterOnPlane - startAxisDirection * axisSegmentLength;
-      const glm::dvec3 axisPoint1 =
+      const AcGePoint3d axisPoint1 =
           axisCenterOnPlane + startAxisDirection * axisSegmentLength;
       const glm::vec4 clip0 = overlayProjection * view *
-          glm::vec4(glm::vec3(axisPoint0 - rebase), 1.0f);
+          glm::vec4(glm::vec3(axisPoint0 - AcGePoint3d(rebase)), 1.0f);
       const glm::vec4 clip1 = overlayProjection * view *
-          glm::vec4(glm::vec3(axisPoint1 - rebase), 1.0f);
+          glm::vec4(glm::vec3(axisPoint1 - AcGePoint3d(rebase)), 1.0f);
       if (clip0.w > 0.0f && clip1.w > 0.0f)
       {
           const glm::dvec2 ndc0(clip0.x / clip0.w, clip0.y / clip0.w);
           const glm::dvec2 ndc1(clip1.x / clip1.w, clip1.y / clip1.w);
           if (glm::length(ndc1 - ndc0) > 1e-12)
           {
-              const glm::dvec3 normalizedLine = normalizedNdcLine(glm::dvec3(
+              const AcGeVector3d normalizedLine = normalizedNdcLine(AcGeVector3d(
                   ndc0.y - ndc1.y,
                   ndc1.x - ndc0.x,
                   ndc0.x * ndc1.y - ndc1.x * ndc0.y));
@@ -8360,15 +8355,15 @@ void render()
     {
       const double halfH = orbitCam.orthoSize();
       const double halfW = (double)halfH * (double)aspect;
-      const glm::dvec3 right(orbitCam.Right);
-      const glm::dvec3 up(orbitCam.Up);
+      const AcGeVector3d right(orbitCam.Right);
+      const AcGeVector3d up(orbitCam.Up);
       const double cameraPlaneDistance =
-          glm::dot(cameraPos - gridPlaneOriginRender, planeNormal);
+          (AcGePoint3d(cameraPos) - gridPlaneOrigin).dotProduct(planeNormal);
       const double groundCenterDepth =
           -cameraPlaneDistance / frontOnNormal;
       const double groundDepthRadius =
-          (std::abs(glm::dot(right, planeNormal)) * halfW +
-           std::abs(glm::dot(up, planeNormal)) * halfH) /
+          (std::abs(right.dotProduct(planeNormal)) * halfW +
+           std::abs(up.dotProduct(planeNormal)) * halfH) /
           std::abs(frontOnNormal);
       gridPlaneVisible =
           (groundCenterDepth + groundDepthRadius >= activeNear) &&
@@ -8377,14 +8372,15 @@ void render()
   }
   else
   {
-    const glm::dvec3 front = glm::normalize(orbitCam.Front);
-    const double planeCos = std::abs(glm::dot(front, planeNormal));
+    const AcGeVector3d front = AcGeVector3d(orbitCam.Front).normal();
+    const double planeCos = std::abs(front.dotProduct(planeNormal));
     gridPlaneVisible = planeCos >= kMinGridPlaneCos;
     if (gridPlaneVisible)
     {
-      const double denom = glm::dot(front, planeNormal);
+      const double denom = front.dotProduct(planeNormal);
       const double t =
-          glm::dot(gridPlaneOriginRender - cameraPos, planeNormal) / denom;
+          (gridPlaneOrigin - AcGePoint3d(cameraPos)).dotProduct(planeNormal) /
+          denom;
       gridPlaneVisible = t > 0.0;
     }
   }
@@ -8413,35 +8409,35 @@ void render()
     int gridPolygonCount = 0;
     if (useOrthoProjection() && orthoPlaneValid)
     {
-      gridPolygon[0] = originWorld +
-          glm::dvec3(orthoPlaneCenter - orthoRight - orthoUp);
-      gridPolygon[1] = originWorld +
-          glm::dvec3(orthoPlaneCenter + orthoRight - orthoUp);
-      gridPolygon[2] = originWorld +
-          glm::dvec3(orthoPlaneCenter + orthoRight + orthoUp);
-      gridPolygon[3] = originWorld +
-          glm::dvec3(orthoPlaneCenter - orthoRight + orthoUp);
+      const AcGeVector3d center(orthoPlaneCenter);
+      const AcGeVector3d right(orthoRight);
+      const AcGeVector3d up(orthoUp);
+      gridPolygon[0] = originWorld + (center - right - up);
+      gridPolygon[1] = originWorld + (center + right - up);
+      gridPolygon[2] = originWorld + (center + right + up);
+      gridPolygon[3] = originWorld + (center - right + up);
       gridPolygonCount = 4;
       gridVisibleQuadValid = true;
     }
     else if (!useOrthoProjection())
     {
-      const glm::dvec3 camPos = orbitCam.Position;
-      const glm::dvec3 n = glm::normalize(gridPlaneNormalRender);
+      const AcGePoint3d camPos(orbitCam.Position);
+      const AcGeVector3d n = planeNormal;
       const double planeDist =
-          glm::dot(gridPlaneOriginRender - camPos, n);
+          (gridPlaneOrigin - camPos).dotProduct(n);
       gridVisibleQuadValid = true;
       for (int i = 0; i < 4; ++i)
       {
-        const glm::dvec3 dir = glm::normalize(
-            glm::dvec3(frustumCorners[4 + i]) - camPos);
-        const double denom = glm::dot(dir, n);
+        const AcGeVector3d dir =
+            (AcGePoint3d(frustumCorners[4 + i]) - camPos).normal();
+        const double denom = dir.dotProduct(n);
         if (std::abs(denom) < 1e-10 || planeDist / denom < 0.0)
         {
           gridVisibleQuadValid = false;
           break;
         }
-        gridPolygon[i] = camPos + dir * (planeDist / denom);
+        gridPolygon[i] = glm::dvec3(
+            camPos + dir * (planeDist / denom));
       }
       gridPolygonCount = gridVisibleQuadValid ? 4 : 0;
     }
