@@ -156,6 +156,7 @@ set(WINDOW_SOURCES
     lib/acdb/AcDbDatabase.cpp
     lib/acdb/AcDbStore.cpp
     lib/acdb/AcDbFileIo.cpp
+    lib/acdb/AcDbLibredwgFileCodec.cpp
     lib/acdb/AcDbGltf.cpp
     lib/brep/BRep.cpp
     lib/acdb/AcDbTransaction.cpp
@@ -271,7 +272,8 @@ target_link_libraries(WINDOW PRIVATE tinygltf)
 add_executable(fileio_repro tools/fileio_repro.cpp
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDatabase.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransaction.cpp"
-    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbFileIo.cpp")
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbFileIo.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbLibredwgFileCodec.cpp")
 target_include_directories(fileio_repro PRIVATE
     "${CMAKE_SOURCE_DIR}/lib"
     "${CMAKE_SOURCE_DIR}/lib/libredwg/src"
