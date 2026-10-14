@@ -7198,11 +7198,16 @@ void render()
   {
     const rendering::GpuPickQueueStats queueStats =
         acgs::acgsGetManager()->gpuPickQueueStats();
-    if (queueStats.capacityExceeded())
+    const rendering::GpuPickResult completedPick =
+        acgs::acgsGetManager()->pollGpuPick();
+    const bool completedPickMatches =
+        completedPick.ready &&
+        completedPick.requestToken == gpuPickFocus.requestToken;
+    if (queueStats.capacityExceeded() && !completedPickMatches)
     {
       gpuPickFocus.waitingResult = false;
       gpuPickFocus.pendingFrames = 0;
-      std::cout << "GPU pick queue full meshes="
+      std::cout << "GPU pick geometry dropped meshes="
                 << queueStats.queuedMeshes << "/"
                 << queueStats.meshCapacity
                 << " triangles=" << queueStats.queuedTriangles
