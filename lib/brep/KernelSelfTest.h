@@ -64,6 +64,12 @@ inline int runKernelSelfTest()
                             AcGeVector2d{4.0, 5.0});
         check(vectorSegment2d.endPoint() == AcGePoint2d{6.0, 8.0},
               "2D segment point-vector construction");
+        double segmentParameter = -1.0;
+        check(a.closestPointTo({2.0, 3.0}) == AcGePoint2d{2.0, 0.0} &&
+                  a.distanceTo({2.0, 3.0}) == 3.0 &&
+                  a.isOn(AcGePoint2d{3.0, 0.0}, segmentParameter) &&
+                  segmentParameter == 0.75 && !a.isOn(1.1),
+              "2D segment closest point and membership");
         AcGeLine2d bisector;
         a.getBisector(bisector);
         check(bisector.basePoint == AcGePoint2d{2.0, 0.0} &&
@@ -78,6 +84,14 @@ inline int runKernelSelfTest()
                             AcGeVector3d{4.0, 5.0, 6.0});
         check(vectorSegment3d.endPoint() == AcGePoint3d{6.0, 8.0, 10.0},
               "3D segment point-vector construction");
+        segmentParameter = -1.0;
+        check(segment3d.closestPointTo({1.0, 0.0, 2.0}) ==
+                      AcGePoint3d{0.0, 0.0, 2.0} &&
+                  segment3d.distanceTo({1.0, 0.0, 2.0}) == 1.0 &&
+                  segment3d.isOn(AcGePoint3d{0.0, 0.0, 3.0},
+                                 segmentParameter) &&
+                  segmentParameter == 0.75,
+              "3D segment closest point and membership");
         AcGePlane bisector3d;
         segment3d.getBisector(bisector3d);
         check(segment3d.length() == 4.0 &&

@@ -5,6 +5,7 @@
 // radians measured in the plane's basis) so entity tessellation and AcGi
 // draw callbacks can exchange them directly.
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -51,6 +52,15 @@ public:
     AcGePoint3d startPoint() const { return m_startPoint; }
     AcGePoint3d endPoint() const { return m_endPoint; }
     AcGeVector3d direction() const { return m_endPoint - m_startPoint; }
+    double parameterOf(const AcGePoint3d &point) const
+    {
+        const AcGeVector3d segment = direction();
+        const double lengthSquared = segment.lengthSq();
+        return lengthSquared == 0.0
+                   ? 0.0
+                   : (point - m_startPoint).dotProduct(segment) /
+                         lengthSquared;
+    }
 
     double length() const { return m_startPoint.distanceTo(m_endPoint); }
     double length(double fromParam, double toParam,
@@ -68,6 +78,39 @@ public:
     AcGePoint3d pointAt(double t) const
     {
         return baryComb(t);
+    }
+    AcGePoint3d closestPointTo(
+        const AcGePoint3d &point,
+        const AcGeTol & = AcGeTol{}) const
+    {
+        return pointAt(std::clamp(parameterOf(point), 0.0, 1.0));
+    }
+    double distanceTo(const AcGePoint3d &point,
+                      const AcGeTol &tol = AcGeTol{}) const
+    {
+        return closestPointTo(point, tol).distanceTo(point);
+    }
+    bool isOn(double parameter, const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double pointTolerance = std::abs(tol.equalPoint());
+        const double parameterTolerance =
+            pointTolerance / std::max(length(), pointTolerance);
+        return parameter >= -parameterTolerance &&
+               parameter <= 1.0 + parameterTolerance;
+    }
+    bool isOn(const AcGePoint3d &point, double &parameter,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double candidate = parameterOf(point);
+        const double pointTolerance = std::abs(tol.equalPoint());
+        const double parameterTolerance =
+            pointTolerance / std::max(length(), pointTolerance);
+        if (candidate < -parameterTolerance ||
+            candidate > 1.0 + parameterTolerance ||
+            distanceTo(point, tol) > pointTolerance)
+            return false;
+        parameter = std::clamp(candidate, 0.0, 1.0);
+        return true;
     }
 
     void getBisector(AcGePlane &plane) const

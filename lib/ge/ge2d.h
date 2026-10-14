@@ -56,6 +56,14 @@ public:
     AcGePoint2d endPoint() const { return m_end; }
 
     AcGeVector2d direction() const { return m_end - m_start; }
+    double parameterOf(const AcGePoint2d &point) const
+    {
+        const AcGeVector2d segment = direction();
+        const double lengthSquared = segment.lengthSq();
+        return lengthSquared == 0.0
+                   ? 0.0
+                   : (point - m_start).dotProduct(segment) / lengthSquared;
+    }
     double length() const { return m_start.distanceTo(m_end); }
     double length(double fromParam, double toParam,
                   double tol = AcGeTol{}.equalPoint()) const
@@ -69,6 +77,39 @@ public:
         return m_start + (m_end - m_start) * blendCoeff;
     }
     AcGePoint2d pointAt(double parameter) const { return baryComb(parameter); }
+    AcGePoint2d closestPointTo(
+        const AcGePoint2d &point,
+        const AcGeTol & = AcGeTol{}) const
+    {
+        return pointAt(std::clamp(parameterOf(point), 0.0, 1.0));
+    }
+    double distanceTo(const AcGePoint2d &point,
+                      const AcGeTol &tol = AcGeTol{}) const
+    {
+        return closestPointTo(point, tol).distanceTo(point);
+    }
+    bool isOn(double parameter, const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double pointTolerance = std::abs(tol.equalPoint());
+        const double parameterTolerance =
+            pointTolerance / std::max(length(), pointTolerance);
+        return parameter >= -parameterTolerance &&
+               parameter <= 1.0 + parameterTolerance;
+    }
+    bool isOn(const AcGePoint2d &point, double &parameter,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double candidate = parameterOf(point);
+        const double pointTolerance = std::abs(tol.equalPoint());
+        const double parameterTolerance =
+            pointTolerance / std::max(length(), pointTolerance);
+        if (candidate < -parameterTolerance ||
+            candidate > 1.0 + parameterTolerance ||
+            distanceTo(point, tol) > pointTolerance)
+            return false;
+        parameter = std::clamp(candidate, 0.0, 1.0);
+        return true;
+    }
     void getBisector(AcGeLine2d &line) const
     {
         line.set(midPoint(), direction().perpVector());
