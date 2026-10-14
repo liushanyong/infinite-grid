@@ -1331,13 +1331,18 @@ void WebGpuRenderer::drawGrid(const GridRenderData &data)
     if (!m_initialized || !m_resourcesCreated || data.step <= 0.0f)
         return;
 
+    const auto toVec3 = [](const auto &value) {
+        return glm::vec3(static_cast<float>(value.x),
+                         static_cast<float>(value.y),
+                         static_cast<float>(value.z));
+    };
     const glm::mat4 projection = projectionForWebGpu(data.projection);
     const uint32_t start = static_cast<uint32_t>(m_lineStaging.size());
     const glm::vec3 center = data.orthoPlaneValid > 0.5f
-                                 ? data.orthoPlaneCenter
-                                 : data.planeOriginRelative;
-    const glm::vec3 axisU = glm::normalize(data.planeTangentU);
-    const glm::vec3 axisV = glm::normalize(data.planeTangentV);
+                                 ? toVec3(data.orthoPlaneCenter)
+                                 : toVec3(data.planeOriginRelative);
+    const glm::vec3 axisU = glm::normalize(toVec3(data.planeTangentU));
+    const glm::vec3 axisV = glm::normalize(toVec3(data.planeTangentV));
     const int lineCount = 48;
     const float extent = std::max({data.screenWidth, data.screenHeight,
                                    64.0f}) * data.step;

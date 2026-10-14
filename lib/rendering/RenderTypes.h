@@ -11,6 +11,7 @@
 
 #include <glm/glm.hpp>
 
+#include "ge/gepoint.h"
 #include "RenderMode.h"
 
 namespace rendering
@@ -114,24 +115,24 @@ struct GridRenderData
     glm::mat4 projection;
     glm::mat4 invViewProj;
     glm::mat4 viewProj;
-    glm::vec3 camFront;
-    glm::vec3 orthoPlaneCenter;
-    glm::vec3 orthoRight;
-    glm::vec3 orthoUp;
-    glm::vec3 planeOriginRelative;
+    AcGeVector3d camFront;
+    AcGePoint3d orthoPlaneCenter;
+    AcGeVector3d orthoRight;
+    AcGeVector3d orthoUp;
+    AcGePoint3d planeOriginRelative;
     float plane;
-    glm::vec3 planeNormal;
-    glm::vec3 planeTangentU;
-    glm::vec3 planeTangentV;
+    AcGeVector3d planeNormal;
+    AcGeVector3d planeTangentU;
+    AcGeVector3d planeTangentV;
     glm::vec3 axisColorU;
     glm::vec3 axisColorV;
-    glm::vec3 startAxisOrigin;
-    glm::vec3 startAxisDirection;
+    AcGePoint3d startAxisOrigin;
+    AcGeVector3d startAxisDirection;
     float startAxisVisible;
-    glm::vec3 startAxisLine;
-    glm::vec2 axisOriginGridRelative;
-    glm::vec3 axisLineX;
-    glm::vec3 axisLineZ;
+    AcGeVector3d startAxisLine;
+    AcGePoint2d axisOriginGridRelative;
+    AcGeVector3d axisLineX;
+    AcGeVector3d axisLineZ;
     float orthoPlaneValid;
     float groundRelativeY;
     float isOrtho;

@@ -2217,6 +2217,11 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
 {
     if (!m_initialized || !bgfx::isValid(m_gridProgram))
         return;
+    const auto toVec3 = [](const auto &value) {
+        return glm::vec3(static_cast<float>(value.x),
+                         static_cast<float>(value.y),
+                         static_cast<float>(value.z));
+    };
     // The grid is translucent, but its line/axis pixels must occlude
     // geometry behind the grid plane. Fragments with zero alpha are already
     // discarded, so only visible line pixels write depth; the gaps between
@@ -2231,38 +2236,43 @@ void BgfxRenderer::drawGrid(const GridRenderData &data)
     const glm::mat4 depthViewProj =
         projectionForDirect3D(data.projection) * data.view;
     bgfx::setUniform(m_gridViewProj, glm::value_ptr(depthViewProj));
-    bgfx::setUniform(m_gridCamFront, packVec4(data.camFront, 0.0f).data());
+    bgfx::setUniform(m_gridCamFront, packVec4(toVec3(data.camFront), 0.0f).data());
     bgfx::setUniform(m_gridOrthoPlaneCenter,
-                     packVec4(data.orthoPlaneCenter, 0.0f).data());
+                     packVec4(toVec3(data.orthoPlaneCenter), 0.0f).data());
     bgfx::setUniform(m_gridOrthoRight,
-                     packVec4(data.orthoRight, 0.0f).data());
+                     packVec4(toVec3(data.orthoRight), 0.0f).data());
     bgfx::setUniform(m_gridOrthoUp,
-                     packVec4(data.orthoUp, 0.0f).data());
+                     packVec4(toVec3(data.orthoUp), 0.0f).data());
     bgfx::setUniform(m_gridOriginRelative,
-                     packVec4(data.planeOriginRelative, data.plane).data());
+                     packVec4(toVec3(data.planeOriginRelative), data.plane).data());
     bgfx::setUniform(m_gridPlaneNormal,
-                     packVec4(data.planeNormal, 0.0f).data());
+                     packVec4(toVec3(data.planeNormal), 0.0f).data());
     bgfx::setUniform(m_gridPlaneTangentU,
-                     packVec4(data.planeTangentU, 0.0f).data());
+                     packVec4(toVec3(data.planeTangentU), 0.0f).data());
     bgfx::setUniform(m_gridPlaneTangentV,
-                     packVec4(data.planeTangentV, 0.0f).data());
+                     packVec4(toVec3(data.planeTangentV), 0.0f).data());
     bgfx::setUniform(m_gridAxisColorU,
                      packVec4(data.axisColorU, 0.0f).data());
     bgfx::setUniform(m_gridAxisColorV,
                      packVec4(data.axisColorV, 0.0f).data());
     bgfx::setUniform(m_gridStartAxisOrigin,
-                     packVec4(data.startAxisOrigin, 0.0f).data());
+                     packVec4(toVec3(data.startAxisOrigin), 0.0f).data());
     bgfx::setUniform(m_gridStartAxisDirection,
-                     packVec4(data.startAxisDirection, 0.0f).data());
+                     packVec4(toVec3(data.startAxisDirection), 0.0f).data());
     bgfx::setUniform(m_gridStartAxisVisible,
                      glm::value_ptr(glm::vec4(data.startAxisVisible, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_gridStartAxisLine,
-                     packVec4(data.startAxisLine, 0.0f).data());
+                     packVec4(toVec3(data.startAxisLine), 0.0f).data());
     bgfx::setUniform(
         m_gridAxisOriginGridRelative,
-        packVec4(glm::vec3(data.axisOriginGridRelative, 0.0f), 0.0f).data());
-    bgfx::setUniform(m_gridAxisLineX, packVec4(data.axisLineX, 0.0f).data());
-    bgfx::setUniform(m_gridAxisLineZ, packVec4(data.axisLineZ, 0.0f).data());
+        packVec4(glm::vec3(static_cast<float>(data.axisOriginGridRelative.x),
+                           static_cast<float>(data.axisOriginGridRelative.y),
+                           0.0f),
+                 0.0f).data());
+    bgfx::setUniform(m_gridAxisLineX,
+                     packVec4(toVec3(data.axisLineX), 0.0f).data());
+    bgfx::setUniform(m_gridAxisLineZ,
+                     packVec4(toVec3(data.axisLineZ), 0.0f).data());
     bgfx::setUniform(m_gridIsOrtho,
                      glm::value_ptr(glm::vec4(data.isOrtho, 0.0f, 0.0f, 0.0f)));
     bgfx::setUniform(m_gridGroundRelativeY,
