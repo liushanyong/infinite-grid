@@ -24,6 +24,7 @@
 #include <glm/glm.hpp>
 
 #include "arx/ArxTypes.h"
+#include "arx/AcCmEntityColor.h"
 #include "ge/gepoint.h"
 
 namespace acdb
@@ -132,8 +133,11 @@ public:
     const std::string &getLayerName() const { return layer; }
 
     // AcDbEntity::setColor / getColor
+    void setColor(const AcCmEntityColor &value) { color = value; }
     void setColor(const glm::vec4 &value) { color = value; }
-    const glm::vec4 &getColor() const { return color; }
+    const AcCmEntityColor &getColor() const { return color; }
+    void setColorIndex(int value) { color.setColorIndex(value); }
+    int colorIndex() const { return color.colorIndex(); }
 
     // AcDbEntity::setLineType / getLineType
     void setLineType(const std::string &value) { lineType = value; }
@@ -158,12 +162,7 @@ public:
     // Payload fields (shared shape with acdb::AcDbEntity).
     std::string name;
     std::string layer = "0";
-    glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
-    // Raw ACI index as carried by the file formats (DXF 62 / DWG CMC):
-    // 0 = ByBlock, 256 = ByLayer, 1..255 explicit (ObjectARX
-    // AcCmEntityColor carries index and RGB side by side; the file IO
-    // bridge treats the index as authoritative, `color` drives rendering).
-    int colorIndex = 256;
+    AcCmEntityColor color;
     std::string lineType = "ByLayer";
     double lineWeight = 0.0;
     bool visible = true;

@@ -959,7 +959,8 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         {
             // Unknown line type: plain solid ribbon, matching the old
             // not-found fallback.
-            appendAcGiRibbon(ra, rb, stroke.common.color, 0.0f, 0.0f, 0.0f);
+            appendAcGiRibbon(ra, rb, stroke.common.color.renderColor(),
+                             0.0f, 0.0f, 0.0f);
             return;
         }
         const float halfWidth = strokeHalfWidth(stroke);
@@ -981,7 +982,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
                 appendAcGiRibbon(
                     glm::vec3(start + (end - start) * (distance / total)),
                     glm::vec3(start + (end - start) * (next / total)),
-                    stroke.common.color, halfWidth,
+                    stroke.common.color.renderColor(), halfWidth,
                     float(distance / total), float(next / total));
             }
             distance = next;
@@ -1047,7 +1048,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
                 appendLineInstance(
                     glm::vec3(clippedStart - ctx.cameraPos),
                     glm::vec3(clippedEnd - ctx.cameraPos),
-                    stroke.common.color, halfWidth);
+                    stroke.common.color.renderColor(), halfWidth);
             }
         }
     }
@@ -1118,7 +1119,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         std::vector<rendering::FillVertex> &vertices =
             triangle.is3DFace ? surfaceFillVertices : fillVertices;
         const glm::vec4 fillColor =
-            contrastColor(triangle.common.color);
+            contrastColor(triangle.common.color.renderColor());
         vertices.push_back(
             {glm::vec3(triangle.a - ctx.cameraPos), fillColor});
         vertices.push_back(
@@ -1154,7 +1155,8 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         if (!point.common.visible)
             continue;
         const glm::vec3 center(point.location - ctx.cameraPos);
-        const glm::vec3 color(contrastColor(point.common.color));
+        const glm::vec3 color(
+            contrastColor(point.common.color.renderColor()));
         const float markerSize =
             point.pointSize > 0.0 ? float(point.pointSize) : pointSize;
         if (point.displayStyle == acge::PointDisplayStyle::Circle)
@@ -1181,7 +1183,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         const glm::vec3 up = glm::vec3(ctx.cameraUp) * radius;
         auto addSymbolLine = [&](const glm::vec3 &from,
                                  const glm::vec3 &to) {
-            appendAcGiRibbon(from, to, point.common.color,
+            appendAcGiRibbon(from, to, point.common.color.renderColor(),
                              markerPixelSizeWorld * 0.5f, 0.0f, 1.0f);
         };
         switch (point.displayStyle)

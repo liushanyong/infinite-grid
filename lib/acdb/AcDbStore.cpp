@@ -112,7 +112,9 @@ Value commonToJson(const AcDbEntity &entity)
     Value out(json::Object{});
     out.set("name", entity.name);
     out.set("layer", entity.layer);
-    out.set("color", colorToJson(entity.color));
+    out.set("color", colorToJson(entity.color.renderColor()));
+    out.set("colorMethod", static_cast<int>(entity.color.colorMethod()));
+    out.set("colorIndex", entity.color.colorIndex());
     out.set("lineType", entity.lineType);
     out.set("lineWeight", entity.lineWeight);
     out.set("visible", entity.visible);
@@ -126,7 +128,27 @@ void commonFromJson(const Value &value, AcDbEntity &entity)
     if (const Value *v = value.find("layer"))
         entity.layer = v->asString();
     if (const Value *v = value.find("color"))
-        entity.color = jsonToColor(*v);
+    {
+        const glm::vec4 rgba = jsonToColor(*v);
+        entity.color = rgba;
+        if (const Value *method = value.find("colorMethod"))
+        {
+            const int methodValue = static_cast<int>(method->asNumber());
+            const Value *index = value.find("colorIndex");
+            if (methodValue >= static_cast<int>(
+                                   AcCmEntityColor::ColorMethod::kByLayer) &&
+                methodValue <= static_cast<int>(
+                                   AcCmEntityColor::ColorMethod::kNone))
+            {
+                entity.color.setFileColor(
+                    static_cast<AcCmEntityColor::ColorMethod>(methodValue),
+                    index != nullptr
+                        ? static_cast<int>(index->asNumber())
+                        : 256,
+                    glm::vec3(rgba), rgba.a);
+            }
+        }
+    }
     if (const Value *v = value.find("lineType"))
         entity.lineType = v->asString();
     if (const Value *v = value.find("lineWeight"))
