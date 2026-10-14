@@ -369,7 +369,7 @@ inline AcDbText toEntity(const Dwg_Entity_TEXT &dwg)
     text.insertion = AcGePoint3d(dwg.ins_pt.x, dwg.ins_pt.y, dwg.elevation);
     text.height = dwg.height;
     text.rotation = dwg.rotation;
-    text.text = dwg.text_value ? dwg.text_value : "";
+    text.text = arxcompat::fromUtf8(dwg.text_value ? dwg.text_value : "");
     return text;
 }
 
@@ -382,7 +382,7 @@ inline AcDbMText toEntity(const Dwg_Entity_MTEXT &dwg)
                                    dwg.x_axis_dir.z);
     mtext.width = dwg.rect_width;
     mtext.height = dwg.text_height;
-    mtext.text = dwg.text ? dwg.text : "";
+    mtext.text = arxcompat::fromUtf8(dwg.text ? dwg.text : "");
     return mtext;
 }
 
@@ -540,7 +540,7 @@ inline std::vector<AcDbEntityVariant> toEntities(
         text.height = context.text_height > 0.0
                           ? context.text_height
                           : content.height;
-        text.text = content.default_text;
+        text.text = arxcompat::fromUtf8(content.default_text);
         entities.emplace_back(std::move(text));
     }
     return entities;

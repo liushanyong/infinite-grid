@@ -688,8 +688,9 @@ inline bool writePayload(DwgWriteContext &ctx,
                          Dwg_Object_BLOCK_HEADER *hdr, const AcDbText &text)
 {
     const dwg_point_3d insertion3 = toDwgPoint(text.insertion);
+    const AcUtf8String utf8Text = arxcompat::toUtf8(text.text);
     Dwg_Entity_TEXT *obj =
-        dwg_add_TEXT(hdr, text.text.c_str(), &insertion3, text.height);
+        dwg_add_TEXT(hdr, utf8Text.c_str(), &insertion3, text.height);
     if (obj == nullptr)
         return false;
     obj->rotation = text.rotation;
@@ -709,8 +710,9 @@ inline bool writePayload(DwgWriteContext &ctx,
                          Dwg_Object_BLOCK_HEADER *hdr, const AcDbMText &mtext)
 {
     const dwg_point_3d insertion = toDwgPoint(mtext.insertion);
+    const AcUtf8String utf8Text = arxcompat::toUtf8(mtext.text);
     Dwg_Entity_MTEXT *obj = dwg_add_MTEXT(hdr, &insertion, mtext.width,
-                                          mtext.text.c_str());
+                                          utf8Text.c_str());
     if (obj == nullptr)
         return false;
     obj->text_height = mtext.height;

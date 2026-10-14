@@ -2350,7 +2350,7 @@ static void buildDemoDocument()
       shxText.insertion = cadAnchor + AcGeVector3d(256.0, 128.0, 96.0);
       shxText.height = 96.0; // world units per em
       const AcString shxMessage = L"\u4E2D\u6587 INFINITE - GRID 123";
-      shxText.text = arxcompat::toUtf8(shxMessage);
+      shxText.text = shxMessage;
       addDemo(std::move(shxText), "ShxText");
     }
 
@@ -2443,7 +2443,7 @@ static void buildDemoDocument()
     text.insertion = cadAnchor + AcGeVector3d(1152.0, 128.0, 384.0);
     text.height = 96.0;
     const AcString demoText = L"\u4E2D\u6587 TEXT";
-    text.text = arxcompat::toUtf8(demoText);
+    text.text = demoText;
     addDemo(text, "Text");
 
     acdb::AcDbMText mtext;
@@ -2452,7 +2452,7 @@ static void buildDemoDocument()
     mtext.direction = AcGeVector3d(1.0, 0.0, 0.0);
     mtext.height = 64.0;
     const AcString demoMText = L"\u4E2D\u6587 MTEXT\nDEMO";
-    mtext.text = arxcompat::toUtf8(demoMText);
+    mtext.text = demoMText;
     addDemo(mtext, "MText");
 
     // Text locators: bright vertical lines pointing at each text insertion

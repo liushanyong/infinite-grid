@@ -11,6 +11,12 @@ shared starting point for ObjectARX-style declarations:
 | `Adesk::Boolean`, integer aliases | Corresponding fixed-width C++ types | `LongPtr`/`ULongPtr` follow pointer width |
 | `AcGePoint2d/3d`, `AcGeVector2d/3d`, `AcGeMatrix3d` | Project's geometry types | Defined in `lib/ge`; already use ObjectARX names |
 
+`AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
+UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
+and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
+fields are being migrated incrementally; UTF-8-oriented renderer, codec, and
+storage interfaces remain narrow strings.
+
 The wide `AcGiWorldDraw::text` overload accepts `ACHAR` text and converts it
 to UTF-8 before queuing it for the existing text renderer. DWG/DXF codecs,
 SQLite storage, and the current renderer remain UTF-8/narrow-string boundaries;
