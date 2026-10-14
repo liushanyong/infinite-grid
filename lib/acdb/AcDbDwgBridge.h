@@ -192,22 +192,7 @@ inline int nearestAciIndex(const glm::vec4 &color)
 // index; its RGB bytes are written separately.
 inline int fileColorIndex(const AcDbEntity &common)
 {
-    switch (common.color.colorMethod())
-    {
-    case AcCmEntityColor::ColorMethod::kByLayer: return 256;
-    case AcCmEntityColor::ColorMethod::kByBlock: return 0;
-    case AcCmEntityColor::ColorMethod::kByACI:
-        return common.color.colorIndex();
-    case AcCmEntityColor::ColorMethod::kByColor:
-        return common.color.colorIndex();
-    case AcCmEntityColor::ColorMethod::kByPen:
-    case AcCmEntityColor::ColorMethod::kLayerOff:
-    case AcCmEntityColor::ColorMethod::kLayerFrozen:
-        return common.color.colorIndex();
-    case AcCmEntityColor::ColorMethod::kForeground: return 7;
-    case AcCmEntityColor::ColorMethod::kNone: return 0;
-    }
-    return 256;
+    return common.color.colorIndex();
 }
 
 // ---- symbol-table reference resolution (null-safe) ----
