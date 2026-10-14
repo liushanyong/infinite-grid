@@ -172,6 +172,34 @@ inline int runKernelSelfTest()
                           0.0, 1.0, -0.5, 0.5}.isClosed(),
               "spherical patch is not closed");
 
+        const AcGeInterval interval{1.0, 5.0};
+        AcGeInterval overlap;
+        check(interval.contains(1.0) && interval.contains(5.0) &&
+                  !interval.contains(5.1) && interval.length() == 4.0 &&
+                  interval.intersectWith(AcGeInterval{4.0, 8.0}, overlap) &&
+                  overlap.isEqualAtLower(4.0) &&
+                  overlap.isEqualAtUpper(5.0),
+              "bounded parameter interval queries");
+        check(interval.isDisjoint(AcGeInterval{6.0, 8.0}) &&
+                  interval.contains(AcGeInterval{2.0, 3.0}),
+              "parameter interval containment and disjointness");
+        AcGeInterval merged;
+        interval.getMerge(AcGeInterval{7.0, 9.0}, merged);
+        check(merged.isEqualAtLower(1.0) && merged.isEqualAtUpper(9.0),
+              "parameter interval merge");
+        const AcGeInterval lowerBounded{false, 3.0};
+        check(lowerBounded.isBoundedAbove() &&
+                  !lowerBounded.isBoundedBelow() &&
+                  lowerBounded.contains(-100.0) &&
+                  lowerBounded.element() == 3.0 &&
+                  lowerBounded.length() == -1.0,
+              "one-sided unbounded parameter interval");
+        AcGeInterval resetInterval{1.0, 2.0};
+        resetInterval.set();
+        check(resetInterval.isUnBounded() &&
+                  resetInterval.length() == -1.0,
+              "interval reset to unbounded");
+
         const AcGeLine2d line{AcGePoint2d{1.0, 2.0},
                               AcGePoint2d{3.0, 2.0}};
         check(line.pointAt(-1.0).distanceTo({-1.0, 2.0}) < 1.0e-9,

@@ -40,6 +40,10 @@ implemented.
 These are geometric subsets; they do not provide the full AcGe surface
 intersection and hierarchy APIs.
 
+`AcGeInterval` provides finite and one-sided/unbounded parameter domains,
+tolerance-aware containment, intersection, merge, and extent queries.
+Advanced periodicity and interval subtraction APIs remain unimplemented.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
