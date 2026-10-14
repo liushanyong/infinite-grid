@@ -53,7 +53,10 @@ inline int runKernelSelfTest()
         check(a.startPoint() == AcGePoint2d{0.0, 0.0} &&
                   a.endPoint() == AcGePoint2d{4.0, 0.0} &&
                   a.midPoint() == AcGePoint2d{2.0, 0.0} &&
-                  a.baryComb(0.25) == AcGePoint2d{1.0, 0.0},
+                  a.baryComb(0.25) == AcGePoint2d{1.0, 0.0} &&
+                  a.length(0.25, 0.75) == 2.0 &&
+                  a.length(0.75, 0.25) == 2.0 &&
+                  a.length(0.25, 0.5, 2.0) == 0.0,
               "2D segment endpoint and barycentric queries");
         AcGeLineSeg2d vectorSegment2d{AcGePoint2d{1.0, 2.0},
                                       AcGeVector2d{3.0, 4.0}};
@@ -78,6 +81,7 @@ inline int runKernelSelfTest()
         AcGePlane bisector3d;
         segment3d.getBisector(bisector3d);
         check(segment3d.length() == 4.0 &&
+                  segment3d.length(0.25, 0.75) == 2.0 &&
                   segment3d.midPoint() == AcGePoint3d{0.0, 0.0, 2.0} &&
                   segment3d.baryComb(0.25) ==
                       AcGePoint3d{0.0, 0.0, 1.0} &&

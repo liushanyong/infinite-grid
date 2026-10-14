@@ -57,6 +57,12 @@ public:
 
     AcGeVector2d direction() const { return m_end - m_start; }
     double length() const { return m_start.distanceTo(m_end); }
+    double length(double fromParam, double toParam,
+                  double tol = AcGeTol{}.equalPoint()) const
+    {
+        const double span = std::abs(toParam - fromParam) * length();
+        return span <= std::abs(tol) ? 0.0 : span;
+    }
     AcGePoint2d midPoint() const { return baryComb(0.5); }
     AcGePoint2d baryComb(double blendCoeff) const
     {

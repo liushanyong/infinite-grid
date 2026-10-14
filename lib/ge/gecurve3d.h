@@ -53,6 +53,12 @@ public:
     AcGeVector3d direction() const { return m_endPoint - m_startPoint; }
 
     double length() const { return m_startPoint.distanceTo(m_endPoint); }
+    double length(double fromParam, double toParam,
+                  double tol = AcGeTol{}.equalPoint()) const
+    {
+        const double span = std::abs(toParam - fromParam) * length();
+        return span <= std::abs(tol) ? 0.0 : span;
+    }
     AcGePoint3d midPoint() const { return baryComb(0.5); }
     AcGePoint3d baryComb(double blendCoeff) const
     {
