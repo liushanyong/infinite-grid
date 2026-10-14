@@ -316,7 +316,7 @@ public:
                          const glm::vec3 &front, float halfWidth) const;
 
     float strokeHalfWidth(const acdb::Stroke &stroke,
-                          float fallback = 2.0f) const;
+                          float fallback = 0.5f) const;
 
     // Clip one world segment to the frame's frustum slab and viewport.
     // Returns false when the segment is entirely outside; semi-infinite

@@ -15,6 +15,7 @@
 #include <type_traits>
 
 #include "acdb/AcDbDatabase.h"
+#include "acdb/AcDbDwgBridge.h"
 #include "acdb/AcDbEntities.h"
 #include "acdb/AcDbFileIo.h"
 
@@ -714,6 +715,78 @@ inline void dumpStructure(const AcDbDatabase &database, FILE *log,
     std::fflush(log);
 }
 
+inline void verifyDwgImportHelpers(FILE *log, int &fails)
+{
+    auto check = [&](bool condition, const char *what) {
+        if (!condition)
+        {
+            ++fails;
+            std::fprintf(log, "FAIL import helper: %s\n", what);
+        }
+    };
+
+    const glm::vec4 aci20 = aciToColor(20);
+    check(closeEnough(aci20.r, 1.0) &&
+              closeEnough(aci20.g, 63.0 / 255.0) &&
+              closeEnough(aci20.b, 0.0),
+          "ACI hue palette");
+    Dwg_Color trueColor{};
+    trueColor.method = 0xc3;
+    trueColor.rgb = 0xc3123456u;
+    const glm::vec4 rgb = dwgColorToColor(trueColor);
+    check(closeEnough(rgb.r, 0x12 / 255.0) &&
+              closeEnough(rgb.g, 0x34 / 255.0) &&
+              closeEnough(rgb.b, 0x56 / 255.0),
+          "DWG truecolor");
+    check(closeEnough(lineWeightValueToPixels(25),
+                      0.25 * 96.0 / 25.4),
+          "lineweight physical-to-pixel conversion");
+}
+
+inline void verifyArchitecturalFixture(FILE *log, int &fails)
+{
+    AcDbDatabase database;
+    AcDbFileIoReport report;
+    if (!database.readDwgFile(
+            "resources/architectural_-_annotation_scaling_and_multileaders.dwg",
+            &report))
+    {
+        ++fails;
+        std::fprintf(log, "FAIL architectural fixture: read error %u\n",
+                     report.errorCode);
+        return;
+    }
+
+    std::size_t multileaderPaths = 0;
+    std::size_t multileaderTexts = 0;
+    for (const AcDbHandle handle : database.modelSpace().entityHandles())
+    {
+        const AcDbEntityVariant *payload = database.getEntity(handle);
+        if (payload == nullptr ||
+            common(*payload).name != "DWG_MULTILEADER")
+            continue;
+        if (const AcDbLeader *leader = std::get_if<AcDbLeader>(payload);
+            leader != nullptr && leader->points.size() >= 2)
+            ++multileaderPaths;
+        if (const AcDbMText *text = std::get_if<AcDbMText>(payload);
+            text != nullptr && !text->text.empty())
+            ++multileaderTexts;
+    }
+    if (multileaderPaths == 0 || multileaderTexts == 0)
+    {
+        ++fails;
+        std::fprintf(log,
+                     "FAIL architectural fixture: multileader paths=%zu text=%zu\n",
+                     multileaderPaths, multileaderTexts);
+    }
+    else
+    {
+        std::fprintf(log,
+                     "architectural fixture: %zu multileader paths, %zu text records\n",
+                     multileaderPaths, multileaderTexts);
+    }
+}
+
 } // namespace fileio_selftest
 
 inline int runFileIoSelfTest()
@@ -730,6 +803,7 @@ inline int runFileIoSelfTest()
 
     stage("building sample document");
     const AcDbDatabase sample = buildSampleDocument();
+    verifyDwgImportHelpers(report, fails);
 
     // ---- DWG out -> in ----
     stage("writeDwgFile");
@@ -821,6 +895,9 @@ inline int runFileIoSelfTest()
         ++fails;
         std::fprintf(report, "FAIL dxf: dxfOut failed\n");
     }
+
+    stage("architectural fixture import");
+    verifyArchitecturalFixture(report, fails);
 
     std::fprintf(report, fails == 0 ? "ALL PASS\n" : "%d FAILURES\n", fails);
     std::fclose(report);
