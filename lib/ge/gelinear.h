@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 
 #include "gepoint.h"
 
@@ -33,6 +34,30 @@ struct AcGeLine2d
     AcGePoint2d pointAt(double parameter) const
     {
         return basePoint + direction * parameter;
+    }
+    double parameterOf(const AcGePoint2d &point) const
+    {
+        const double lengthSquared = direction.lengthSq();
+        return lengthSquared == 0.0
+                   ? 0.0
+                   : (point - basePoint).dotProduct(direction) / lengthSquared;
+    }
+    AcGePoint2d closestPointTo(const AcGePoint2d &point) const
+    {
+        return pointAt(parameterOf(point));
+    }
+    double distanceTo(const AcGePoint2d &point) const
+    {
+        return closestPointTo(point).distanceTo(point);
+    }
+    bool isOn(const AcGePoint2d &point, double &parameter,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double candidate = parameterOf(point);
+        if (distanceTo(point) > std::abs(tol.equalPoint()))
+            return false;
+        parameter = candidate;
+        return true;
     }
 };
 
@@ -70,6 +95,30 @@ struct AcGeLine3d
     {
         return basePoint + direction * parameter;
     }
+    double parameterOf(const AcGePoint3d &point) const
+    {
+        const double lengthSquared = direction.lengthSq();
+        return lengthSquared == 0.0
+                   ? 0.0
+                   : (point - basePoint).dotProduct(direction) / lengthSquared;
+    }
+    AcGePoint3d closestPointTo(const AcGePoint3d &point) const
+    {
+        return pointAt(parameterOf(point));
+    }
+    double distanceTo(const AcGePoint3d &point) const
+    {
+        return closestPointTo(point).distanceTo(point);
+    }
+    bool isOn(const AcGePoint3d &point, double &parameter,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double candidate = parameterOf(point);
+        if (distanceTo(point) > std::abs(tol.equalPoint()))
+            return false;
+        parameter = candidate;
+        return true;
+    }
 };
 
 inline const AcGeLine3d AcGeLine3d::kXAxis{
@@ -104,6 +153,34 @@ struct AcGeRay2d
     {
         return basePoint + direction * std::max(0.0, parameter);
     }
+    double parameterOf(const AcGePoint2d &point) const
+    {
+        const double lengthSquared = direction.lengthSq();
+        return lengthSquared == 0.0
+                   ? 0.0
+                   : (point - basePoint).dotProduct(direction) / lengthSquared;
+    }
+    AcGePoint2d closestPointTo(const AcGePoint2d &point) const
+    {
+        return pointAt(parameterOf(point));
+    }
+    double distanceTo(const AcGePoint2d &point) const
+    {
+        return closestPointTo(point).distanceTo(point);
+    }
+    bool isOn(const AcGePoint2d &point, double &parameter,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double candidate = parameterOf(point);
+        const double pointTolerance = std::abs(tol.equalPoint());
+        const double parameterTolerance =
+            pointTolerance / std::max(direction.length(), pointTolerance);
+        if (candidate < -parameterTolerance ||
+            distanceTo(point) > pointTolerance)
+            return false;
+        parameter = std::max(0.0, candidate);
+        return true;
+    }
 };
 
 struct AcGeRay3d
@@ -130,5 +207,33 @@ struct AcGeRay3d
     AcGePoint3d pointAt(double parameter) const
     {
         return basePoint + direction * std::max(0.0, parameter);
+    }
+    double parameterOf(const AcGePoint3d &point) const
+    {
+        const double lengthSquared = direction.lengthSq();
+        return lengthSquared == 0.0
+                   ? 0.0
+                   : (point - basePoint).dotProduct(direction) / lengthSquared;
+    }
+    AcGePoint3d closestPointTo(const AcGePoint3d &point) const
+    {
+        return pointAt(parameterOf(point));
+    }
+    double distanceTo(const AcGePoint3d &point) const
+    {
+        return closestPointTo(point).distanceTo(point);
+    }
+    bool isOn(const AcGePoint3d &point, double &parameter,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double candidate = parameterOf(point);
+        const double pointTolerance = std::abs(tol.equalPoint());
+        const double parameterTolerance =
+            pointTolerance / std::max(direction.length(), pointTolerance);
+        if (candidate < -parameterTolerance ||
+            distanceTo(point) > pointTolerance)
+            return false;
+        parameter = std::max(0.0, candidate);
+        return true;
     }
 };
