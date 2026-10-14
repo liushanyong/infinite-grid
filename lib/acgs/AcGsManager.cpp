@@ -4,8 +4,10 @@ struct ImDrawData;
 
 #include <SDL.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
 #include <string>
 
 #include "rendering/RendererBackend.h"
@@ -25,6 +27,7 @@ struct RequestedDevice
 {
     rendering::BackendType type = rendering::BackendType::Bgfx;
     rendering::GraphicsApi api = rendering::GraphicsApi::Auto;
+    bool valid = true;
 };
 
 RequestedDevice resolveRequestedDevice(std::string *error)
@@ -64,6 +67,7 @@ RequestedDevice resolveRequestedDevice(std::string *error)
     }
     else
     {
+        requested.valid = false;
         if (error != nullptr)
             *error = "Unknown WINDOW_RENDERER value '" +
                      std::string(backendName) +
@@ -90,6 +94,8 @@ bool AcGsManager::prepareDevice(std::string *error)
     if (device_ != nullptr)
         return true;
     const RequestedDevice requested = resolveRequestedDevice(error);
+    if (!requested.valid)
+        return false;
     rendering::RendererBackend *created =
         rendering::createRenderer(requested.type, requested.api)
             .release();
@@ -392,9 +398,16 @@ void AcGsManager::destroyView(AcGsView *view)
     {
         if (it->get() == view)
         {
+            const int removedIndex =
+                static_cast<int>(std::distance(views_.begin(), it));
             views_.erase(it);
-            if (active_ >= int(views_.size()))
-                active_ = int(views_.size()) - 1;
+            if (views_.empty())
+                active_ = 0;
+            else if (removedIndex < active_)
+                --active_;
+            else if (removedIndex == active_)
+                active_ = std::min(removedIndex,
+                                   static_cast<int>(views_.size()) - 1);
             return;
         }
     }

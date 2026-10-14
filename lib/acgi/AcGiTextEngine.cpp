@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #ifdef _WIN32
@@ -23,6 +24,47 @@
 
 namespace acgi
 {
+
+namespace
+{
+
+glm::dvec3 normalizedOr(const glm::dvec3 &value,
+                        const glm::dvec3 &fallback)
+{
+    const double lengthSquared = glm::dot(value, value);
+    if (!(lengthSquared > 1.0e-18) || !std::isfinite(lengthSquared))
+        return fallback;
+    return value / std::sqrt(lengthSquared);
+}
+
+struct TextPlaneBasis
+{
+    glm::dvec3 normal;
+    glm::dvec3 right;
+    glm::dvec3 up;
+};
+
+TextPlaneBasis textPlaneBasis(const TextRequest &request)
+{
+    const glm::dvec3 normal = normalizedOr(
+        request.normal, glm::dvec3(0.0, 0.0, 1.0));
+    glm::dvec3 right =
+        request.direction - normal * glm::dot(request.direction, normal);
+    if (!(glm::dot(right, right) > 1.0e-18) ||
+        !std::isfinite(glm::dot(right, right)))
+    {
+        const glm::dvec3 axis = std::abs(normal.z) < 0.9
+                                    ? glm::dvec3(0.0, 0.0, 1.0)
+                                    : glm::dvec3(0.0, 1.0, 0.0);
+        right = glm::cross(axis, normal);
+    }
+    right = normalizedOr(right, glm::dvec3(1.0, 0.0, 0.0));
+    const glm::dvec3 up = normalizedOr(
+        glm::cross(normal, right), glm::dvec3(0.0, 1.0, 0.0));
+    return {normal, right, up};
+}
+
+} // namespace
 
 TextEngine &textEngine()
 {
@@ -177,21 +219,22 @@ std::vector<TextEngine::GlyphPlacement> TextEngine::layoutGlyphs(
         // Billboard mode: the quad always faces the camera (kept as a
         // separate selectable mode for screen-anchored labels).
         textUp = glm::dvec3(0.0, 0.0, 1.0);
-        textRight = glm::normalize(
-            glm::cross(textUp, glm::normalize(cameraPos - request.position)));
+        glm::dvec3 toCamera = cameraPos - request.position;
+        if (!(glm::dot(toCamera, toCamera) > 1.0e-18) ||
+            !std::isfinite(glm::dot(toCamera, toCamera)))
+            toCamera = -cameraFront;
+        toCamera = normalizedOr(toCamera, glm::dvec3(0.0, 1.0, 0.0));
+        textRight = normalizedOr(
+            glm::cross(textUp, toCamera),
+            normalizedOr(cameraRight, glm::dvec3(1.0, 0.0, 0.0)));
     }
     else
     {
         // CAD text is planar: the quad lies in the entity's plane defined
         // by its direction (baseline) and normal.
-        textRight = request.direction;
-        if (glm::dot(textRight, textRight) < 1.0e-18)
-            textRight = glm::dvec3(1.0, 0.0, 0.0);
-        textRight = glm::normalize(textRight);
-        textUp = glm::cross(glm::normalize(request.normal), textRight);
-        if (glm::dot(textUp, textUp) < 1.0e-18)
-            textUp = glm::dvec3(0.0, 0.0, 1.0);
-        textUp = glm::normalize(textUp);
+        const TextPlaneBasis basis = textPlaneBasis(request);
+        textRight = basis.right;
+        textUp = basis.up;
     }
     const double emToWorld =
         request.height / double(sdfFont_.pixelsPerEm());
@@ -394,14 +437,9 @@ bool TextEngine::intersectsOrthoViewport(
 {
     // Oriented text rectangle in the entity plane: baseline direction x
     // message width, in-plane up x line count.
-    glm::dvec3 textRight = request.direction;
-    if (glm::dot(textRight, textRight) < 1.0e-18)
-        textRight = glm::dvec3(1.0, 0.0, 0.0);
-    textRight = glm::normalize(textRight);
-    glm::dvec3 textUp = glm::cross(glm::normalize(request.normal), textRight);
-    if (glm::dot(textUp, textUp) < 1.0e-18)
-        textUp = glm::dvec3(0.0, 0.0, 1.0);
-    textUp = glm::normalize(textUp);
+    const TextPlaneBasis basis = textPlaneBasis(request);
+    const glm::dvec3 textRight = basis.right;
+    const glm::dvec3 textUp = basis.up;
 
     size_t lineCount = 1;
     double longest = 0.0;
@@ -427,7 +465,7 @@ bool TextEngine::intersectsOrthoViewport(
 
     // Camera-space AABB over the rectangle's four corners (plus a small
     // thickness along the normal so edge-on text still counts).
-    const glm::dvec3 normal = glm::normalize(request.normal);
+    const glm::dvec3 normal = basis.normal;
     glm::dvec3 minimum(std::numeric_limits<double>::max());
     glm::dvec3 maximum(std::numeric_limits<double>::lowest());
     for (int i = 0; i < 4; ++i)

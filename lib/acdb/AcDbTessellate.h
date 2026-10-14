@@ -84,19 +84,34 @@ struct TessellatedEntity
     std::vector<TessellatedPoint> points;
 };
 
+[[nodiscard]] inline glm::dvec3 normalizedOr(
+    const glm::dvec3 &value, const glm::dvec3 &fallback)
+{
+    const double lengthSquared = glm::dot(value, value);
+    if (!(lengthSquared > 1.0e-18) || !std::isfinite(lengthSquared))
+        return fallback;
+    return value / std::sqrt(lengthSquared);
+}
+
 [[nodiscard]] inline glm::dvec3 planeBasisU(const glm::dvec3 &normal)
 {
     // AutoCAD arbitrary axis algorithm: the OCS x-axis for DWG planar
     // entities, so arc/ellipse angle parameters match libredwg data.
-    const glm::dvec3 n = glm::normalize(normal);
+    const glm::dvec3 n =
+        normalizedOr(normal, glm::dvec3(0.0, 0.0, 1.0));
     if (std::abs(n.x) < 1.0 / 64.0 && std::abs(n.y) < 1.0 / 64.0)
-        return glm::normalize(glm::cross(glm::dvec3(0.0, 1.0, 0.0), n));
-    return glm::normalize(glm::cross(glm::dvec3(0.0, 0.0, 1.0), n));
+        return normalizedOr(glm::cross(glm::dvec3(0.0, 1.0, 0.0), n),
+                            glm::dvec3(1.0, 0.0, 0.0));
+    return normalizedOr(glm::cross(glm::dvec3(0.0, 0.0, 1.0), n),
+                        glm::dvec3(1.0, 0.0, 0.0));
 }
 
 [[nodiscard]] inline glm::dvec3 planeBasisV(const glm::dvec3 &normal)
 {
-    return glm::normalize(glm::cross(glm::normalize(normal), planeBasisU(normal)));
+    const glm::dvec3 n =
+        normalizedOr(normal, glm::dvec3(0.0, 0.0, 1.0));
+    return normalizedOr(glm::cross(n, planeBasisU(normal)),
+                        glm::dvec3(0.0, 1.0, 0.0));
 }
 
 inline int curveSegmentCount(double sweep, const TesselationOptions &options)
@@ -172,7 +187,9 @@ inline void tessellate(const AcDbArc &arc, TessellatedEntity &result,
     // quads along the normal, one per span so curved segments stay smooth.
     if (std::abs(arc.thickness) > 1.0e-12)
     {
-        const glm::dvec3 offset = glm::dvec3(arc.normal.normal()) * arc.thickness;
+        const glm::dvec3 offset =
+            normalizedOr(glm::dvec3(arc.normal), glm::dvec3(0.0, 0.0, 1.0)) *
+            arc.thickness;
         for (size_t i = 0; i + 1 < stroke.points.size(); ++i)
         {
             const glm::dvec3 &a = stroke.points[i];
@@ -211,9 +228,13 @@ inline void tessellate(const AcDbEllipse &ellipse, TessellatedEntity &result,
         !(ellipse.radiusRatio > 0.0) ||
         !std::isfinite(ellipse.radiusRatio))
         return;
-    const glm::dvec3 n = glm::normalize(glm::dvec3(ellipse.normal));
-    const glm::dvec3 u = major / majorLength;
-    const glm::dvec3 v = glm::normalize(glm::cross(n, u));
+    const glm::dvec3 n = normalizedOr(
+        glm::dvec3(ellipse.normal), glm::dvec3(0.0, 0.0, 1.0));
+    const glm::dvec3 majorDirection = major / majorLength;
+    const glm::dvec3 u = normalizedOr(
+        majorDirection - n * glm::dot(majorDirection, n),
+        planeBasisU(n));
+    const glm::dvec3 v = normalizedOr(glm::cross(n, u), planeBasisV(n));
     double sweep = std::fmod(ellipse.endParameter - ellipse.startParameter,
                              glm::two_pi<double>());
     if (sweep <= 0.0)
@@ -247,7 +268,10 @@ inline void tessellate(const AcDbEllipse &ellipse, TessellatedEntity &result,
     const double b2 = bulge * bulge;
     const double radius = chordLength * (1.0 + b2) / (4.0 * std::abs(bulge));
     const double centerDistance = radius * (1.0 - b2) / (1.0 + b2);
-    const glm::dvec3 perp = glm::normalize(glm::cross(normal, chord));
+    const glm::dvec3 safeNormal =
+        normalizedOr(normal, glm::dvec3(0.0, 0.0, 1.0));
+    const glm::dvec3 perp = normalizedOr(
+        glm::cross(safeNormal, chord), planeBasisV(safeNormal));
     const glm::dvec3 center = (start + end) * 0.5 +
         glm::sign(bulge) * centerDistance * perp;
     const double startAngle = std::atan2(glm::dot(start - center, planeBasisV(normal)),
@@ -274,7 +298,8 @@ inline std::vector<AcGePoint3d> polylineOutline(
     const size_t vertexCount = polyline.vertices.size();
     if (vertexCount < 2)
         return outline;
-    const glm::dvec3 normal = glm::dvec3(polyline.normal.normal());
+    const glm::dvec3 normal = normalizedOr(
+        glm::dvec3(polyline.normal), glm::dvec3(0.0, 0.0, 1.0));
     outline.push_back(pointAt(polyline, 0));
     const size_t segmentCount = polyline.closed ? vertexCount : vertexCount - 1;
     for (size_t i = 0; i < segmentCount; ++i)
@@ -314,7 +339,8 @@ inline std::vector<Triangle> polylineWallTriangles(
     std::vector<Triangle> walls;
     if (std::abs(polyline.thickness) <= 1.0e-12 || outline.size() < 2)
         return walls;
-    const glm::dvec3 normal = glm::dvec3(polyline.normal.normal());
+    const glm::dvec3 normal = normalizedOr(
+        glm::dvec3(polyline.normal), glm::dvec3(0.0, 0.0, 1.0));
     const glm::dvec3 offset = normal * polyline.thickness;
     const size_t wallCount =
         polyline.closed ? outline.size() : outline.size() - 1;
