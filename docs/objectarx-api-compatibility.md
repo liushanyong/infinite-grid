@@ -35,6 +35,11 @@ direction predicates, and common axis constants. `AcGeTol` follows the
 documented accessor-method spelling; only the basic tolerance contract is
 implemented.
 
+`AcGePlane` includes signed distance and point projection helpers, and
+`AcGeSphere` supports spherical surface parameterization and angular patches.
+These are geometric subsets; they do not provide the full AcGe surface
+intersection and hierarchy APIs.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string

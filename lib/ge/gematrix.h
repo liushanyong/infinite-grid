@@ -5,6 +5,7 @@
 // AcGeMatrix3d's entry[0..3][0..3].
 
 #include <glm/glm.hpp>
+#include <cmath>
 #ifndef GLM_ENABLE_EXPERIMENTAL
 #define GLM_ENABLE_EXPERIMENTAL
 #endif
@@ -117,9 +118,52 @@ struct AcGePlane
     {
     }
 
+    AcGePlane &set(const AcGePoint3d &pointOnPlane,
+                   const AcGeVector3d &planeNormal)
+    {
+        origin = pointOnPlane;
+        normal = planeNormal;
+        return *this;
+    }
+
     double distanceTo(const AcGePoint3d &point) const
     {
         return (point - origin).dotProduct(normal);
+    }
+
+    double signedDistanceTo(const AcGePoint3d &point) const
+    {
+        const double normalLength = normal.length();
+        return normalLength == 0.0 ? 0.0 : distanceTo(point) / normalLength;
+    }
+
+    AcGePoint3d closestPointTo(const AcGePoint3d &point) const
+    {
+        const double normalLength = normal.length();
+        if (normalLength == 0.0)
+            return point;
+        const AcGeVector3d unitNormal = normal / normalLength;
+        return point - unitNormal * signedDistanceTo(point);
+    }
+
+    bool isOn(const AcGePoint3d &point,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        return normal.length() > tol.equalVector() &&
+               std::abs(signedDistanceTo(point)) <= tol.equalPoint();
+    }
+
+    bool project(const AcGePoint3d &point, const AcGeVector3d &direction,
+                 AcGePoint3d &projected,
+                 const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double denominator = direction.dotProduct(normal);
+        if (std::abs(denominator) <=
+            tol.equalVector() * direction.length() * normal.length())
+            return false;
+        const double parameter = -distanceTo(point) / denominator;
+        projected = point + direction * parameter;
+        return true;
     }
 };
 

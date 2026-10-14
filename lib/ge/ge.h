@@ -8,6 +8,7 @@
 #include "getol.h"
 #include "gematrix2d.h"
 #include "gematrix.h"
+#include "gesurface3d.h"
 #include "gelinear.h"
 #include "gescale.h"
 #include "gecurve3d.h"

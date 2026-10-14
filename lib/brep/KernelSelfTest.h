@@ -145,6 +145,33 @@ inline int runKernelSelfTest()
                   AcGeVector3d{0.0, 1.0, 0.0}.isUnitLength(),
               "3D vector direction predicates");
 
+        const AcGePlane plane{{0.0, 0.0, 2.0}, {0.0, 0.0, 3.0}};
+        AcGePoint3d projected;
+        check(std::abs(plane.signedDistanceTo({1.0, 2.0, 5.0}) - 3.0) <
+                  1.0e-9 &&
+                  plane.closestPointTo({1.0, 2.0, 5.0})
+                          .distanceTo({1.0, 2.0, 2.0}) < 1.0e-9 &&
+                  plane.project({1.0, 2.0, 5.0}, {0.0, 0.0, -2.0},
+                                projected) &&
+                  projected.distanceTo({1.0, 2.0, 2.0}) < 1.0e-9,
+              "plane signed distance and projection");
+        check(!plane.project({1.0, 2.0, 5.0}, {1.0, 0.0, 0.0},
+                             projected),
+              "parallel direction cannot project to plane");
+
+        const AcGeSphere sphere{2.0, {1.0, 2.0, 3.0}};
+        check(sphere.isClosed() &&
+                  sphere.pointAt(0.0, 0.0)
+                          .distanceTo({3.0, 2.0, 3.0}) < 1.0e-9 &&
+                  sphere.northPole().distanceTo({1.0, 2.0, 5.0}) < 1.0e-9 &&
+                  sphere.normalAt(0.0, 0.0)
+                          .isEqualTo({1.0, 0.0, 0.0}),
+              "spherical surface frame and parameterization");
+        check(!AcGeSphere{2.0, {0.0, 0.0, 0.0},
+                          AcGeVector3d::kZAxis, AcGeVector3d::kXAxis,
+                          0.0, 1.0, -0.5, 0.5}.isClosed(),
+              "spherical patch is not closed");
+
         const AcGeLine2d line{AcGePoint2d{1.0, 2.0},
                               AcGePoint2d{3.0, 2.0}};
         check(line.pointAt(-1.0).distanceTo({-1.0, 2.0}) < 1.0e-9,
