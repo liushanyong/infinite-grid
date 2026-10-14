@@ -201,6 +201,20 @@ inline int runKernelSelfTest()
         check(pointFromPosition2d == AcGePoint2d{4.0, 5.0} &&
                   pointFromPosition3d == AcGePoint3d{6.0, 7.0, 8.0},
               "position point-entity interoperability");
+        AcGeInterval cylinderHeight{-2.0, 3.0};
+        AcGeCylinder cylinder{2.0, AcGePoint3d{1.0, 2.0, 3.0},
+                              AcGeVector3d::kZAxis, AcGeVector3d::kXAxis,
+                              cylinderHeight, 0.0,
+                              6.2831853071795864769};
+        AcGeInterval reportedHeight;
+        cylinder.getHeight(reportedHeight);
+        check(cylinder.pointAt(1.5707963267948966192, 2.0)
+                      .isEqualTo({1.0, 4.0, 5.0}) &&
+                  cylinder.normalAt(1.5707963267948966192, 2.0)
+                      .isEqualTo({0.0, 1.0, 0.0}) &&
+                  reportedHeight.lowerBound() == -2.0 &&
+                  reportedHeight.upperBound() == 3.0 && cylinder.isClosed(),
+              "cylinder parameterization and height interval");
         check(AcGeVector2d{2.0, 0.0}.isParallelTo({-1.0, 0.0}) &&
                   AcGeVector2d{2.0, 0.0}.isCodirectionalTo({1.0, 0.0}) &&
                   AcGeVector2d{1.0, 0.0}.isPerpendicularTo({0.0, 4.0}) &&

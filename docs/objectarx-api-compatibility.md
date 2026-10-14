@@ -44,6 +44,10 @@ implemented.
 These are geometric subsets; they do not provide the full AcGe surface
 intersection and hierarchy APIs.
 
+`AcGeCylinder` supports an axis/reference frame, angular sweep, height
+interval, and parametric point/normal evaluation; it does not implement
+surface intersection or the full `AcGeSurface` interface.
+
 `AcGeInterval` provides finite and one-sided/unbounded parameter domains,
 tolerance-aware containment, intersection, merge, and extent queries.
 Advanced periodicity and interval subtraction APIs remain unimplemented.
