@@ -36,13 +36,19 @@ struct AcGeLine2d
     }
 };
 
-inline const AcGeLine2d AcGeLine2d::kXAxis{{0.0, 0.0}, {1.0, 0.0}};
-inline const AcGeLine2d AcGeLine2d::kYAxis{{0.0, 0.0}, {0.0, 1.0}};
+inline const AcGeLine2d AcGeLine2d::kXAxis{
+    AcGePoint2d{0.0, 0.0}, AcGeVector2d{1.0, 0.0}};
+inline const AcGeLine2d AcGeLine2d::kYAxis{
+    AcGePoint2d{0.0, 0.0}, AcGeVector2d{0.0, 1.0}};
 
 struct AcGeLine3d
 {
     AcGePoint3d basePoint{0.0, 0.0, 0.0};
     AcGeVector3d direction{1.0, 0.0, 0.0};
+
+    static const AcGeLine3d kXAxis;
+    static const AcGeLine3d kYAxis;
+    static const AcGeLine3d kZAxis;
 
     AcGeLine3d() = default;
     AcGeLine3d(const AcGePoint3d &point, const AcGeVector3d &vector)
@@ -65,6 +71,13 @@ struct AcGeLine3d
         return basePoint + direction * parameter;
     }
 };
+
+inline const AcGeLine3d AcGeLine3d::kXAxis{
+    AcGePoint3d{0.0, 0.0, 0.0}, AcGeVector3d{1.0, 0.0, 0.0}};
+inline const AcGeLine3d AcGeLine3d::kYAxis{
+    AcGePoint3d{0.0, 0.0, 0.0}, AcGeVector3d{0.0, 1.0, 0.0}};
+inline const AcGeLine3d AcGeLine3d::kZAxis{
+    AcGePoint3d{0.0, 0.0, 0.0}, AcGeVector3d{0.0, 0.0, 1.0}};
 
 struct AcGeRay2d
 {

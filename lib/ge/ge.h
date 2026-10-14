@@ -7,6 +7,8 @@
 #include "gepoint.h"
 #include "gematrix2d.h"
 #include "gematrix.h"
+#include "gelinear.h"
+#include "gescale.h"
 #include "gecurve3d.h"
 #include "geutil.h"
 #include "genurbscore.h"

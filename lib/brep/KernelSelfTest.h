@@ -12,7 +12,9 @@
 #include <vector>
 
 #include "ge/ge2d.h"
+#include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
+#include "ge/gescale.h"
 #include "brep/BRepBuild.h"
 #include "brep/Validate.h"
 #include "brep/BRepBoolean.h"
@@ -122,6 +124,43 @@ inline int runKernelSelfTest()
         singular[1][0] = 0.0;
         singular[1][1] = 0.0;
         check(singular.isSingular(), "2D singular matrix detection");
+    }
+
+    // ---------------- AcGe linear entities and scale vectors ----------------
+    {
+        const AcGeLine2d line{AcGePoint2d{1.0, 2.0},
+                              AcGePoint2d{3.0, 2.0}};
+        check(line.pointAt(-1.0).distanceTo({-1.0, 2.0}) < 1.0e-9,
+        "2D line parameterization");
+        const AcGeRay2d ray{AcGePoint2d{1.0, 2.0},
+                            AcGeVector2d{2.0, 0.0}};
+        check(ray.pointAt(2.0).distanceTo({5.0, 2.0}) < 1.0e-9 &&
+            ray.pointAt(-1.0).distanceTo({1.0, 2.0}) < 1.0e-9,
+        "2D ray is half-bounded");
+
+        const AcGeLine3d line3d{AcGePoint3d{1.0, 2.0, 3.0},
+                                AcGeVector3d{0.0, 0.0, 2.0}};
+        check(line3d.pointAt(-1.0).distanceTo({1.0, 2.0, 1.0}) < 1.0e-9,
+        "3D line parameterization");
+        const AcGeRay3d ray3d{AcGePoint3d{1.0, 2.0, 3.0},
+                              AcGeVector3d{0.0, 0.0, 2.0}};
+        check(ray3d.pointAt(2.0).distanceTo({1.0, 2.0, 7.0}) < 1.0e-9 &&
+            ray3d.pointAt(-1.0).distanceTo({1.0, 2.0, 3.0}) < 1.0e-9,
+        "3D ray is half-bounded");
+
+        const AcGeScale2d scale2d{2.0, 3.0};
+        check(transformBy(AcGePoint2d{1.0, 2.0}, scale2d.getMatrix())
+                .distanceTo({2.0, 6.0}) < 1.0e-9 &&
+            (scale2d * scale2d.inverse()).isEqualTo(
+                AcGeScale2d::kIdentity),
+        "2D scale matrix and inverse");
+
+        const AcGeScale3d scale3d{2.0, 3.0, 4.0};
+        check(transformBy(AcGePoint3d{1.0, 2.0, 3.0}, scale3d.getMatrix())
+                .distanceTo({2.0, 6.0, 12.0}) < 1.0e-9 &&
+            (scale3d * scale3d.inverse()).isEqualTo(
+                AcGeScale3d::kIdentity),
+        "3D scale matrix and inverse");
     }
 
     // ---------------- brep (milestone 2) ----------------
