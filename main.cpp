@@ -868,99 +868,6 @@ struct GpuPickEntity
   }
 };
 
-// Glyph-shaped pick coverage for SDF text: marching-squares the glyph's R8
-// distance field at the same 0.5 iso the visible text shader thresholds at,
-// so the ID texture carries the glyph shape instead of its bounding quad.
-// Returns triangles in glyph-quad UV space, cached per codepoint: the same
-// glyph repeats across requests and this soup rebuilds every pick frame.
-static const std::vector<glm::vec2> &glyphCoverageUV(std::uint32_t codepoint)
-{
-  static std::unordered_map<std::uint32_t, std::vector<glm::vec2>> cache;
-  auto [entry, inserted] = cache.try_emplace(codepoint);
-  if (!inserted)
-    return entry->second;
-  std::vector<glm::vec2> &soup = entry->second;
-  const rendering::GlyphSdfRaster &raster =
-      acgi::textEngine().sdfFont().glyphSdf(codepoint);
-  if (!raster.valid || raster.width < 2 || raster.height < 2 ||
-      raster.sdf.empty())
-  {
-    return soup;
-  }
-  const int width = raster.width;
-  const int height = raster.height;
-  // Cell stride 2 texels: quarters the triangle count while keeping the
-  // ID coverage within ~1 texel of the visible glyph edge.
-  const int stride = 2;
-  auto sample = [&](int i, int j) {
-    return float(raster.sdf[size_t(j) * width + i]) / 255.0f;
-  };
-  auto texelUv = [&](int i, int j) {
-    return glm::vec2((float(i) + 0.5f) / float(width),
-                     (float(j) + 0.5f) / float(height));
-  };
-  auto crossing = [](glm::vec2 a, glm::vec2 b, float va, float vb) {
-    const float t = (0.5f - va) / (vb - va);
-    return a + (b - a) * t;
-  };
-  std::vector<glm::vec2> polygon;
-  polygon.reserve(8);
-  for (int j = 0; j + stride < height; j += stride)
-  {
-    for (int i = 0; i + stride < width; i += stride)
-    {
-      const float v00 = sample(i, j);
-      const float v10 = sample(i + stride, j);
-      const float v11 = sample(i + stride, j + stride);
-      const float v01 = sample(i, j + stride);
-      const bool in00 = v00 > 0.5f;
-      const bool in10 = v10 > 0.5f;
-      const bool in11 = v11 > 0.5f;
-      const bool in01 = v01 > 0.5f;
-      const glm::vec2 p00 = texelUv(i, j);
-      const glm::vec2 p10 = texelUv(i + stride, j);
-      const glm::vec2 p11 = texelUv(i + stride, j + stride);
-      const glm::vec2 p01 = texelUv(i, j + stride);
-      if (in00 && in10 && in11 && in01)
-      {
-        // Fully inside: fill the cell so solid strokes get solid ID
-        // coverage, not just their contour band.
-        soup.push_back(p00);
-        soup.push_back(p10);
-        soup.push_back(p11);
-        soup.push_back(p00);
-        soup.push_back(p11);
-        soup.push_back(p01);
-        continue;
-      }
-      if (!in00 && !in10 && !in11 && !in01)
-        continue;
-      // Walk the cell corners in cyclic order, emitting inside corners and
-      // iso-0.5 edge crossings; the walk yields the inside-region polygon
-      // (3-6 vertices; the saddle case joins its two lobes).
-      polygon.clear();
-      auto walk = [&](const glm::vec2 &a, const glm::vec2 &b, bool aIn,
-                      float va, float vb) {
-        if (aIn)
-          polygon.push_back(a);
-        if ((va > 0.5f) != (vb > 0.5f))
-          polygon.push_back(crossing(a, b, va, vb));
-      };
-      walk(p00, p10, in00, v00, v10);
-      walk(p10, p11, in10, v10, v11);
-      walk(p11, p01, in11, v11, v01);
-      walk(p01, p00, in01, v01, v00);
-      for (size_t k = 2; k < polygon.size(); ++k)
-      {
-        soup.push_back(polygon[0]);
-        soup.push_back(polygon[k - 1]);
-        soup.push_back(polygon[k]);
-      }
-    }
-  }
-  return soup;
-}
-
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
   return acgs::AcGsSelectionManager::instance();
@@ -8658,7 +8565,6 @@ void render()
         return value != nullptr && *value != '\0' &&
                std::strcmp(value, "0") != 0;
       }();
-      static const std::vector<glm::vec2> kEmptyCoverage;
       for (const acgi::TextEngine::GlyphPlacement &placement : placements)
       {
         for (const glm::dvec3 &worldCorner : placement.corners)
@@ -8666,10 +8572,11 @@ void render()
         // Glyph-shaped coverage: the SDF iso-contour soup instead of the
         // full quad, so the ID texture and the selection highlight follow
         // the visible glyph rather than its bounding box.
-        const std::vector<glm::vec2> &coverage =
-            textPickQuads ? kEmptyCoverage
-                          : glyphCoverageUV(placement.codepoint);
-        if (coverage.empty())
+        const std::vector<acgi::TextEngine::GlyphCoverageUv> *coverage =
+            textPickQuads
+                ? nullptr
+                : &acgi::textEngine().glyphCoverageUv(placement.codepoint);
+        if (coverage == nullptr || coverage->empty())
         {
           // Raster unavailable: keep the quad as the conservative shape.
           for (const int index : {0, 1, 2, 0, 2, 3})
@@ -8677,11 +8584,12 @@ void render()
                 {glm::vec3(placement.corners[index] - cameraPos), idColor});
           continue;
         }
-        for (size_t tri = 0; tri + 2 < coverage.size(); tri += 3)
+        for (size_t tri = 0; tri + 2 < coverage->size(); tri += 3)
         {
           for (int t = 0; t < 3; ++t)
           {
-            const glm::vec2 uv = coverage[tri + t];
+            const acgi::TextEngine::GlyphCoverageUv &uv =
+                (*coverage)[tri + t];
             // The visible pass samples texture v=0 at the glyph's TOP row
             // while quad cornerV=1 is the top (see AcGiTextEngine::drawText:
             // cornerV carries uv v = 1 - cornerV). Invert v here so the
@@ -8689,9 +8597,9 @@ void render()
             const glm::dvec3 world =
                 placement.corners[0] +
                 (placement.corners[1] - placement.corners[0]) *
-                    double(uv.x) +
+                    double(uv.u) +
                 (placement.corners[3] - placement.corners[0]) *
-                    double(1.0 - uv.y);
+                    double(1.0 - uv.v);
             textPickVertices.push_back(
                 {glm::vec3(world - cameraPos), idColor});
           }
