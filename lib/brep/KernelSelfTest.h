@@ -192,6 +192,15 @@ inline int runKernelSelfTest()
                   AcGePoint2d{1.0, 2.0 + 1.0e-9}, tol) &&
                   AcGePoint3d::kOrigin.isEqualTo({0.0, 0.0, 0.0}),
               "point tolerance comparison and origin constants");
+        AcGePosition2d position2d{1.0, 2.0};
+        AcGePosition3d position3d{1.0, 2.0, 3.0};
+        position2d.set(AcGePoint2d{4.0, 5.0});
+        position3d.set(6.0, 7.0, 8.0);
+        const AcGePoint2d pointFromPosition2d = position2d;
+        const AcGePoint3d pointFromPosition3d = position3d;
+        check(pointFromPosition2d == AcGePoint2d{4.0, 5.0} &&
+                  pointFromPosition3d == AcGePoint3d{6.0, 7.0, 8.0},
+              "position point-entity interoperability");
         check(AcGeVector2d{2.0, 0.0}.isParallelTo({-1.0, 0.0}) &&
                   AcGeVector2d{2.0, 0.0}.isCodirectionalTo({1.0, 0.0}) &&
                   AcGeVector2d{1.0, 0.0}.isPerpendicularTo({0.0, 4.0}) &&

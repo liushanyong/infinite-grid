@@ -35,6 +35,10 @@ direction predicates, and common axis constants. `AcGeTol` follows the
 documented accessor-method spelling; only the basic tolerance contract is
 implemented.
 
+`AcGePosition2d/3d` are point-derived value types with ObjectARX-style point
+and coordinate constructors/setters; the broad `AcGePointEnt` hierarchy is not
+implemented.
+
 `AcGePlane` includes signed distance and point projection helpers, and
 `AcGeSphere` supports spherical surface parameterization and angular patches.
 These are geometric subsets; they do not provide the full AcGe surface

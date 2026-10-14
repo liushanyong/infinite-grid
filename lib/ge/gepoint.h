@@ -399,3 +399,45 @@ struct AcGePoint3d
 };
 
 inline const AcGePoint3d AcGePoint3d::kOrigin{0.0, 0.0, 0.0};
+
+struct AcGePosition2d : AcGePoint2d
+{
+    AcGePosition2d() = default;
+    AcGePosition2d(double x, double y) : AcGePoint2d(x, y) {}
+    AcGePosition2d(const AcGePoint2d &point) : AcGePoint2d(point) {}
+
+    AcGePosition2d &set(double x, double y)
+    {
+        this->x = x;
+        this->y = y;
+        return *this;
+    }
+    AcGePosition2d &set(const AcGePoint2d &point)
+    {
+        x = point.x;
+        y = point.y;
+        return *this;
+    }
+};
+
+struct AcGePosition3d : AcGePoint3d
+{
+    AcGePosition3d() = default;
+    AcGePosition3d(double x, double y, double z) : AcGePoint3d(x, y, z) {}
+    AcGePosition3d(const AcGePoint3d &point) : AcGePoint3d(point) {}
+
+    AcGePosition3d &set(double x, double y, double z)
+    {
+        this->x = x;
+        this->y = y;
+        this->z = z;
+        return *this;
+    }
+    AcGePosition3d &set(const AcGePoint3d &point)
+    {
+        x = point.x;
+        y = point.y;
+        z = point.z;
+        return *this;
+    }
+};
