@@ -6,27 +6,54 @@
 // draw callbacks can exchange them directly.
 
 #include <cmath>
+#include <stdexcept>
 
 #include <glm/glm.hpp>
 
+#include "gematrix.h"
 #include "gepoint.h"
 
 struct AcGeLineSeg3d
 {
-    AcGePoint3d startPoint{0.0, 0.0, 0.0};
-    AcGePoint3d endPoint{1.0, 0.0, 0.0};
+private:
+    AcGePoint3d m_startPoint{0.0, 0.0, 0.0};
+    AcGePoint3d m_endPoint{1.0, 0.0, 0.0};
 
+public:
     AcGeLineSeg3d() = default;
     AcGeLineSeg3d(const AcGePoint3d &start, const AcGePoint3d &end)
-        : startPoint(start), endPoint(end)
     {
+        set(start, end);
     }
 
-    double length() const { return (endPoint - startPoint).length(); }
+    AcGeLineSeg3d &set(const AcGePoint3d &start, const AcGePoint3d &end)
+    {
+        if (start == end)
+            throw std::invalid_argument("AcGeLineSeg3d endpoints must differ.");
+        m_startPoint = start;
+        m_endPoint = end;
+        return *this;
+    }
+
+    AcGePoint3d startPoint() const { return m_startPoint; }
+    AcGePoint3d endPoint() const { return m_endPoint; }
+    AcGeVector3d direction() const { return m_endPoint - m_startPoint; }
+
+    double length() const { return m_startPoint.distanceTo(m_endPoint); }
+    AcGePoint3d midPoint() const { return baryComb(0.5); }
+    AcGePoint3d baryComb(double blendCoeff) const
+    {
+        return m_startPoint + direction() * blendCoeff;
+    }
 
     AcGePoint3d pointAt(double t) const
     {
-        return startPoint + (endPoint - startPoint) * t;
+        return baryComb(t);
+    }
+
+    void getBisector(AcGePlane &plane) const
+    {
+        plane.set(midPoint(), direction());
     }
 };
 

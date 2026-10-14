@@ -58,6 +58,18 @@ inline int runKernelSelfTest()
                   bisector.direction.isPerpendicularTo(a.direction()),
               "2D segment perpendicular bisector");
 
+        const AcGeLineSeg3d segment3d{{0.0, 0.0, 0.0},
+                                      {0.0, 0.0, 4.0}};
+        AcGePlane bisector3d;
+        segment3d.getBisector(bisector3d);
+        check(segment3d.length() == 4.0 &&
+                  segment3d.midPoint() == AcGePoint3d{0.0, 0.0, 2.0} &&
+                  segment3d.baryComb(0.25) ==
+                      AcGePoint3d{0.0, 0.0, 1.0} &&
+                  bisector3d.origin == AcGePoint3d{0.0, 0.0, 2.0} &&
+                  bisector3d.normal.isParallelTo(segment3d.direction()),
+              "3D segment parameterization and bisector plane");
+
         AcGeLineSeg2d cross{{2.0, -2.0}, {2.0, 2.0}};
         auto hit = intersect(a, cross);
         check(hit.size() == 1, "line-line crossing yields one point");

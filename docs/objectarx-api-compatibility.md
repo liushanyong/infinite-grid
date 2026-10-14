@@ -49,6 +49,9 @@ The existing 2D segment implementation is also exported as global
 length, set, and bisector operations. Its robust intersection helpers remain
 available in namespace `ge`.
 
+`AcGeLineSeg3d` now exposes the same endpoint, midpoint, blend, length, and
+set operations, with its bisector represented by an `AcGePlane`.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
