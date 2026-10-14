@@ -213,6 +213,100 @@ struct AcGePolyline2d : AcGePolylineBase<AcGePoint2d, AcGeVector2d>
     double area() const { return std::abs(signedArea()); }
 };
 
+struct AcGePolygon2d
+{
+private:
+    AcGePolyline2d m_boundary;
+
+public:
+    AcGePolygon2d() { m_boundary.setClosed(true); }
+    explicit AcGePolygon2d(const std::vector<AcGePoint2d> &vertices)
+        : m_boundary(vertices, true)
+    {
+    }
+    AcGePolygon2d(std::initializer_list<AcGePoint2d> vertices)
+        : m_boundary(vertices, true)
+    {
+    }
+
+    AcGePolygon2d &setVertices(const std::vector<AcGePoint2d> &vertices)
+    {
+        m_boundary = AcGePolyline2d(vertices, true);
+        return *this;
+    }
+    AcGePolygon2d &appendVertex(const AcGePoint2d &point)
+    {
+        m_boundary.appendVertex(point);
+        return *this;
+    }
+    std::size_t numVerts() const { return m_boundary.numVerts(); }
+    const std::vector<AcGePoint2d> &vertices() const
+    {
+        return m_boundary.vertices();
+    }
+
+    double perimeter() const { return m_boundary.length(); }
+    double signedArea() const { return m_boundary.signedArea(); }
+    double area() const { return m_boundary.area(); }
+
+    AcGePoint2d centroid(const AcGeTol &tol = AcGeTol{}) const
+    {
+        const auto &points = m_boundary.vertices();
+        if (points.empty())
+            return {};
+
+        double twiceArea = 0.0;
+        double xSum = 0.0;
+        double ySum = 0.0;
+        for (std::size_t i = 0; i < points.size(); ++i)
+        {
+            const AcGePoint2d &a = points[i];
+            const AcGePoint2d &b = points[(i + 1) % points.size()];
+            const double cross = a.x * b.y - b.x * a.y;
+            twiceArea += cross;
+            xSum += (a.x + b.x) * cross;
+            ySum += (a.y + b.y) * cross;
+        }
+        if (std::abs(twiceArea) <=
+            std::abs(tol.equalPoint()) * std::abs(tol.equalPoint()))
+        {
+            AcGeVector2d average;
+            for (const AcGePoint2d &point : points)
+                average += point.asVector();
+            return {average.x / double(points.size()),
+                    average.y / double(points.size())};
+        }
+        return {xSum / (3.0 * twiceArea), ySum / (3.0 * twiceArea)};
+    }
+
+    bool contains(const AcGePoint2d &point,
+                  const AcGeTol &tol = AcGeTol{}) const
+    {
+        const auto &points = m_boundary.vertices();
+        if (points.size() < 3)
+            return false;
+        const double pointTolerance = std::abs(tol.equalPoint());
+        if (area() <= pointTolerance * pointTolerance)
+            return false;
+        double parameter = 0.0;
+        if (m_boundary.isOn(point, parameter, pointTolerance))
+            return true;
+
+        bool inside = false;
+        for (std::size_t i = 0, j = points.size() - 1; i < points.size();
+             j = i++)
+        {
+            const AcGePoint2d &a = points[i];
+            const AcGePoint2d &b = points[j];
+            if ((a.y > point.y) != (b.y > point.y) &&
+                point.x <
+                    (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x)
+                inside = !inside;
+        }
+        return inside;
+    }
+};
+
 struct AcGePolyline3d : AcGePolylineBase<AcGePoint3d, AcGeVector3d>
 {
     using AcGePolylineBase::AcGePolylineBase;
