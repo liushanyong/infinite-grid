@@ -4409,7 +4409,7 @@ glm::vec3 anchoredNdcLine(const AcGeVector3d &line)
 
   AcGeVector2d anchor(0.0, 0.0);
   for (int index = 0; index < anchorCount; ++index)
-    anchor += anchors[index] / static_cast<double>(anchorCount);
+    anchor += anchors[index].asVector() / static_cast<double>(anchorCount);
 
   return glm::vec3(float(line.x), float(line.y),
                    float(-(line.x * anchor.x + line.y * anchor.y)));
@@ -7408,7 +7408,6 @@ void render()
       planeCenter = AcGePoint3d(cameraPos) -
                     planeNormal *
                         (AcGePoint3d(cameraPos) - gridPlaneOrigin)
-                            .asVector()
                             .dotProduct(planeNormal);
   }
 
@@ -8215,13 +8214,14 @@ void render()
       const AcGeVector3d groundUp =
           imageUp - cameraFrontGe *
                         (imageUp.dotProduct(planeNormal) / frontOnNormal);
-      orthoRight = glm::vec3(groundRight);
-      orthoUp = glm::vec3(groundUp);
+      orthoRight = glm::vec3(static_cast<glm::dvec3>(groundRight));
+      orthoUp = glm::vec3(static_cast<glm::dvec3>(groundUp));
       // The point is relative to the snapped plane anchor.  Its normal-axis
       // component also cancels the rebase translation (the anchor has normal
       // coordinate zero), which is exactly what the shader depth path adds
       // back when it reconstructs a rebased clip position.
-      orthoPlaneCenter = glm::vec3(planeCenter - originWorld);
+      orthoPlaneCenter = glm::vec3(static_cast<glm::dvec3>(
+          planeCenter - originWorld));
 
       // World axes are projected as exact NDC lines while their plane
       // mapping is still in CPU doubles.  For an arbitrary plane, a point
@@ -8260,7 +8260,8 @@ void render()
   // The shader receives the rebased offset and never sees the absolute
   // world coordinate; magnitude is bounded by chunkSize/2 instead of
   // step/2.
-  planeOriginRelative = glm::vec3(originWorld - AcGePoint3d(rebase));
+  planeOriginRelative = glm::vec3(static_cast<glm::dvec3>(
+      originWorld - AcGePoint3d(rebase)));
   // The shader's p is already relative to the snapped grid anchor, so this
   // value intentionally stays grid-relative.  Resolving it against the frame
   // rebase would shift the world axes by one rebase chunk.
@@ -8278,8 +8279,8 @@ void render()
         static_cast<float>(axisV));
   }
 
-  planeTangentU = glm::vec3(tangentUGe);
-  planeTangentV = glm::vec3(tangentVGe);
+  planeTangentU = glm::vec3(static_cast<glm::dvec3>(tangentUGe));
+  planeTangentV = glm::vec3(static_cast<glm::dvec3>(tangentVGe));
   if (gridPlane == GridPlaneType::XZ)
   {
       axisColorU = kAxisColorX;   // X red
@@ -8300,7 +8301,8 @@ void render()
       AcGePoint3d startAxisWorld = gridPlaneStartAxisOrigin -
           planeNormal * (gridPlaneStartAxisOrigin - gridPlaneOrigin)
                             .dotProduct(planeNormal);
-      startAxisOrigin = glm::vec3(startAxisWorld - originWorld);
+      startAxisOrigin = glm::vec3(static_cast<glm::dvec3>(
+          startAxisWorld - originWorld));
       AcGeVector3d startAxisDirection =
           gridPlaneStartAxisDirection -
           planeNormal * gridPlaneStartAxisDirection.dotProduct(planeNormal);
@@ -8321,9 +8323,13 @@ void render()
       const AcGePoint3d axisPoint1 =
           axisCenterOnPlane + startAxisDirection * axisSegmentLength;
       const glm::vec4 clip0 = overlayProjection * view *
-          glm::vec4(glm::vec3(axisPoint0 - AcGePoint3d(rebase)), 1.0f);
+          glm::vec4(glm::vec3(static_cast<glm::dvec3>(
+                        axisPoint0 - AcGePoint3d(rebase))),
+                    1.0f);
       const glm::vec4 clip1 = overlayProjection * view *
-          glm::vec4(glm::vec3(axisPoint1 - AcGePoint3d(rebase)), 1.0f);
+          glm::vec4(glm::vec3(static_cast<glm::dvec3>(
+                        axisPoint1 - AcGePoint3d(rebase))),
+                    1.0f);
       if (clip0.w > 0.0f && clip1.w > 0.0f)
       {
           const glm::dvec2 ndc0(clip0.x / clip0.w, clip0.y / clip0.w);
