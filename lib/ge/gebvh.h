@@ -32,8 +32,6 @@
 #include "ge/gepoint.h"
 #include "ge/geoctree.h" // AcGeBoundBox3d
 
-#include <glm/glm.hpp>
-
 namespace ge
 {
 
@@ -139,12 +137,14 @@ public:
     // Closest ray-AABB hit: primitive index + entry depth.  Nodes pop
     // nearest-first, so the first primitive hit terminates the walk.
     std::optional<std::pair<std::uint32_t, double>> rayClosest(
-        const AcGePoint3d &origin, const glm::dvec3 &direction,
+        const AcGePoint3d &origin, const AcGeVector3d &direction,
         double tMin, double tMax) const
     {
         if (nodes_.empty())
             return std::nullopt;
-        const glm::dvec3 inverseDirection = 1.0 / direction;
+        const AcGeVector3d inverseDirection{1.0 / direction.x,
+                                            1.0 / direction.y,
+                                            1.0 / direction.z};
 
         struct StackItem
         {
@@ -230,12 +230,14 @@ public:
     // returns false to stop the walk (once an exact test has found a hit
     // nearer than the remaining entries, nothing better can appear).
     template <typename Callback>
-    void rayTraverse(const AcGePoint3d &origin, const glm::dvec3 &direction,
+    void rayTraverse(const AcGePoint3d &origin, const AcGeVector3d &direction,
                      double tMin, double tMax, Callback &&callback) const
     {
         if (nodes_.empty())
             return;
-        const glm::dvec3 inverseDirection = 1.0 / direction;
+        const AcGeVector3d inverseDirection{1.0 / direction.x,
+                                            1.0 / direction.y,
+                                            1.0 / direction.z};
 
         struct StackItem
         {
@@ -409,7 +411,7 @@ private:
 
     static std::optional<double> slabEntry(
         const AcGeBoundBox3d &bounds, const AcGePoint3d &origin,
-        const glm::dvec3 &inverseDirection, double tMin, double tMax)
+        const AcGeVector3d &inverseDirection, double tMin, double tMax)
     {
         double tEnter = tMin;
         double tExit = tMax;
@@ -469,7 +471,7 @@ private:
                         refs[begin].centroid);
         for (std::uint32_t i = begin + 1; i < end; ++i)
             centroidBounds = extendPoint(centroidBounds, refs[i].centroid);
-        const glm::dvec3 centroidExtent{
+        const AcGeVector3d centroidExtent{
             centroidBounds.max.x - centroidBounds.min.x,
             centroidBounds.max.y - centroidBounds.min.y,
             centroidBounds.max.z - centroidBounds.min.z};

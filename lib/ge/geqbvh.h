@@ -99,14 +99,16 @@ public:
     // Near-ordered closest-hit, mirroring AcGeBoundBvh::rayClosest.  The
     // widened float boxes can only admit extra candidates, never miss.
     std::optional<std::pair<std::uint32_t, double>> rayClosest(
-        const AcGePoint3d &origin, const glm::dvec3 &direction,
+        const AcGePoint3d &origin, const AcGeVector3d &direction,
         double tMin, double tMax,
         const std::vector<AcGeBoundBox3d> &primitiveBounds,
         const std::vector<std::uint32_t> &order) const
     {
         if (nodes_.empty())
             return std::nullopt;
-        const glm::dvec3 inverseDirection = 1.0 / direction;
+        const AcGeVector3d inverseDirection{1.0 / direction.x,
+                                            1.0 / direction.y,
+                                            1.0 / direction.z};
 
         struct StackItem
         {
@@ -233,7 +235,7 @@ public:
 private:
     static std::optional<double> slabEntry(
         const AcGeBoundBox3d &bounds, const AcGePoint3d &origin,
-        const glm::dvec3 &inverseDirection, double tMin, double tMax)
+        const AcGeVector3d &inverseDirection, double tMin, double tMax)
     {
         double tEnter = tMin;
         double tExit = tMax;

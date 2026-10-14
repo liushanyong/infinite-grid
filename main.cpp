@@ -183,15 +183,15 @@ SDL_Window *window = nullptr;
 // protocol keeps instancing compact; only the submitter knows backend details.
 // All world-space object positions stay double precision on the CPU.
 // The GPU never sees these; only (objWorld - worldRebase().origin()) does.
-glm::dvec3 cubeWorldPosition(0.0);
+AcGePoint3d cubeWorldPosition;
 
 bool largeCoordinateCameraView = false;
 bool frustumCaptureRequested = false;
 bool frustumWireframeVisible = false;
 bool targetPlaneConstraintEnabled = false;
-glm::dvec3 frustumCorners[8];
+AcGePoint3d frustumCorners[8];
 bool gridVisibleQuadValid = false;
-glm::dvec3 gridVisibleQuad[8];
+AcGePoint3d gridVisibleQuad[8];
 int gridVisibleQuadCount = 0;
 enum class GridPlaneType
 {
@@ -330,15 +330,15 @@ void activePlaneTangents(AcGeVector3d &tangentU, AcGeVector3d &tangentV)
   // objects sit far from the rebase origin, but at those distances they
   // render below the impostor threshold, so float32 quantization stays
   // sub-pixel.  Bump to ~1e9 for a true precision-stress demonstration:
-const glm::dvec3 LARGE_COORDINATE_BASE_POINT(1e7, 0.0, 1e7);
-const glm::dvec3 LARGE_COORDINATE_DETAIL_OFFSET(1536.0, 0.0, -1024.0);
+const AcGePoint3d LARGE_COORDINATE_BASE_POINT(1e7, 0.0, 1e7);
+const AcGeVector3d LARGE_COORDINATE_DETAIL_OFFSET(1536.0, 0.0, -1024.0);
 
 // The view owns the orbit camera; demo code keeps the orbitCam alias.
 AcGsOrbitCamera &orbitCam = acgsView().orbitCamera();
 
 // An orbit drag locks its pivot when it starts.  Until this demo has a
 // selection system, use the same fallback as OpenCADStudio: the camera target.
-std::optional<glm::dvec3> orbitPivot;
+std::optional<AcGePoint3d> orbitPivot;
 
 // Project the orbit focus onto the active grid plane. Translating the eye by
 // the same plane correction preserves the view direction and orbit distance;
@@ -637,9 +637,11 @@ void drawUcsIconOverlay()
   }
 }
 
-void logCameraTargetIfChanged(const glm::dvec3 &target)
+void logCameraTargetIfChanged(const AcGePoint3d &target)
 {
-  static glm::dvec3 lastTarget(std::numeric_limits<double>::quiet_NaN());
+  static AcGePoint3d lastTarget(std::numeric_limits<double>::quiet_NaN(),
+                                std::numeric_limits<double>::quiet_NaN(),
+                                std::numeric_limits<double>::quiet_NaN());
   if (!(std::abs(target.x - lastTarget.x) < 1e-9 &&
         std::abs(target.y - lastTarget.y) < 1e-9 &&
         std::abs(target.z - lastTarget.z) < 1e-9))
@@ -652,11 +654,13 @@ void logCameraTargetIfChanged(const glm::dvec3 &target)
   }
 }
 
-void logCameraStateIfChanged(const glm::dvec3 &target,
+void logCameraStateIfChanged(const AcGePoint3d &target,
                              double nearPlane, double farPlane,
                              bool isOrtho)
 {
-  static glm::dvec3 lastTarget(std::numeric_limits<double>::quiet_NaN());
+  static AcGePoint3d lastTarget(std::numeric_limits<double>::quiet_NaN(),
+                                std::numeric_limits<double>::quiet_NaN(),
+                                std::numeric_limits<double>::quiet_NaN());
   static double lastNear = std::numeric_limits<double>::quiet_NaN();
   static double lastFar  = std::numeric_limits<double>::quiet_NaN();
   static bool lastOrtho  = false;
@@ -805,7 +809,7 @@ struct GltfStaticMesh
 struct MeshEntityRecord
 {
   acdb::AcDbPolyFaceMesh entity;
-  glm::dvec3 worldPosition;
+  AcGePoint3d worldPosition;
   float size;
   rendering::MeshType mesh = rendering::MeshType::Cube;
   // Non-null: draw/pick upload and rasterize this static geometry instead
@@ -1071,7 +1075,7 @@ static constexpr glm::vec3 kSelectionHighlightRGB(0.35f, 0.65f, 1.0f);
 struct MeshInstanceCacheEntry
 {
   rendering::MeshInstance instance;
-  glm::dvec3 position;
+  AcGePoint3d position;
   float size = 0.0f;
   glm::vec4 color;
   glm::vec4 material;
@@ -1087,17 +1091,17 @@ static std::unordered_map<const MeshEntityRecord *, MeshInstanceCacheEntry>
 // by the same umbrella).  Wireframe styles draw these strokes because
 // imported models carry no procedural feature-edge buffer.
 static std::unordered_map<const MeshEntityRecord *,
-                          std::vector<std::vector<glm::dvec3>>>
+                          std::vector<std::vector<AcGePoint3d>>>
     g_gltfWireframeCache;
 
-static const std::vector<std::vector<glm::dvec3>> &gltfWireframeChains(
+static const std::vector<std::vector<AcGePoint3d>> &gltfWireframeChains(
     const MeshEntityRecord &entity)
 {
   auto found = g_gltfWireframeCache.find(&entity);
   if (found != g_gltfWireframeCache.end())
     return found->second;
 
-  std::vector<std::vector<glm::dvec3>> chains;
+  std::vector<std::vector<AcGePoint3d>> chains;
   const auto &positions = entity.staticMesh->cpu.positionU;
   const auto &indices = entity.staticMesh->cpu.indices;
 
@@ -1129,15 +1133,15 @@ static const std::vector<std::vector<glm::dvec3>> &gltfWireframeChains(
   std::vector<std::uint8_t> used(edges.size(), 0);
   auto toWorld = [&entity, &positions](std::uint32_t index) {
     const glm::vec3 &local = glm::vec3(positions[index]);
-    return entity.worldPosition + glm::dvec3(local);
+    return entity.worldPosition + AcGeVector3d(local);
   };
   for (std::uint32_t start = 0; start < edges.size(); ++start)
   {
     if (used[start])
       continue;
     used[start] = 1;
-    std::vector<glm::dvec3> chain{toWorld(edges[start].first),
-                                  toWorld(edges[start].second)};
+    std::vector<AcGePoint3d> chain{toWorld(edges[start].first),
+                                   toWorld(edges[start].second)};
     for (int direction = 0; direction < 2; ++direction)
     {
       std::uint32_t cursor = direction == 0 ? edges[start].second
@@ -1349,31 +1353,31 @@ std::string indexedDisplayName(const char *prefix, size_t index)
 const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
 {
   static const std::vector<LargeCoordinateObject> objects = [] {
-    const glm::dvec3 detailCenter =
+    const AcGePoint3d detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
     struct ValidationPoint
     {
-      glm::dvec3 offset;
+      AcGeVector3d offset;
       glm::vec3 color;
       float size;
       rendering::MeshType mesh;
     };
     const ValidationPoint validationPoints[] = {
-        {glm::dvec3(0.0, 256.0, 0.0), glm::vec3(0.43f, 0.91f, 0.98f),
+        {AcGeVector3d(0.0, 256.0, 0.0), glm::vec3(0.43f, 0.91f, 0.98f),
          512.0f, rendering::MeshType::Cube},
-        {glm::dvec3(0.0, 224.0, 0.0), glm::vec3(1.0f, 0.58f, 0.25f),
+        {AcGeVector3d(0.0, 224.0, 0.0), glm::vec3(1.0f, 0.58f, 0.25f),
          448.0f, rendering::MeshType::Cube},
-        {glm::dvec3(1920.0, 64.0, 0.0), glm::vec3(0.95f, 0.95f, 0.95f),
+        {AcGeVector3d(1920.0, 64.0, 0.0), glm::vec3(0.95f, 0.95f, 0.95f),
          128.0f, rendering::MeshType::Cube},
-        {glm::dvec3(0.0, 64.0, -1920.0), glm::vec3(0.95f, 0.95f, 0.95f),
+        {AcGeVector3d(0.0, 64.0, -1920.0), glm::vec3(0.95f, 0.95f, 0.95f),
          128.0f, rendering::MeshType::Cube},
-        {glm::dvec3(-288.0, 32.0, -224.0),
+        {AcGeVector3d(-288.0, 32.0, -224.0),
          glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
-        {glm::dvec3(-96.0, 32.0, -224.0),
+        {AcGeVector3d(-96.0, 32.0, -224.0),
          glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
-        {glm::dvec3(96.0, 32.0, -224.0),
+        {AcGeVector3d(96.0, 32.0, -224.0),
          glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
-        {glm::dvec3(288.0, 32.0, -224.0),
+        {AcGeVector3d(288.0, 32.0, -224.0),
          glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
     };
     std::vector<LargeCoordinateObject> objects;
@@ -1421,9 +1425,9 @@ MeshEntityRecord getCenterCubeEntity()
   return entity;
 }
 
-static glm::dvec3 vectorPrimitivesAnchor() {
-  return LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET +
-         glm::dvec3(0.0, 0.0, 0.0);
+static AcGePoint3d vectorPrimitivesAnchor()
+{
+  return LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
 }
 
 static bool cadEntityDemoEnabled()
@@ -1747,16 +1751,16 @@ static void appendDemoBlocks()
   if (document.blockTable().contains("DEMO_BRACKET"))
     return; // builder cache may rerun; keep the definition unique
 
-  const glm::dvec3 blockAnchor = vectorPrimitivesAnchor();
+  const AcGePoint3d blockAnchor = vectorPrimitivesAnchor();
   const double base = 240.0;
   acdb::AcDbLine left;
   left.common.color = glm::vec4(0.30f, 0.85f, 0.55f, 1.0f);
   left.start = blockAnchor;
-  left.end = blockAnchor + glm::dvec3(0.0, base, 0.0);
+  left.end = blockAnchor + AcGeVector3d(0.0, base, 0.0);
   acdb::AcDbLine bottom;
   bottom.common.color = glm::vec4(0.30f, 0.85f, 0.55f, 1.0f);
   bottom.start = blockAnchor;
-  bottom.end = blockAnchor + glm::dvec3(base, 0.0, 0.0);
+  bottom.end = blockAnchor + AcGeVector3d(base, 0.0, 0.0);
   const acdb::AcDbHandle leftHandle = document.addEntity(left);
   const acdb::AcDbHandle bottomHandle = document.addEntity(bottom);
 
@@ -1766,10 +1770,10 @@ static void appendDemoBlocks()
     return;
   // The members left model space with the definition; put the two
   // instances where the demo can see them.
-  for (const glm::dvec3 position :
-       {blockAnchor + glm::dvec3(512.0, 96.0, 0.0),
-        blockAnchor + glm::dvec3(512.0, 416.0, 0.0),
-        blockAnchor + glm::dvec3(512.0, 736.0, 0.0)})
+  for (const AcGePoint3d position :
+       {blockAnchor + AcGeVector3d(512.0, 96.0, 0.0),
+        blockAnchor + AcGeVector3d(512.0, 416.0, 0.0),
+        blockAnchor + AcGeVector3d(512.0, 736.0, 0.0)})
   {
     document.addBlockReference("DEMO_BRACKET", position);
   }
@@ -1784,14 +1788,14 @@ static void appendDemoBlocks()
 
 
 
-static glm::dvec3 demoAnchorPoint()
+static AcGePoint3d demoAnchorPoint()
 {
   return vectorPrimitivesAnchor();
 }
 
-static glm::dvec3 demoCadAnchor()
+static AcGePoint3d demoCadAnchor()
 {
-  return vectorPrimitivesAnchor() + glm::dvec3(1536.0, -1280.0, 0.0);
+  return vectorPrimitivesAnchor() + AcGeVector3d(1536.0, -1280.0, 0.0);
 }
 
 // Authors one demo entity into the document under a stable label; the
@@ -1860,11 +1864,11 @@ static const bool gGltfEnvResolved = [] {
   return true;
 }();
 
-static glm::dvec3 gltfDemoPlacement()
+static AcGePoint3d gltfDemoPlacement()
 {
   // Inside the large-coordinate stress field, off to the side of the demo
   // cube cluster so the startup fit-all camera frames the model.
-  return demoAnchorPoint() + glm::dvec3(768.0, -1024.0, 0.0);
+  return demoAnchorPoint() + AcGeVector3d(768.0, -1024.0, 0.0);
 }
 
 static std::vector<std::filesystem::path> listGltfDemoModels()
@@ -2105,7 +2109,7 @@ static void appendGltfDemoMeshes(VectorPrimitivesTessellation &target)
   if (!asset.valid)
     return;
 
-  const glm::dvec3 placement = gltfDemoPlacement();
+  const AcGePoint3d placement = gltfDemoPlacement();
   for (size_t i = 0; i < asset.import.meshes.size(); ++i)
   {
     MeshEntityRecord record;
@@ -2177,7 +2181,7 @@ static void cycleGltfDemoModel()
   }
   gGltfActivePath = next;
   ++gGltfModelSerial; // bumps the draw-list key; rebuild imports the model
-  const glm::dvec3 placement = gltfDemoPlacement();
+  const AcGePoint3d placement = gltfDemoPlacement();
   std::cout << "GRID_GLTF: queued " << next.filename().string()
             << " (place at " << placement.x << ", " << placement.y << ", "
             << placement.z << "; G cycles, Ctrl+G exports)" << std::endl;
@@ -2197,18 +2201,18 @@ static void buildDemoDocument()
     // import, builder reruns).
     openDemoScene();
     acdb::AcDbDatabase &document = acdbDocument();
-    const glm::dvec3 cadAnchor = demoCadAnchor();
-    const glm::dvec3 demoAnchor = demoAnchorPoint();
+    const AcGePoint3d cadAnchor = demoCadAnchor();
+    const AcGePoint3d demoAnchor = demoAnchorPoint();
 
     acdb::AcDbLine line;
     line.common.color = glm::vec4(1.0f, 0.24f, 0.20f, 1.0f);
     line.start = cadAnchor;
-    line.end = cadAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    line.end = cadAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     addDemo(line, "Line");
 
     acdb::AcDbArc arc;
     arc.common.color = glm::vec4(1.0f, 0.52f, 0.10f, 1.0f);
-    arc.center = cadAnchor + glm::dvec3(1024.0, 256.0, 0.0);
+    arc.center = cadAnchor + AcGeVector3d(1024.0, 256.0, 0.0);
     arc.radius = 192.0;
     arc.startAngle = 0.0;
     arc.endAngle = glm::radians(270.0);
@@ -2216,14 +2220,14 @@ static void buildDemoDocument()
 
     acdb::AcDbCircle circle;
     circle.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
-    circle.center = cadAnchor + glm::dvec3(256.0, 512.0, 0.0);
+    circle.center = cadAnchor + AcGeVector3d(256.0, 512.0, 0.0);
     circle.radius = 160.0;
     addDemo(circle, "Circle");
 
     acdb::AcDbEllipse ellipse;
     ellipse.common.color = glm::vec4(0.65f, 0.30f, 0.85f, 1.0f);
-    ellipse.center = cadAnchor + glm::dvec3(768.0, 640.0, 0.0);
-    ellipse.majorAxis = glm::dvec3(224.0, 0.0, 0.0);
+    ellipse.center = cadAnchor + AcGeVector3d(768.0, 640.0, 0.0);
+    ellipse.majorAxis = AcGeVector3d(224.0, 0.0, 0.0);
     ellipse.radiusRatio = 0.55;
     addDemo(ellipse, "Ellipse");
 
@@ -2231,8 +2235,8 @@ static void buildDemoDocument()
     // of the closed curve.
     acdb::AcDbEllipse ellipseArc;
     ellipseArc.common.color = glm::vec4(0.75f, 0.40f, 0.95f, 1.0f);
-    ellipseArc.center = cadAnchor + glm::dvec3(1536.0, -640.0, 0.0);
-    ellipseArc.majorAxis = glm::dvec3(160.0, 0.0, 0.0);
+    ellipseArc.center = cadAnchor + AcGeVector3d(1536.0, -640.0, 0.0);
+    ellipseArc.majorAxis = AcGeVector3d(160.0, 0.0, 0.0);
     ellipseArc.radiusRatio = 0.55;
     ellipseArc.startParameter = glm::pi<double>() * 0.25;
     ellipseArc.endParameter = glm::pi<double>() * 1.75;
@@ -2241,10 +2245,10 @@ static void buildDemoDocument()
     acdb::AcDb3dPolyline polyline;
     polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     polyline.vertices = {
-        cadAnchor + glm::dvec3(-384.0, 128.0, 0.0),
-        cadAnchor + glm::dvec3(-128.0, 384.0, 0.0),
-        cadAnchor + glm::dvec3(128.0, 256.0, 0.0),
-        cadAnchor + glm::dvec3(384.0, 512.0, 0.0)};
+        cadAnchor + AcGeVector3d(-384.0, 128.0, 0.0),
+        cadAnchor + AcGeVector3d(-128.0, 384.0, 0.0),
+        cadAnchor + AcGeVector3d(128.0, 256.0, 0.0),
+        cadAnchor + AcGeVector3d(384.0, 512.0, 0.0)};
     polyline.bulges = {0.25, 0.0, -0.35};
     addDemo(polyline, "Polyline");
 
@@ -2264,19 +2268,19 @@ static void buildDemoDocument()
     spline.degree = 3;
     spline.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
     spline.controlPoints = {
-        cadAnchor + glm::dvec3(-768.0, 512.0, 0.0),
-        cadAnchor + glm::dvec3(-512.0, 896.0, 128.0),
-        cadAnchor + glm::dvec3(-256.0, 384.0, -128.0),
-        cadAnchor + glm::dvec3(0.0, 768.0, 0.0)};
+        cadAnchor + AcGeVector3d(-768.0, 512.0, 0.0),
+        cadAnchor + AcGeVector3d(-512.0, 896.0, 128.0),
+        cadAnchor + AcGeVector3d(-256.0, 384.0, -128.0),
+        cadAnchor + AcGeVector3d(0.0, 768.0, 0.0)};
     addDemo(spline, "Spline");
 
     acdb::AcDbHatch hatch;
     hatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.75f);
     hatch.outerLoop = {
-        cadAnchor + glm::dvec3(1024.0, -384.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -384.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -128.0, 0.0),
-        cadAnchor + glm::dvec3(1024.0, -128.0, 0.0)};
+        cadAnchor + AcGeVector3d(1024.0, -384.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -384.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -128.0, 0.0),
+        cadAnchor + AcGeVector3d(1024.0, -128.0, 0.0)};
     addDemo(hatch, "Hatch");
 
     // ANSI31 line pattern at unit scale; the inner loop punches a hole via
@@ -2288,15 +2292,15 @@ static void buildDemoDocument()
     patternHatch.patternScale = 1.0;
     patternHatch.patternAngle = 0.0;
     patternHatch.outerLoop = {
-        cadAnchor + glm::dvec3(1024.0, -768.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -768.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -512.0, 0.0),
-        cadAnchor + glm::dvec3(1024.0, -512.0, 0.0)};
+        cadAnchor + AcGeVector3d(1024.0, -768.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -768.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -512.0, 0.0),
+        cadAnchor + AcGeVector3d(1024.0, -512.0, 0.0)};
     patternHatch.innerLoops = {{
-        cadAnchor + glm::dvec3(1152.0, -704.0, 0.0),
-        cadAnchor + glm::dvec3(1280.0, -704.0, 0.0),
-        cadAnchor + glm::dvec3(1280.0, -576.0, 0.0),
-        cadAnchor + glm::dvec3(1152.0, -576.0, 0.0)}};
+        cadAnchor + AcGeVector3d(1152.0, -704.0, 0.0),
+        cadAnchor + AcGeVector3d(1280.0, -704.0, 0.0),
+        cadAnchor + AcGeVector3d(1280.0, -576.0, 0.0),
+        cadAnchor + AcGeVector3d(1152.0, -576.0, 0.0)}};
     addDemo(patternHatch, "PatternHatch");
 
     // Same pattern family rotated 45 degrees and widened by patternScale.
@@ -2307,30 +2311,30 @@ static void buildDemoDocument()
     angledHatch.patternScale = 2.0;
     angledHatch.patternAngle = glm::pi<double>() * 0.25;
     angledHatch.outerLoop = {
-        cadAnchor + glm::dvec3(1024.0, -1024.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -1024.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -832.0, 0.0),
-        cadAnchor + glm::dvec3(1024.0, -832.0, 0.0)};
+        cadAnchor + AcGeVector3d(1024.0, -1024.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -1024.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -832.0, 0.0),
+        cadAnchor + AcGeVector3d(1024.0, -832.0, 0.0)};
     addDemo(angledHatch, "AngledHatch");
 
     acdb::AcDbSolid solid;
     solid.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 0.85f);
-    solid.firstCorner = cadAnchor + glm::dvec3(0.0, -128.0, 256.0);
-    solid.secondCorner = solid.firstCorner + glm::dvec3(512.0, 0.0, 0.0);
-    solid.thirdCorner = solid.firstCorner + glm::dvec3(0.0, 384.0, 0.0);
-    solid.fourthCorner = solid.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
+    solid.firstCorner = cadAnchor + AcGeVector3d(0.0, -128.0, 256.0);
+    solid.secondCorner = solid.firstCorner + AcGeVector3d(512.0, 0.0, 0.0);
+    solid.thirdCorner = solid.firstCorner + AcGeVector3d(0.0, 384.0, 0.0);
+    solid.fourthCorner = solid.firstCorner + AcGeVector3d(512.0, 384.0, 0.0);
     addDemo(solid, "Solid");
 
     acdb::AcDbRay ray;
     ray.common.color = glm::vec4(0.10f, 0.85f, 0.75f, 1.0f);
-    ray.start = cadAnchor + glm::dvec3(-640.0, -768.0, 0.0);
-    ray.direction = glm::dvec3(1.0, 0.25, 0.0);
+    ray.start = cadAnchor + AcGeVector3d(-640.0, -768.0, 0.0);
+    ray.direction = AcGeVector3d(1.0, 0.25, 0.0);
     addDemo(ray, "Ray");
 
     acdb::AcDbXline xline;
     xline.common.color = glm::vec4(0.65f, 0.35f, 0.95f, 1.0f);
-    xline.point = cadAnchor + glm::dvec3(256.0, -1152.0, 0.0);
-    xline.direction = glm::dvec3(2.0, -1.0, 0.0);
+    xline.point = cadAnchor + AcGeVector3d(256.0, -1152.0, 0.0);
+    xline.direction = AcGeVector3d(2.0, -1.0, 0.0);
     addDemo(xline, "XLine");
 
     // SHX vector-font text: authored as an AcDbText whose style
@@ -2343,7 +2347,7 @@ static void buildDemoDocument()
       shxText.styleName = "SHX";
       // SHX glyphs hang below their anchor (cap line at the anchor,
       // baseline one em down): the insertion is the cap line.
-      shxText.insertion = cadAnchor + glm::dvec3(256.0, 128.0, 96.0);
+      shxText.insertion = cadAnchor + AcGeVector3d(256.0, 128.0, 96.0);
       shxText.height = 96.0; // world units per em
       const AcString shxMessage = L"\u4E2D\u6587 INFINITE - GRID 123";
       shxText.text = arxcompat::toUtf8(shxMessage);
@@ -2353,10 +2357,10 @@ static void buildDemoDocument()
     acdb::AcDbMline mline;
     mline.common.color = glm::vec4(0.85f, 0.35f, 0.35f, 0.95f);
     mline.vertices = {
-        cadAnchor + glm::dvec3(-256.0, -768.0, 0.0),
-        cadAnchor + glm::dvec3(256.0, -704.0, 0.0),
-        cadAnchor + glm::dvec3(768.0, -832.0, 0.0)};
-    mline.scale = glm::dvec3(24.0, 1.0, 1.0);
+        cadAnchor + AcGeVector3d(-256.0, -768.0, 0.0),
+        cadAnchor + AcGeVector3d(256.0, -704.0, 0.0),
+        cadAnchor + AcGeVector3d(768.0, -832.0, 0.0)};
+    mline.scale = AcGeVector3d(24.0, 1.0, 1.0);
     addDemo(mline, "MLine", false, acgs::AcGsPickShape::PairedStrokeBand);
 
     // Closed multi-line: the offset band wraps around and the enclosed
@@ -2364,10 +2368,10 @@ static void buildDemoDocument()
     acdb::AcDbMline closedMLine;
     closedMLine.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 0.95f);
     closedMLine.vertices = {
-        cadAnchor + glm::dvec3(1472.0, -880.0, 0.0),
-        cadAnchor + glm::dvec3(1728.0, -960.0, 0.0),
-        cadAnchor + glm::dvec3(1600.0, -1088.0, 0.0)};
-    closedMLine.scale = glm::dvec3(40.0, 1.0, 1.0);
+        cadAnchor + AcGeVector3d(1472.0, -880.0, 0.0),
+        cadAnchor + AcGeVector3d(1728.0, -960.0, 0.0),
+        cadAnchor + AcGeVector3d(1600.0, -1088.0, 0.0)};
+    closedMLine.scale = AcGeVector3d(40.0, 1.0, 1.0);
     closedMLine.closed = true;
     addDemo(closedMLine, "ClosedMLine", false, acgs::AcGsPickShape::PairedStrokeBand);
 
@@ -2376,10 +2380,10 @@ static void buildDemoDocument()
     acdb::AcDb3dPolyline borderedPolyline;
     borderedPolyline.common.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f);
     borderedPolyline.vertices = {
-        cadAnchor + glm::dvec3(1792.0, -576.0, 0.0),
-        cadAnchor + glm::dvec3(1984.0, -576.0, 0.0),
-        cadAnchor + glm::dvec3(1984.0, -736.0, 0.0),
-        cadAnchor + glm::dvec3(1792.0, -736.0, 0.0)};
+        cadAnchor + AcGeVector3d(1792.0, -576.0, 0.0),
+        cadAnchor + AcGeVector3d(1984.0, -576.0, 0.0),
+        cadAnchor + AcGeVector3d(1984.0, -736.0, 0.0),
+        cadAnchor + AcGeVector3d(1792.0, -736.0, 0.0)};
     borderedPolyline.closed = true;
     borderedPolyline.thickness = 48.0;
     addDemo(borderedPolyline, "BorderedPolyline");
@@ -2390,10 +2394,10 @@ static void buildDemoDocument()
     fitSpline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
     fitSpline.degree = 3;
     fitSpline.fitPoints = {
-        cadAnchor + glm::dvec3(1024.0, -1152.0, 0.0),
-        cadAnchor + glm::dvec3(1152.0, -1024.0, 0.0),
-        cadAnchor + glm::dvec3(1280.0, -1216.0, 0.0),
-        cadAnchor + glm::dvec3(1408.0, -1088.0, 0.0)};
+        cadAnchor + AcGeVector3d(1024.0, -1152.0, 0.0),
+        cadAnchor + AcGeVector3d(1152.0, -1024.0, 0.0),
+        cadAnchor + AcGeVector3d(1280.0, -1216.0, 0.0),
+        cadAnchor + AcGeVector3d(1408.0, -1088.0, 0.0)};
     addDemo(fitSpline, "FitSpline");
 
     acdb::AcDbSpline closedFitSpline;
@@ -2401,10 +2405,10 @@ static void buildDemoDocument()
     closedFitSpline.degree = 3;
     closedFitSpline.closed = true;
     closedFitSpline.fitPoints = {
-        cadAnchor + glm::dvec3(1024.0, -1408.0, 160.0),
-        cadAnchor + glm::dvec3(1152.0, -1296.0, -160.0),
-        cadAnchor + glm::dvec3(1312.0, -1424.0, 288.0),
-        cadAnchor + glm::dvec3(1152.0, -1520.0, -96.0)};
+        cadAnchor + AcGeVector3d(1024.0, -1408.0, 160.0),
+        cadAnchor + AcGeVector3d(1152.0, -1296.0, -160.0),
+        cadAnchor + AcGeVector3d(1312.0, -1424.0, 288.0),
+        cadAnchor + AcGeVector3d(1152.0, -1520.0, -96.0)};
     addDemo(closedFitSpline, "ClosedFitSpline");
 
     // The closed ring through the same points: the interpolation visibly
@@ -2422,21 +2426,21 @@ static void buildDemoDocument()
     spaceSpline.common.color = glm::vec4(0.30f, 0.65f, 0.95f, 1.0f);
     spaceSpline.degree = 3;
     spaceSpline.fitPoints = {
-        cadAnchor + glm::dvec3(1024.0, -1152.0, 480.0),
-        cadAnchor + glm::dvec3(1152.0, -1024.0, -480.0),
-        cadAnchor + glm::dvec3(1280.0, -1216.0, 768.0),
-        cadAnchor + glm::dvec3(1408.0, -1088.0, -320.0),
-        cadAnchor + glm::dvec3(1536.0, -1216.0, 640.0)};
+        cadAnchor + AcGeVector3d(1024.0, -1152.0, 480.0),
+        cadAnchor + AcGeVector3d(1152.0, -1024.0, -480.0),
+        cadAnchor + AcGeVector3d(1280.0, -1216.0, 768.0),
+        cadAnchor + AcGeVector3d(1408.0, -1088.0, -320.0),
+        cadAnchor + AcGeVector3d(1536.0, -1216.0, 640.0)};
     addDemo(spaceSpline, "SpaceSpline");
 
     acdb::AcDbPoint cadPoint;
     cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
-    cadPoint.location = cadAnchor + glm::dvec3(512.0, 0.0, 0.0);
+    cadPoint.location = cadAnchor + AcGeVector3d(512.0, 0.0, 0.0);
     addDemo(cadPoint, "Point");
 
     acdb::AcDbText text;
     text.common.color = glm::vec4(0.95f, 0.95f, 0.30f, 1.0f);
-    text.insertion = cadAnchor + glm::dvec3(1152.0, 128.0, 384.0);
+    text.insertion = cadAnchor + AcGeVector3d(1152.0, 128.0, 384.0);
     text.height = 96.0;
     const AcString demoText = L"\u4E2D\u6587 TEXT";
     text.text = arxcompat::toUtf8(demoText);
@@ -2444,8 +2448,8 @@ static void buildDemoDocument()
 
     acdb::AcDbMText mtext;
     mtext.common.color = glm::vec4(0.35f, 0.90f, 0.95f, 1.0f);
-    mtext.insertion = cadAnchor + glm::dvec3(1152.0, 320.0, 384.0);
-    mtext.direction = glm::dvec3(1.0, 0.0, 0.0);
+    mtext.insertion = cadAnchor + AcGeVector3d(1152.0, 320.0, 384.0);
+    mtext.direction = AcGeVector3d(1.0, 0.0, 0.0);
     mtext.height = 64.0;
     const AcString demoMText = L"\u4E2D\u6587 MTEXT\nDEMO";
     mtext.text = arxcompat::toUtf8(demoMText);
@@ -2457,64 +2461,65 @@ static void buildDemoDocument()
     acdb::AcDbLine textLocator;
     textLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
     textLocator.common.lineWeight = 3.0;
-    textLocator.start = text.insertion + glm::dvec3(0.0, 0.0, -320.0);
+    textLocator.start = text.insertion + AcGeVector3d(0.0, 0.0, -320.0);
     textLocator.end = text.insertion;
     addDemo(textLocator, "TextLocator");
     acdb::AcDbLine mtextLocator;
     mtextLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
     mtextLocator.common.lineWeight = 3.0;
-    mtextLocator.start = mtext.insertion + glm::dvec3(0.0, 0.0, -320.0);
+    mtextLocator.start = mtext.insertion + AcGeVector3d(0.0, 0.0, -320.0);
     mtextLocator.end = mtext.insertion;
     addDemo(mtextLocator, "MTextLocator");
 
     // ---- annotation family demos (dimension / leader / tolerance) ----
     // The cluster sits right of the 3d-solid demo: a small plate outline
     // with the dimension types AutoCAD drawings actually carry.
-    const glm::dvec3 dimAnchor = demoAnchor + glm::dvec3(2304.0, 0.0, 0.0);
+    const AcGePoint3d dimAnchor = demoAnchor + AcGeVector3d(2304.0, 0.0, 0.0);
     const double dimTextHeight = 56.0;
 
     acdb::AcDbLine plateA;
     plateA.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateA.start = dimAnchor;
-    plateA.end = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
+    plateA.end = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     addDemo(plateA, "PlateBottom");
     acdb::AcDbLine plateB;
     plateB.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
-    plateB.start = dimAnchor + glm::dvec3(0.0, 512.0, 0.0);
-    plateB.end = dimAnchor + glm::dvec3(768.0, 512.0, 0.0);
+    plateB.start = dimAnchor + AcGeVector3d(0.0, 512.0, 0.0);
+    plateB.end = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     addDemo(plateB, "PlateTop");
     acdb::AcDbLine plateC;
     plateC.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateC.start = dimAnchor;
-    plateC.end = dimAnchor + glm::dvec3(0.0, 512.0, 0.0);
+    plateC.end = dimAnchor + AcGeVector3d(0.0, 512.0, 0.0);
     addDemo(plateC, "PlateLeft");
     acdb::AcDbLine plateD;
     plateD.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
-    plateD.start = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
-    plateD.end = dimAnchor + glm::dvec3(768.0, 512.0, 0.0);
+    plateD.start = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
+    plateD.end = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     addDemo(plateD, "PlateRight");
 
     acdb::AcDbRotatedDimension dimRotated;
     dimRotated.common.color = glm::vec4(0.95f, 0.80f, 0.25f, 1.0f);
     dimRotated.dimension.textHeight = dimTextHeight;
     dimRotated.xLine1Point = dimAnchor;
-    dimRotated.xLine2Point = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
-    dimRotated.dimensionLinePoint = dimAnchor + glm::dvec3(384.0, -160.0, 0.0);
+    dimRotated.xLine2Point = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
+    dimRotated.dimensionLinePoint =
+        dimAnchor + AcGeVector3d(384.0, -160.0, 0.0);
     dimRotated.dimensionLineAngle = 0.0;
     addDemo(dimRotated, "DimRotated");
 
     acdb::AcDbAlignedDimension dimAligned;
     dimAligned.common.color = glm::vec4(0.45f, 0.90f, 0.45f, 1.0f);
     dimAligned.dimension.textHeight = dimTextHeight;
-    dimAligned.xLine1Point = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
-    dimAligned.xLine2Point = dimAnchor + glm::dvec3(768.0, 512.0, 0.0);
+    dimAligned.xLine1Point = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
+    dimAligned.xLine2Point = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     dimAligned.dimensionLinePoint =
-        dimAnchor + glm::dvec3(928.0, 256.0, 0.0);
+        dimAnchor + AcGeVector3d(928.0, 256.0, 0.0);
     addDemo(dimAligned, "DimAligned");
 
     acdb::AcDbCircle dimCircle;
     dimCircle.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
-    dimCircle.center = dimAnchor + glm::dvec3(192.0, 256.0, 0.0);
+    dimCircle.center = dimAnchor + AcGeVector3d(192.0, 256.0, 0.0);
     dimCircle.radius = 96.0;
     addDemo(dimCircle, "DimBore");
 
@@ -2523,7 +2528,8 @@ static void buildDemoDocument()
     dimRadial.dimension.textHeight = dimTextHeight;
     dimRadial.centerPoint = dimCircle.center;
     dimRadial.radiusPoint =
-        dimCircle.center + glm::dvec3(96.0 * 0.7071, 96.0 * 0.7071, 0.0);
+        dimCircle.center +
+        AcGeVector3d(96.0 * 0.7071, 96.0 * 0.7071, 0.0);
     dimRadial.leaderLength = 96.0;
     addDemo(dimRadial, "DimRadial");
 
@@ -2540,11 +2546,11 @@ static void buildDemoDocument()
     acdb::AcDb3PointAngularDimension dimAngular;
     dimAngular.common.color = glm::vec4(0.75f, 0.55f, 0.95f, 1.0f);
     dimAngular.dimension.textHeight = dimTextHeight;
-    dimAngular.centerPoint = dimAnchor + glm::dvec3(768.0, 0.0, 0.0);
-    dimAngular.xLine1Point = dimAnchor + glm::dvec3(384.0, 0.0, 0.0);
-    dimAngular.xLine2Point = dimAnchor + glm::dvec3(768.0, 384.0, 0.0);
+    dimAngular.centerPoint = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
+    dimAngular.xLine1Point = dimAnchor + AcGeVector3d(384.0, 0.0, 0.0);
+    dimAngular.xLine2Point = dimAnchor + AcGeVector3d(768.0, 384.0, 0.0);
     dimAngular.dimension.textPosition =
-        dimAnchor + glm::dvec3(560.0, 120.0, 0.0);
+        dimAnchor + AcGeVector3d(560.0, 120.0, 0.0);
     addDemo(dimAngular, "DimAngular");
 
     acdb::AcDbOrdinateDimension dimOrdinate;
@@ -2552,24 +2558,24 @@ static void buildDemoDocument()
     dimOrdinate.dimension.textHeight = dimTextHeight;
     dimOrdinate.featureLocationPoint = dimAnchor;
     dimOrdinate.leaderEndPoint =
-        dimAnchor + glm::dvec3(-96.0, -224.0, 0.0);
+        dimAnchor + AcGeVector3d(-96.0, -224.0, 0.0);
     dimOrdinate.useXAxis = true;
     addDemo(dimOrdinate, "DimOrdinate");
 
     acdb::AcDbLeader leader;
     leader.common.color = glm::vec4(0.90f, 0.90f, 0.90f, 1.0f);
     leader.points = {
-        dimAnchor + glm::dvec3(192.0, 256.0, 0.0) +
-            glm::dvec3(96.0 * 0.7071, 96.0 * 0.7071, 0.0),
-        dimAnchor + glm::dvec3(480.0, 704.0, 0.0),
-        dimAnchor + glm::dvec3(704.0, 704.0, 0.0)};
+        dimAnchor + AcGeVector3d(192.0, 256.0, 0.0) +
+            AcGeVector3d(96.0 * 0.7071, 96.0 * 0.7071, 0.0),
+        dimAnchor + AcGeVector3d(480.0, 704.0, 0.0),
+        dimAnchor + AcGeVector3d(704.0, 704.0, 0.0)};
     leader.hasArrowhead = true;
     addDemo(leader, "Leader");
 
     acdb::AcDbFcf fcf;
     fcf.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
-    fcf.insertion = dimAnchor + glm::dvec3(716.0, 640.0, 0.0);
-    fcf.direction = glm::dvec3(1.0, 0.0, 0.0);
+    fcf.insertion = dimAnchor + AcGeVector3d(716.0, 640.0, 0.0);
+    fcf.direction = AcGeVector3d(1.0, 0.0, 0.0);
     fcf.text = "{|0.05|A}";
     fcf.height = dimTextHeight;
     addDemo(fcf, "Fcf");
@@ -2577,17 +2583,17 @@ static void buildDemoDocument()
     acdb::AcDb3dSolid solid3d;
     solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
     solid3d.renderClass = acdb::RenderClass::Cad;
-    const glm::dvec3 boxMin = cadAnchor + glm::dvec3(1536.0, 128.0, 384.0);
-    const glm::dvec3 boxMax = boxMin + glm::dvec3(256.0, 256.0, 256.0);
+    const AcGePoint3d boxMin = cadAnchor + AcGeVector3d(1536.0, 128.0, 384.0);
+    const AcGePoint3d boxMax = boxMin + AcGeVector3d(256.0, 256.0, 256.0);
     solid3d.vertices = {
-        glm::dvec3(boxMin.x, boxMin.y, boxMin.z),
-        glm::dvec3(boxMax.x, boxMin.y, boxMin.z),
-        glm::dvec3(boxMax.x, boxMax.y, boxMin.z),
-        glm::dvec3(boxMin.x, boxMax.y, boxMin.z),
-        glm::dvec3(boxMin.x, boxMin.y, boxMax.z),
-        glm::dvec3(boxMax.x, boxMin.y, boxMax.z),
-        glm::dvec3(boxMax.x, boxMax.y, boxMax.z),
-        glm::dvec3(boxMin.x, boxMax.y, boxMax.z)
+        AcGePoint3d(boxMin.x, boxMin.y, boxMin.z),
+        AcGePoint3d(boxMax.x, boxMin.y, boxMin.z),
+        AcGePoint3d(boxMax.x, boxMax.y, boxMin.z),
+        AcGePoint3d(boxMin.x, boxMax.y, boxMin.z),
+        AcGePoint3d(boxMin.x, boxMin.y, boxMax.z),
+        AcGePoint3d(boxMax.x, boxMin.y, boxMax.z),
+        AcGePoint3d(boxMax.x, boxMax.y, boxMax.z),
+        AcGePoint3d(boxMin.x, boxMax.y, boxMax.z)
     };
     solid3d.indices = {
         0, 2, 1, 0, 3, 2,
@@ -2602,8 +2608,8 @@ static void buildDemoDocument()
     acdb::AcDbLight light;
     light.common.color = glm::vec4(1.0f, 0.90f, 0.55f, 1.0f);
     light.type = acdb::LightType::Spot;
-    light.position = cadAnchor + glm::dvec3(-1152.0, 256.0, 512.0);
-    light.target = cadAnchor + glm::dvec3(-768.0, 0.0, 0.0);
+    light.position = cadAnchor + AcGeVector3d(-1152.0, 256.0, 512.0);
+    light.target = AcGeVector3d(cadAnchor.x - 768.0, cadAnchor.y, cadAnchor.z);
     light.range = 1024.0f;
     addDemo(light, "Light");
 
@@ -2616,9 +2622,9 @@ static void buildDemoDocument()
       gridPoint.common.color = glm::vec4(
           0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i, 1.0f);
       gridPoint.common.lineWeight = 6.0;
-      gridPoint.location = demoAnchor +
-          glm::dvec3((i % 8) * 96.0, (i / 8) * 96.0 - 640.0, 0.0) +
-          glm::dvec3(1024.0, 0.0, 0.0);
+      gridPoint.location =
+          demoAnchor + AcGeVector3d((i % 8) * 96.0, (i / 8) * 96.0 - 640.0, 0.0) +
+          AcGeVector3d(1024.0, 0.0, 0.0);
       addDemo(gridPoint, "PointGrid" + std::to_string(i));
     }
 
@@ -2626,16 +2632,15 @@ static void buildDemoDocument()
     dashedArrow.common.color = glm::vec4(0.95f, 0.25f, 0.75f, 1.0f);
     dashedArrow.common.lineType = "DASHED";
     dashedArrow.common.lineWeight = 2.5;
-    dashedArrow.start = demoAnchor + glm::dvec3(-1024.0, -640.0, -512.0);
-    dashedArrow.end = dashedArrow.start + glm::dvec3(1024.0, 256.0, 0.0);
+    dashedArrow.start = demoAnchor + AcGeVector3d(-1024.0, -640.0, -512.0);
+    dashedArrow.end = dashedArrow.start + AcGeVector3d(1024.0, 256.0, 0.0);
     addDemo(dashedArrow, "DashedArrow");
 
     {
-      const glm::dvec3 dir = glm::dvec3(
-          (dashedArrow.end - dashedArrow.start).normal());
-      const glm::dvec3 side =
-          glm::normalize(glm::cross(dir, glm::dvec3(0.0, 0.0, 1.0))) * 24.0;
-      const glm::dvec3 base = dashedArrow.end - AcGeVector3d(dir) * 48.0;
+      const AcGeVector3d dir = (dashedArrow.end - dashedArrow.start).normal();
+      const AcGeVector3d side =
+          dir.crossProduct(AcGeVector3d(0.0, 0.0, 1.0)).normal() * 24.0;
+      const AcGePoint3d base = dashedArrow.end - dir * 48.0;
       acdb::AcDbSolid arrowHead;
       arrowHead.common = dashedArrow.common;
       arrowHead.firstCorner = dashedArrow.end;
@@ -2648,13 +2653,13 @@ static void buildDemoDocument()
     if (paramSurfaceDemoEnabled())
     {
       const int surfaceSegs = paramSurfaceSegmentCount();
-      const glm::dvec3 surfaceOrigin =
-          demoAnchor + glm::dvec3(512.0, 768.0, -512.0);
+      const AcGePoint3d surfaceOrigin =
+          demoAnchor + AcGeVector3d(512.0, 768.0, -512.0);
       auto surfacePoint = [&](double u, double v) {
         const double height = glm::sin(glm::pi<double>() * u) *
                               glm::sin(glm::pi<double>() * v);
-        return surfaceOrigin +
-               glm::dvec3(u * 768.0, height * 224.0, v * 512.0);
+        return surfaceOrigin + AcGeVector3d(u * 768.0, height * 224.0,
+                                            v * 512.0);
       };
 
       acdb::AcDbPolyFaceMesh surface;
@@ -2716,7 +2721,7 @@ static void buildDemoDocument()
           0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f);
       widthDot.common.lineWeight = 12.0;
       widthDot.location =
-          demoAnchor + glm::dvec3(i * 256.0, -768.0, 0.0);
+          demoAnchor + AcGeVector3d(i * 256.0, -768.0, 0.0);
       addDemo(widthDot, "WidthDot" + std::to_string(i));
     }
 
@@ -2731,8 +2736,8 @@ static void buildDemoDocument()
         widthLine.common.color = colors[i];
         widthLine.common.lineWeight = widths[i];
         widthLine.start =
-            demoAnchor + glm::dvec3(-1024.0, -384.0 + i * 192.0, -512.0);
-        widthLine.end = widthLine.start + glm::dvec3(1024.0, 0.0, 0.0);
+            demoAnchor + AcGeVector3d(-1024.0, -384.0 + i * 192.0, -512.0);
+        widthLine.end = widthLine.start + AcGeVector3d(1024.0, 0.0, 0.0);
         addDemo(widthLine, "WidthLine" + std::to_string(i));
       }
     }
@@ -2751,8 +2756,8 @@ static void buildDemoDocument()
         specimen.common.lineType = lineTypes[i];
         specimen.common.lineWeight = 24.0;
         specimen.start =
-            demoAnchor + glm::dvec3(-1024.0, 1536.0 + i * 256.0, -3072.0);
-        specimen.end = specimen.start + glm::dvec3(2048.0, 0.0, 0.0);
+            demoAnchor + AcGeVector3d(-1024.0, 1536.0 + i * 256.0, -3072.0);
+        specimen.end = specimen.start + AcGeVector3d(2048.0, 0.0, 0.0);
         addDemo(specimen, std::string(lineTypes[i]) + "Line");
       }
     }
@@ -2760,13 +2765,13 @@ static void buildDemoDocument()
     acdb::AcDb3dPolyline demoPolyline;
     demoPolyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
     demoPolyline.common.lineWeight = 4.0;
-    const glm::dvec3 polylineBase =
-        demoAnchor + glm::dvec3(-512.0, 0.0, -512.0);
+    const AcGePoint3d polylineBase =
+        demoAnchor + AcGeVector3d(-512.0, 0.0, -512.0);
     demoPolyline.vertices = {
         polylineBase,
-        polylineBase + glm::dvec3(256.0, 256.0, 0.0),
-        polylineBase + glm::dvec3(512.0, 128.0, 256.0),
-        polylineBase + glm::dvec3(768.0, 384.0, 0.0)};
+        polylineBase + AcGeVector3d(256.0, 256.0, 0.0),
+        polylineBase + AcGeVector3d(512.0, 128.0, 256.0),
+        polylineBase + AcGeVector3d(768.0, 384.0, 0.0)};
     addDemo(demoPolyline, "DemoPolyline");
 
     acdb::AcDbHatch hexagon;
@@ -2776,8 +2781,8 @@ static void buildDemoDocument()
     {
       const double angle = glm::two_pi<double>() * i / 6.0;
       hexagon.outerLoop.push_back(
-          demoAnchor + glm::dvec3(0.0, 256.0, -512.0) +
-          glm::dvec3(128.0 * std::cos(angle), 128.0 * std::sin(angle), 0.0));
+          demoAnchor + AcGeVector3d(0.0, 256.0, -512.0) +
+          AcGeVector3d(128.0 * std::cos(angle), 128.0 * std::sin(angle), 0.0));
     }
     addDemo(hexagon, "Hexagon");
 
@@ -2790,9 +2795,9 @@ static void buildDemoDocument()
       {
         const double angle = glm::two_pi<double>() * i / circleSegments;
         circleFill.outerLoop.push_back(
-            demoAnchor + glm::dvec3(256.0, 512.0, 256.0) +
-            glm::dvec3(160.0 * std::cos(angle),
-                       160.0 * std::sin(angle), 0.0));
+            demoAnchor + AcGeVector3d(256.0, 512.0, 256.0) +
+            AcGeVector3d(160.0 * std::cos(angle),
+                         160.0 * std::sin(angle), 0.0));
       }
       addDemo(circleFill, "CircleFill");
     }
@@ -2800,11 +2805,13 @@ static void buildDemoDocument()
     acdb::AcDbSolid rectangle;
     rectangle.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 1.0f);
     rectangle.firstCorner =
-        demoAnchor + glm::dvec3(-256.0, -128.0, 256.0);
-    rectangle.secondCorner = rectangle.firstCorner + glm::dvec3(512.0, 0.0, 0.0);
-    rectangle.thirdCorner = rectangle.firstCorner + glm::dvec3(0.0, 384.0, 0.0);
+        demoAnchor + AcGeVector3d(-256.0, -128.0, 256.0);
+    rectangle.secondCorner =
+        rectangle.firstCorner + AcGeVector3d(512.0, 0.0, 0.0);
+    rectangle.thirdCorner =
+        rectangle.firstCorner + AcGeVector3d(0.0, 384.0, 0.0);
     rectangle.fourthCorner =
-        rectangle.firstCorner + glm::dvec3(512.0, 384.0, 0.0);
+        rectangle.firstCorner + AcGeVector3d(512.0, 384.0, 0.0);
     addDemo(rectangle, "Rectangle");
 
     acdb::AcDbSpline bezier;
@@ -2812,13 +2819,13 @@ static void buildDemoDocument()
     bezier.common.lineWeight = 6.0;
     bezier.degree = 3;
     bezier.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
-    const glm::dvec3 bezierBase =
-        demoAnchor + glm::dvec3(-768.0, 512.0, 0.0);
+    const AcGePoint3d bezierBase =
+        demoAnchor + AcGeVector3d(-768.0, 512.0, 0.0);
     bezier.controlPoints = {
         bezierBase,
-        bezierBase + glm::dvec3(256.0, 384.0, 128.0),
-        bezierBase + glm::dvec3(512.0, -128.0, -128.0),
-        bezierBase + glm::dvec3(768.0, 256.0, 0.0)};
+        bezierBase + AcGeVector3d(256.0, 384.0, 128.0),
+        bezierBase + AcGeVector3d(512.0, -128.0, -128.0),
+        bezierBase + AcGeVector3d(768.0, 256.0, 0.0)};
     addDemo(bezier, "Bezier");
 
     // A GRID_DWG file replaces the demo document with its decoded contents.
@@ -2890,7 +2897,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   acgi::textRequests().clear();
 
   target.anchor = demoCadAnchor();
-  const glm::dvec3 demoAnchor = demoAnchorPoint();
+  const AcGePoint3d demoAnchor = demoAnchorPoint();
   const acdb::TesselationOptions options;
 
   // The Gs replay: the document model space records into the
@@ -2916,26 +2923,26 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       curve.acgiMaterial.baseColor = color;
     };
 
-    const glm::dvec3 curveCenter = demoAnchor;
+    const AcGePoint3d curveCenter = demoAnchor;
     addCurveDemo(rendering::CurveAlgorithm::Bezier, "BezierCurve",
                  glm::vec4(0.15f, 1.0f, 0.55f, 1.0f),
-                 {curveCenter + glm::dvec3(-240.0, -120.0, 0.0),
-                  curveCenter + glm::dvec3(-80.0, 220.0, 0.0),
-                  curveCenter + glm::dvec3(80.0, -220.0, 0.0),
-                  curveCenter + glm::dvec3(240.0, 120.0, 0.0)});
+                 {curveCenter + AcGeVector3d(-240.0, -120.0, 0.0),
+                  curveCenter + AcGeVector3d(-80.0, 220.0, 0.0),
+                  curveCenter + AcGeVector3d(80.0, -220.0, 0.0),
+                  curveCenter + AcGeVector3d(240.0, 120.0, 0.0)});
     addCurveDemo(rendering::CurveAlgorithm::BSpline, "BSplineCurve",
                  glm::vec4(0.20f, 0.62f, 1.00f, 1.0f),
-                 {curveCenter + glm::dvec3(-320.0, -180.0, 0.0),
-                  curveCenter + glm::dvec3(-140.0, 180.0, 0.0),
-                  curveCenter + glm::dvec3(0.0, -140.0, 0.0),
-                  curveCenter + glm::dvec3(140.0, 180.0, 0.0),
-                  curveCenter + glm::dvec3(320.0, -180.0, 0.0)});
+                 {curveCenter + AcGeVector3d(-320.0, -180.0, 0.0),
+                  curveCenter + AcGeVector3d(-140.0, 180.0, 0.0),
+                  curveCenter + AcGeVector3d(0.0, -140.0, 0.0),
+                  curveCenter + AcGeVector3d(140.0, 180.0, 0.0),
+                  curveCenter + AcGeVector3d(320.0, -180.0, 0.0)});
     addCurveDemo(rendering::CurveAlgorithm::NURBS, "NurbsCurve",
                  glm::vec4(0.95f, 0.82f, 0.25f, 1.0f),
-                 {curveCenter + glm::dvec3(-280.0, 260.0, 0.0),
-                  curveCenter + glm::dvec3(-110.0, -260.0, 0.0),
-                  curveCenter + glm::dvec3(110.0, 260.0, 0.0),
-                  curveCenter + glm::dvec3(280.0, -260.0, 0.0)},
+                 {curveCenter + AcGeVector3d(-280.0, 260.0, 0.0),
+                  curveCenter + AcGeVector3d(-110.0, -260.0, 0.0),
+                  curveCenter + AcGeVector3d(110.0, 260.0, 0.0),
+                  curveCenter + AcGeVector3d(280.0, -260.0, 0.0)},
                  3, {1.0, 2.0, 2.0, 1.0});
 
     acgs::CurveBatchCommand &curveArc = target.curves.emplace_back();
@@ -2943,8 +2950,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     curveArc.name = "CurveArc";
     curveArc.sampleCount = 192;
     curveArc.center = curveCenter;
-    curveArc.axisU = glm::dvec3(1.0, 0.0, 0.0);
-    curveArc.axisV = glm::dvec3(0.0, 1.0, 0.0);
+    curveArc.axisU = AcGeVector3d(1.0, 0.0, 0.0);
+    curveArc.axisV = AcGeVector3d(0.0, 1.0, 0.0);
     curveArc.radius = 360.0;
     curveArc.startAngle = -0.35;
     curveArc.sweep = 1.60;
@@ -2969,8 +2976,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       debugCube.size = 200.0f;
       target.meshes.push_back(std::move(debugCube));
 
-      const glm::dvec3 solidBase =
-          demoAnchor + glm::dvec3(0.0, 768.0, 512.0);
+      const AcGePoint3d solidBase =
+          demoAnchor + AcGeVector3d(0.0, 768.0, 512.0);
       const rendering::MeshType meshTypes[] = {
           rendering::MeshType::Cube, rendering::MeshType::Sphere,
           rendering::MeshType::Cone, rendering::MeshType::Torus};
@@ -2982,7 +2989,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
         mesh.entity.common.name = meshNames[index];
         mesh.entity.common.color = glm::vec4(0.8f, 0.7f, 0.9f, 0.65f);
         mesh.worldPosition = solidBase +
-            glm::dvec3((index % 2) * 512.0, (index / 2) * 512.0, 0.0);
+            AcGeVector3d((index % 2) * 512.0, (index / 2) * 512.0, 0.0);
         mesh.size = 192.0f;
         mesh.mesh = meshTypes[index];
         target.meshes.push_back(std::move(mesh));
@@ -3750,12 +3757,14 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
               ? glm::vec4(kSelectionHighlightRGB,
                           meshEntityColor(mesh).a)
               : meshEntityColor(mesh);
-      for (const std::vector<glm::dvec3> &chain : gltfWireframeChains(mesh))
+      for (const std::vector<AcGePoint3d> &chain : gltfWireframeChains(mesh))
       {
         acdb::Stroke stroke;
         stroke.common.name = mesh.entity.common.name;
         stroke.common.color = wireColor;
-        stroke.points = chain;
+        stroke.points.reserve(chain.size());
+        for (const AcGePoint3d &point : chain)
+          stroke.points.emplace_back(glm::dvec3(point));
         meshDrawList.geometry().strokes.push_back(std::move(stroke));
       }
     }
@@ -3809,7 +3818,9 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   for (const LargeCoordinateObject *object : drawOrder)
   {
     sortedDraws.emplace_back(
-        glm::dot(object->worldPosition - cameraPos, cameraFront), object);
+        glm::dot(glm::dvec3(object->worldPosition - AcGePoint3d(cameraPos)),
+                 cameraFront),
+        object);
   }
   std::sort(sortedDraws.begin(), sortedDraws.end(),
             [](const auto &lhs, const auto &rhs) {
@@ -3818,14 +3829,16 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
 
   rendering::RealisticLightsRenderData realisticLights;
   realisticLights.pointLights[0].position =
-      glm::vec3(LARGE_COORDINATE_BASE_POINT +
-                LARGE_COORDINATE_DETAIL_OFFSET + glm::dvec3(-1024.0, 640.0, 512.0) -
+      glm::vec3(glm::dvec3(LARGE_COORDINATE_BASE_POINT +
+                           LARGE_COORDINATE_DETAIL_OFFSET +
+                           AcGeVector3d(-1024.0, 640.0, 512.0)) -
                 cameraPos);
   realisticLights.pointLights[0].radius = 1024.0f;
   realisticLights.pointLights[0].color = glm::vec3(1.0f, 0.88f, 0.72f);
   realisticLights.pointLights[1].position =
-      glm::vec3(LARGE_COORDINATE_BASE_POINT +
-                LARGE_COORDINATE_DETAIL_OFFSET + glm::dvec3(1024.0, 384.0, -512.0) -
+      glm::vec3(glm::dvec3(LARGE_COORDINATE_BASE_POINT +
+                           LARGE_COORDINATE_DETAIL_OFFSET +
+                           AcGeVector3d(1024.0, 384.0, -512.0)) -
                 cameraPos);
   realisticLights.pointLights[1].radius = 1024.0f;
   realisticLights.pointLights[1].color = glm::vec3(0.52f, 0.74f, 1.0f);
@@ -4521,11 +4534,10 @@ public:
     // the walk.  Used by CPU picking so exact tests run nearest-first and
     // prune with the current best depth.
     template <typename Callback>
-    void rayTraverse(const glm::dvec3 &origin, const glm::dvec3 &direction,
+    void rayTraverse(const AcGePoint3d &origin, const AcGeVector3d &direction,
                      double tMin, double tMax, Callback &&callback) const
     {
-        bvh_.rayTraverse(AcGePoint3d(origin.x, origin.y, origin.z),
-                         direction, tMin, tMax, callback);
+        bvh_.rayTraverse(origin, direction, tMin, tMax, callback);
     }
 
     const ObjectT *object(std::uint32_t index) const
@@ -5089,7 +5101,8 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     const double localDepthFar = ortho
         ? g_pickDepthFar * directionLength / scale
         : std::numeric_limits<double>::infinity();
-    const glm::dvec3 origin = (ray.origin - object.worldPosition) / scale;
+    const glm::dvec3 origin =
+        (ray.origin - glm::dvec3(object.worldPosition)) / scale;
     const glm::dvec3 direction = ray.direction / directionLength;
     double best = std::numeric_limits<double>::infinity();
     const PickRay localRay{origin, direction};
@@ -8420,8 +8433,8 @@ void render()
       gridVisibleQuadValid = true;
       for (int i = 0; i < 4; ++i)
       {
-        const glm::dvec3 dir =
-            glm::normalize(frustumCorners[4 + i] - camPos);
+        const glm::dvec3 dir = glm::normalize(
+            glm::dvec3(frustumCorners[4 + i]) - camPos);
         const double denom = glm::dot(dir, n);
         if (std::abs(denom) < 1e-10 || planeDist / denom < 0.0)
         {
