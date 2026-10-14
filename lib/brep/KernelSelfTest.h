@@ -87,28 +87,34 @@ inline int runKernelSelfTest()
         const AcGePoint2d center{2.0, -1.0};
         const AcGeMatrix2d rotate =
             AcGeMatrix2d::rotation(1.5707963267948966, center);
-        const AcGePoint2d rotated = transformBy({3.0, -1.0}, rotate);
+        const AcGePoint2d rotated =
+            transformBy(AcGePoint2d{3.0, -1.0}, rotate);
+        AcGePoint2d memberTransformed{3.0, -1.0};
+        memberTransformed.transformBy(rotate);
         check(std::abs(rotated.x - 2.0) < 1.0e-9 &&
-                  std::abs(rotated.y) < 1.0e-9,
+                  std::abs(rotated.y) < 1.0e-9 &&
+                  memberTransformed.distanceTo(rotated) < 1.0e-9,
               "2D rotation about center");
 
         const AcGeMatrix2d translate =
             AcGeMatrix2d::translation({4.0, 3.0});
         const AcGePoint2d moved =
-            transformBy(transformBy({1.0, 2.0}, translate), rotate);
+            transformBy(transformBy(AcGePoint2d{1.0, 2.0}, translate), rotate);
         const AcGePoint2d composed =
-            transformBy({1.0, 2.0}, rotate * translate);
+            transformBy(AcGePoint2d{1.0, 2.0}, rotate * translate);
         check(moved.distanceTo(composed) < 1.0e-9,
               "2D affine multiplication order");
 
         const AcGeMatrix2d inverse = (rotate * translate).inverse();
         const AcGePoint2d restored =
-            transformBy(transformBy({1.0, 2.0}, rotate * translate), inverse);
-        check(restored.distanceTo({1.0, 2.0}) < 1.0e-9,
+            transformBy(transformBy(AcGePoint2d{1.0, 2.0},
+                                    rotate * translate),
+                        inverse);
+        check(restored.distanceTo(AcGePoint2d{1.0, 2.0}) < 1.0e-9,
               "2D affine inverse");
 
         const AcGeVector2d unchanged =
-            transformBy({1.0, 2.0}, translate);
+            transformBy(AcGeVector2d{1.0, 2.0}, translate);
         check(unchanged == AcGeVector2d{1.0, 2.0},
               "2D vector transform ignores translation");
 

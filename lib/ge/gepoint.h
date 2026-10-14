@@ -9,6 +9,8 @@
 #include <glm/glm.hpp>
 #include <type_traits>
 
+struct AcGeMatrix2d;
+
 struct AcGeVector2d
 {
     double x = 0.0;
@@ -51,6 +53,8 @@ struct AcGeVector2d
         copy.normalize();
         return copy;
     }
+
+    AcGeVector2d &transformBy(const AcGeMatrix2d &matrix);
 
     AcGeVector2d operator-() const { return {-x, -y}; }
     AcGeVector2d operator+(const AcGeVector2d &o) const { return {x + o.x, y + o.y}; }
@@ -145,6 +149,7 @@ struct AcGePoint2d
     }
 
     AcGeVector2d asVector() const { return {x, y}; }
+    AcGePoint2d &transformBy(const AcGeMatrix2d &matrix);
     AcGePoint2d operator+(const AcGeVector2d &o) const { return {x + o.x, y + o.y}; }
     AcGePoint2d operator-(const AcGeVector2d &o) const { return {x - o.x, y - o.y}; }
     AcGeVector2d operator-(const AcGePoint2d &o) const { return {x - o.x, y - o.y}; }

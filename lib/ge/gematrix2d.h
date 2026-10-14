@@ -8,15 +8,22 @@
 #include "geutil.h"
 
 // Source-level AcGeMatrix2d subset based on the ObjectARX 2026 reference.
-// The matrix stores the two affine rows [a00 a01 t0] and [a10 a11 t1].
+// The matrix stores the full homogeneous 3x3 matrix used for 2D affine
+// transforms; affine operations preserve the final row [0 0 1].
 struct AcGeMatrix2d
 {
-    double entry[2][3]{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}};
+    double entry[3][3]{
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}};
 
     AcGeMatrix2d() = default;
     AcGeMatrix2d(double a00, double a01, double t0,
                  double a10, double a11, double t1)
-        : entry{{a00, a01, t0}, {a10, a11, t1}}
+        : entry{
+              {a00, a01, t0},
+              {a10, a11, t1},
+              {0.0, 0.0, 1.0}}
     {
     }
 
@@ -31,27 +38,34 @@ struct AcGeMatrix2d
         return entry[row][column];
     }
 
-    static AcGeMatrix2d kIdentity() { return {}; }
+    static const AcGeMatrix2d kIdentity;
 
     AcGeMatrix2d &setToIdentity()
     {
-        *this = AcGeMatrix2d{};
+        *this = kIdentity;
         return *this;
     }
 
     double det() const
     {
-        return entry[0][0] * entry[1][1] -
-               entry[0][1] * entry[1][0];
+        return entry[0][0] *
+                   (entry[1][1] * entry[2][2] -
+                    entry[1][2] * entry[2][1]) -
+               entry[0][1] *
+                   (entry[1][0] * entry[2][2] -
+                    entry[1][2] * entry[2][0]) +
+               entry[0][2] *
+                   (entry[1][0] * entry[2][1] -
+                    entry[1][1] * entry[2][0]);
     }
 
-    double norm() const
+    double scale() const
     {
-        double largest = 0.0;
-        for (const auto &row : entry)
-            for (double value : row)
-                largest = std::max(largest, std::abs(value));
-        return largest;
+        const double length0 =
+            entry[0][0] * entry[0][0] + entry[1][0] * entry[1][0];
+        const double length1 =
+            entry[0][1] * entry[0][1] + entry[1][1] * entry[1][1];
+        return std::sqrt(std::max(length0, length1));
     }
 
     AcGeMatrix2d inverse() const
@@ -61,16 +75,35 @@ struct AcGeMatrix2d
             throw std::domain_error("Cannot invert a singular AcGeMatrix2d.");
 
         const double invDet = 1.0 / determinant;
-        const double a00 = entry[0][0];
-        const double a01 = entry[0][1];
-        const double a10 = entry[1][0];
-        const double a11 = entry[1][1];
-        const double tx = entry[0][2];
-        const double ty = entry[1][2];
-        return {a11 * invDet, -a01 * invDet,
-                (a01 * ty - a11 * tx) * invDet,
-                -a10 * invDet, a00 * invDet,
-                (a10 * tx - a00 * ty) * invDet};
+        AcGeMatrix2d result;
+        result.entry[0][0] =
+            (entry[1][1] * entry[2][2] - entry[1][2] * entry[2][1]) *
+            invDet;
+        result.entry[0][1] =
+            (entry[0][2] * entry[2][1] - entry[0][1] * entry[2][2]) *
+            invDet;
+        result.entry[0][2] =
+            (entry[0][1] * entry[1][2] - entry[0][2] * entry[1][1]) *
+            invDet;
+        result.entry[1][0] =
+            (entry[1][2] * entry[2][0] - entry[1][0] * entry[2][2]) *
+            invDet;
+        result.entry[1][1] =
+            (entry[0][0] * entry[2][2] - entry[0][2] * entry[2][0]) *
+            invDet;
+        result.entry[1][2] =
+            (entry[0][2] * entry[1][0] - entry[0][0] * entry[1][2]) *
+            invDet;
+        result.entry[2][0] =
+            (entry[1][0] * entry[2][1] - entry[1][1] * entry[2][0]) *
+            invDet;
+        result.entry[2][1] =
+            (entry[0][1] * entry[2][0] - entry[0][0] * entry[2][1]) *
+            invDet;
+        result.entry[2][2] =
+            (entry[0][0] * entry[1][1] - entry[0][1] * entry[1][0]) *
+            invDet;
+        return result;
     }
 
     AcGeMatrix2d &invert()
@@ -82,21 +115,20 @@ struct AcGeMatrix2d
     AcGeMatrix2d operator*(const AcGeMatrix2d &right) const
     {
         AcGeMatrix2d result;
-        result.entry[0][0] = entry[0][0] * right.entry[0][0] +
-                             entry[0][1] * right.entry[1][0];
-        result.entry[0][1] = entry[0][0] * right.entry[0][1] +
-                             entry[0][1] * right.entry[1][1];
-        result.entry[0][2] = entry[0][0] * right.entry[0][2] +
-                             entry[0][1] * right.entry[1][2] +
-                             entry[0][2];
-        result.entry[1][0] = entry[1][0] * right.entry[0][0] +
-                             entry[1][1] * right.entry[1][0];
-        result.entry[1][1] = entry[1][0] * right.entry[0][1] +
-                             entry[1][1] * right.entry[1][1];
-        result.entry[1][2] = entry[1][0] * right.entry[0][2] +
-                             entry[1][1] * right.entry[1][2] +
-                             entry[1][2];
+        for (unsigned int row = 0; row < 3; ++row)
+            for (unsigned int column = 0; column < 3; ++column)
+            {
+                result.entry[row][column] = 0.0;
+                for (unsigned int k = 0; k < 3; ++k)
+                    result.entry[row][column] +=
+                        entry[row][k] * right.entry[k][column];
+            }
         return result;
+    }
+
+    AcGeMatrix2d &operator*=(const AcGeMatrix2d &right)
+    {
+        return postMultBy(right);
     }
 
     AcGeMatrix2d &postMultBy(const AcGeMatrix2d &right)
@@ -120,8 +152,11 @@ struct AcGeMatrix2d
 
     AcGeMatrix2d transpose() const
     {
-        return {entry[0][0], entry[1][0], 0.0,
-                entry[0][1], entry[1][1], 0.0};
+        AcGeMatrix2d result;
+        for (unsigned int row = 0; row < 3; ++row)
+            for (unsigned int column = 0; column < 3; ++column)
+                result.entry[row][column] = entry[column][row];
+        return result;
     }
 
     AcGeMatrix2d &transposeIt()
@@ -146,6 +181,19 @@ struct AcGeMatrix2d
     {
         AcGeMatrix2d result;
         result.setTranslation(offset);
+        return result;
+    }
+
+    static AcGeMatrix2d alignCoordSys(const AcGePoint2d &fromOrigin,
+                                      const AcGeVector2d &fromE0,
+                                      const AcGeVector2d &fromE1,
+                                      const AcGePoint2d &toOrigin,
+                                      const AcGeVector2d &toE0,
+                                      const AcGeVector2d &toE1)
+    {
+        AcGeMatrix2d result;
+        result.setToAlignCoordSys(fromOrigin, fromE0, fromE1,
+                                  toOrigin, toE0, toE1);
         return result;
     }
 
@@ -175,6 +223,27 @@ struct AcGeMatrix2d
         return *this;
     }
 
+    static AcGeMatrix2d mirroring(const AcGePoint2d &point)
+    {
+        AcGeMatrix2d result;
+        result.setToMirroring(point);
+        return result;
+    }
+
+    AcGeMatrix2d &setToMirroring(const AcGePoint2d &point)
+    {
+        entry[0][0] = -1.0;
+        entry[0][1] = 0.0;
+        entry[0][2] = 2.0 * point.x;
+        entry[1][0] = 0.0;
+        entry[1][1] = -1.0;
+        entry[1][2] = 2.0 * point.y;
+        entry[2][0] = 0.0;
+        entry[2][1] = 0.0;
+        entry[2][2] = 1.0;
+        return *this;
+    }
+
     AcGeMatrix2d &setToTranslation(const AcGeVector2d &offset)
     {
         setToIdentity();
@@ -191,6 +260,9 @@ struct AcGeMatrix2d
         entry[1][1] = e1.y;
         entry[0][2] = origin.x;
         entry[1][2] = origin.y;
+        entry[2][0] = 0.0;
+        entry[2][1] = 0.0;
+        entry[2][2] = 1.0;
         return *this;
     }
 
@@ -246,11 +318,10 @@ struct AcGeMatrix2d
     }
 
     bool isConformal(double &scale, double &angle, bool &isMirror,
-                     AcGeVector2d &reflex,
-                     const AcGeTol &tol = AcGeTol{}) const
+                     AcGeVector2d &reflex) const
     {
         const AcGeVector2d e0{entry[0][0], entry[1][0]};
-        const AcGeVector2d e1{entry[0][1], entry[1][1]};
+        const AcGeTol tol;
         if (!isUniScaledOrtho(tol) || e0.length() <= tol.equalVector)
             return false;
         scale = e0.length();
@@ -263,7 +334,7 @@ struct AcGeMatrix2d
     bool isEqualTo(const AcGeMatrix2d &other,
                    const AcGeTol &tol = AcGeTol{}) const
     {
-        for (unsigned int row = 0; row < 2; ++row)
+        for (unsigned int row = 0; row < 3; ++row)
             for (unsigned int column = 0; column < 3; ++column)
             {
                 const double epsilon = column == 2
@@ -278,7 +349,7 @@ struct AcGeMatrix2d
 
     bool operator==(const AcGeMatrix2d &other) const
     {
-        return isEqualTo(other, AcGeTol{0.0, 0.0});
+        return isEqualTo(other);
     }
 
     bool operator!=(const AcGeMatrix2d &other) const
@@ -286,6 +357,8 @@ struct AcGeMatrix2d
         return !(*this == other);
     }
 };
+
+inline const AcGeMatrix2d AcGeMatrix2d::kIdentity{};
 
 inline AcGePoint2d transformBy(const AcGePoint2d &point,
                                const AcGeMatrix2d &matrix)
@@ -303,4 +376,16 @@ inline AcGeVector2d transformBy(const AcGeVector2d &vector,
     return {
         matrix.entry[0][0] * vector.x + matrix.entry[0][1] * vector.y,
         matrix.entry[1][0] * vector.x + matrix.entry[1][1] * vector.y};
+}
+
+inline AcGePoint2d &AcGePoint2d::transformBy(const AcGeMatrix2d &matrix)
+{
+    *this = ::transformBy(*this, matrix);
+    return *this;
+}
+
+inline AcGeVector2d &AcGeVector2d::transformBy(const AcGeMatrix2d &matrix)
+{
+    *this = ::transformBy(*this, matrix);
+    return *this;
 }
