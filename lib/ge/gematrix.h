@@ -11,6 +11,9 @@
 #endif
 #include <glm/gtx/transform.hpp>
 
+#include <stdexcept>
+
+#include "gelinear.h"
 #include "gepoint.h"
 
 struct AcGeMatrix3d
@@ -117,12 +120,63 @@ struct AcGePlane
         : origin(pointOnPlane), normal(planeNormal)
     {
     }
+    AcGePlane(const AcGePoint3d &pntU, const AcGePoint3d &org,
+              const AcGePoint3d &pntV)
+        : origin(org),
+          normal((pntU - org).crossProduct(pntV - org))
+    {
+        if (normal.isZeroLength())
+            throw std::invalid_argument("AcGePlane points must not be collinear.");
+    }
+    AcGePlane(const AcGePoint3d &org, const AcGeVector3d &uAxis,
+              const AcGeVector3d &vAxis)
+        : origin(org), normal(uAxis.crossProduct(vAxis))
+    {
+        if (normal.isZeroLength())
+            throw std::invalid_argument("AcGePlane axes must not be collinear.");
+    }
+    AcGePlane(double a, double b, double c, double d)
+    {
+        set(a, b, c, d);
+    }
 
     AcGePlane &set(const AcGePoint3d &pointOnPlane,
                    const AcGeVector3d &planeNormal)
     {
         origin = pointOnPlane;
         normal = planeNormal;
+        return *this;
+    }
+    AcGePlane &set(const AcGePoint3d &pntU, const AcGePoint3d &org,
+                   const AcGePoint3d &pntV)
+    {
+        const AcGeVector3d newNormal =
+            (pntU - org).crossProduct(pntV - org);
+        if (newNormal.isZeroLength())
+            throw std::invalid_argument("AcGePlane points must not be collinear.");
+        origin = org;
+        normal = newNormal;
+        return *this;
+    }
+    AcGePlane &set(const AcGePoint3d &org, const AcGeVector3d &uAxis,
+                   const AcGeVector3d &vAxis)
+    {
+        const AcGeVector3d newNormal = uAxis.crossProduct(vAxis);
+        if (newNormal.isZeroLength())
+            throw std::invalid_argument("AcGePlane axes must not be collinear.");
+        origin = org;
+        normal = newNormal;
+        return *this;
+    }
+    AcGePlane &set(double a, double b, double c, double d)
+    {
+        const AcGeVector3d equationNormal{a, b, c};
+        const double normalLengthSq = equationNormal.lengthSq();
+        if (normalLengthSq == 0.0)
+            throw std::invalid_argument("AcGePlane equation normal must be nonzero.");
+        normal = equationNormal;
+        origin = AcGePoint3d::kOrigin +
+                 equationNormal * (-d / normalLengthSq);
         return *this;
     }
 
@@ -163,6 +217,39 @@ struct AcGePlane
             return false;
         const double parameter = -distanceTo(point) / denominator;
         projected = point + direction * parameter;
+        return true;
+    }
+
+    bool intersectWith(const AcGeLine3d &line, AcGePoint3d &result,
+                       const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double denominator = normal.dotProduct(line.direction);
+        if (std::abs(denominator) <=
+            tol.equalVector() * normal.length() * line.direction.length())
+            return false;
+        const double parameter =
+            normal.dotProduct(origin - line.basePoint) / denominator;
+        result = line.pointAt(parameter);
+        return true;
+    }
+
+    bool intersectWith(const AcGePlane &other, AcGeLine3d &result,
+                       const AcGeTol &tol = AcGeTol{}) const
+    {
+        const AcGeVector3d direction = normal.crossProduct(other.normal);
+        const double directionLengthSq = direction.lengthSq();
+        if (directionLengthSq <=
+            std::pow(tol.equalVector() * normal.length() * other.normal.length(),
+                     2.0))
+            return false;
+        const double thisOffset = normal.dotProduct(origin.asVector());
+        const double otherOffset = other.normal.dotProduct(other.origin.asVector());
+        const AcGePoint3d intersection =
+            AcGePoint3d::kOrigin +
+            (other.normal.crossProduct(direction) * thisOffset +
+             direction.crossProduct(normal) * otherOffset) /
+                directionLengthSq;
+        result.set(intersection, direction);
         return true;
     }
 };

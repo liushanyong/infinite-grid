@@ -239,6 +239,30 @@ inline int runKernelSelfTest()
                        0.7071067811865475244}) &&
                   cone.isClosed(),
               "cone apex and parametric surface");
+        const AcGePlane planeFromPoints{
+            AcGePoint3d{1.0, 0.0, 1.0}, AcGePoint3d{0.0, 0.0, 1.0},
+            AcGePoint3d{0.0, 1.0, 1.0}};
+        AcGePoint3d lineHit;
+        check(planeFromPoints.intersectWith(
+                  AcGeLine3d{AcGePoint3d{0.0, 0.0, 0.0},
+                             AcGeVector3d::kZAxis},
+                  lineHit) &&
+                  lineHit.isEqualTo({0.0, 0.0, 1.0}) &&
+                  !planeFromPoints.intersectWith(
+                      AcGeLine3d{AcGePoint3d{0.0, 0.0, 2.0},
+                                 AcGeVector3d::kXAxis},
+                      lineHit),
+              "plane construction and line intersection");
+        const AcGePlane planeFromEquation{0.0, 0.0, 2.0, -2.0};
+        AcGeLine3d planeIntersection;
+        check(planeFromEquation.origin.isEqualTo({0.0, 0.0, 1.0}) &&
+                  planeFromPoints.intersectWith(
+                      AcGePlane{AcGePoint3d{2.0, 0.0, 0.0},
+                                AcGeVector3d::kXAxis},
+                      planeIntersection) &&
+                  planeIntersection.pointAt(0.0)
+                      .isEqualTo({2.0, 0.0, 1.0}),
+              "plane equation and plane intersection");
         check(AcGeVector2d{2.0, 0.0}.isParallelTo({-1.0, 0.0}) &&
                   AcGeVector2d{2.0, 0.0}.isCodirectionalTo({1.0, 0.0}) &&
                   AcGeVector2d{1.0, 0.0}.isPerpendicularTo({0.0, 4.0}) &&

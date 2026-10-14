@@ -45,6 +45,10 @@ implemented.
 These are geometric subsets; they do not provide the full AcGe surface
 intersection and hierarchy APIs.
 
+`AcGePlane` also supports construction from three points, spanning vectors,
+or equation coefficients, plus tolerance-aware line-plane and plane-plane
+intersection.
+
 `AcGeCylinder` supports an axis/reference frame, angular sweep, height
 interval, and parametric point/normal evaluation; it does not implement
 surface intersection or the full `AcGeSurface` interface.
