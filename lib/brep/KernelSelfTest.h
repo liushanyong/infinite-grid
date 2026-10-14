@@ -47,6 +47,17 @@ inline int runKernelSelfTest()
     {
         using namespace ge;
         AcGeLineSeg2d a{{0.0, 0.0}, {4.0, 0.0}};
+        check(a.startPoint() == AcGePoint2d{0.0, 0.0} &&
+                  a.endPoint() == AcGePoint2d{4.0, 0.0} &&
+                  a.midPoint() == AcGePoint2d{2.0, 0.0} &&
+                  a.baryComb(0.25) == AcGePoint2d{1.0, 0.0},
+              "2D segment endpoint and barycentric queries");
+        AcGeLine2d bisector;
+        a.getBisector(bisector);
+        check(bisector.basePoint == AcGePoint2d{2.0, 0.0} &&
+                  bisector.direction.isPerpendicularTo(a.direction()),
+              "2D segment perpendicular bisector");
+
         AcGeLineSeg2d cross{{2.0, -2.0}, {2.0, 2.0}};
         auto hit = intersect(a, cross);
         check(hit.size() == 1, "line-line crossing yields one point");

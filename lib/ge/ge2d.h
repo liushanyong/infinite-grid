@@ -8,43 +8,60 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <vector>
 
 #include "ge/gepoint.h"
 #include "ge/gepredicates.h"
+#include "ge/gelinear.h"
 
 #include <glm/glm.hpp>
+
+struct AcGeLineSeg2d
+{
+private:
+    AcGePoint2d m_start{0.0, 0.0};
+    AcGePoint2d m_end{0.0, 0.0};
+
+public:
+    AcGeLineSeg2d() = default;
+    AcGeLineSeg2d(const AcGePoint2d &start, const AcGePoint2d &end)
+    {
+        set(start, end);
+    }
+
+    AcGeLineSeg2d &set(const AcGePoint2d &start, const AcGePoint2d &end)
+    {
+        if (start == end)
+            throw std::invalid_argument("AcGeLineSeg2d endpoints must differ.");
+        m_start = start;
+        m_end = end;
+        return *this;
+    }
+
+    AcGePoint2d startPoint() const { return m_start; }
+    AcGePoint2d endPoint() const { return m_end; }
+
+    AcGeVector2d direction() const { return m_end - m_start; }
+    double length() const { return m_start.distanceTo(m_end); }
+    AcGePoint2d midPoint() const { return baryComb(0.5); }
+    AcGePoint2d baryComb(double blendCoeff) const
+    {
+        return m_start + (m_end - m_start) * blendCoeff;
+    }
+    AcGePoint2d pointAt(double parameter) const { return baryComb(parameter); }
+    void getBisector(AcGeLine2d &line) const
+    {
+        line.set(midPoint(), direction().perpVector());
+    }
+};
 
 namespace ge
 {
 
 inline constexpr double kGeom2dTolerance = 1.0e-12;
 
-// ---- AcGeLineSeg2d ----
-
-struct AcGeLineSeg2d
-{
-    AcGePoint2d start{0.0, 0.0};
-    AcGePoint2d end{0.0, 0.0};
-
-    AcGeVector2d direction() const
-    {
-        return {end.x - start.x, end.y - start.y};
-    }
-
-    double length() const
-    {
-        const AcGeVector2d d = direction();
-        return std::sqrt(d.x * d.x + d.y * d.y);
-    }
-
-    // Point at parameter t in [0, 1].
-    AcGePoint2d pointAt(double t) const
-    {
-        return {start.x + (end.x - start.x) * t,
-                start.y + (end.y - start.y) * t};
-    }
-};
+using ::AcGeLineSeg2d;
 
 // ---- AcGeCircle2d ----
 
@@ -119,30 +136,33 @@ inline std::vector<AcGePoint2d> intersect(const AcGeLineSeg2d &a,
                                           const AcGeLineSeg2d &b)
 {
     std::vector<AcGePoint2d> out;
-    const double d1 = ge::orient2d(a.start, a.end, b.start);
-    const double d2 = ge::orient2d(a.start, a.end, b.end);
+    const AcGePoint2d aStart = a.startPoint();
+    const AcGePoint2d aEnd = a.endPoint();
+    const AcGePoint2d bStart = b.startPoint();
+    const AcGePoint2d bEnd = b.endPoint();
+    const double d1 = ge::orient2d(aStart, aEnd, bStart);
+    const double d2 = ge::orient2d(aStart, aEnd, bEnd);
     if (d1 == 0.0 && d2 == 0.0)
     {
         // Collinear: report the overlap extremes when the segments touch.
-        const double dotAB = (b.start.x - a.start.x) * (a.end.x - a.start.x) +
-                             (b.start.y - a.start.y) *
-                                 (a.end.y - a.start.y);
-        const double dotAC = (b.end.x - a.start.x) * (a.end.x - a.start.x) +
-                             (b.end.y - a.start.y) * (a.end.y - a.start.y);
+        const double dotAB = (bStart.x - aStart.x) * (aEnd.x - aStart.x) +
+                             (bStart.y - aStart.y) * (aEnd.y - aStart.y);
+        const double dotAC = (bEnd.x - aStart.x) * (aEnd.x - aStart.x) +
+                             (bEnd.y - aStart.y) * (aEnd.y - aStart.y);
         const double lenA = a.length() * a.length();
         if (dotAB > lenA + kGeom2dTolerance &&
             dotAC > lenA + kGeom2dTolerance)
             return out; // b beyond a
-        out.push_back(b.start);
-        out.push_back(b.end);
+        out.push_back(bStart);
+        out.push_back(bEnd);
         return out;
     }
     if ((d1 > 0.0) == (d2 > 0.0))
         return out; // b entirely on one side: no crossing
 
     // Robust side test of a's endpoints against b must also straddle.
-    const double d3 = ge::orient2d(b.start, b.end, a.start);
-    const double d4 = ge::orient2d(b.start, b.end, a.end);
+    const double d3 = ge::orient2d(bStart, bEnd, aStart);
+    const double d4 = ge::orient2d(bStart, bEnd, aEnd);
     if ((d3 > 0.0) == (d4 > 0.0))
         return out;
 
@@ -157,10 +177,12 @@ inline std::vector<AcGePoint2d> intersect(const AcGeLineSeg2d &line,
                                           const AcGeCircle2d &circle)
 {
     std::vector<AcGePoint2d> out;
-    const double dx = line.end.x - line.start.x;
-    const double dy = line.end.y - line.start.y;
-    const double fx = line.start.x - circle.center.x;
-    const double fy = line.start.y - circle.center.y;
+    const AcGePoint2d lineStart = line.startPoint();
+    const AcGePoint2d lineEnd = line.endPoint();
+    const double dx = lineEnd.x - lineStart.x;
+    const double dy = lineEnd.y - lineStart.y;
+    const double fx = lineStart.x - circle.center.x;
+    const double fy = lineStart.y - circle.center.y;
     const double a = dx * dx + dy * dy;
     if (a < kGeom2dTolerance * kGeom2dTolerance)
         return out;

@@ -19,3 +19,4 @@
 #include "geintersect.h"
 #include "geproject.h"
 #include "geoctree.h"
+#include "ge2d.h"

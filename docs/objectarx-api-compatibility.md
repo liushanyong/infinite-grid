@@ -44,6 +44,11 @@ intersection and hierarchy APIs.
 tolerance-aware containment, intersection, merge, and extent queries.
 Advanced periodicity and interval subtraction APIs remain unimplemented.
 
+The existing 2D segment implementation is also exported as global
+`AcGeLineSeg2d` and now includes the documented endpoint, midpoint, blend,
+length, set, and bisector operations. Its robust intersection helpers remain
+available in namespace `ge`.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
