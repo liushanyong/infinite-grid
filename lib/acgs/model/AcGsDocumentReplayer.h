@@ -146,8 +146,9 @@ public:
     const glm::dvec3 textRight(1.0, 0.0, 0.0);
     const glm::dvec3 textUp(0.0, 0.0, 1.0);
     const std::size_t strokeBegin = target.geometry.strokes.size();
+    const AcUtf8String utf8Text = arxcompat::toUtf8(text.text);
     for (const rendering::ShxGlyphStroke &glyphStroke :
-         acgi::textEngine().shxStrokes(text.text))
+         acgi::textEngine().shxStrokes(utf8Text))
     {
       acdb::Stroke segment;
       segment.common.color = text.common.color;
