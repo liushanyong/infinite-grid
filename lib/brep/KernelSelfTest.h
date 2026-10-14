@@ -12,9 +12,12 @@
 #include <vector>
 
 #include "ge/ge2d.h"
+#include "ge/geinterval.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
 #include "ge/gescale.h"
+#include "ge/gesurface3d.h"
+#include "ge/geutil.h"
 #include "brep/BRepBuild.h"
 #include "brep/Validate.h"
 #include "brep/BRepBoolean.h"
@@ -373,6 +376,24 @@ inline int runKernelSelfTest()
         bounds2d.swell(1.0);
         check(bounds2d.contains({-2.0, 1.0}),
         "2D bound swelling");
+        const AcGeBoundBlock2d oriented2d{
+            AcGePoint2d{0.0, 0.0}, AcGeVector2d{1.0, 1.0},
+            AcGeVector2d{-1.0, 1.0}};
+        AcGePoint2d base2d;
+        AcGeVector2d dir2d1, dir2d2;
+        oriented2d.get(base2d, dir2d1, dir2d2);
+        const AcGeBoundBlock2d separated2d{
+            AcGePoint2d{1.5, 1.5}, AcGeVector2d{1.0, 1.0},
+            AcGeVector2d{-1.0, 1.0}};
+        check(oriented2d.contains({0.0, 1.0}) &&
+                  !oriented2d.contains({0.9, 0.1}) &&
+                  !oriented2d.isBox() &&
+                  oriented2d.isDisjoint(separated2d) &&
+                  !oriented2d.isDisjoint(oriented2d) &&
+                  base2d == AcGePoint2d{0.0, 0.0} &&
+                  dir2d1 == AcGeVector2d{1.0, 1.0} &&
+                  dir2d2 == AcGeVector2d{-1.0, 1.0},
+              "2D oriented bound containment and separation");
 
         AcGeBoundBlock3d bounds3d{{3.0, 4.0, 5.0}, {-1.0, 2.0, 3.0}};
         AcGePoint3d origin;
@@ -389,6 +410,18 @@ inline int runKernelSelfTest()
             bounds3d.isDisjoint(
                 AcGeBoundBlock3d{{5.0, 0.0, 0.0}, {6.0, 1.0, 1.0}}),
         "3D bound swelling and disjointness");
+        const AcGeBoundBlock3d oriented3d{
+            AcGePoint3d{0.0, 0.0, 0.0}, AcGeVector3d{1.0, 1.0, 0.0},
+            AcGeVector3d{-1.0, 1.0, 0.0}, AcGeVector3d{0.0, 0.0, 2.0}};
+        const AcGeBoundBlock3d separated3d{
+            AcGePoint3d{1.5, 1.5, 0.0}, AcGeVector3d{1.0, 1.0, 0.0},
+            AcGeVector3d{-1.0, 1.0, 0.0}, AcGeVector3d{0.0, 0.0, 2.0}};
+        check(oriented3d.contains({0.0, 1.0, 1.0}) &&
+                  !oriented3d.contains({0.9, 0.1, 1.0}) &&
+                  !oriented3d.isBox() &&
+                  oriented3d.isDisjoint(separated3d) &&
+                  !oriented3d.isDisjoint(oriented3d),
+              "3D oriented bound containment and separation");
     }
 
     // ---------------- brep (milestone 2) ----------------

@@ -26,9 +26,10 @@ parameterized evaluation (rays clamp to their half-line), and scale-vector
 composition/inversion/matrix conversion. They do not yet reproduce the full
 `AcGeLinearEnt2d/3d` inheritance API or every documented overload.
 
-`AcGeBoundBlock2d/3d` provide coordinate-aligned box operations for setting,
-extending, swelling, querying extents, containment, and disjointness. They do
-not yet represent the documented oriented parallelogram/parallelepiped forms.
+`AcGeBoundBlock2d/3d` provide coordinate-aligned box operations and documented
+oriented parallelogram/parallelepiped constructors, containment, frame queries,
+and separating-axis disjointness tests. Extending or swelling an oriented block
+converts it to its axis-aligned extents.
 
 The point/vector value types expose tolerance-based equality, vector angle and
 direction predicates, and common axis constants. `AcGeTol` follows the
