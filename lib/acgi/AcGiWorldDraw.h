@@ -9,6 +9,7 @@
 #include <cmath>
 #include <vector>
 
+#include "arx/ArxTypes.h"
 #include "../ge/ge.h"
 #include "../acgs/model/DrawContext.h"
 #include "AcGiTextStyle.h"
@@ -188,6 +189,17 @@ public:
         applyTraits(frame);
         worldPoint(position);
         return true;
+    }
+
+    bool text(const AcGePoint3d &position, const AcGeVector3d &normal,
+              const AcGeVector3d &direction, const ACHAR *message,
+              const AcGiTextStyle &style)
+    {
+        if (!message)
+            return false;
+        const AcUtf8String utf8Message =
+            arxcompat::toUtf8(AcStringView(message));
+        return text(position, normal, direction, utf8Message.c_str(), style);
     }
 
     // ObjectARX draws ellipses as worldPolyline; this convenience keeps the

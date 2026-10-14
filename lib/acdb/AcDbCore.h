@@ -23,6 +23,7 @@
 
 #include <glm/glm.hpp>
 
+#include "arx/ArxTypes.h"
 #include "ge/gepoint.h"
 
 namespace acdb
@@ -211,11 +212,11 @@ public:
     const AcGePoint3d &basePoint() const { return basePoint_; }
     void setBasePoint(const AcGePoint3d &point) { basePoint_ = point; }
 
-    const std::vector<AcDbHandle> &entityHandles() const
+    const AcArray<AcDbHandle> &entityHandles() const
     {
         return entityHandles_;
     }
-    std::vector<AcDbHandle> &entityHandles() { return entityHandles_; }
+    AcArray<AcDbHandle> &entityHandles() { return entityHandles_; }
 
     void appendEntityHandle(AcDbHandle handle)
     {
@@ -224,7 +225,7 @@ public:
 
 private:
     AcGePoint3d basePoint_{0.0, 0.0, 0.0};
-    std::vector<AcDbHandle> entityHandles_;
+    AcArray<AcDbHandle> entityHandles_;
 };
 
 

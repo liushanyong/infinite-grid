@@ -12,6 +12,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "coordinate/WorldRebase.h"
+#include "arx/ArxTypes.h"
 #include "acdb/AcDbTessellate.h"
 #include "acdb/AcDbEntityWorldDraw.h"
 #include "acdb/AcDbFileIo.h"
@@ -2247,13 +2248,13 @@ static void buildDemoDocument()
 
     acdb::AcDbPolyline lwpolyline;
     lwpolyline.common.color = glm::vec4(0.25f, 0.80f, 0.45f, 1.0f);
-    lwpolyline.vertices = {glm::dvec2(-256.0, -384.0),
-                           glm::dvec2(0.0, -192.0),
-                           glm::dvec2(256.0, -448.0)};
+    lwpolyline.vertices = {AcGePoint2d(-256.0, -384.0),
+                           AcGePoint2d(0.0, -192.0),
+                           AcGePoint2d(256.0, -448.0)};
     lwpolyline.elevation = cadAnchor.z;
     lwpolyline.closed = true;
     for (AcGePoint2d &vertex : lwpolyline.vertices)
-      vertex += glm::dvec2(cadAnchor);
+      vertex += AcGeVector2d(cadAnchor.x, cadAnchor.y);
     addDemo(lwpolyline, "LwPolyline");
 
     acdb::AcDbSpline spline;
@@ -2342,7 +2343,8 @@ static void buildDemoDocument()
       // baseline one em down): the insertion is the cap line.
       shxText.insertion = cadAnchor + glm::dvec3(256.0, 128.0, 96.0);
       shxText.height = 96.0; // world units per em
-      shxText.text = "\u4E2D\u6587 INFINITE - GRID 123";
+      const AcString shxMessage = L"\u4E2D\u6587 INFINITE - GRID 123";
+      shxText.text = arxcompat::toUtf8(shxMessage);
       addDemo(std::move(shxText), "ShxText");
     }
 
@@ -2434,7 +2436,8 @@ static void buildDemoDocument()
     text.common.color = glm::vec4(0.95f, 0.95f, 0.30f, 1.0f);
     text.insertion = cadAnchor + glm::dvec3(1152.0, 128.0, 384.0);
     text.height = 96.0;
-    text.text = "中文 TEXT";
+    const AcString demoText = L"\u4E2D\u6587 TEXT";
+    text.text = arxcompat::toUtf8(demoText);
     addDemo(text, "Text");
 
     acdb::AcDbMText mtext;
@@ -2442,7 +2445,8 @@ static void buildDemoDocument()
     mtext.insertion = cadAnchor + glm::dvec3(1152.0, 320.0, 384.0);
     mtext.direction = glm::dvec3(1.0, 0.0, 0.0);
     mtext.height = 64.0;
-    mtext.text = "中文 MTEXT\nDEMO";
+    const AcString demoMText = L"\u4E2D\u6587 MTEXT\nDEMO";
+    mtext.text = arxcompat::toUtf8(demoMText);
     addDemo(mtext, "MText");
 
     // Text locators: bright vertical lines pointing at each text insertion

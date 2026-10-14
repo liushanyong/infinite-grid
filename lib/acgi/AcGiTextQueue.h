@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "arx/ArxTypes.h"
+
 namespace acgi
 {
 
@@ -33,9 +35,9 @@ struct TextRequest
 // Global request list.  Entities tessellate once into the cached draw
 // list, so requests accumulate at tessellation time and persist for the
 // lifetime of the cache; the renderer reads them every frame.
-inline std::vector<TextRequest> &textRequests()
+inline AcArray<TextRequest> &textRequests()
 {
-    static std::vector<TextRequest> requests;
+    static AcArray<TextRequest> requests;
     return requests;
 }
 
