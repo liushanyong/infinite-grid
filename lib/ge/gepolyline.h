@@ -311,3 +311,134 @@ struct AcGePolyline3d : AcGePolylineBase<AcGePoint3d, AcGeVector3d>
 {
     using AcGePolylineBase::AcGePolylineBase;
 };
+
+struct AcGePolygon3d
+{
+private:
+    std::vector<AcGePoint3d> m_vertices;
+
+    AcGeVector3d areaVector() const
+    {
+        AcGeVector3d result;
+        if (m_vertices.size() < 3)
+            return result;
+        const AcGePoint3d &origin = m_vertices.front();
+        for (std::size_t i = 0; i < m_vertices.size(); ++i)
+        {
+            const AcGeVector3d a = m_vertices[i] - origin;
+            const AcGeVector3d b =
+                m_vertices[(i + 1) % m_vertices.size()] - origin;
+            result += a.crossProduct(b);
+        }
+        return result;
+    }
+
+    AcGePolygon2d projected(const AcGeVector3d &unitNormal) const
+    {
+        AcGePolygon2d result;
+        if (m_vertices.empty())
+            return result;
+        const AcGeVector3d u = unitNormal.perpVector().normal();
+        const AcGeVector3d v = unitNormal.crossProduct(u);
+        const AcGePoint3d &origin = m_vertices.front();
+        for (const AcGePoint3d &point : m_vertices)
+        {
+            const AcGeVector3d offset = point - origin;
+            result.appendVertex({offset.dotProduct(u), offset.dotProduct(v)});
+        }
+        return result;
+    }
+
+public:
+    AcGePolygon3d() = default;
+    explicit AcGePolygon3d(const std::vector<AcGePoint3d> &vertices)
+        : m_vertices(vertices)
+    {
+    }
+    AcGePolygon3d(std::initializer_list<AcGePoint3d> vertices)
+        : m_vertices(vertices)
+    {
+    }
+
+    AcGePolygon3d &setVertices(const std::vector<AcGePoint3d> &vertices)
+    {
+        m_vertices = vertices;
+        return *this;
+    }
+    AcGePolygon3d &appendVertex(const AcGePoint3d &point)
+    {
+        m_vertices.push_back(point);
+        return *this;
+    }
+    std::size_t numVerts() const { return m_vertices.size(); }
+    const std::vector<AcGePoint3d> &vertices() const { return m_vertices; }
+
+    AcGeVector3d normal() const { return areaVector().normal(); }
+    double area() const { return areaVector().length() * 0.5; }
+
+    double perimeter() const
+    {
+        if (m_vertices.size() < 2)
+            return 0.0;
+        double result = 0.0;
+        for (std::size_t i = 0; i < m_vertices.size(); ++i)
+            result += m_vertices[i].distanceTo(
+                m_vertices[(i + 1) % m_vertices.size()]);
+        return result;
+    }
+
+    bool isPlanar(const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (m_vertices.size() < 3)
+            return false;
+        const AcGeVector3d unitNormal = normal();
+        if (unitNormal.isZeroLength(tol))
+            return false;
+        const AcGePoint3d &origin = m_vertices.front();
+        for (const AcGePoint3d &point : m_vertices)
+            if (std::abs((point - origin).dotProduct(unitNormal)) >
+                std::abs(tol.equalPoint()))
+                return false;
+        return true;
+    }
+
+    AcGePoint3d centroid(const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (m_vertices.empty())
+            return {};
+        const AcGeVector3d unitNormal = normal();
+        if (unitNormal.isZeroLength(tol) || area() <=
+                                                   std::abs(tol.equalPoint()) *
+                                                       std::abs(tol.equalPoint()))
+        {
+            AcGeVector3d average;
+            for (const AcGePoint3d &point : m_vertices)
+                average += point.asVector();
+            return {average.x / double(m_vertices.size()),
+                    average.y / double(m_vertices.size()),
+                    average.z / double(m_vertices.size())};
+        }
+        const AcGePoint2d projectedCenter = projected(unitNormal).centroid(tol);
+        const AcGeVector3d u = unitNormal.perpVector().normal();
+        const AcGeVector3d v = unitNormal.crossProduct(u);
+        return m_vertices.front() + u * projectedCenter.x +
+               v * projectedCenter.y;
+    }
+
+    bool contains(const AcGePoint3d &point,
+                  const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (m_vertices.size() < 3 || !isPlanar(tol))
+            return false;
+        const AcGeVector3d unitNormal = normal();
+        const AcGePoint3d &origin = m_vertices.front();
+        const AcGeVector3d offset = point - origin;
+        if (std::abs(offset.dotProduct(unitNormal)) >
+            std::abs(tol.equalPoint()))
+            return false;
+        const AcGeVector3d u = unitNormal.perpVector().normal();
+        const AcGeVector3d v = unitNormal.crossProduct(u);
+        return projected(unitNormal).contains(
+            {offset.dotProduct(u), offset.dotProduct(v)}, tol);
+    }
+};
