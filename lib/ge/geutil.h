@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "gepoint.h"
+#include "getol.h"
 
 struct AcGeBoundBlock2d
 {
@@ -198,13 +199,4 @@ struct AcGeBoundBlock3d
 
     bool isBox() const { return true; }
     bool isEmpty() const { return m_empty; }
-};
-
-struct AcGeTol
-{
-    double equalPoint = 1.0e-10;
-    double equalVector = 1.0e-10;
-
-    void setEqualPoint(double value) { equalPoint = value; }
-    void setEqualVector(double value) { equalVector = value; }
 };

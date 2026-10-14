@@ -292,10 +292,10 @@ struct AcGeMatrix2d
     {
         const AcGeVector2d e0{entry[0][0], entry[1][0]};
         const AcGeVector2d e1{entry[0][1], entry[1][1]};
-        return e0.length() <= tol.equalVector ||
-               e1.length() <= tol.equalVector ||
+        return e0.length() <= tol.equalVector() ||
+               e1.length() <= tol.equalVector() ||
                std::abs(e0.x * e1.y - e0.y * e1.x) <=
-                   tol.equalVector * e0.length() * e1.length();
+                   tol.equalVector() * e0.length() * e1.length();
     }
 
     bool isScaledOrtho(const AcGeTol &tol = AcGeTol{}) const
@@ -303,7 +303,7 @@ struct AcGeMatrix2d
         const AcGeVector2d e0{entry[0][0], entry[1][0]};
         const AcGeVector2d e1{entry[0][1], entry[1][1]};
         return std::abs(e0.dotProduct(e1)) <=
-               tol.equalVector * e0.length() * e1.length();
+               tol.equalVector() * e0.length() * e1.length();
     }
 
     bool isUniScaledOrtho(const AcGeTol &tol = AcGeTol{}) const
@@ -314,7 +314,7 @@ struct AcGeMatrix2d
         const double length1 = e1.length();
         return isScaledOrtho(tol) &&
                std::abs(length0 - length1) <=
-                   tol.equalVector * std::max({1.0, length0, length1});
+                   tol.equalVector() * std::max({1.0, length0, length1});
     }
 
     bool isConformal(double &scale, double &angle, bool &isMirror,
@@ -322,7 +322,7 @@ struct AcGeMatrix2d
     {
         const AcGeVector2d e0{entry[0][0], entry[1][0]};
         const AcGeTol tol;
-        if (!isUniScaledOrtho(tol) || e0.length() <= tol.equalVector)
+        if (!isUniScaledOrtho(tol) || e0.length() <= tol.equalVector())
             return false;
         scale = e0.length();
         angle = std::atan2(e0.y, e0.x);
@@ -338,8 +338,8 @@ struct AcGeMatrix2d
             for (unsigned int column = 0; column < 3; ++column)
             {
                 const double epsilon = column == 2
-                    ? tol.equalPoint
-                    : tol.equalVector;
+                    ? tol.equalPoint()
+                    : tol.equalVector();
                 if (std::abs(entry[row][column] -
                              other.entry[row][column]) > epsilon)
                     return false;

@@ -128,6 +128,23 @@ inline int runKernelSelfTest()
 
     // ---------------- AcGe linear entities and scale vectors ----------------
     {
+        AcGeTol tol;
+        tol.setEqualPoint(1.0e-8);
+        check(AcGePoint2d{1.0, 2.0}.isEqualTo(
+                  AcGePoint2d{1.0, 2.0 + 1.0e-9}, tol) &&
+                  AcGePoint3d::kOrigin.isEqualTo({0.0, 0.0, 0.0}),
+              "point tolerance comparison and origin constants");
+        check(AcGeVector2d{2.0, 0.0}.isParallelTo({-1.0, 0.0}) &&
+                  AcGeVector2d{2.0, 0.0}.isCodirectionalTo({1.0, 0.0}) &&
+                  AcGeVector2d{1.0, 0.0}.isPerpendicularTo({0.0, 4.0}) &&
+                  AcGeVector2d{0.0, 0.0}.isZeroLength(),
+              "2D vector direction predicates");
+        check(AcGeVector3d{1.0, 0.0, 0.0}.isParallelTo({-5.0, 0.0, 0.0}) &&
+                  AcGeVector3d{1.0, 0.0, 0.0}.isPerpendicularTo(
+                      {0.0, 1.0, 0.0}) &&
+                  AcGeVector3d{0.0, 1.0, 0.0}.isUnitLength(),
+              "3D vector direction predicates");
+
         const AcGeLine2d line{AcGePoint2d{1.0, 2.0},
                               AcGePoint2d{3.0, 2.0}};
         check(line.pointAt(-1.0).distanceTo({-1.0, 2.0}) < 1.0e-9,

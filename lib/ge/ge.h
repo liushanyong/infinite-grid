@@ -5,6 +5,7 @@
 // "AcGe Overview"); the implementation is original and glm-interopable.
 
 #include "gepoint.h"
+#include "getol.h"
 #include "gematrix2d.h"
 #include "gematrix.h"
 #include "gelinear.h"

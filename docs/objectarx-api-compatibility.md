@@ -30,6 +30,11 @@ composition/inversion/matrix conversion. They do not yet reproduce the full
 extending, swelling, querying extents, containment, and disjointness. They do
 not yet represent the documented oriented parallelogram/parallelepiped forms.
 
+The point/vector value types expose tolerance-based equality, vector angle and
+direction predicates, and common axis constants. `AcGeTol` follows the
+documented accessor-method spelling; only the basic tolerance contract is
+implemented.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string

@@ -44,13 +44,13 @@ struct AcGeScale2d
     bool isEqualTo(const AcGeScale2d &other,
                    const AcGeTol &tol = AcGeTol{}) const
     {
-        return std::abs(sx - other.sx) <= tol.equalVector &&
-               std::abs(sy - other.sy) <= tol.equalVector;
+        return std::abs(sx - other.sx) <= tol.equalVector() &&
+               std::abs(sy - other.sy) <= tol.equalVector();
     }
     bool isProportional(const AcGeTol &tol = AcGeTol{}) const
     {
         return std::abs(sx - sy) <=
-               tol.equalVector * std::max({1.0, std::abs(sx), std::abs(sy)});
+               tol.equalVector() * std::max({1.0, std::abs(sx), std::abs(sy)});
     }
     AcGeScale2d &postMultBy(const AcGeScale2d &other)
     {
@@ -131,16 +131,16 @@ struct AcGeScale3d
     bool isEqualTo(const AcGeScale3d &other,
                    const AcGeTol &tol = AcGeTol{}) const
     {
-        return std::abs(sx - other.sx) <= tol.equalVector &&
-               std::abs(sy - other.sy) <= tol.equalVector &&
-               std::abs(sz - other.sz) <= tol.equalVector;
+        return std::abs(sx - other.sx) <= tol.equalVector() &&
+               std::abs(sy - other.sy) <= tol.equalVector() &&
+               std::abs(sz - other.sz) <= tol.equalVector();
     }
     bool isProportional(const AcGeTol &tol = AcGeTol{}) const
     {
         const double magnitude = std::max({1.0, std::abs(sx), std::abs(sy),
                                            std::abs(sz)});
-        return std::abs(sx - sy) <= tol.equalVector * magnitude &&
-               std::abs(sx - sz) <= tol.equalVector * magnitude;
+        return std::abs(sx - sy) <= tol.equalVector() * magnitude &&
+               std::abs(sx - sz) <= tol.equalVector() * magnitude;
     }
     AcGeScale3d &postMultBy(const AcGeScale3d &other)
     {
