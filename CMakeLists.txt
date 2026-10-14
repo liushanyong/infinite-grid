@@ -96,6 +96,18 @@ target_include_directories(glm INTERFACE "${WINDOW_GLM_DIR}")
 # GLM uses some intrinsics; the upstream defaults are the right baseline.
 target_compile_definitions(glm INTERFACE GLM_FORCE_RADIANS)
 
+# Keep the math implementation dependency behind the CAD library interfaces.
+# The current source layout builds these modules into WINDOW, while their
+# interface targets preserve the intended dependency direction.
+add_library(acge INTERFACE)
+target_link_libraries(acge INTERFACE glm::glm)
+add_library(acgi INTERFACE)
+target_link_libraries(acgi INTERFACE acge)
+add_library(acgs INTERFACE)
+target_link_libraries(acgs INTERFACE acge acgi)
+add_library(acdb INTERFACE)
+target_link_libraries(acdb INTERFACE acge acgi)
+
 # ---------------------------------------------------------------------------
 # Dear ImGui + BGFX overlay widgets
 # ---------------------------------------------------------------------------
@@ -181,7 +193,10 @@ target_include_directories(WINDOW PRIVATE
 
 target_link_libraries(WINDOW PRIVATE
     SDL3::SDL3
-    glm::glm
+    acge
+    acgi
+    acgs
+    acdb
     imgui
     imgui_bgfx
     cadui

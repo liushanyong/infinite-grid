@@ -7,10 +7,6 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_bgfx.h>
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-
 #include "coordinate/WorldRebase.h"
 #include "arx/ArxTypes.h"
 #include "acdb/AcDbTessellate.h"
@@ -23,6 +19,7 @@
 #include "acdb/FileIoSelfTest.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
+#include "acgs/AcGsMath.h"
 #include "acgs/AcGsSelectionManager.h"
 #include "acgs/DocumentSceneBridge.h"
 #include "acgi/AcGiTextEngine.h"
@@ -166,16 +163,16 @@ static bool realisticMeshEnabled()
 }
 
 static rendering::MeshInstance makeMeshInstance(
-    float scale, const glm::vec3 &color, float opacity,
+    float scale, const acgs::math::Vec3 &color, float opacity,
     const rendering::DoubleSingleVec3 &position,
-    const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f))
+    const acgs::math::Vec4 &material = acgs::math::Vec4(0.0f, 0.0f, 0.0f, 0.0f))
 {
   rendering::MeshInstance instance;
-  instance.transformColumn0 = glm::vec4(scale, 0.0f, 0.0f, color.r);
-  instance.transformColumn1 = glm::vec4(0.0f, scale, 0.0f, color.g);
-  instance.transformColumn2 = glm::vec4(0.0f, 0.0f, scale, color.b);
-  instance.positionHigh = glm::vec4(position.high, opacity);
-  instance.positionLow = glm::vec4(position.low, material.r);
+  instance.transformColumn0 = acgs::math::Vec4(scale, 0.0f, 0.0f, color.r);
+  instance.transformColumn1 = acgs::math::Vec4(0.0f, scale, 0.0f, color.g);
+  instance.transformColumn2 = acgs::math::Vec4(0.0f, 0.0f, scale, color.b);
+  instance.positionHigh = acgs::math::Vec4(position.high, opacity);
+  instance.positionLow = acgs::math::Vec4(position.low, material.r);
   return instance;
 }
 SDL_Window *window = nullptr;
@@ -234,9 +231,9 @@ const char *gridPlaneName(GridPlaneType plane)
     }
 }
 
-constexpr glm::vec3 kAxisColorX(0.8f, 0.2f, 0.2f);
-constexpr glm::vec3 kAxisColorY(0.2f, 0.8f, 0.2f);
-constexpr glm::vec3 kAxisColorZ(0.2f, 0.2f, 0.8f);
+constexpr acgs::math::Vec3 kAxisColorX(0.8f, 0.2f, 0.2f);
+constexpr acgs::math::Vec3 kAxisColorY(0.2f, 0.8f, 0.2f);
+constexpr acgs::math::Vec3 kAxisColorZ(0.2f, 0.2f, 0.8f);
 
 bool isSpecialGridPlane(GridPlaneType plane)
 {
@@ -351,7 +348,7 @@ void enforceTargetPlaneConstraint()
     const double targetOnNormal =
         (target - gridPlaneOrigin).dotProduct(planeNormal);
     const AcGeVector3d correction = planeNormal * -targetOnNormal;
-    orbitCam.setTarget(glm::dvec3(target + correction));
+    orbitCam.setTarget(acgs::math::DVec3(target + correction));
 }
 
 void setTargetPlaneConstraint(bool enabled)
@@ -453,7 +450,7 @@ bool init()
       // kicks), and the UI view clears the swapchain so any pixel the
       // panels do not paint is a deterministic color.  Text/outline live
       // in the scene target now, so nothing needs a backbuffer underlay.
-      const glm::vec4 &uiClear = acgs::kClearColor;
+      const acgs::math::Vec4 &uiClear = acgs::kClearColor;
       imguiBgfxSetViewClear(
           (std::uint32_t(uiClear.r * 255.0f) << 24) |
           (std::uint32_t(uiClear.g * 255.0f) << 16) |
@@ -753,12 +750,12 @@ void logSlabIfChanged(bool isOrtho, double nearPlane, double farPlane,
 }
 
 void appendSceneLine(acgs::AcGsModel &drawList,
-                     const glm::dvec3 &start, const glm::dvec3 &end,
-                     const glm::vec3 &color, float opacity,
+                     const acgs::math::DVec3 &start, const acgs::math::DVec3 &end,
+                     const acgs::math::Vec3 &color, float opacity,
                      double lineWeight = 2.0)
 {
   acgs::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgsView().contrastColor(glm::vec4(color, opacity)));
+  draw.subEntityTraits().setColor(acgsView().contrastColor(acgs::math::Vec4(color, opacity)));
   draw.subEntityTraits().setLineWeight(lineWeight);
 
   acdb::AcDbLine line;
@@ -777,11 +774,11 @@ bool lineDebugEnabled()
 }
 
 void appendScenePoint(acgs::AcGsModel &drawList,
-                      const glm::dvec3 &location, const glm::vec3 &color,
+                      const acgs::math::DVec3 &location, const acgs::math::Vec3 &color,
                       double pointSize)
 {
   acgs::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgsView().contrastColor(glm::vec4(color, 1.0f)));
+  draw.subEntityTraits().setColor(acgsView().contrastColor(acgs::math::Vec4(color, 1.0f)));
   draw.subEntityTraits().setLineWeight(pointSize);
 
   acdb::AcDbPoint point;
@@ -965,7 +962,7 @@ static bool gpuPickFocusWaiting()
   return gpuPickEnabled() && gpuPickFocus.waitingResult;
 }
 
-glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
+acgs::math::Vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
   return acgsView().contrastColor(
       entity.entity.common.color.renderColor());
@@ -980,15 +977,15 @@ bool meshEntityVisible(const MeshEntityRecord &entity)
 // In-scene selection recolor: the selected entity's primitives draw with
 // this color IN their own passes (unified depth buffer — same geometry,
 // same depth, same blending; only the color changes).
-static constexpr glm::vec3 kSelectionHighlightRGB(0.35f, 0.65f, 1.0f);
+static constexpr acgs::math::Vec3 kSelectionHighlightRGB(0.35f, 0.65f, 1.0f);
 
 struct MeshInstanceCacheEntry
 {
   rendering::MeshInstance instance;
   AcGePoint3d position;
   float size = 0.0f;
-  glm::vec4 color;
-  glm::vec4 material;
+  acgs::math::Vec4 color;
+  acgs::math::Vec4 material;
 };
 
 // Keyed on tessellation-stored record pointers; cleared wholesale by
@@ -1042,7 +1039,7 @@ static const std::vector<std::vector<AcGePoint3d>> &gltfWireframeChains(
   }
   std::vector<std::uint8_t> used(edges.size(), 0);
   auto toWorld = [&entity, &positions](std::uint32_t index) {
-    const glm::vec3 &local = glm::vec3(positions[index]);
+    const acgs::math::Vec3 &local = acgs::math::Vec3(positions[index]);
     return entity.worldPosition + AcGeVector3d(local);
   };
   for (std::uint32_t start = 0; start < edges.size(); ++start)
@@ -1089,12 +1086,12 @@ static const std::vector<std::vector<AcGePoint3d>> &gltfWireframeChains(
 
 static rendering::MeshInstance &cachedMeshInstance(
     const MeshEntityRecord &entity,
-    const glm::vec4 &material = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
-    const glm::vec3 *colorOverride = nullptr)
+    const acgs::math::Vec4 &material = acgs::math::Vec4(0.0f, 0.0f, 0.0f, 0.0f),
+    const acgs::math::Vec3 *colorOverride = nullptr)
 {
-  const glm::vec4 color =
+  const acgs::math::Vec4 color =
       colorOverride
-          ? glm::vec4(*colorOverride, meshEntityColor(entity).a)
+          ? acgs::math::Vec4(*colorOverride, meshEntityColor(entity).a)
           : meshEntityColor(entity);
   const float scale = entity.instanceScale();
   auto found = g_meshInstanceCache.find(&entity);
@@ -1112,7 +1109,7 @@ static rendering::MeshInstance &cachedMeshInstance(
   entry.color = color;
   entry.material = material;
   entry.instance = makeMeshInstance(
-      scale, glm::vec3(color), color.a,
+      scale, acgs::math::Vec3(color), color.a,
       rendering::encodeDoubleSingle(entity.worldPosition), material);
   if (found != g_meshInstanceCache.end())
   {
@@ -1138,9 +1135,9 @@ static void queueGpuMeshEntity(const MeshEntityRecord &entity,
 
   const rendering::DoubleSingleVec3 objectPosition =
       rendering::encodeDoubleSingle(entity.worldPosition);
-  const glm::vec4 color = meshEntityColor(entity);
+  const acgs::math::Vec4 color = meshEntityColor(entity);
   const rendering::MeshInstance instance = makeMeshInstance(
-      entity.instanceScale(), glm::vec3(color), color.a, objectPosition);
+      entity.instanceScale(), acgs::math::Vec3(color), color.a, objectPosition);
   acgs::acgsGetManager()->queueGpuMeshPick(
       instance, entity.mesh, objectId,
       entity.staticMesh ? entity.staticMesh->gpuId : 0);
@@ -1155,12 +1152,12 @@ static void queueGpuMeshEntity(const MeshEntityRecord *entity)
                                             entity, nullptr}));
 }
 
-glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity);
+acgs::math::Vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity);
 
 void appendMeshEntityToScene(const MeshEntityRecord &entity,
                              acgs::AcGsModel &drawList,
                              bool cadAlgorithm = false,
-                             const glm::vec3 *colorOverride = nullptr)
+                             const acgs::math::Vec3 *colorOverride = nullptr)
 {
   if (!meshEntityVisible(entity))
     return;
@@ -1185,14 +1182,14 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   }
 
   const bool imported = entity.staticMesh != nullptr;
-  const glm::vec4 color =
+  const acgs::math::Vec4 color =
       colorOverride
-          ? glm::vec4(*colorOverride,
+          ? acgs::math::Vec4(*colorOverride,
                       imported ? entity.entity.common.color.alpha()
                                : meshEntityColor(entity).a)
           : (imported ? entity.entity.common.color.renderColor()
                       : meshEntityColor(entity));
-  const glm::vec4 material = meshEntityRenderMaterial(entity);
+  const acgs::math::Vec4 material = meshEntityRenderMaterial(entity);
   acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
       entity.mesh, color.a >= 1.0f, imported || entity.realistic(), material,
       cadAlgorithm);
@@ -1216,22 +1213,22 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   batch.instances.push_back(cachedMeshInstance(entity, material, colorOverride));
 }
 
-glm::vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
+acgs::math::Vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
 {
   // fs_pbr_mesh uniform: x=metallic y=roughness z=emissive w=alphaCutoff.
   // Imported glTF materials map 1:1 (alphaMask=1 marks a MASK material).
   if (entity.staticMesh)
   {
     const acdb::AcDbMaterial &material = entity.entity.material;
-    return glm::vec4(
+    return acgs::math::Vec4(
         material.metallicFactor, material.roughnessFactor,
         material.emissiveFactor.r,
         material.alphaMask > 0.5f ? material.alphaMaskCutoff : 0.0f);
   }
   return entity.realistic()
-      ? glm::vec4(entity.entity.material.metallicFactor,
+      ? acgs::math::Vec4(entity.entity.material.metallicFactor,
                   entity.entity.material.roughnessFactor, 0.0f, 0.0f)
-      : glm::vec4(0.0f, 0.35f, 0.0f, 0.0f);
+      : acgs::math::Vec4(0.0f, 0.35f, 0.0f, 0.0f);
 }
 
 
@@ -1268,27 +1265,27 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
     struct ValidationPoint
     {
       AcGeVector3d offset;
-      glm::vec3 color;
+      acgs::math::Vec3 color;
       float size;
       rendering::MeshType mesh;
     };
     const ValidationPoint validationPoints[] = {
-        {AcGeVector3d(0.0, 256.0, 0.0), glm::vec3(0.43f, 0.91f, 0.98f),
+        {AcGeVector3d(0.0, 256.0, 0.0), acgs::math::Vec3(0.43f, 0.91f, 0.98f),
          512.0f, rendering::MeshType::Cube},
-        {AcGeVector3d(0.0, 224.0, 0.0), glm::vec3(1.0f, 0.58f, 0.25f),
+        {AcGeVector3d(0.0, 224.0, 0.0), acgs::math::Vec3(1.0f, 0.58f, 0.25f),
          448.0f, rendering::MeshType::Cube},
-        {AcGeVector3d(1920.0, 64.0, 0.0), glm::vec3(0.95f, 0.95f, 0.95f),
+        {AcGeVector3d(1920.0, 64.0, 0.0), acgs::math::Vec3(0.95f, 0.95f, 0.95f),
          128.0f, rendering::MeshType::Cube},
-        {AcGeVector3d(0.0, 64.0, -1920.0), glm::vec3(0.95f, 0.95f, 0.95f),
+        {AcGeVector3d(0.0, 64.0, -1920.0), acgs::math::Vec3(0.95f, 0.95f, 0.95f),
          128.0f, rendering::MeshType::Cube},
         {AcGeVector3d(-288.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         acgs::math::Vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
         {AcGeVector3d(-96.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         acgs::math::Vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
         {AcGeVector3d(96.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         acgs::math::Vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
         {AcGeVector3d(288.0, 32.0, -224.0),
-         glm::vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
+         acgs::math::Vec3(1.0f, 0.55f, 0.41f), 64.0f, rendering::MeshType::Cube},
     };
     std::vector<LargeCoordinateObject> objects;
     if (debugValidationMeshesEnabled())
@@ -1298,7 +1295,7 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
       {
         MeshEntityRecord object;
         object.worldPosition = detailCenter + point.offset;
-        object.entity.common.color = glm::vec4(point.color, 0.45f);
+        object.entity.common.color = acgs::math::Vec4(point.color, 0.45f);
         object.size = point.size;
         object.mesh = point.mesh;
         object.entity.common.name =
@@ -1328,7 +1325,7 @@ MeshEntityRecord getCenterCubeEntity()
   entity.entity.common.name = "CenterCube";
   entity.entity.common.visible =
       !largeCoordinateCameraView || centerCubeForced();
-  entity.entity.common.color = glm::vec4(1.0f, 0.58f, 0.25f, 1.0f);
+  entity.entity.common.color = acgs::math::Vec4(1.0f, 0.58f, 0.25f, 1.0f);
   entity.worldPosition = cubeWorldPosition;
   entity.size = 1.0f;
   entity.mesh = rendering::MeshType::Cube;
@@ -1406,11 +1403,11 @@ struct VisibilityCandidate
   size_t rangeCount = 0;
   const MeshEntityRecord *mesh = nullptr;
   const acgs::CurveBatchCommand *curve = nullptr;
-  glm::dvec3 min{0.0};
-  glm::dvec3 max{0.0};
-  glm::dvec3 center{0.0};
+  acgs::math::DVec3 min{0.0};
+  acgs::math::DVec3 max{0.0};
+  acgs::math::DVec3 center{0.0};
   double lodSize = 0.0;
-  glm::vec4 overlayColor{1.0f};
+  acgs::math::Vec4 overlayColor{1.0f};
   float overlayPointSize = 2.0f;
 };
 
@@ -1664,11 +1661,11 @@ static void appendDemoBlocks()
   const AcGePoint3d blockAnchor = vectorPrimitivesAnchor();
   const double base = 240.0;
   acdb::AcDbLine left;
-  left.common.color = glm::vec4(0.30f, 0.85f, 0.55f, 1.0f);
+  left.common.color = acgs::math::Vec4(0.30f, 0.85f, 0.55f, 1.0f);
   left.start = blockAnchor;
   left.end = blockAnchor + AcGeVector3d(0.0, base, 0.0);
   acdb::AcDbLine bottom;
-  bottom.common.color = glm::vec4(0.30f, 0.85f, 0.55f, 1.0f);
+  bottom.common.color = acgs::math::Vec4(0.30f, 0.85f, 0.55f, 1.0f);
   bottom.start = blockAnchor;
   bottom.end = blockAnchor + AcGeVector3d(base, 0.0, 0.0);
   const acdb::AcDbHandle leftHandle = document.addEntity(left);
@@ -1828,7 +1825,7 @@ static const GltfDemoModelAsset &gltfDemoAsset(
   }
   asset.name = path.stem().string();
 
-  const glm::dvec3 extent = asset.import.maximum - asset.import.minimum;
+  const acgs::math::DVec3 extent = asset.import.maximum - asset.import.minimum;
   const double radius =
       0.5 * std::max(extent.x, std::max(extent.y, extent.z));
   asset.scale = radius > 0.0 ? kGltfDemoTargetRadius / radius : 1.0;
@@ -1847,16 +1844,16 @@ static const GltfDemoModelAsset &gltfDemoAsset(
     for (size_t v = 0; v < vertexCount; ++v)
     {
       const AcGePoint3d &position = geometry.positions[v];
-      const glm::vec2 uv = hasUvs ? geometry.uvs[v] : glm::vec2(0.0f);
+      const acgs::math::Vec2 uv = hasUvs ? geometry.uvs[v] : acgs::math::Vec2(0.0f);
       // The normalization scale bakes into the vertices so the rendered
       // geometry is final-size and the instance only translates.
-      staticMesh->cpu.positionU[v] = glm::vec4(
+      staticMesh->cpu.positionU[v] = acgs::math::Vec4(
           float(position.x) * float(asset.scale),
           float(position.y) * float(asset.scale),
           float(position.z) * float(asset.scale), uv.x);
-      const glm::vec3 normal = hasNormals ? geometry.normals[v]
-                                          : glm::vec3(0.0f, 0.0f, 1.0f);
-      staticMesh->cpu.normalV[v] = glm::vec4(normal, uv.y);
+      const acgs::math::Vec3 normal = hasNormals ? geometry.normals[v]
+                                          : acgs::math::Vec3(0.0f, 0.0f, 1.0f);
+      staticMesh->cpu.normalV[v] = acgs::math::Vec4(normal, uv.y);
     }
     staticMesh->cpu.indices = geometry.indices;
     asset.meshes[i] = std::move(staticMesh);
@@ -2115,27 +2112,27 @@ static void buildDemoDocument()
     const AcGePoint3d demoAnchor = demoAnchorPoint();
 
     acdb::AcDbLine line;
-    line.common.color = glm::vec4(1.0f, 0.24f, 0.20f, 1.0f);
+    line.common.color = acgs::math::Vec4(1.0f, 0.24f, 0.20f, 1.0f);
     line.start = cadAnchor;
     line.end = cadAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     addDemo(line, "Line");
 
     acdb::AcDbArc arc;
-    arc.common.color = glm::vec4(1.0f, 0.52f, 0.10f, 1.0f);
+    arc.common.color = acgs::math::Vec4(1.0f, 0.52f, 0.10f, 1.0f);
     arc.center = cadAnchor + AcGeVector3d(1024.0, 256.0, 0.0);
     arc.radius = 192.0;
     arc.startAngle = 0.0;
-    arc.endAngle = glm::radians(270.0);
+    arc.endAngle = acgs::math::radians(270.0);
     addDemo(arc, "Arc");
 
     acdb::AcDbCircle circle;
-    circle.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
+    circle.common.color = acgs::math::Vec4(0.20f, 0.60f, 0.90f, 1.0f);
     circle.center = cadAnchor + AcGeVector3d(256.0, 512.0, 0.0);
     circle.radius = 160.0;
     addDemo(circle, "Circle");
 
     acdb::AcDbEllipse ellipse;
-    ellipse.common.color = glm::vec4(0.65f, 0.30f, 0.85f, 1.0f);
+    ellipse.common.color = acgs::math::Vec4(0.65f, 0.30f, 0.85f, 1.0f);
     ellipse.center = cadAnchor + AcGeVector3d(768.0, 640.0, 0.0);
     ellipse.majorAxis = AcGeVector3d(224.0, 0.0, 0.0);
     ellipse.radiusRatio = 0.55;
@@ -2144,16 +2141,16 @@ static void buildDemoDocument()
     // Partial ellipse: the parameter range draws an elliptical arc instead
     // of the closed curve.
     acdb::AcDbEllipse ellipseArc;
-    ellipseArc.common.color = glm::vec4(0.75f, 0.40f, 0.95f, 1.0f);
+    ellipseArc.common.color = acgs::math::Vec4(0.75f, 0.40f, 0.95f, 1.0f);
     ellipseArc.center = cadAnchor + AcGeVector3d(1536.0, -640.0, 0.0);
     ellipseArc.majorAxis = AcGeVector3d(160.0, 0.0, 0.0);
     ellipseArc.radiusRatio = 0.55;
-    ellipseArc.startParameter = glm::pi<double>() * 0.25;
-    ellipseArc.endParameter = glm::pi<double>() * 1.75;
+    ellipseArc.startParameter = acgs::math::pi<double>() * 0.25;
+    ellipseArc.endParameter = acgs::math::pi<double>() * 1.75;
     addDemo(ellipseArc, "EllipseArc");
 
     acdb::AcDb3dPolyline polyline;
-    polyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
+    polyline.common.color = acgs::math::Vec4(0.60f, 0.20f, 1.00f, 1.0f);
     polyline.vertices = {
         cadAnchor + AcGeVector3d(-384.0, 128.0, 0.0),
         cadAnchor + AcGeVector3d(-128.0, 384.0, 0.0),
@@ -2163,7 +2160,7 @@ static void buildDemoDocument()
     addDemo(polyline, "Polyline");
 
     acdb::AcDbPolyline lwpolyline;
-    lwpolyline.common.color = glm::vec4(0.25f, 0.80f, 0.45f, 1.0f);
+    lwpolyline.common.color = acgs::math::Vec4(0.25f, 0.80f, 0.45f, 1.0f);
     lwpolyline.vertices = {AcGePoint2d(-256.0, -384.0),
                            AcGePoint2d(0.0, -192.0),
                            AcGePoint2d(256.0, -448.0)};
@@ -2174,7 +2171,7 @@ static void buildDemoDocument()
     addDemo(lwpolyline, "LwPolyline");
 
     acdb::AcDbSpline spline;
-    spline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    spline.common.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
     spline.degree = 3;
     spline.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
     spline.controlPoints = {
@@ -2185,7 +2182,7 @@ static void buildDemoDocument()
     addDemo(spline, "Spline");
 
     acdb::AcDbHatch hatch;
-    hatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.75f);
+    hatch.common.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 0.75f);
     hatch.outerLoop = {
         cadAnchor + AcGeVector3d(1024.0, -384.0, 0.0),
         cadAnchor + AcGeVector3d(1408.0, -384.0, 0.0),
@@ -2196,7 +2193,7 @@ static void buildDemoDocument()
     // ANSI31 line pattern at unit scale; the inner loop punches a hole via
     // the even-odd rule.
     acdb::AcDbHatch patternHatch;
-    patternHatch.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 0.90f);
+    patternHatch.common.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 0.90f);
     patternHatch.solidFill = false;
     patternHatch.patternName = "ANSI31";
     patternHatch.patternScale = 1.0;
@@ -2215,11 +2212,11 @@ static void buildDemoDocument()
 
     // Same pattern family rotated 45 degrees and widened by patternScale.
     acdb::AcDbHatch angledHatch;
-    angledHatch.common.color = glm::vec4(0.35f, 0.55f, 0.95f, 0.90f);
+    angledHatch.common.color = acgs::math::Vec4(0.35f, 0.55f, 0.95f, 0.90f);
     angledHatch.solidFill = false;
     angledHatch.patternName = "ANSI31";
     angledHatch.patternScale = 2.0;
-    angledHatch.patternAngle = glm::pi<double>() * 0.25;
+    angledHatch.patternAngle = acgs::math::pi<double>() * 0.25;
     angledHatch.outerLoop = {
         cadAnchor + AcGeVector3d(1024.0, -1024.0, 0.0),
         cadAnchor + AcGeVector3d(1408.0, -1024.0, 0.0),
@@ -2228,7 +2225,7 @@ static void buildDemoDocument()
     addDemo(angledHatch, "AngledHatch");
 
     acdb::AcDbSolid solid;
-    solid.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 0.85f);
+    solid.common.color = acgs::math::Vec4(0.50f, 0.50f, 0.90f, 0.85f);
     solid.firstCorner = cadAnchor + AcGeVector3d(0.0, -128.0, 256.0);
     solid.secondCorner = solid.firstCorner + AcGeVector3d(512.0, 0.0, 0.0);
     solid.thirdCorner = solid.firstCorner + AcGeVector3d(0.0, 384.0, 0.0);
@@ -2236,13 +2233,13 @@ static void buildDemoDocument()
     addDemo(solid, "Solid");
 
     acdb::AcDbRay ray;
-    ray.common.color = glm::vec4(0.10f, 0.85f, 0.75f, 1.0f);
+    ray.common.color = acgs::math::Vec4(0.10f, 0.85f, 0.75f, 1.0f);
     ray.start = cadAnchor + AcGeVector3d(-640.0, -768.0, 0.0);
     ray.direction = AcGeVector3d(1.0, 0.25, 0.0);
     addDemo(ray, "Ray");
 
     acdb::AcDbXline xline;
-    xline.common.color = glm::vec4(0.65f, 0.35f, 0.95f, 1.0f);
+    xline.common.color = acgs::math::Vec4(0.65f, 0.35f, 0.95f, 1.0f);
     xline.point = cadAnchor + AcGeVector3d(256.0, -1152.0, 0.0);
     xline.direction = AcGeVector3d(2.0, -1.0, 0.0);
     addDemo(xline, "XLine");
@@ -2253,7 +2250,7 @@ static void buildDemoDocument()
     if (gShxFontReady)
     {
       acdb::AcDbText shxText;
-      shxText.common.color = glm::vec4(0.95f, 0.85f, 0.30f, 1.0f);
+      shxText.common.color = acgs::math::Vec4(0.95f, 0.85f, 0.30f, 1.0f);
       shxText.styleName = "SHX";
       // SHX glyphs hang below their anchor (cap line at the anchor,
       // baseline one em down): the insertion is the cap line.
@@ -2265,7 +2262,7 @@ static void buildDemoDocument()
     }
 
     acdb::AcDbMline mline;
-    mline.common.color = glm::vec4(0.85f, 0.35f, 0.35f, 0.95f);
+    mline.common.color = acgs::math::Vec4(0.85f, 0.35f, 0.35f, 0.95f);
     mline.vertices = {
         cadAnchor + AcGeVector3d(-256.0, -768.0, 0.0),
         cadAnchor + AcGeVector3d(256.0, -704.0, 0.0),
@@ -2276,7 +2273,7 @@ static void buildDemoDocument()
     // Closed multi-line: the offset band wraps around and the enclosed
     // strip is filled between the two boundary strokes.
     acdb::AcDbMline closedMLine;
-    closedMLine.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 0.95f);
+    closedMLine.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 0.95f);
     closedMLine.vertices = {
         cadAnchor + AcGeVector3d(1472.0, -880.0, 0.0),
         cadAnchor + AcGeVector3d(1728.0, -960.0, 0.0),
@@ -2288,7 +2285,7 @@ static void buildDemoDocument()
     // Closed polyline with non-zero thickness: the outline extrudes into
     // wall quads along the normal.
     acdb::AcDb3dPolyline borderedPolyline;
-    borderedPolyline.common.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f);
+    borderedPolyline.common.color = acgs::math::Vec4(0.95f, 0.45f, 0.15f, 1.0f);
     borderedPolyline.vertices = {
         cadAnchor + AcGeVector3d(1792.0, -576.0, 0.0),
         cadAnchor + AcGeVector3d(1984.0, -576.0, 0.0),
@@ -2301,7 +2298,7 @@ static void buildDemoDocument()
     // Fit-point splines: the C1 fallback interpolates the fit points, open
     // and closed forms.
     acdb::AcDbSpline fitSpline;
-    fitSpline.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    fitSpline.common.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
     fitSpline.degree = 3;
     fitSpline.fitPoints = {
         cadAnchor + AcGeVector3d(1024.0, -1152.0, 0.0),
@@ -2311,7 +2308,7 @@ static void buildDemoDocument()
     addDemo(fitSpline, "FitSpline");
 
     acdb::AcDbSpline closedFitSpline;
-    closedFitSpline.common.color = glm::vec4(0.55f, 0.85f, 0.25f, 1.0f);
+    closedFitSpline.common.color = acgs::math::Vec4(0.55f, 0.85f, 0.25f, 1.0f);
     closedFitSpline.degree = 3;
     closedFitSpline.closed = true;
     closedFitSpline.fitPoints = {
@@ -2324,7 +2321,7 @@ static void buildDemoDocument()
     // The closed ring through the same points: the interpolation visibly
     // smooths the corners of this reference polygon.
     acdb::AcDb3dPolyline closedFitRing;
-    closedFitRing.common.color = glm::vec4(0.55f, 0.55f, 0.55f, 0.9f);
+    closedFitRing.common.color = acgs::math::Vec4(0.55f, 0.55f, 0.55f, 0.9f);
     closedFitRing.vertices = closedFitSpline.fitPoints;
     closedFitRing.closed = true;
     addDemo(closedFitRing, "ClosedFitRing");
@@ -2333,7 +2330,7 @@ static void buildDemoDocument()
     // the curve bends out of the ground plane (the fit-point demos above
     // are flat for comparison).
     acdb::AcDbSpline spaceSpline;
-    spaceSpline.common.color = glm::vec4(0.30f, 0.65f, 0.95f, 1.0f);
+    spaceSpline.common.color = acgs::math::Vec4(0.30f, 0.65f, 0.95f, 1.0f);
     spaceSpline.degree = 3;
     spaceSpline.fitPoints = {
         cadAnchor + AcGeVector3d(1024.0, -1152.0, 480.0),
@@ -2344,12 +2341,12 @@ static void buildDemoDocument()
     addDemo(spaceSpline, "SpaceSpline");
 
     acdb::AcDbPoint cadPoint;
-    cadPoint.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    cadPoint.common.color = acgs::math::Vec4(0.95f, 0.95f, 0.95f, 1.0f);
     cadPoint.location = cadAnchor + AcGeVector3d(512.0, 0.0, 0.0);
     addDemo(cadPoint, "Point");
 
     acdb::AcDbText text;
-    text.common.color = glm::vec4(0.95f, 0.95f, 0.30f, 1.0f);
+    text.common.color = acgs::math::Vec4(0.95f, 0.95f, 0.30f, 1.0f);
     text.insertion = cadAnchor + AcGeVector3d(1152.0, 128.0, 384.0);
     text.height = 96.0;
     const AcString demoText = L"\u4E2D\u6587 TEXT";
@@ -2357,7 +2354,7 @@ static void buildDemoDocument()
     addDemo(text, "Text");
 
     acdb::AcDbMText mtext;
-    mtext.common.color = glm::vec4(0.35f, 0.90f, 0.95f, 1.0f);
+    mtext.common.color = acgs::math::Vec4(0.35f, 0.90f, 0.95f, 1.0f);
     mtext.insertion = cadAnchor + AcGeVector3d(1152.0, 320.0, 384.0);
     mtext.direction = AcGeVector3d(1.0, 0.0, 0.0);
     mtext.height = 64.0;
@@ -2369,13 +2366,13 @@ static void buildDemoDocument()
     // point, so the glyph position can be found from any distance while
     // debugging the SDF path.
     acdb::AcDbLine textLocator;
-    textLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
+    textLocator.common.color = acgs::math::Vec4(1.0f, 0.20f, 0.90f, 1.0f);
     textLocator.common.lineWeight = 3.0;
     textLocator.start = text.insertion + AcGeVector3d(0.0, 0.0, -320.0);
     textLocator.end = text.insertion;
     addDemo(textLocator, "TextLocator");
     acdb::AcDbLine mtextLocator;
-    mtextLocator.common.color = glm::vec4(1.0f, 0.20f, 0.90f, 1.0f);
+    mtextLocator.common.color = acgs::math::Vec4(1.0f, 0.20f, 0.90f, 1.0f);
     mtextLocator.common.lineWeight = 3.0;
     mtextLocator.start = mtext.insertion + AcGeVector3d(0.0, 0.0, -320.0);
     mtextLocator.end = mtext.insertion;
@@ -2388,28 +2385,28 @@ static void buildDemoDocument()
     const double dimTextHeight = 56.0;
 
     acdb::AcDbLine plateA;
-    plateA.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateA.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateA.start = dimAnchor;
     plateA.end = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     addDemo(plateA, "PlateBottom");
     acdb::AcDbLine plateB;
-    plateB.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateB.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateB.start = dimAnchor + AcGeVector3d(0.0, 512.0, 0.0);
     plateB.end = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     addDemo(plateB, "PlateTop");
     acdb::AcDbLine plateC;
-    plateC.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateC.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateC.start = dimAnchor;
     plateC.end = dimAnchor + AcGeVector3d(0.0, 512.0, 0.0);
     addDemo(plateC, "PlateLeft");
     acdb::AcDbLine plateD;
-    plateD.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateD.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateD.start = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     plateD.end = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     addDemo(plateD, "PlateRight");
 
     acdb::AcDbRotatedDimension dimRotated;
-    dimRotated.common.color = glm::vec4(0.95f, 0.80f, 0.25f, 1.0f);
+    dimRotated.common.color = acgs::math::Vec4(0.95f, 0.80f, 0.25f, 1.0f);
     dimRotated.dimension.textHeight = dimTextHeight;
     dimRotated.xLine1Point = dimAnchor;
     dimRotated.xLine2Point = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
@@ -2419,7 +2416,7 @@ static void buildDemoDocument()
     addDemo(dimRotated, "DimRotated");
 
     acdb::AcDbAlignedDimension dimAligned;
-    dimAligned.common.color = glm::vec4(0.45f, 0.90f, 0.45f, 1.0f);
+    dimAligned.common.color = acgs::math::Vec4(0.45f, 0.90f, 0.45f, 1.0f);
     dimAligned.dimension.textHeight = dimTextHeight;
     dimAligned.xLine1Point = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     dimAligned.xLine2Point = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
@@ -2428,13 +2425,13 @@ static void buildDemoDocument()
     addDemo(dimAligned, "DimAligned");
 
     acdb::AcDbCircle dimCircle;
-    dimCircle.common.color = glm::vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    dimCircle.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     dimCircle.center = dimAnchor + AcGeVector3d(192.0, 256.0, 0.0);
     dimCircle.radius = 96.0;
     addDemo(dimCircle, "DimBore");
 
     acdb::AcDbRadialDimension dimRadial;
-    dimRadial.common.color = glm::vec4(0.95f, 0.55f, 0.30f, 1.0f);
+    dimRadial.common.color = acgs::math::Vec4(0.95f, 0.55f, 0.30f, 1.0f);
     dimRadial.dimension.textHeight = dimTextHeight;
     dimRadial.centerPoint = dimCircle.center;
     dimRadial.radiusPoint =
@@ -2444,7 +2441,7 @@ static void buildDemoDocument()
     addDemo(dimRadial, "DimRadial");
 
     acdb::AcDbDiametricDimension dimDiameter;
-    dimDiameter.common.color = glm::vec4(0.95f, 0.45f, 0.55f, 1.0f);
+    dimDiameter.common.color = acgs::math::Vec4(0.95f, 0.45f, 0.55f, 1.0f);
     dimDiameter.dimension.textHeight = dimTextHeight;
     dimDiameter.chordPoint =
         dimCircle.center - AcGeVector3d(96.0, 0.0, 0.0);
@@ -2454,7 +2451,7 @@ static void buildDemoDocument()
     addDemo(dimDiameter, "DimDiameter");
 
     acdb::AcDb3PointAngularDimension dimAngular;
-    dimAngular.common.color = glm::vec4(0.75f, 0.55f, 0.95f, 1.0f);
+    dimAngular.common.color = acgs::math::Vec4(0.75f, 0.55f, 0.95f, 1.0f);
     dimAngular.dimension.textHeight = dimTextHeight;
     dimAngular.centerPoint = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     dimAngular.xLine1Point = dimAnchor + AcGeVector3d(384.0, 0.0, 0.0);
@@ -2464,7 +2461,7 @@ static void buildDemoDocument()
     addDemo(dimAngular, "DimAngular");
 
     acdb::AcDbOrdinateDimension dimOrdinate;
-    dimOrdinate.common.color = glm::vec4(0.85f, 0.85f, 0.35f, 1.0f);
+    dimOrdinate.common.color = acgs::math::Vec4(0.85f, 0.85f, 0.35f, 1.0f);
     dimOrdinate.dimension.textHeight = dimTextHeight;
     dimOrdinate.featureLocationPoint = dimAnchor;
     dimOrdinate.leaderEndPoint =
@@ -2473,7 +2470,7 @@ static void buildDemoDocument()
     addDemo(dimOrdinate, "DimOrdinate");
 
     acdb::AcDbLeader leader;
-    leader.common.color = glm::vec4(0.90f, 0.90f, 0.90f, 1.0f);
+    leader.common.color = acgs::math::Vec4(0.90f, 0.90f, 0.90f, 1.0f);
     leader.points = {
         dimAnchor + AcGeVector3d(192.0, 256.0, 0.0) +
             AcGeVector3d(96.0 * 0.7071, 96.0 * 0.7071, 0.0),
@@ -2483,7 +2480,7 @@ static void buildDemoDocument()
     addDemo(leader, "Leader");
 
     acdb::AcDbFcf fcf;
-    fcf.common.color = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    fcf.common.color = acgs::math::Vec4(0.95f, 0.95f, 0.95f, 1.0f);
     fcf.insertion = dimAnchor + AcGeVector3d(716.0, 640.0, 0.0);
     fcf.direction = AcGeVector3d(1.0, 0.0, 0.0);
     fcf.text = "{|0.05|A}";
@@ -2491,7 +2488,7 @@ static void buildDemoDocument()
     addDemo(fcf, "Fcf");
 
     acdb::AcDb3dSolid solid3d;
-    solid3d.common.color = glm::vec4(0.75f, 0.65f, 0.25f, 1.0f);
+    solid3d.common.color = acgs::math::Vec4(0.75f, 0.65f, 0.25f, 1.0f);
     solid3d.renderClass = acdb::RenderClass::Cad;
     const AcGePoint3d boxMin = cadAnchor + AcGeVector3d(1536.0, 128.0, 384.0);
     const AcGePoint3d boxMax = boxMin + AcGeVector3d(256.0, 256.0, 256.0);
@@ -2516,7 +2513,7 @@ static void buildDemoDocument()
     addDemo(solid3d, "Solid3d", true);
 
     acdb::AcDbLight light;
-    light.common.color = glm::vec4(1.0f, 0.90f, 0.55f, 1.0f);
+    light.common.color = acgs::math::Vec4(1.0f, 0.90f, 0.55f, 1.0f);
     light.type = acdb::LightType::Spot;
     light.position = cadAnchor + AcGeVector3d(-1152.0, 256.0, 512.0);
     light.target = AcGeVector3d(cadAnchor.x - 768.0, cadAnchor.y, cadAnchor.z);
@@ -2529,7 +2526,7 @@ static void buildDemoDocument()
     for (int i = 0; i < 24; ++i)
     {
       acdb::AcDbPoint gridPoint;
-      gridPoint.common.color = glm::vec4(
+      gridPoint.common.color = acgs::math::Vec4(
           0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i, 1.0f);
       gridPoint.common.lineWeight = 6.0;
       gridPoint.location =
@@ -2539,7 +2536,7 @@ static void buildDemoDocument()
     }
 
     acdb::AcDbLine dashedArrow;
-    dashedArrow.common.color = glm::vec4(0.95f, 0.25f, 0.75f, 1.0f);
+    dashedArrow.common.color = acgs::math::Vec4(0.95f, 0.25f, 0.75f, 1.0f);
     dashedArrow.common.lineType = "DASHED";
     dashedArrow.common.lineWeight = 2.5;
     dashedArrow.start = demoAnchor + AcGeVector3d(-1024.0, -640.0, -512.0);
@@ -2566,14 +2563,14 @@ static void buildDemoDocument()
       const AcGePoint3d surfaceOrigin =
           demoAnchor + AcGeVector3d(512.0, 768.0, -512.0);
       auto surfacePoint = [&](double u, double v) {
-        const double height = glm::sin(glm::pi<double>() * u) *
-                              glm::sin(glm::pi<double>() * v);
+        const double height = acgs::math::sin(acgs::math::pi<double>() * u) *
+                              acgs::math::sin(acgs::math::pi<double>() * v);
         return surfaceOrigin + AcGeVector3d(u * 768.0, height * 224.0,
                                             v * 512.0);
       };
 
       acdb::AcDbPolyFaceMesh surface;
-      surface.common.color = glm::vec4(0.20f, 0.45f, 0.85f, 0.80f);
+      surface.common.color = acgs::math::Vec4(0.20f, 0.45f, 0.85f, 0.80f);
       surface.common.layer = "GRID_FILL_LAYER";
       surface.style = acdb::MeshStyle::Cad;
       surface.geometry.positions.reserve(
@@ -2609,7 +2606,7 @@ static void buildDemoDocument()
       {
         acdb::AcDb3dPolyline isoU;
         acdb::AcDb3dPolyline isoV;
-        isoU.common.color = glm::vec4(0.05f, 0.10f, 0.25f, 0.85f);
+        isoU.common.color = acgs::math::Vec4(0.05f, 0.10f, 0.25f, 0.85f);
         isoU.common.lineWeight = 2.0;
         isoV = isoU;
         const double g = double(k) / surfaceSegs;
@@ -2627,7 +2624,7 @@ static void buildDemoDocument()
     for (int i = 0; i < 5; ++i)
     {
       acdb::AcDbPoint widthDot;
-      widthDot.common.color = glm::vec4(
+      widthDot.common.color = acgs::math::Vec4(
           0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f);
       widthDot.common.lineWeight = 12.0;
       widthDot.location =
@@ -2637,7 +2634,7 @@ static void buildDemoDocument()
 
     {
       const float widths[] = {1.0f, 2.0f, 4.0f, 8.0f};
-      const glm::vec4 colors[] = {
+      const acgs::math::Vec4 colors[] = {
           {1.0f, 0.2f, 0.2f, 1.0f}, {0.2f, 1.0f, 0.2f, 1.0f},
           {0.2f, 0.4f, 1.0f, 1.0f}, {1.0f, 0.8f, 0.2f, 1.0f}};
       for (int i = 0; i < 4; ++i)
@@ -2655,7 +2652,7 @@ static void buildDemoDocument()
     {
       const char *lineTypes[] = {"CONTINUOUS", "DASHED", "HIDDEN", "CENTER",
                                  "DOT", "PHANTOM"};
-      const glm::vec4 lineColors[] = {
+      const acgs::math::Vec4 lineColors[] = {
           {0.85f, 0.85f, 0.85f, 1.0f}, {0.95f, 0.25f, 0.75f, 1.0f},
           {0.20f, 0.80f, 0.80f, 1.0f}, {1.00f, 0.70f, 0.20f, 1.0f},
           {0.60f, 0.60f, 1.00f, 1.0f}, {0.80f, 0.20f, 0.20f, 1.0f}};
@@ -2673,7 +2670,7 @@ static void buildDemoDocument()
     }
 
     acdb::AcDb3dPolyline demoPolyline;
-    demoPolyline.common.color = glm::vec4(0.60f, 0.20f, 1.00f, 1.0f);
+    demoPolyline.common.color = acgs::math::Vec4(0.60f, 0.20f, 1.00f, 1.0f);
     demoPolyline.common.lineWeight = 4.0;
     const AcGePoint3d polylineBase =
         demoAnchor + AcGeVector3d(-512.0, 0.0, -512.0);
@@ -2685,11 +2682,11 @@ static void buildDemoDocument()
     addDemo(demoPolyline, "DemoPolyline");
 
     acdb::AcDbHatch hexagon;
-    hexagon.common.color = glm::vec4(0.30f, 0.80f, 0.50f, 1.0f);
+    hexagon.common.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 1.0f);
     hexagon.outerLoop.reserve(6);
     for (int i = 0; i < 6; ++i)
     {
-      const double angle = glm::two_pi<double>() * i / 6.0;
+      const double angle = acgs::math::two_pi<double>() * i / 6.0;
       hexagon.outerLoop.push_back(
           demoAnchor + AcGeVector3d(0.0, 256.0, -512.0) +
           AcGeVector3d(128.0 * std::cos(angle), 128.0 * std::sin(angle), 0.0));
@@ -2698,12 +2695,12 @@ static void buildDemoDocument()
 
     {
       acdb::AcDbHatch circleFill;
-      circleFill.common.color = glm::vec4(0.20f, 0.60f, 0.90f, 1.0f);
+      circleFill.common.color = acgs::math::Vec4(0.20f, 0.60f, 0.90f, 1.0f);
       constexpr int circleSegments = 48;
       circleFill.outerLoop.reserve(circleSegments);
       for (int i = 0; i < circleSegments; ++i)
       {
-        const double angle = glm::two_pi<double>() * i / circleSegments;
+        const double angle = acgs::math::two_pi<double>() * i / circleSegments;
         circleFill.outerLoop.push_back(
             demoAnchor + AcGeVector3d(256.0, 512.0, 256.0) +
             AcGeVector3d(160.0 * std::cos(angle),
@@ -2713,7 +2710,7 @@ static void buildDemoDocument()
     }
 
     acdb::AcDbSolid rectangle;
-    rectangle.common.color = glm::vec4(0.50f, 0.50f, 0.90f, 1.0f);
+    rectangle.common.color = acgs::math::Vec4(0.50f, 0.50f, 0.90f, 1.0f);
     rectangle.firstCorner =
         demoAnchor + AcGeVector3d(-256.0, -128.0, 256.0);
     rectangle.secondCorner =
@@ -2725,7 +2722,7 @@ static void buildDemoDocument()
     addDemo(rectangle, "Rectangle");
 
     acdb::AcDbSpline bezier;
-    bezier.common.color = glm::vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    bezier.common.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
     bezier.common.lineWeight = 6.0;
     bezier.degree = 3;
     bezier.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
@@ -2818,8 +2815,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     auto addCurveDemo = [&target](rendering::CurveAlgorithm algorithm,
                                    const char *name,
-                                   const glm::vec4 &color,
-                                   std::vector<glm::dvec3> controlPoints,
+                                   const acgs::math::Vec4 &color,
+                                   std::vector<acgs::math::DVec3> controlPoints,
                                    int degree = 3,
                                    std::vector<double> weights = {}) {
       acgs::CurveBatchCommand &curve = target.curves.emplace_back();
@@ -2835,20 +2832,20 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
     const AcGePoint3d curveCenter = demoAnchor;
     addCurveDemo(rendering::CurveAlgorithm::Bezier, "BezierCurve",
-                 glm::vec4(0.15f, 1.0f, 0.55f, 1.0f),
+                 acgs::math::Vec4(0.15f, 1.0f, 0.55f, 1.0f),
                  {curveCenter + AcGeVector3d(-240.0, -120.0, 0.0),
                   curveCenter + AcGeVector3d(-80.0, 220.0, 0.0),
                   curveCenter + AcGeVector3d(80.0, -220.0, 0.0),
                   curveCenter + AcGeVector3d(240.0, 120.0, 0.0)});
     addCurveDemo(rendering::CurveAlgorithm::BSpline, "BSplineCurve",
-                 glm::vec4(0.20f, 0.62f, 1.00f, 1.0f),
+                 acgs::math::Vec4(0.20f, 0.62f, 1.00f, 1.0f),
                  {curveCenter + AcGeVector3d(-320.0, -180.0, 0.0),
                   curveCenter + AcGeVector3d(-140.0, 180.0, 0.0),
                   curveCenter + AcGeVector3d(0.0, -140.0, 0.0),
                   curveCenter + AcGeVector3d(140.0, 180.0, 0.0),
                   curveCenter + AcGeVector3d(320.0, -180.0, 0.0)});
     addCurveDemo(rendering::CurveAlgorithm::NURBS, "NurbsCurve",
-                 glm::vec4(0.95f, 0.82f, 0.25f, 1.0f),
+                 acgs::math::Vec4(0.95f, 0.82f, 0.25f, 1.0f),
                  {curveCenter + AcGeVector3d(-280.0, 260.0, 0.0),
                   curveCenter + AcGeVector3d(-110.0, -260.0, 0.0),
                   curveCenter + AcGeVector3d(110.0, 260.0, 0.0),
@@ -2866,7 +2863,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
     curveArc.startAngle = -0.35;
     curveArc.sweep = 1.60;
     curveArc.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
-    curveArc.acgiMaterial.baseColor = glm::vec4(0.92f, 0.35f, 0.72f, 1.0f);
+    curveArc.acgiMaterial.baseColor = acgs::math::Vec4(0.92f, 0.35f, 0.72f, 1.0f);
 
 
   // Imported glTF demo model (GRID_GLTF env / G key): one mesh record per
@@ -2881,7 +2878,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   {
       MeshEntityRecord debugCube;
       debugCube.entity.common.name = "RedDebugCube";
-      debugCube.entity.common.color = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+      debugCube.entity.common.color = acgs::math::Vec4(1.0f, 0.0f, 0.0f, 1.0f);
       debugCube.worldPosition = demoAnchor;
       debugCube.size = 200.0f;
       target.meshes.push_back(std::move(debugCube));
@@ -2897,7 +2894,7 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
       {
         MeshEntityRecord mesh;
         mesh.entity.common.name = meshNames[index];
-        mesh.entity.common.color = glm::vec4(0.8f, 0.7f, 0.9f, 0.65f);
+        mesh.entity.common.color = acgs::math::Vec4(0.8f, 0.7f, 0.9f, 0.65f);
         mesh.worldPosition = solidBase +
             AcGeVector3d((index % 2) * 512.0, (index / 2) * 512.0, 0.0);
         mesh.size = 192.0f;
@@ -2956,9 +2953,9 @@ bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
 static std::map<const acgs::AcGsEntityRange *, std::vector<rendering::FillVertex>>
     g_cadFillVertexCache;
 static std::unordered_map<const acgs::CurveBatchCommand *,
-                          std::vector<glm::dvec3>>
+                          std::vector<acgs::math::DVec3>>
     g_curveSampleCache;
-static std::unordered_map<const MeshEntityRecord *, glm::dvec3>
+static std::unordered_map<const MeshEntityRecord *, acgs::math::DVec3>
     g_curveCenterCache;
 static void invalidateTessellationKeyedCaches()
 {
@@ -2989,52 +2986,52 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
     const acdb::Triangle &triangle = tessellation.geometry.fills[i];
     if (!triangle.common.visible)
       continue;
-    const glm::vec4 fillColor =
+    const acgs::math::Vec4 fillColor =
         acgsView().contrastColor(triangle.common.color.renderColor());
     vertices.push_back(
-        {glm::vec3(triangle.a - tessellation.anchor), fillColor});
+        {acgs::math::Vec3(triangle.a - tessellation.anchor), fillColor});
     vertices.push_back(
-        {glm::vec3(triangle.b - tessellation.anchor), fillColor});
+        {acgs::math::Vec3(triangle.b - tessellation.anchor), fillColor});
     vertices.push_back(
-        {glm::vec3(triangle.c - tessellation.anchor), fillColor});
+        {acgs::math::Vec3(triangle.c - tessellation.anchor), fillColor});
   }
   return vertices;
 }
 
-static void drawVectorPrimitivesDemo(const glm::mat4 &view,
-                                     const glm::mat4 &projection,
-                                     const glm::mat4 &overlayProjection,
-                                     const glm::dvec3 &rebase,
-                                     const glm::vec4 &logDepth,
-                                     const glm::dvec3 &cameraPos,
-                                     const glm::dvec3 &cameraFront,
-                                     const glm::dvec3 &cameraRightD,
-                                     const glm::dvec3 &cameraUpD,
+static void drawVectorPrimitivesDemo(const acgs::math::Mat4 &view,
+                                     const acgs::math::Mat4 &projection,
+                                     const acgs::math::Mat4 &overlayProjection,
+                                     const acgs::math::DVec3 &rebase,
+                                     const acgs::math::Vec4 &logDepth,
+                                     const acgs::math::DVec3 &cameraPos,
+                                     const acgs::math::DVec3 &cameraFront,
+                                     const acgs::math::DVec3 &cameraRightD,
+                                     const acgs::math::DVec3 &cameraUpD,
                                      float pixelSizeWorld,
                                      const std::vector<const VisibilityCandidate *> &visibleCad,
                                      const std::vector<const VisibilityCandidate *> &tinyCad) {
   if (visibleCad.empty() && tinyCad.empty()) return;
 
-  const glm::vec3 camRight = glm::normalize(glm::vec3(cameraRightD));
-  const glm::vec3 camUp = glm::normalize(glm::vec3(cameraUpD));
-  const glm::vec3 camFront = glm::normalize(glm::vec3(cameraFront));
+  const acgs::math::Vec3 camRight = acgs::math::normalize(acgs::math::Vec3(cameraRightD));
+  const acgs::math::Vec3 camUp = acgs::math::normalize(acgs::math::Vec3(cameraUpD));
+  const acgs::math::Vec3 camFront = acgs::math::normalize(acgs::math::Vec3(cameraFront));
   // Visible point impostors are exact screen-space discs.  Use the
   // world-per-pixel value at the point itself so the ID quad has the same
   // projected pixel radius in perspective views, not merely at the camera
   // target.
-  auto pointWorldPerPixel = [&](const glm::dvec3 &worldPoint) {
+  auto pointWorldPerPixel = [&](const acgs::math::DVec3 &worldPoint) {
     if (useOrthoProjection())
       return 2.0 * orbitCam.orthoSize() / currentDrawableHeight();
     const double viewDepth = std::max(1.0e-9,
-        glm::dot(worldPoint - cameraPos, cameraFront));
-    return 2.0 * viewDepth * std::tan(glm::radians(45.0) * 0.5) /
+        acgs::math::dot(worldPoint - cameraPos, cameraFront));
+    return 2.0 * viewDepth * std::tan(acgs::math::radians(45.0) * 0.5) /
            currentDrawableHeight();
   };
 
   const VectorPrimitivesTessellation &tessellation =
       getVectorPrimitivesTessellation();
-  const glm::mat4 cadAnchorView = view * glm::translate(
-      glm::mat4(1.0f), glm::vec3(tessellation.anchor - cameraPos));
+  const acgs::math::Mat4 cadAnchorView = view * acgs::math::translate(
+      acgs::math::Mat4(1.0f), acgs::math::Vec3(tessellation.anchor - cameraPos));
   static acgs::AcGsModel cadDrawList;
   // Keep the geometry vectors' capacity across frames: clear() freed and
   // re-allocated them every frame.
@@ -3055,9 +3052,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
       : rendering::RenderModeFlags{};
-  auto queueGpuSoup = [&](const glm::mat4 &pickProjection, uint32_t objectId,
+  auto queueGpuSoup = [&](const acgs::math::Mat4 &pickProjection, uint32_t objectId,
                           uint8_t occlusionRank,
-                          const glm::vec4 &slabLogDepth = glm::vec4(0.0f)) {
+                          const acgs::math::Vec4 &slabLogDepth = acgs::math::Vec4(0.0f)) {
     gpuPickManager().queueSoupChunks(gpuPickVertices,
                                      view, pickProjection, logDepth,
                                      objectId, gpuPickQueueActive,
@@ -3065,15 +3062,15 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   };
   // Match the centered visible AcGi ribbon and its symmetric edge shader.
   // A one-sided pick quad would offset the ID buffer from the rendered pixels.
-  auto appendPickRibbon = [&](const glm::vec3 &ra, const glm::vec3 &rb,
-                              const glm::vec4 &color, float halfWidth) {
-    const glm::vec3 direction = rb - ra;
-    if (glm::length(direction) < 1.0e-5f)
+  auto appendPickRibbon = [&](const acgs::math::Vec3 &ra, const acgs::math::Vec3 &rb,
+                              const acgs::math::Vec4 &color, float halfWidth) {
+    const acgs::math::Vec3 direction = rb - ra;
+    if (acgs::math::length(direction) < 1.0e-5f)
       return;
     const float minimumHalfWidth =
         pixelSizeWorld > 0.0f ? pixelSizeWorld * 1.0f : 1.0f;
     halfWidth = std::max(halfWidth, minimumHalfWidth);
-    const glm::vec3 side = acgsView().ribbonSide(direction, camFront, halfWidth);
+    const acgs::math::Vec3 side = acgsView().ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -3084,20 +3081,20 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   // CurveBatchCommand is drawn by a centered 1-pixel line strip, unlike the
   // one-sided AcGi ribbon above.  Its ID ribbon must therefore also be
   // centered on the curve, not offset to the rendered line's side.
-  auto appendCenteredPickRibbon = [&](const glm::vec3 &ra,
-                                      const glm::vec3 &rb,
-                                      const glm::vec4 &color) {
-    const glm::vec3 direction = rb - ra;
-    if (glm::length(direction) < 1.0e-5f)
+  auto appendCenteredPickRibbon = [&](const acgs::math::Vec3 &ra,
+                                      const acgs::math::Vec3 &rb,
+                                      const acgs::math::Vec4 &color) {
+    const acgs::math::Vec3 direction = rb - ra;
+    if (acgs::math::length(direction) < 1.0e-5f)
       return;
-    const glm::dvec3 worldMidpoint =
-        cameraPos + glm::dvec3((ra + rb) * 0.5f);
+    const acgs::math::DVec3 worldMidpoint =
+        cameraPos + acgs::math::DVec3((ra + rb) * 0.5f);
     // Hardware AA line strips rasterize wider than their nominal 1-pixel
     // centerline, so the ID ribbon uses the same 2-pixel floor as AcGi
     // stroke ribbons; otherwise the visible curve is easier to see than to
     // pick.
     const float halfWidth = float(pointWorldPerPixel(worldMidpoint));
-    const glm::vec3 side = acgsView().ribbonSide(direction, camFront, halfWidth);
+    const acgs::math::Vec3 side = acgsView().ribbonSide(direction, camFront, halfWidth);
     gpuPickVertices.push_back({ra - side, color});
     gpuPickVertices.push_back({ra + side, color});
     gpuPickVertices.push_back({rb + side, color});
@@ -3105,10 +3102,10 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     gpuPickVertices.push_back({rb + side, color});
     gpuPickVertices.push_back({rb - side, color});
   };
-  auto appendPickPoint = [&](const glm::vec3 &center, float radius,
-                             const glm::vec4 &color) {
-    const glm::vec3 right = camRight * radius;
-    const glm::vec3 up = camUp * radius;
+  auto appendPickPoint = [&](const acgs::math::Vec3 &center, float radius,
+                             const acgs::math::Vec4 &color) {
+    const acgs::math::Vec3 right = camRight * radius;
+    const acgs::math::Vec3 up = camUp * radius;
     gpuPickVertices.push_back({center - right - up, color});
     gpuPickVertices.push_back({center + right - up, color});
     gpuPickVertices.push_back({center + right + up, color});
@@ -3122,7 +3119,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadFill, nullptr, &range});
-    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+    const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
     // Fully transient (the strokes/points convention): the pick id is
     // re-assigned on every registry rebuild, so any id-keyed cache
     // (CPU soup or GPU vertex buffer) grows without bound under the
@@ -3151,11 +3148,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         if (!triangle.common.visible)
           continue;
         gpuPickVertices.push_back(
-            {glm::vec3(triangle.a - tessellation.anchor), idColor});
+            {acgs::math::Vec3(triangle.a - tessellation.anchor), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(triangle.b - tessellation.anchor), idColor});
+            {acgs::math::Vec3(triangle.b - tessellation.anchor), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(triangle.c - tessellation.anchor), idColor});
+            {acgs::math::Vec3(triangle.c - tessellation.anchor), idColor});
       }
       if (!gpuPickVertices.empty())
       {
@@ -3173,7 +3170,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadStroke, nullptr, &range});
-    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+    const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     CadPairedBandPoints band;
     if (cadPairedBandPoints(range, tess, band))
@@ -3186,17 +3183,17 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         const size_t next =
             (segment + 1) % band.left->points.size();
         gpuPickVertices.push_back(
-            {glm::vec3(band.left->points[segment] - cameraPos), idColor});
+            {acgs::math::Vec3(band.left->points[segment] - cameraPos), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(band.right->points[segment] - cameraPos), idColor});
+            {acgs::math::Vec3(band.right->points[segment] - cameraPos), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(band.right->points[next] - cameraPos), idColor});
+            {acgs::math::Vec3(band.right->points[next] - cameraPos), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(band.left->points[segment] - cameraPos), idColor});
+            {acgs::math::Vec3(band.left->points[segment] - cameraPos), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(band.right->points[next] - cameraPos), idColor});
+            {acgs::math::Vec3(band.right->points[next] - cameraPos), idColor});
         gpuPickVertices.push_back(
-            {glm::vec3(band.left->points[next] - cameraPos), idColor});
+            {acgs::math::Vec3(band.left->points[next] - cameraPos), idColor});
       }
     }
     else
@@ -3213,15 +3210,15 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       {
         // The scene ID pass and the 1x1 pick pass both hardware-clip at
         // the overlay slab, so clipping the soup there is pixel-exact.
-        glm::dvec3 clippedStart, clippedEnd;
+        acgs::math::DVec3 clippedStart, clippedEnd;
         if (!acgsView().clipStrokeSegment(
                 stroke.points[segment],
                 stroke.points[(segment + 1) % count],
                 clippedStart, clippedEnd, stroke.semiInfinite))
           continue;
         appendPickRibbon(
-            glm::vec3(clippedStart - cameraPos),
-            glm::vec3(clippedEnd - cameraPos),
+            acgs::math::Vec3(clippedStart - cameraPos),
+            acgs::math::Vec3(clippedEnd - cameraPos),
             idColor, halfWidth);
       }
     }
@@ -3233,7 +3230,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadPoint, nullptr, &range});
-    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+    const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     double pickDepthMin = 0.0;
     double pickDepthMax = 0.0;
@@ -3255,11 +3252,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
                                  : std::max(0.5f * float(pointWorldPerPixel(
                                                  point.location)),
                                             0.01f);
-      const glm::vec3 discCenter =
-          glm::vec3(point.location - cameraPos) - camFront * pickBias;
+      const acgs::math::Vec3 discCenter =
+          acgs::math::Vec3(point.location - cameraPos) - camFront * pickBias;
       appendPickPoint(discCenter, radius, idColor);
-      const double discDepth = glm::dot(glm::dvec3(discCenter),
-                                        glm::dvec3(camFront));
+      const double discDepth = acgs::math::dot(acgs::math::DVec3(discCenter),
+                                        acgs::math::DVec3(camFront));
       pickDepthMin = pickDepthMin == 0.0
                          ? discDepth
                          : std::min(pickDepthMin, discDepth);
@@ -3277,7 +3274,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // draws effectively always-on-top through the overlay projection):
     // give the discs their own slab around their depths (rank 3 = no
     // content-slab discard, no depth-test surprise).
-    const glm::vec4 pointSlab(
+    const acgs::math::Vec4 pointSlab(
         1.0f, float(std::max(1.0, pickDepthMin * 0.5)),
         float(std::max(2.0, pickDepthMax * 2.0)), 0.0f);
     queueGpuSoup(overlayProjection, objectId, 3, pointSlab);
@@ -3287,7 +3284,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       return;
     const uint32_t objectId = registerGpuPickEntity(
         {VisibilityKind::CadCurve, nullptr, nullptr, candidate.curve});
-    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+    const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     // The sampled polyline is camera-independent and the curve is immutable
     // once tessellated: cache it per curve pointer (cleared when the
@@ -3297,11 +3294,11 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         g_curveSampleCache.try_emplace(candidate.curve);
     if (inserted)
       sampleIt->second = acgs::AcGsView::sampleCurveBatch(*candidate.curve);
-    const std::vector<glm::dvec3> &points = sampleIt->second;
+    const std::vector<acgs::math::DVec3> &points = sampleIt->second;
     for (size_t i = 0; i + 1 < points.size(); ++i)
       appendCenteredPickRibbon(
-          glm::vec3(points[i] - cameraPos),
-          glm::vec3(points[i + 1] - cameraPos), idColor);
+          acgs::math::Vec3(points[i] - cameraPos),
+          acgs::math::Vec3(points[i + 1] - cameraPos), idColor);
     queueGpuSoup(overlayProjection, objectId, linePickOcclusionRank);
   };
   auto queueTinyCadPoint = [&](const VisibilityCandidate &candidate) {
@@ -3310,7 +3307,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     const acgs::AcGsEntityRange &range = *candidate.cadRange;
     const uint32_t objectId = registerGpuPickEntity(
         {candidate.kind, nullptr, &range});
-    const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+    const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
     gpuPickVertices.clear();
     const float minimumRadius =
         float(3.0 * pointWorldPerPixel(candidate.center));
@@ -3330,7 +3327,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         outlineEntity->cadRange == candidate.cadRange)
     {
       const double pointDepth =
-          glm::dot(candidate.center - cameraPos, cameraFront);
+          acgs::math::dot(candidate.center - cameraPos, cameraFront);
       std::printf("[POINT_PICK] tiny selected point queued: verts=%zu "
                   "viewDepth=%.1f slab=[%.1f, %.1f]\n",
                   gpuPickVertices.size(), pointDepth, logDepth.y,
@@ -3340,16 +3337,16 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // Screen-overlay pickable: own slab + rank 3 (mirrors the visible
     // impostor's effective always-on-top semantics).
     const double tinyDepth =
-        glm::dot(glm::dvec3(candidate.center - cameraPos),
-                 glm::dvec3(camFront));
-    const glm::vec4 tinySlab(
+        acgs::math::dot(acgs::math::DVec3(candidate.center - cameraPos),
+                 acgs::math::DVec3(camFront));
+    const acgs::math::Vec4 tinySlab(
         1.0f, float(std::max(1.0, tinyDepth * 0.5)),
         float(std::max(2.0, tinyDepth * 2.0)), 0.0f);
     const float tinyRadius = std::max(pointRadius, minimumRadius);
     const bool giantProbe =
         pickDebugEnabled() && outlineEntity.has_value() &&
         outlineEntity->cadRange == candidate.cadRange;
-    appendPickPoint(glm::vec3(candidate.center - cameraPos) -
+    appendPickPoint(acgs::math::Vec3(candidate.center - cameraPos) -
                         camFront * pickBias,
                     giantProbe ? 200.0f * tinyRadius : tinyRadius, idColor);
     queueGpuSoup(overlayProjection, objectId, 3, tinySlab);
@@ -3375,8 +3372,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
   // entity's primitives draw in their OWN passes with the highlight color —
   // same geometry, same depth, same blending — so the highlight's depth
   // relationship is identical to the original by construction.
-  glm::dvec2 selectedStrokeRange{SIZE_MAX, 0}; // x=begin, y=count
-  glm::dvec2 selectedPointRange{SIZE_MAX, 0};
+  acgs::math::DVec2 selectedStrokeRange{SIZE_MAX, 0}; // x=begin, y=count
+  acgs::math::DVec2 selectedPointRange{SIZE_MAX, 0};
   const acgs::CurveBatchCommand *selectedCurve = nullptr;
   const acgs::AcGsEntityRange *selectedFillRange = nullptr;
   auto entitySelected = [&](const VisibilityCandidate *candidate) {
@@ -3441,7 +3438,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       // highlight blends exactly like the original).
       acdb::Stroke recolored = stroke;
       recolored.common.color =
-          glm::vec4(kSelectionHighlightRGB, stroke.common.color.alpha());
+          acgs::math::Vec4(kSelectionHighlightRGB, stroke.common.color.alpha());
       cadDrawList.geometry().strokes.push_back(std::move(recolored));
       continue;
     }
@@ -3466,7 +3463,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       {
         visibleFillVertices.push_back(
             {vertex.position,
-             glm::vec4(kSelectionHighlightRGB, vertex.color.a)});
+             acgs::math::Vec4(kSelectionHighlightRGB, vertex.color.a)});
       }
       continue;
     }
@@ -3495,7 +3492,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       return acgsView().contrastColor(
           triangle.common.color.renderColor());
     }
-    return glm::vec4(0.0f, 0.0f, 0.0f, -1.0f); // alpha<0: no visible color
+    return acgs::math::Vec4(0.0f, 0.0f, 0.0f, -1.0f); // alpha<0: no visible color
   };
   const rendering::RenderModeFlags fillRenderFlags = acgs::acgsGetManager()->deviceReady()
       ? acgs::acgsGetManager()->deviceRenderModeFlags()
@@ -3510,9 +3507,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         continue;
       const acgs::AcGsEntityRange &range = *candidate->cadRange;
       // The selected fill's boundary ribbons recolor too.
-      const glm::vec4 boundaryColor =
+      const acgs::math::Vec4 boundaryColor =
           candidate->cadRange == selectedFillRange
-              ? glm::vec4(kSelectionHighlightRGB, 1.0f)
+              ? acgs::math::Vec4(kSelectionHighlightRGB, 1.0f)
               : fillRangeColor(range);
       if (boundaryColor.a < 0.0f)
         continue;
@@ -3531,7 +3528,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         // Selected curve: recolor the batch copy (keep alpha).
         acgs::CurveBatchCommand &recolored = cadDrawList.addCurveBatch();
         recolored = *candidate->curve;
-        recolored.acgiMaterial.baseColor = glm::vec4(
+        recolored.acgiMaterial.baseColor = acgs::math::Vec4(
             kSelectionHighlightRGB, candidate->curve->acgiMaterial.baseColor.a);
       }
       else
@@ -3552,7 +3549,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     {
       acdb::TessellatedPoint recolored = point;
       recolored.common.color =
-          glm::vec4(kSelectionHighlightRGB, point.common.color.alpha());
+          acgs::math::Vec4(kSelectionHighlightRGB, point.common.color.alpha());
       cadDrawList.geometry().points.push_back(std::move(recolored));
       continue;
     }
@@ -3567,8 +3564,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       continue;
     const bool selected = entitySelected(candidate);
     appendScenePoint(cadDrawList, candidate->center,
-                     selected ? glm::vec3(kSelectionHighlightRGB)
-                              : glm::vec3(candidate->overlayColor),
+                     selected ? acgs::math::Vec3(kSelectionHighlightRGB)
+                              : acgs::math::Vec3(candidate->overlayColor),
                      double(candidate->overlayPointSize));
   }
 
@@ -3663,9 +3660,9 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     // chained unique-edge strokes (selected recolor included).
     if (mesh.staticMesh && !fillRenderFlags.meshFill)
     {
-      const glm::vec4 wireColor =
+      const acgs::math::Vec4 wireColor =
           meshSelected
-              ? glm::vec4(kSelectionHighlightRGB,
+              ? acgs::math::Vec4(kSelectionHighlightRGB,
                           meshEntityColor(mesh).a)
               : meshEntityColor(mesh);
       for (const std::vector<AcGePoint3d> &chain : gltfWireframeChains(mesh))
@@ -3675,7 +3672,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
         stroke.common.color = wireColor;
         stroke.points.reserve(chain.size());
         for (const AcGePoint3d &point : chain)
-          stroke.points.emplace_back(glm::dvec3(point));
+          stroke.points.emplace_back(acgs::math::DVec3(point));
         meshDrawList.geometry().strokes.push_back(std::move(stroke));
       }
     }
@@ -3710,16 +3707,16 @@ static bool cadAlgorithmDemoEnabled()
 
 
 
-void drawLargeCoordinateObjects(const glm::mat4 &view,
-                                const glm::mat4 &projection,
-                                const glm::dvec3 &rebaseOrigin,
+void drawLargeCoordinateObjects(const acgs::math::Mat4 &view,
+                                const acgs::math::Mat4 &projection,
+                                const acgs::math::DVec3 &rebaseOrigin,
                                 const std::vector<const LargeCoordinateObject *> &drawOrder,
-                                const glm::vec4 &logDepth,
+                                const acgs::math::Vec4 &logDepth,
                                 float pixelSizeWorld = 0.0f,
                                 float edgeSoftness = 0.15f)
 {
-  const glm::dvec3 cameraPos(orbitCam.Position);
-  const glm::dvec3 &cameraFront = orbitCam.Front;
+  const acgs::math::DVec3 cameraPos(orbitCam.Position);
+  const acgs::math::DVec3 &cameraFront = orbitCam.Front;
 
   // Depth values feed both sort comparisons, so cache them once per frame.
   static std::vector<std::pair<double, const LargeCoordinateObject *>>
@@ -3729,7 +3726,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   for (const LargeCoordinateObject *object : drawOrder)
   {
     sortedDraws.emplace_back(
-        glm::dot(glm::dvec3(object->worldPosition - AcGePoint3d(cameraPos)),
+        acgs::math::dot(acgs::math::DVec3(object->worldPosition - AcGePoint3d(cameraPos)),
                  cameraFront),
         object);
   }
@@ -3740,19 +3737,19 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
 
   rendering::RealisticLightsRenderData realisticLights;
   realisticLights.pointLights[0].position =
-      glm::vec3(glm::dvec3(LARGE_COORDINATE_BASE_POINT +
+      acgs::math::Vec3(acgs::math::DVec3(LARGE_COORDINATE_BASE_POINT +
                            LARGE_COORDINATE_DETAIL_OFFSET +
                            AcGeVector3d(-1024.0, 640.0, 512.0)) -
                 cameraPos);
   realisticLights.pointLights[0].radius = 1024.0f;
-  realisticLights.pointLights[0].color = glm::vec3(1.0f, 0.88f, 0.72f);
+  realisticLights.pointLights[0].color = acgs::math::Vec3(1.0f, 0.88f, 0.72f);
   realisticLights.pointLights[1].position =
-      glm::vec3(glm::dvec3(LARGE_COORDINATE_BASE_POINT +
+      acgs::math::Vec3(acgs::math::DVec3(LARGE_COORDINATE_BASE_POINT +
                            LARGE_COORDINATE_DETAIL_OFFSET +
                            AcGeVector3d(1024.0, 384.0, -512.0)) -
                 cameraPos);
   realisticLights.pointLights[1].radius = 1024.0f;
-  realisticLights.pointLights[1].color = glm::vec3(0.52f, 0.74f, 1.0f);
+  realisticLights.pointLights[1].color = acgs::math::Vec3(0.52f, 0.74f, 1.0f);
   realisticLights.pointLightCount = 2;
   if (cadAlgorithmDemoEnabled())
   {
@@ -3808,7 +3805,7 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
   {
     rendering::MeshType mesh;
     bool realistic;
-    glm::vec4 material;
+    acgs::math::Vec4 material;
     float opacity;
     std::vector<rendering::MeshInstance> instances;
   };
@@ -3835,10 +3832,10 @@ void drawLargeCoordinateObjects(const glm::mat4 &view,
             outlineEntity->mesh == object;
 
         const bool realistic = object->realistic();
-        const glm::vec4 material = meshEntityRenderMaterial(*object);
-        const glm::vec4 color =
+        const acgs::math::Vec4 material = meshEntityRenderMaterial(*object);
+        const acgs::math::Vec4 color =
             meshSelected
-                ? glm::vec4(kSelectionHighlightRGB, meshEntityColor(*object).a)
+                ? acgs::math::Vec4(kSelectionHighlightRGB, meshEntityColor(*object).a)
                 : meshEntityColor(*object);
 
         {
@@ -3915,7 +3912,7 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
         rendering::MeshType::Sphere, rendering::MeshType::Cone,
         rendering::MeshType::Torus,  rendering::MeshType::Cube,
     };
-    static constexpr glm::vec3 kPalette[] = {
+    static constexpr acgs::math::Vec3 kPalette[] = {
         {0.43f, 0.91f, 0.98f}, {1.00f, 0.58f, 0.25f},
         {0.55f, 0.85f, 0.45f}, {0.95f, 0.95f, 0.95f},
         {0.90f, 0.45f, 0.75f}, {0.98f, 0.90f, 0.35f},
@@ -3928,9 +3925,9 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
       LargeCoordinateObject object;
       object.worldPosition =
           LARGE_COORDINATE_BASE_POINT +
-          glm::dvec3(col * kSpacing - centerOffset, kObjectSize * 0.5,
+          acgs::math::DVec3(col * kSpacing - centerOffset, kObjectSize * 0.5,
                      row * kSpacing - centerOffset - 4096.0);
-      object.entity.common.color = glm::vec4(kPalette[i % 6], 0.45f);
+      object.entity.common.color = acgs::math::Vec4(kPalette[i % 6], 0.45f);
       object.size = static_cast<float>(kObjectSize);
       object.mesh = kMeshCycle[i % 4];
       object.entity.style = realisticMeshEnabled() && (i % 2) != 0
@@ -3949,16 +3946,16 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
 
 struct WorldAabb
 {
-  glm::dvec3 min;
-  glm::dvec3 max;
+  acgs::math::DVec3 min;
+  acgs::math::DVec3 max;
   bool valid = false;
 };
 
-void expandWorldAabb(WorldAabb &bounds, const glm::dvec3 &center,
-                     const glm::dvec3 &halfExtent)
+void expandWorldAabb(WorldAabb &bounds, const acgs::math::DVec3 &center,
+                     const acgs::math::DVec3 &halfExtent)
 {
-  const glm::dvec3 minimum = center - halfExtent;
-  const glm::dvec3 maximum = center + halfExtent;
+  const acgs::math::DVec3 minimum = center - halfExtent;
+  const acgs::math::DVec3 maximum = center + halfExtent;
   if (!bounds.valid)
   {
     bounds.min = minimum;
@@ -3967,8 +3964,8 @@ void expandWorldAabb(WorldAabb &bounds, const glm::dvec3 &center,
     return;
   }
 
-  bounds.min = glm::min(bounds.min, minimum);
-  bounds.max = glm::max(bounds.max, maximum);
+  bounds.min = acgs::math::min(bounds.min, minimum);
+  bounds.max = acgs::math::max(bounds.max, maximum);
 }
 
 void expandCadTessellationBounds(WorldAabb &bounds,
@@ -3983,32 +3980,32 @@ void expandCadTessellationBounds(WorldAabb &bounds,
       // endpoint; their unbounded geometry must not inflate scene bounds.
       if (stroke.semiInfinite)
         continue;
-      for (const glm::dvec3 &point : stroke.points)
-        expandWorldAabb(bounds, point, glm::dvec3(0.0));
+      for (const acgs::math::DVec3 &point : stroke.points)
+        expandWorldAabb(bounds, point, acgs::math::DVec3(0.0));
     }
   }
   for (const acdb::Triangle &triangle : tess.geometry.fills)
   {
-    expandWorldAabb(bounds, triangle.a, glm::dvec3(0.0));
-    expandWorldAabb(bounds, triangle.b, glm::dvec3(0.0));
-    expandWorldAabb(bounds, triangle.c, glm::dvec3(0.0));
+    expandWorldAabb(bounds, triangle.a, acgs::math::DVec3(0.0));
+    expandWorldAabb(bounds, triangle.b, acgs::math::DVec3(0.0));
+    expandWorldAabb(bounds, triangle.c, acgs::math::DVec3(0.0));
   }
   for (const acdb::TessellatedPoint &point : tess.geometry.points)
-    expandWorldAabb(bounds, point.location, glm::dvec3(0.0));
+    expandWorldAabb(bounds, point.location, acgs::math::DVec3(0.0));
   for (const acgs::CurveBatchCommand &curve : tess.curves)
   {
     if (curve.algorithm == rendering::CurveAlgorithm::Arc)
     {
-      const double radius = glm::max(curve.radius, 0.0);
-      expandWorldAabb(bounds, curve.center, glm::dvec3(radius));
+      const double radius = acgs::math::max(curve.radius, 0.0);
+      expandWorldAabb(bounds, curve.center, acgs::math::DVec3(radius));
       continue;
     }
-    for (const glm::dvec3 &point : curve.controlPoints)
-      expandWorldAabb(bounds, point, glm::dvec3(0.0));
+    for (const acgs::math::DVec3 &point : curve.controlPoints)
+      expandWorldAabb(bounds, point, acgs::math::DVec3(0.0));
   }
   for (const MeshEntityRecord &mesh : tess.meshes)
     expandWorldAabb(bounds, mesh.worldPosition,
-                    glm::dvec3(mesh.size * 0.5));
+                    acgs::math::DVec3(mesh.size * 0.5));
 }
 
 // Immutable scene bounds are computed once; the per-frame pass only converts
@@ -4018,7 +4015,7 @@ static WorldAabb stressFieldBounds()
   WorldAabb bounds;
   expandCadTessellationBounds(bounds, getVectorPrimitivesTessellation());
   for (const LargeCoordinateObject &object : getStressObjects())
-    expandWorldAabb(bounds, object.worldPosition, glm::dvec3(object.size * 0.5));
+    expandWorldAabb(bounds, object.worldPosition, acgs::math::DVec3(object.size * 0.5));
 
   // Text entities must join the content bounds: their glyph quads are
   // drawn with the main ortho projection, so the depth slab has to cover
@@ -4030,7 +4027,7 @@ static WorldAabb stressFieldBounds()
     const double extent =
         double(request.message.size()) * request.height + request.height;
     expandWorldAabb(bounds, request.position,
-                    glm::dvec3(extent, extent, request.height * 2.0));
+                    acgs::math::DVec3(extent, extent, request.height * 2.0));
   }
   return bounds;
 }
@@ -4042,7 +4039,7 @@ const WorldAabb &immutableObjectBounds()
     for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
     {
       expandWorldAabb(result, object.worldPosition,
-                      glm::dvec3(object.size * 0.5));
+                      acgs::math::DVec3(object.size * 0.5));
     }
     return result;
   }();
@@ -4056,8 +4053,8 @@ const WorldAabb &immutableSceneBounds()
     WorldAabb result = immutableObjectBounds();
 
     // The reference line is always drawn and may connect distant clusters.
-    expandWorldAabb(result, glm::dvec3(0.0), glm::dvec3(0.0));
-    expandWorldAabb(result, LARGE_COORDINATE_BASE_POINT, glm::dvec3(0.0));
+    expandWorldAabb(result, acgs::math::DVec3(0.0), acgs::math::DVec3(0.0));
+    expandWorldAabb(result, LARGE_COORDINATE_BASE_POINT, acgs::math::DVec3(0.0));
     return result;
   }();
   return bounds;
@@ -4112,7 +4109,7 @@ static void fitCameraToImportedEntities(
     const double extent =
         double(request.message.size() + 1) * request.height;
     expandWorldAabb(bounds, request.position,
-                    glm::dvec3(extent, extent, request.height * 2.0));
+                    acgs::math::DVec3(extent, extent, request.height * 2.0));
   }
   requests.resize(textRequestStart);
 
@@ -4133,7 +4130,7 @@ void fitCameraToStressField()
   const WorldAabb bounds = stressFieldBounds();
   if (!bounds.valid)
   {
-    const glm::dvec3 detailCenter =
+    const acgs::math::DVec3 detailCenter =
         LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
     acgsView().focusOn(detailCenter, 6000.0);
     return;
@@ -4143,7 +4140,7 @@ void fitCameraToStressField()
 
 void printLargeCoordinateValidation()
 {
-  const glm::dvec3 detailCenter =
+  const acgs::math::DVec3 detailCenter =
       LARGE_COORDINATE_BASE_POINT + LARGE_COORDINATE_DETAIL_OFFSET;
   const std::array<double, 4> microOffsets{-288.0, -96.0, 96.0, 288.0};
   const float floatReferenceX = static_cast<float>(detailCenter.x);
@@ -4283,10 +4280,10 @@ bool lineIntersectsNdcSquare(const AcGeVector3d &line)
   return minValue <= 0.0f && maxValue >= 0.0f;
 }
 
-glm::vec3 anchoredNdcLine(const AcGeVector3d &line)
+acgs::math::Vec3 anchoredNdcLine(const AcGeVector3d &line)
 {
   if (!lineIntersectsNdcSquare(line))
-    return glm::vec3(float(line.x), float(line.y), float(line.z));
+    return acgs::math::Vec3(float(line.x), float(line.y), float(line.z));
 
   // Re-anchor the infinite line at the midpoint of its segment inside the
   // NDC square.  The original constant can still contain a large world
@@ -4316,13 +4313,13 @@ glm::vec3 anchoredNdcLine(const AcGeVector3d &line)
     addAnchor((-line.z - line.y) / line.x, 1.0);
   }
   if (anchorCount == 0)
-    return glm::vec3(float(line.x), float(line.y), float(line.z));
+    return acgs::math::Vec3(float(line.x), float(line.y), float(line.z));
 
   AcGeVector2d anchor(0.0, 0.0);
   for (int index = 0; index < anchorCount; ++index)
     anchor += anchors[index].asVector() / static_cast<double>(anchorCount);
 
-  return glm::vec3(float(line.x), float(line.y),
+  return acgs::math::Vec3(float(line.x), float(line.y),
                    float(-(line.x * anchor.x + line.y * anchor.y)));
 }
 
@@ -4339,20 +4336,20 @@ struct CameraSpaceAabb
 // The exact camera-space bounds of an axis-aligned box.  The support radius
 // along each camera basis vector is dot(abs(basis), halfExtent); summing all
 // three world-axis contributions is required for a rotated camera basis.
-CameraSpaceAabb cameraAabbBounds(const glm::dvec3 &worldCenter,
-                                 const glm::dvec3 &halfExtent,
-                                 const glm::dvec3 &cameraPosition,
-                                 const glm::dvec3 &cameraRight,
-                                 const glm::dvec3 &cameraUp,
-                                 const glm::dvec3 &cameraFront)
+CameraSpaceAabb cameraAabbBounds(const acgs::math::DVec3 &worldCenter,
+                                 const acgs::math::DVec3 &halfExtent,
+                                 const acgs::math::DVec3 &cameraPosition,
+                                 const acgs::math::DVec3 &cameraRight,
+                                 const acgs::math::DVec3 &cameraUp,
+                                 const acgs::math::DVec3 &cameraFront)
 {
-  const glm::dvec3 delta = worldCenter - cameraPosition;
-  const double rightRadius = glm::dot(glm::abs(cameraRight), halfExtent);
-  const double upRadius = glm::dot(glm::abs(cameraUp), halfExtent);
-  const double frontRadius = glm::dot(glm::abs(cameraFront), halfExtent);
-  const double centerX = glm::dot(delta, cameraRight);
-  const double centerY = glm::dot(delta, cameraUp);
-  const double centerDepth = glm::dot(delta, cameraFront);
+  const acgs::math::DVec3 delta = worldCenter - cameraPosition;
+  const double rightRadius = acgs::math::dot(acgs::math::abs(cameraRight), halfExtent);
+  const double upRadius = acgs::math::dot(acgs::math::abs(cameraUp), halfExtent);
+  const double frontRadius = acgs::math::dot(acgs::math::abs(cameraFront), halfExtent);
+  const double centerX = acgs::math::dot(delta, cameraRight);
+  const double centerY = acgs::math::dot(delta, cameraUp);
+  const double centerDepth = acgs::math::dot(delta, cameraFront);
 
   return {centerX - rightRadius, centerX + rightRadius,
           centerY - upRadius,      centerY + upRadius,
@@ -4371,13 +4368,13 @@ bool aabbIntersectsOrthoViewport(const CameraSpaceAabb &bounds,
 using WorldAabb2 = WorldAabb;
 
 CameraSpaceAabb cameraAabbBounds(const WorldAabb2 &worldBounds,
-                                 const glm::dvec3 &cameraPosition,
-                                 const glm::dvec3 &cameraRight,
-                                 const glm::dvec3 &cameraUp,
-                                 const glm::dvec3 &cameraFront)
+                                 const acgs::math::DVec3 &cameraPosition,
+                                 const acgs::math::DVec3 &cameraRight,
+                                 const acgs::math::DVec3 &cameraUp,
+                                 const acgs::math::DVec3 &cameraFront)
 {
-    const glm::dvec3 center = (worldBounds.min + worldBounds.max) * 0.5;
-    const glm::dvec3 halfExtent = (worldBounds.max - worldBounds.min) * 0.5;
+    const acgs::math::DVec3 center = (worldBounds.min + worldBounds.max) * 0.5;
+    const acgs::math::DVec3 halfExtent = (worldBounds.max - worldBounds.min) * 0.5;
     return cameraAabbBounds(center, halfExtent, cameraPosition, cameraRight,
                             cameraUp, cameraFront);
 }
@@ -4429,10 +4426,10 @@ public:
         nodes.reserve(bvh_.nodes().size());
         for (const ge::AcGeBvhNode &node : bvh_.nodes())
         {
-            nodes.push_back({WorldAabb2{glm::dvec3(node.bounds.min.x,
+            nodes.push_back({WorldAabb2{acgs::math::DVec3(node.bounds.min.x,
                                                     node.bounds.min.y,
                                                     node.bounds.min.z),
-                                        glm::dvec3(node.bounds.max.x,
+                                        acgs::math::DVec3(node.bounds.max.x,
                                                    node.bounds.max.y,
                                                    node.bounds.max.z)},
                              node.leftChild, node.rightChild, node.begin,
@@ -4487,12 +4484,12 @@ public:
 
 protected:
     virtual WorldAabb2 objectBounds(const ObjectT &object) const = 0;
-    virtual glm::dvec3 objectCentroid(const ObjectT &object) const = 0;
+    virtual acgs::math::DVec3 objectCentroid(const ObjectT &object) const = 0;
 
 private:
     static WorldAabb2 mergeBounds(const WorldAabb2 &a, const WorldAabb2 &b)
     {
-        return {glm::min(a.min, b.min), glm::max(a.max, b.max)};
+        return {acgs::math::min(a.min, b.min), acgs::math::max(a.max, b.max)};
     }
 
 
@@ -4511,12 +4508,12 @@ class SceneObjectBvh final : public MedianSplitBvh<LargeCoordinateObject>
 protected:
     WorldAabb2 objectBounds(const LargeCoordinateObject &object) const override
     {
-        const glm::dvec3 halfExtent(object.size * 0.5);
+        const acgs::math::DVec3 halfExtent(object.size * 0.5);
         return {object.worldPosition - halfExtent,
                 object.worldPosition + halfExtent};
     }
 
-    glm::dvec3 objectCentroid(const LargeCoordinateObject &object) const override
+    acgs::math::DVec3 objectCentroid(const LargeCoordinateObject &object) const override
     {
         return object.worldPosition;
     }
@@ -4677,22 +4674,22 @@ VisibilityCandidate makeCurveCandidate(const acgs::CurveBatchCommand &curve)
     candidate.overlayColor = acgsView().contrastColor(curve.acgiMaterial.baseColor);
     candidate.overlayPointSize = 2.0f;
 
-    const std::vector<glm::dvec3> points = acgs::AcGsView::sampleCurveBatch(curve);
+    const std::vector<acgs::math::DVec3> points = acgs::AcGsView::sampleCurveBatch(curve);
     if (points.empty())
         return candidate;
 
-    glm::dvec3 minimum = points.front();
-    glm::dvec3 maximum = points.front();
-    for (const glm::dvec3 &point : points)
+    acgs::math::DVec3 minimum = points.front();
+    acgs::math::DVec3 maximum = points.front();
+    for (const acgs::math::DVec3 &point : points)
     {
-        minimum = glm::min(minimum, point);
-        maximum = glm::max(maximum, point);
+        minimum = acgs::math::min(minimum, point);
+        maximum = acgs::math::max(maximum, point);
     }
 
     candidate.min = minimum;
     candidate.max = maximum;
     candidate.center = (minimum + maximum) * 0.5;
-    candidate.lodSize = glm::length(maximum - minimum);
+    candidate.lodSize = acgs::math::length(maximum - minimum);
     return candidate;
 }
 
@@ -4709,7 +4706,7 @@ protected:
         return {candidate.min, candidate.max};
     }
 
-    glm::dvec3 objectCentroid(const VisibilityCandidate &candidate) const override
+    acgs::math::DVec3 objectCentroid(const VisibilityCandidate &candidate) const override
     {
         return candidate.center;
     }
@@ -5138,10 +5135,10 @@ bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
 struct UnifiedVisibilityQuery
 {
   bool isOrtho = false;
-  glm::dvec3 cameraPos{0.0};
-  glm::dvec3 right{1.0, 0.0, 0.0};
-  glm::dvec3 up{0.0, 1.0, 0.0};
-  glm::dvec3 front{0.0, 0.0, -1.0};
+  acgs::math::DVec3 cameraPos{0.0};
+  acgs::math::DVec3 right{1.0, 0.0, 0.0};
+  acgs::math::DVec3 up{0.0, 1.0, 0.0};
+  acgs::math::DVec3 front{0.0, 0.0, -1.0};
   double halfWidth = 1.0;
   double halfHeight = 1.0;
   double nearDepth = 0.05;
@@ -5152,8 +5149,8 @@ struct UnifiedVisibilityQuery
   double minPixelExtent = 0.1;
 
   static UnifiedVisibilityQuery makeOrtho(
-      const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-      const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
+      const acgs::math::DVec3 &cameraPosition, const acgs::math::DVec3 &cameraRight,
+      const acgs::math::DVec3 &cameraUp, const acgs::math::DVec3 &cameraFront,
       double halfWidthValue, double halfHeightValue, double pixelsHigh)
   {
     return UnifiedVisibilityQuery{
@@ -5163,8 +5160,8 @@ struct UnifiedVisibilityQuery
   }
 
   static UnifiedVisibilityQuery makePerspective(
-      const glm::dvec3 &cameraPosition, const glm::dvec3 &cameraRight,
-      const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront,
+      const acgs::math::DVec3 &cameraPosition, const acgs::math::DVec3 &cameraRight,
+      const acgs::math::DVec3 &cameraUp, const acgs::math::DVec3 &cameraFront,
       double tanHalfV, double tanHalfH, double pixelsHigh,
       double nearPlane, double farPlane)
   {
@@ -5176,10 +5173,10 @@ struct UnifiedVisibilityQuery
 
   CameraSpaceAabb cameraAabb(const VisibilityCandidate &candidate) const
   {
-    const glm::dvec3 center = (candidate.min + candidate.max) * 0.5;
-    const glm::dvec3 halfExtent =
-        glm::max((candidate.max - candidate.min) * 0.5,
-                 glm::dvec3(0.5e-3));
+    const acgs::math::DVec3 center = (candidate.min + candidate.max) * 0.5;
+    const acgs::math::DVec3 halfExtent =
+        acgs::math::max((candidate.max - candidate.min) * 0.5,
+                 acgs::math::DVec3(0.5e-3));
     return cameraAabbBounds(center, halfExtent, cameraPos, right, up, front);
   }
 
@@ -5198,7 +5195,7 @@ struct UnifiedVisibilityQuery
     const CameraSpaceAabb bounds = cameraAabb(candidate);
     const double worldSize = candidate.lodSize > 0.0
                                  ? candidate.lodSize
-                                 : glm::length(candidate.max - candidate.min);
+                                 : acgs::math::length(candidate.max - candidate.min);
     if (isOrtho)
       return worldSize * drawableHeight / (2.0 * halfHeight);
 
@@ -5238,7 +5235,7 @@ UnifiedVisibilityQuery makePickingVisibilityQuery()
 {
   const double aspect = (double)currentDrawableWidth() /
                         (double)currentDrawableHeight();
-  const glm::dvec3 cameraPosition(orbitCam.Position);
+  const acgs::math::DVec3 cameraPosition(orbitCam.Position);
   if (useOrthoProjection())
   {
     return UnifiedVisibilityQuery::makeOrtho(
@@ -5247,7 +5244,7 @@ UnifiedVisibilityQuery makePickingVisibilityQuery()
         (double)currentDrawableHeight());
   }
 
-  const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
+  const double tanHalfVertical = std::tan(acgs::math::radians(45.0) * 0.5);
   return UnifiedVisibilityQuery::makePerspective(
       cameraPosition, orbitCam.Right, orbitCam.Up, orbitCam.Front,
       tanHalfVertical, tanHalfVertical * aspect,
@@ -5419,7 +5416,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
     {
         if (!meshEntityVisible(*object))
             continue;
-        const glm::dvec3 halfExtent(object->size * 0.5);
+        const acgs::math::DVec3 halfExtent(object->size * 0.5);
         const WorldAabb2 objBounds{object->worldPosition - halfExtent,
                                    object->worldPosition + halfExtent};
         double hitDepth = 0.0;
@@ -5554,11 +5551,11 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                 {
                     if (!candidate.curve)
                         break;
-                    const std::vector<glm::dvec3> sampledPoints =
+                    const std::vector<acgs::math::DVec3> sampledPoints =
                         acgs::AcGsView::sampleCurveBatch(*candidate.curve);
                     std::vector<AcGePoint3d> points;
                     points.reserve(sampledPoints.size());
-                    for (const glm::dvec3 &point : sampledPoints)
+                    for (const acgs::math::DVec3 &point : sampledPoints)
                         points.emplace_back(point);
                     for (size_t i = 0; i + 1 < points.size(); ++i)
                     {
@@ -5787,11 +5784,11 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
     if (pickEntity && pickEntity->kind == VisibilityKind::CadCurve &&
         pickEntity->curve)
     {
-        const std::vector<glm::dvec3> sampledPoints =
+        const std::vector<acgs::math::DVec3> sampledPoints =
             acgs::AcGsView::sampleCurveBatch(*pickEntity->curve);
         std::vector<AcGePoint3d> points;
         points.reserve(sampledPoints.size());
-        for (const glm::dvec3 &point : sampledPoints)
+        for (const acgs::math::DVec3 &point : sampledPoints)
             points.emplace_back(point);
         bool hit = false;
         double bestDepth = std::numeric_limits<double>::infinity();
@@ -6171,7 +6168,7 @@ bool runCadPickAudit()
   {
     std::string name;
     VisibilityKind kind;
-    glm::dvec3 location;
+    acgs::math::DVec3 location;
     double extent = 0.0;
     VisibilityCandidate candidate;
     const MeshEntityRecord *mesh = nullptr;
@@ -6191,7 +6188,7 @@ bool runCadPickAudit()
       continue;
     const double extent = makeCadRangeCandidate(
         cad, range, VisibilityKind::CadStroke).lodSize;
-    const glm::dvec3 location =
+    const acgs::math::DVec3 location =
         (stroke.points[0] + stroke.points[1]) * 0.5;
     AuditSample sample{range.name, VisibilityKind::CadStroke,
                        location, extent};
@@ -6209,9 +6206,9 @@ bool runCadPickAudit()
     const double extent = makeCadRangeCandidate(
         cad, range, VisibilityKind::CadFill).lodSize;
     const double localExtent = std::max(
-        {glm::distance(fill.a, fill.b),
-         glm::distance(fill.b, fill.c),
-         glm::distance(fill.c, fill.a)});
+        {acgs::math::distance(fill.a, fill.b),
+         acgs::math::distance(fill.b, fill.c),
+         acgs::math::distance(fill.c, fill.a)});
     AuditSample sample{range.name, VisibilityKind::CadFill,
                        (fill.a + fill.b + fill.c) / 3.0, localExtent};
     sample.candidate = makeCadRangeCandidate(
@@ -6257,7 +6254,7 @@ bool runCadPickAudit()
     {
       // A ray through the torus center passes through the hole. Aim at a
       // point on the tube so the diagnostic validates the rendered surface.
-      sample.location += glm::dvec3(0.325, 0.175, 0.0) *
+      sample.location += acgs::math::DVec3(0.325, 0.175, 0.0) *
           static_cast<double>(mesh.size);
     }
     samples.push_back(std::move(sample));
@@ -6286,17 +6283,17 @@ bool runCadPickAudit()
     return true;
 
   const bool previousOrtho = useOrthoProjection();
-  const glm::dquat previousRotation = orbitCam.Rotation;
-  const glm::dvec3 previousTarget = orbitCam.Target;
+  const acgs::math::DQuat previousRotation = orbitCam.Rotation;
+  const acgs::math::DVec3 previousTarget = orbitCam.Target;
   const double previousDistance = orbitCam.Distance;
-  const glm::dvec3 previousWorldUp = orbitCam.WorldUp;
+  const acgs::math::DVec3 previousWorldUp = orbitCam.WorldUp;
   const float previousZoom = orbitCam.Zoom;
   useOrthoProjection() = true;
   orbitCam.Zoom = 45.0f;
 
   constexpr int kAzimuthCount = 8;
   constexpr double kElevations[] = {
-      glm::radians(35.0), glm::radians(70.0)};
+      acgs::math::radians(35.0), acgs::math::radians(70.0)};
   using AuditKey = std::pair<VisibilityKind, std::string>;
   std::map<AuditKey, AuditStats> results;
   for (const AuditSample &sample : samples)
@@ -6306,16 +6303,16 @@ bool runCadPickAudit()
     results.emplace(AuditKey{sample.kind, sample.name}, stats);
   }
 
-  auto setAuditCamera = [&](const glm::dvec3 &target,
-                            const glm::dvec3 &viewDirection, double distance) {
-    const glm::dvec3 front = glm::normalize(viewDirection);
-    glm::dvec3 right(1.0, 0.0, 0.0);
+  auto setAuditCamera = [&](const acgs::math::DVec3 &target,
+                            const acgs::math::DVec3 &viewDirection, double distance) {
+    const acgs::math::DVec3 front = acgs::math::normalize(viewDirection);
+    acgs::math::DVec3 right(1.0, 0.0, 0.0);
     if (std::abs(front.z) < 0.999)
-      right = glm::normalize(
-          glm::cross(front, glm::dvec3(0.0, 0.0, 1.0)));
-    const glm::dvec3 up = glm::normalize(glm::cross(right, front));
-    orbitCam.Rotation = glm::dquat(
-        glm::dmat3(right, up, -front));
+      right = acgs::math::normalize(
+          acgs::math::cross(front, acgs::math::DVec3(0.0, 0.0, 1.0)));
+    const acgs::math::DVec3 up = acgs::math::normalize(acgs::math::cross(right, front));
+    orbitCam.Rotation = acgs::math::DQuat(
+        acgs::math::DMat3(right, up, -front));
     orbitCam.setOrbit(target, std::max(1.0, distance));
   };
 
@@ -6406,7 +6403,7 @@ bool runCadPickAudit()
           2.0 * std::numbers::pi_v<double> * azimuth / kAzimuthCount;
       for (const double elevation : kElevations)
       {
-        const glm::dvec3 viewDirection = glm::normalize(glm::dvec3(
+        const acgs::math::DVec3 viewDirection = acgs::math::normalize(acgs::math::DVec3(
             std::cos(elevation) * std::cos(angle),
             std::cos(elevation) * std::sin(angle),
             std::sin(elevation)));
@@ -6418,10 +6415,10 @@ bool runCadPickAudit()
       }
     }
 
-    setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, -1.0), distance);
+    setAuditCamera(sample.location, acgs::math::DVec3(0.0, 0.0, -1.0), distance);
     recordSample(sample, pickObjectAlongRay(
         {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, -1.0)}));
-    setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, 1.0), distance);
+    setAuditCamera(sample.location, acgs::math::DVec3(0.0, 0.0, 1.0), distance);
     recordSample(sample, pickObjectAlongRay(
         {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, 1.0)}));
 
@@ -6507,18 +6504,18 @@ bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
          !outside( 0.0, -1.0,  tanHalfVertical,   0.0);   // top
 }
 
-void expandWorldAabb(glm::dvec3 &minimum, glm::dvec3 &maximum,
-                     const glm::dvec3 &point)
+void expandWorldAabb(acgs::math::DVec3 &minimum, acgs::math::DVec3 &maximum,
+                     const acgs::math::DVec3 &point)
 {
-  minimum = glm::min(minimum, point);
-  maximum = glm::max(maximum, point);
+  minimum = acgs::math::min(minimum, point);
+  maximum = acgs::math::max(maximum, point);
 }
 
 VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
                                       VisibilityKind kind,
                                       size_t entityIndex)
 {
-  const glm::dvec3 halfExtent(mesh.size * 0.5);
+  const acgs::math::DVec3 halfExtent(mesh.size * 0.5);
   VisibilityCandidate candidate;
   candidate.kind = kind;
   candidate.entityIndex = entityIndex;
@@ -6551,9 +6548,9 @@ VisibilityCandidate makeCadRangeCandidate(
   candidate.overlayPointSize = 2.0f;
 
   bool hasPoint = false;
-  glm::dvec3 minimum(0.0);
-  glm::dvec3 maximum(0.0);
-  auto include = [&](const glm::dvec3 &point) {
+  acgs::math::DVec3 minimum(0.0);
+  acgs::math::DVec3 maximum(0.0);
+  auto include = [&](const acgs::math::DVec3 &point) {
     if (!hasPoint)
     {
       minimum = maximum = point;
@@ -6570,7 +6567,7 @@ VisibilityCandidate makeCadRangeCandidate(
     for (size_t i = range.begin; i < range.begin + range.count; ++i)
     {
       const acdb::Stroke &stroke = tessellation.geometry.strokes[i];
-      for (const glm::dvec3 &point : stroke.points)
+      for (const acgs::math::DVec3 &point : stroke.points)
         include(point);
       if (stroke.semiInfinite && stroke.points.size() >= 2)
       {
@@ -6581,9 +6578,9 @@ VisibilityCandidate makeCadRangeCandidate(
         // The render and slab paths clip the ray analytically, so this
         // bound only has to contain the geometry, which it does out to
         // any navigable distance.
-        const glm::dvec3 direction =
+        const acgs::math::DVec3 direction =
             stroke.points[1] - stroke.points.front();
-        const double length = glm::length(direction);
+        const double length = acgs::math::length(direction);
         if (length > 1.0e-18)
           include(stroke.points.front() + direction / length *
                       kSemiInfiniteClassificationLength);
@@ -6622,13 +6619,13 @@ VisibilityCandidate makeCadRangeCandidate(
     return candidate;
 
   const double padding = 1.0e-3;
-  minimum -= glm::dvec3(padding);
-  maximum += glm::dvec3(padding);
+  minimum -= acgs::math::DVec3(padding);
+  maximum += acgs::math::DVec3(padding);
   candidate.min = minimum;
   candidate.max = maximum;
   candidate.center = (minimum + maximum) * 0.5;
-  const glm::dvec3 extent = maximum - minimum;
-  candidate.lodSize = glm::max(extent.x, glm::max(extent.y, extent.z));
+  const acgs::math::DVec3 extent = maximum - minimum;
+  candidate.lodSize = acgs::math::max(extent.x, acgs::math::max(extent.y, extent.z));
   return candidate;
 }
 
@@ -6722,12 +6719,12 @@ void buildVisibilityCandidates(std::vector<VisibilityCandidate> &candidates)
 // line) do not miss near/far when both endpoints fall outside the
 // viewport but the middle of the segment crosses it, and their off-screen
 // endpoints do not inflate the depth slab either.
-void includeSegmentCameraDepth(const glm::dvec3 &startWorldPosition,
-                               const glm::dvec3 &endWorldPosition,
-                               const glm::dvec3 &cameraPosition,
-                               const glm::dvec3 &cameraRight,
-                               const glm::dvec3 &cameraUp,
-                               const glm::dvec3 &cameraFront,
+void includeSegmentCameraDepth(const acgs::math::DVec3 &startWorldPosition,
+                               const acgs::math::DVec3 &endWorldPosition,
+                               const acgs::math::DVec3 &cameraPosition,
+                               const acgs::math::DVec3 &cameraRight,
+                               const acgs::math::DVec3 &cameraUp,
+                               const acgs::math::DVec3 &cameraFront,
                                double halfWidth,
                                double halfHeight,
                                double &minDepth,
@@ -6846,10 +6843,10 @@ bool includeSegmentPerspectiveDepth(
 // uses the same +Z-forward convention as the depth slab.  This keeps the
 // debug wireframe aligned with what the grid shader actually accepts:
 // fragments outside the [near, far] slab are discarded by depth test.
-void clipPolygonAgainstDepth(const glm::dvec3 *polygon, int &count,
-                             glm::dvec3 *clipped, int maxClipped,
-                             const glm::dvec3 &cameraPos,
-                             const glm::dvec3 &front,
+void clipPolygonAgainstDepth(const acgs::math::DVec3 *polygon, int &count,
+                             acgs::math::DVec3 *clipped, int maxClipped,
+                             const acgs::math::DVec3 &cameraPos,
+                             const acgs::math::DVec3 &front,
                              bool keepAtMost, double depthLimit)
 {
     if (count <= 0)
@@ -6858,34 +6855,34 @@ void clipPolygonAgainstDepth(const glm::dvec3 *polygon, int &count,
         return;
     }
 
-    std::array<glm::dvec3, 16> output{};
+    std::array<acgs::math::DVec3, 16> output{};
     int outputCount = 0;
 
-    auto cameraDepth = [&](const glm::dvec3 &p) {
-        return glm::dot(p - cameraPos, front);
+    auto cameraDepth = [&](const acgs::math::DVec3 &p) {
+        return acgs::math::dot(p - cameraPos, front);
     };
     auto inside = [&](double depth) {
         return keepAtMost ? depth <= depthLimit
                           : depth >= depthLimit;
     };
-    auto addPoint = [&](const glm::dvec3 &p) {
+    auto addPoint = [&](const acgs::math::DVec3 &p) {
         if (outputCount >= (int)output.size())
             return;
         output[outputCount++] = p;
     };
-    auto addIntersection = [&](const glm::dvec3 &a,
-                               const glm::dvec3 &b) {
+    auto addIntersection = [&](const acgs::math::DVec3 &a,
+                               const acgs::math::DVec3 &b) {
         const double da = cameraDepth(a) - depthLimit;
         const double db = cameraDepth(b) - depthLimit;
         const double denom = da - db;
         const double t = std::abs(denom) > 1e-18 ? da / denom : 0.0;
-        addPoint(a + (b - a) * glm::clamp(t, 0.0, 1.0));
+        addPoint(a + (b - a) * acgs::math::clamp(t, 0.0, 1.0));
     };
 
     bool previousInside = inside(cameraDepth(polygon[count - 1]));
     for (int i = 0; i < count; ++i)
     {
-        const glm::dvec3 &current = polygon[i];
+        const acgs::math::DVec3 &current = polygon[i];
         const bool currentInside = inside(cameraDepth(current));
         if (currentInside)
         {
@@ -6976,7 +6973,7 @@ void render()
             // Tilt down ~35 degrees so the mesh's filled faces (not just
             // its edge-on silhouette) are visible for the capture.
             orbitCam.setViewDirection(
-                glm::normalize(glm::dvec3(0.25, 0.25, -0.9)));
+                acgs::math::normalize(acgs::math::DVec3(0.25, 0.25, -0.9)));
           }
           else if (entity->curve != nullptr)
           {
@@ -6990,7 +6987,7 @@ void render()
             // their tessellated vertices.
             const auto &tess = getVectorPrimitivesTessellation();
             const acgs::AcGsEntityRange &range = *entity->cadRange;
-            glm::dvec3 center(0.0);
+            acgs::math::DVec3 center(0.0);
             size_t count = 0;
             const size_t last =
                 std::min(range.begin + range.count, size_t(1) << 30);
@@ -6998,7 +6995,7 @@ void render()
             {
               const size_t last2 = std::min(last, tess.geometry.strokes.size());
               for (size_t i = range.begin; i < last2; ++i)
-                for (const glm::dvec3 &pt : tess.geometry.strokes[i].points)
+                for (const acgs::math::DVec3 &pt : tess.geometry.strokes[i].points)
                 {
                   center += pt;
                   ++count;
@@ -7064,7 +7061,7 @@ void render()
                 std::max(300.0, matched->height * 10.0);
             orbitCam.setTarget(matched->position);
             orbitCam.setTargetDistance(focusDistance);
-            orbitCam.setViewDirection(glm::dvec3(0.0, 0.0, -1.0));
+            orbitCam.setViewDirection(acgs::math::DVec3(0.0, 0.0, -1.0));
           }
         }
       }
@@ -7140,7 +7137,7 @@ void render()
               : document.viewportTable().add(
                     "Top", document.allocateHandle());
       top->orbitCamera().setViewDirection(
-          glm::dvec3(0.0, 0.0, 1.0));
+          acgs::math::DVec3(0.0, 0.0, 1.0));
       top->writeToViewportRecord(record);
       std::cout << "Top viewport created" << std::endl;
     }
@@ -7270,7 +7267,7 @@ void render()
   // to this anchor, so its magnitude never exceeds chunkSize/2 even at
   // 1e9 world coordinates.
   worldRebase().update(orbitCam.Position);
-  const glm::dvec3 rebase = worldRebase().origin();
+  const acgs::math::DVec3 rebase = worldRebase().origin();
 
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
@@ -7283,20 +7280,20 @@ void render()
   // (camera - rebase, target - rebase).  Rotation is preserved; only the
   // translation column shifts, and the same shift is applied to every
   // object uniform downstream.
-  glm::mat4 view = orbitCam.getViewMatrix(rebase);
+  acgs::math::Mat4 view = orbitCam.getViewMatrix(rebase);
   // Object pipelines use the strict RTE view: rotation only, zero translation.
   // Grid/overlay keeps the old rebase view because its ray shaders reconstruct
   // world-space rays from the inverse view-projection.
-  const glm::mat4 viewRte = orbitCam.getViewRotationMatrix();
-  glm::mat4 projection;
-  glm::mat4 overlayProjection;
-  glm::mat4 gridProjection;
+  const acgs::math::Mat4 viewRte = orbitCam.getViewRotationMatrix();
+  acgs::math::Mat4 projection;
+  acgs::math::Mat4 overlayProjection;
+  acgs::math::Mat4 gridProjection;
   float pixelSize = 0.0f;
   double activeNear = 0.0;
   double activeFar  = 0.0;
   float overlayNear = 0.0f;
   float overlayFar = 0.0f;
-  glm::vec4 logDepth(0.0f);
+  acgs::math::Vec4 logDepth(0.0f);
   static std::vector<const LargeCoordinateObject *> drawOrder;
   drawOrder.clear();
   drawOrder.reserve(getLargeCoordinateObjects().size() +
@@ -7315,14 +7312,14 @@ void render()
   tinyCadDraws.reserve(visibilityCandidates.size());
   bool centerCubeInFrame = false;
   const AcGePoint3d worldLineEnd = LARGE_COORDINATE_BASE_POINT;
-  glm::dvec3 referenceLineStart = glm::dvec3(0.0);
-  glm::dvec3 referenceLineEnd = worldLineEnd;
+  acgs::math::DVec3 referenceLineStart = acgs::math::DVec3(0.0);
+  acgs::math::DVec3 referenceLineEnd = worldLineEnd;
   bool referenceLineVisible = false;
 
-  const glm::dvec3 cameraPos(orbitCam.Position);
-  const glm::dvec3 &frontVec = orbitCam.Front;
-  // The grid shader consumes GLM, while its persistent plane geometry uses
-  // the AcGe point/vector interfaces.
+  const acgs::math::DVec3 cameraPos(orbitCam.Position);
+  const acgs::math::DVec3 &frontVec = orbitCam.Front;
+  // The grid shader consumes rendering types, while its persistent plane
+  // geometry uses the AcGe point/vector interfaces.
   const AcGeVector3d cameraFrontGe(orbitCam.Front);
   const AcGeVector3d cameraRightGe(orbitCam.Right);
   const AcGeVector3d cameraUpGe(orbitCam.Up);
@@ -7352,9 +7349,9 @@ void render()
   {
     const double halfH = orbitCam.orthoSize();
     const double halfW = (double)halfH * (double)aspect;
-    const glm::dvec3 &front = orbitCam.Front;
-    const glm::dvec3 &right = orbitCam.Right;
-    const glm::dvec3 &up = orbitCam.Up;
+    const acgs::math::DVec3 &front = orbitCam.Front;
+    const acgs::math::DVec3 &right = orbitCam.Right;
+    const acgs::math::DVec3 &up = orbitCam.Up;
 
     // Start with the depth interval covered by the visible ortho image.
     // The scene bounds below can make near negative; that is intentional
@@ -7392,7 +7389,7 @@ void render()
         return;
       const double halfSize = (double)object.size * 0.5;
       const CameraSpaceAabb bounds = cameraAabbBounds(
-          object.worldPosition, glm::dvec3(halfSize), cameraPos, right,
+          object.worldPosition, acgs::math::DVec3(halfSize), cameraPos, right,
           up, front);
       if (aabbIntersectsOrthoViewport(bounds, halfW, halfH))
       {
@@ -7500,7 +7497,7 @@ void render()
               continue;
             if (stroke.semiInfinite)
             {
-              glm::dvec3 clippedStart, clippedEnd;
+              acgs::math::DVec3 clippedStart, clippedEnd;
               if (!acgsView().clipSemiInfiniteRay(
                       stroke.points.front(), stroke.points.back(), 0.0, 0.0,
                       clippedStart, clippedEnd, false))
@@ -7516,7 +7513,7 @@ void render()
             }
             else
             {
-              for (const glm::dvec3 &point : stroke.points)
+              for (const acgs::math::DVec3 &point : stroke.points)
               {
                 const CameraSpacePoint c = acgs::toCameraSpace(
                     point, cameraPos, right, up, front);
@@ -7543,7 +7540,7 @@ void render()
     // ends of the accumulated interval, so it still covers every
     // contributing object plus the target ± imageRadius seed.
     const double cameraDistance =
-        glm::length(orbitCam.Position - orbitCam.Target);
+        acgs::math::length(orbitCam.Position - orbitCam.Target);
     double slabCenterDepth;
     double slabRadius;
     // Minimum slab span: keeps extreme zoom from starving the depth
@@ -7620,10 +7617,10 @@ void render()
                                 slabCenterDepth - slabRadius,
                                 slabCenterDepth + slabRadius, near, far);
 
-    const glm::dmat4 orthoDouble = glm::ortho(
+    const acgs::math::DMat4 orthoDouble = acgs::math::ortho(
         -halfH * (double)aspect, halfH * (double)aspect,
         -halfH,                  halfH, near, far);
-    projection = glm::mat4(orthoDouble);
+    projection = acgs::math::Mat4(orthoDouble);
     activeNear = near;
     activeFar  = far;
     g_pickDepthNear = activeNear;
@@ -7635,10 +7632,10 @@ void render()
   }
   else
   {
-    const glm::dvec3 &right = orbitCam.Right;
-    const glm::dvec3 &up = orbitCam.Up;
+    const acgs::math::DVec3 &right = orbitCam.Right;
+    const acgs::math::DVec3 &up = orbitCam.Up;
     const double tanHalfVertical =
-        std::tan(glm::radians(45.0) * 0.5);
+        std::tan(acgs::math::radians(45.0) * 0.5);
     const double tanHalfHorizontal = tanHalfVertical * aspect;
 
     constexpr double kNearDepthFloor = 0.05;
@@ -7654,9 +7651,9 @@ void render()
     double provisionalFar = kMaxPerspectiveFar;
     if (sceneBounds.valid)
     {
-      const glm::dvec3 center =
+      const acgs::math::DVec3 center =
           (sceneBounds.min + sceneBounds.max) * 0.5;
-      const glm::dvec3 halfExtent =
+      const acgs::math::DVec3 halfExtent =
           (sceneBounds.max - sceneBounds.min) * 0.5;
       const CameraSpaceAabb sceneCamera =
           cameraAabbBounds(center, halfExtent, cameraPos, right, up,
@@ -7713,7 +7710,7 @@ void render()
         }
         else
         {
-          const double centerDepth = glm::dot(
+          const double centerDepth = acgs::math::dot(
               candidate.center - cameraPos, frontVec);
           overlayMinDepth = std::min(overlayMinDepth, centerDepth);
           overlayMaxDepth = std::max(overlayMaxDepth, centerDepth);
@@ -7732,7 +7729,7 @@ void render()
         }
         else
         {
-          const double centerDepth = glm::dot(
+          const double centerDepth = acgs::math::dot(
               candidate.center - cameraPos, frontVec);
           overlayMinDepth = std::min(overlayMinDepth, centerDepth);
           overlayMaxDepth = std::max(overlayMaxDepth, centerDepth);
@@ -7744,11 +7741,11 @@ void render()
         const CameraSpaceAabb bounds = perspectiveVisibility.cameraAabb(candidate);
         const double useDepth = state == VisibilityState::Visible
                                     ? bounds.minDepth
-                                    : glm::dot(candidate.center - cameraPos,
+                                    : acgs::math::dot(candidate.center - cameraPos,
                                                frontVec);
         const double maxUseDepth = state == VisibilityState::Visible
                                        ? bounds.maxDepth
-                                       : glm::dot(candidate.center - cameraPos,
+                                       : acgs::math::dot(candidate.center - cameraPos,
                                                   frontVec);
         overlayMinDepth = std::min(overlayMinDepth, useDepth);
         overlayMaxDepth = std::max(overlayMaxDepth, maxUseDepth);
@@ -7763,7 +7760,7 @@ void render()
     // the exact perspective side frusta.  It is a non-depth-writing overlay
     // and must not consume the depth precision reserved for solid geometry.
     includeSegmentPerspectiveDepth(
-        acgs::toCameraSpace(glm::dvec3(0.0), cameraPos, right, up, frontVec),
+        acgs::toCameraSpace(acgs::math::DVec3(0.0), cameraPos, right, up, frontVec),
         acgs::toCameraSpace(worldLineEnd, cameraPos, right, up, frontVec),
         kNearDepthFloor, tanHalfVertical, tanHalfHorizontal,
         overlayMinDepth, overlayMaxDepth);
@@ -7771,8 +7768,8 @@ void render()
     // The infinite grid does not take part in camera depth-slab selection.
     // It still writes depth for sorting, so give it a stable dedicated frustum
     // and let its shader put distant background lines at depth one.
-    gridProjection = glm::mat4(glm::perspective(
-        glm::radians(45.0), (double)aspect,
+    gridProjection = acgs::math::Mat4(acgs::math::perspective(
+        acgs::math::radians(45.0), (double)aspect,
         kNearDepthFloor, kMaxPerspectiveFar));
 
     // Solid geometry receives a compact depth slab.  Infinite ground and the
@@ -7800,9 +7797,9 @@ void render()
                                       candidateObjectNear,
                                       candidateObjectFar, near, far);
 
-    const glm::dmat4 perspectiveDouble = glm::perspective(
-        glm::radians(45.0), (double)aspect, near, far);
-    projection = glm::mat4(perspectiveDouble);
+    const acgs::math::DMat4 perspectiveDouble = acgs::math::perspective(
+        acgs::math::radians(45.0), (double)aspect, near, far);
+    projection = acgs::math::Mat4(perspectiveDouble);
     activeNear = near;
     activeFar  = far;
     g_pickDepthNear = activeNear;
@@ -7825,14 +7822,14 @@ void render()
                                 stableOverlayNear, stableOverlayFar);
     overlayNear = stableOverlayNear;
     overlayFar = stableOverlayFar;
-    const glm::dmat4 overlayDouble = glm::perspective(
-        glm::radians(45.0), (double)aspect, (double)overlayNear, (double)overlayFar);
-    overlayProjection = glm::mat4(overlayDouble);
+    const acgs::math::DMat4 overlayDouble = acgs::math::perspective(
+        acgs::math::radians(45.0), (double)aspect, (double)overlayNear, (double)overlayFar);
+    overlayProjection = acgs::math::Mat4(overlayDouble);
 
     // Rough estimate around the orbit target, only used to seed the LOD
     // step; the shader computes exact per-fragment sizes for perspective.
-    pixelSize = (2.0f * (float)glm::length(orbitCam.Position - orbitCam.Target)
-                  * tan(glm::radians(22.5f)))
+    pixelSize = (2.0f * (float)acgs::math::length(orbitCam.Position - orbitCam.Target)
+                  * tan(acgs::math::radians(22.5f)))
                / static_cast<float>(drawableHeight);
   }
 
@@ -7842,7 +7839,7 @@ void render()
     gridProjection = projection;
     overlayNear = static_cast<float>(activeNear);
     overlayFar = static_cast<float>(activeFar);
-    logDepth = glm::vec4(0.0f, overlayNear, overlayFar, 0.0f);
+    logDepth = acgs::math::Vec4(0.0f, overlayNear, overlayFar, 0.0f);
   }
   else
   {
@@ -7853,7 +7850,7 @@ void render()
         std::min(static_cast<float>(activeNear), overlayNear);
     const float depthFar =
         std::max(static_cast<float>(activeFar), overlayFar);
-    logDepth = glm::vec4(1.0f, depthNear, depthFar, 0.0f);
+    logDepth = acgs::math::Vec4(1.0f, depthNear, depthFar, 0.0f);
   }
 
   // Publish this frame's overlay slab for stroke frustum clipping; the
@@ -7877,19 +7874,19 @@ void render()
   static uint32_t cachedOutlineObjectId = 0;
   uint64_t sceneIdSignature = 0xcbf29ce484222325ull;
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(viewRte), 16 * sizeof(float));
+      sceneIdSignature, acgs::math::value_ptr(viewRte), 16 * sizeof(float));
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(projection), 16 * sizeof(float));
+      sceneIdSignature, acgs::math::value_ptr(projection), 16 * sizeof(float));
   // Strict-RTE viewRte intentionally has no translation.  Pan/rebase can
   // therefore leave viewRte and projection unchanged while every RTE vertex
   // (object - camera/rebase) changes.  Hash the camera world pose/rebase too,
   // or the selection outline keeps sampling the previous frame ID texture.
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(rebase), 3 * sizeof(double));
+      sceneIdSignature, acgs::math::value_ptr(rebase), 3 * sizeof(double));
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(orbitCam.Target), 3 * sizeof(double));
+      sceneIdSignature, acgs::math::value_ptr(orbitCam.Target), 3 * sizeof(double));
   sceneIdSignature = hashGpuPickSceneBytes(
-      sceneIdSignature, glm::value_ptr(orbitCam.Position), 3 * sizeof(double));
+      sceneIdSignature, acgs::math::value_ptr(orbitCam.Position), 3 * sizeof(double));
   sceneIdSignature = hashGpuPickSceneBytes(
       sceneIdSignature, &activeNear, sizeof(activeNear));
   sceneIdSignature = hashGpuPickSceneBytes(
@@ -8014,7 +8011,7 @@ void render()
         outlineEntity && outlineEntity->kind == VisibilityKind::CadText
             ? outlineEntity->text
             : nullptr,
-        glm::vec4(kSelectionHighlightRGB, 1.0f));
+        acgs::math::Vec4(kSelectionHighlightRGB, 1.0f));
     gpuPickSceneDebugQueueActive =
         acgs::acgsGetManager()->requestGpuPick(sceneRequest) != 0;
     // No clearRegistry here either: ids are keyed by entity identity
@@ -8026,20 +8023,20 @@ void render()
     // re-register under the same id.
   }
 
-  const glm::dvec3 cameraRight(orbitCam.Right);
-  const glm::dvec3 cameraUp(orbitCam.Up);
+  const acgs::math::DVec3 cameraRight(orbitCam.Right);
+  const acgs::math::DVec3 cameraUp(orbitCam.Up);
   if (useOrthoProjection())
   {
     referenceLineVisible = acgsView().clipSegmentToOrtho(
-        glm::dvec3(0.0), worldLineEnd, activeNear, activeFar,
+        acgs::math::DVec3(0.0), worldLineEnd, activeNear, activeFar,
         orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
         referenceLineStart, referenceLineEnd);
   }
   else
   {
-    const double tanHalfVertical = std::tan(glm::radians(45.0) * 0.5);
+    const double tanHalfVertical = std::tan(acgs::math::radians(45.0) * 0.5);
     referenceLineVisible = acgsView().clipSegmentToPerspective(
-        glm::dvec3(0.0), worldLineEnd, overlayNear, overlayFar,
+        acgs::math::DVec3(0.0), worldLineEnd, overlayNear, overlayFar,
         tanHalfVertical, tanHalfVertical * (double)aspect,
         referenceLineStart, referenceLineEnd);
   }
@@ -8092,22 +8089,22 @@ void render()
   // planeCenter computation -- reused here.
   const double s = (double)step;
   AcGePoint3d originWorld(0.0, 0.0, 0.0);
-  glm::vec3 planeOriginRelative(0.0f);
-  glm::vec3 orthoPlaneCenter(0.0f);
-  glm::vec3 orthoRight(0.0f);
-  glm::vec3 orthoUp(0.0f);
-  glm::vec2 axisVisible(0.0f);
-  glm::vec2 axisOriginGridRelative(0.0f);
-  glm::vec3 axisLineX(0.0f);
-  glm::vec3 axisLineZ(0.0f);
-  glm::vec3 planeTangentU(0.0f);
-  glm::vec3 planeTangentV(0.0f);
-  glm::vec3 axisColorU(0.0f);
-  glm::vec3 axisColorV(0.0f);
-  glm::vec3 startAxisOrigin(0.0f);
-  glm::vec3 startAxisDirection(0.0f);
+  acgs::math::Vec3 planeOriginRelative(0.0f);
+  acgs::math::Vec3 orthoPlaneCenter(0.0f);
+  acgs::math::Vec3 orthoRight(0.0f);
+  acgs::math::Vec3 orthoUp(0.0f);
+  acgs::math::Vec2 axisVisible(0.0f);
+  acgs::math::Vec2 axisOriginGridRelative(0.0f);
+  acgs::math::Vec3 axisLineX(0.0f);
+  acgs::math::Vec3 axisLineZ(0.0f);
+  acgs::math::Vec3 planeTangentU(0.0f);
+  acgs::math::Vec3 planeTangentV(0.0f);
+  acgs::math::Vec3 axisColorU(0.0f);
+  acgs::math::Vec3 axisColorV(0.0f);
+  acgs::math::Vec3 startAxisOrigin(0.0f);
+  acgs::math::Vec3 startAxisDirection(0.0f);
   float startAxisVisible = 0.0f;
-  glm::vec3 startAxisLine(0.0f);
+  acgs::math::Vec3 startAxisLine(0.0f);
   AcGeVector3d normalizedAxisLineX(0.0, 0.0, 0.0);
   AcGeVector3d normalizedAxisLineZ(0.0, 0.0, 0.0);
   bool orthoPlaneValid = false;
@@ -8125,9 +8122,9 @@ void render()
 
   if (useOrthoProjection())
   {
-    const glm::dvec3 front(orbitCam.Front);
-    const glm::dvec3 right(orbitCam.Right);
-    const glm::dvec3 up(orbitCam.Up);
+    const acgs::math::DVec3 front(orbitCam.Front);
+    const acgs::math::DVec3 right(orbitCam.Right);
+    const acgs::math::DVec3 up(orbitCam.Up);
     const double halfH = orbitCam.orthoSize();
     const double halfW = halfH * (double)aspect;
 
@@ -8151,13 +8148,13 @@ void render()
       const AcGeVector3d groundUp =
           imageUp - cameraFrontGe *
                         (imageUp.dotProduct(planeNormal) / frontOnNormal);
-      orthoRight = glm::vec3(static_cast<glm::dvec3>(groundRight));
-      orthoUp = glm::vec3(static_cast<glm::dvec3>(groundUp));
+      orthoRight = acgs::math::Vec3(static_cast<acgs::math::DVec3>(groundRight));
+      orthoUp = acgs::math::Vec3(static_cast<acgs::math::DVec3>(groundUp));
       // The point is relative to the snapped plane anchor.  Its normal-axis
       // component also cancels the rebase translation (the anchor has normal
       // coordinate zero), which is exactly what the shader depth path adds
       // back when it reconstructs a rebased clip position.
-      orthoPlaneCenter = glm::vec3(static_cast<glm::dvec3>(
+      orthoPlaneCenter = acgs::math::Vec3(static_cast<acgs::math::DVec3>(
           planeCenter - originWorld));
 
       // World axes are projected as exact NDC lines while their plane
@@ -8175,10 +8172,10 @@ void render()
       axisLineX = anchoredNdcLine(normalizedAxisLineX);
       axisLineZ = anchoredNdcLine(normalizedAxisLineZ);
       axisVisible = isSpecialGridPlane(gridPlane)
-          ? glm::vec2(
+          ? acgs::math::Vec2(
                 lineIntersectsNdcSquare(normalizedAxisLineX) ? 1.0f : 0.0f,
                 lineIntersectsNdcSquare(normalizedAxisLineZ) ? 1.0f : 0.0f)
-          : glm::vec2(0.0f);
+          : acgs::math::Vec2(0.0f);
     }
   }
   else
@@ -8189,15 +8186,15 @@ void render()
     // the cube then no longer lines up with the major grid lines and axes.
     //
     // Reuse the hoisted planeCenter computed once at the top of render().
-    axisVisible = isSpecialGridPlane(gridPlane) ? glm::vec2(1.0f)
-                                                : glm::vec2(0.0f);
+    axisVisible = isSpecialGridPlane(gridPlane) ? acgs::math::Vec2(1.0f)
+                                                : acgs::math::Vec2(0.0f);
   }
 
   // Rebase-relative grid anchor (was originWorld - cameraPos).
   // The shader receives the rebased offset and never sees the absolute
   // world coordinate; magnitude is bounded by chunkSize/2 instead of
   // step/2.
-  planeOriginRelative = glm::vec3(static_cast<glm::dvec3>(
+  planeOriginRelative = acgs::math::Vec3(static_cast<acgs::math::DVec3>(
       originWorld - AcGePoint3d(rebase)));
   // The shader's p is already relative to the snapped grid anchor, so this
   // value intentionally stays grid-relative.  Resolving it against the frame
@@ -8211,13 +8208,13 @@ void render()
     const AcGeVector3d gridPlaneToAnchor = gridPlaneOrigin - originWorld;
     const double axisU = gridPlaneToAnchor.dotProduct(tangentUGe);
     const double axisV = gridPlaneToAnchor.dotProduct(tangentVGe);
-    axisOriginGridRelative = glm::vec2(
+    axisOriginGridRelative = acgs::math::Vec2(
         static_cast<float>(axisU),
         static_cast<float>(axisV));
   }
 
-  planeTangentU = glm::vec3(static_cast<glm::dvec3>(tangentUGe));
-  planeTangentV = glm::vec3(static_cast<glm::dvec3>(tangentVGe));
+  planeTangentU = acgs::math::Vec3(static_cast<acgs::math::DVec3>(tangentUGe));
+  planeTangentV = acgs::math::Vec3(static_cast<acgs::math::DVec3>(tangentVGe));
   if (gridPlane == GridPlaneType::XZ)
   {
       axisColorU = kAxisColorX;   // X red
@@ -8238,7 +8235,7 @@ void render()
       AcGePoint3d startAxisWorld = gridPlaneStartAxisOrigin -
           planeNormal * (gridPlaneStartAxisOrigin - gridPlaneOrigin)
                             .dotProduct(planeNormal);
-      startAxisOrigin = glm::vec3(static_cast<glm::dvec3>(
+      startAxisOrigin = acgs::math::Vec3(static_cast<acgs::math::DVec3>(
           startAxisWorld - originWorld));
       AcGeVector3d startAxisDirection =
           gridPlaneStartAxisDirection -
@@ -8259,19 +8256,19 @@ void render()
           axisCenterOnPlane - startAxisDirection * axisSegmentLength;
       const AcGePoint3d axisPoint1 =
           axisCenterOnPlane + startAxisDirection * axisSegmentLength;
-      const glm::vec4 clip0 = overlayProjection * view *
-          glm::vec4(glm::vec3(static_cast<glm::dvec3>(
+      const acgs::math::Vec4 clip0 = overlayProjection * view *
+          acgs::math::Vec4(acgs::math::Vec3(static_cast<acgs::math::DVec3>(
                         axisPoint0 - AcGePoint3d(rebase))),
                     1.0f);
-      const glm::vec4 clip1 = overlayProjection * view *
-          glm::vec4(glm::vec3(static_cast<glm::dvec3>(
+      const acgs::math::Vec4 clip1 = overlayProjection * view *
+          acgs::math::Vec4(acgs::math::Vec3(static_cast<acgs::math::DVec3>(
                         axisPoint1 - AcGePoint3d(rebase))),
                     1.0f);
       if (clip0.w > 0.0f && clip1.w > 0.0f)
       {
-          const glm::dvec2 ndc0(clip0.x / clip0.w, clip0.y / clip0.w);
-          const glm::dvec2 ndc1(clip1.x / clip1.w, clip1.y / clip1.w);
-          if (glm::length(ndc1 - ndc0) > 1e-12)
+          const acgs::math::DVec2 ndc0(clip0.x / clip0.w, clip0.y / clip0.w);
+          const acgs::math::DVec2 ndc1(clip1.x / clip1.w, clip1.y / clip1.w);
+          if (acgs::math::length(ndc1 - ndc0) > 1e-12)
           {
               const AcGeVector3d normalizedLine = normalizedNdcLine(AcGeVector3d(
                   ndc0.y - ndc1.y,
@@ -8286,9 +8283,9 @@ void render()
       }
   }
 
-  const glm::mat4 objectViewProj = projection * view;
-  const glm::mat4 overlayViewProj = overlayProjection * view;
-  const glm::mat4 gridViewProj = gridProjection * view;
+  const acgs::math::Mat4 objectViewProj = projection * view;
+  const acgs::math::Mat4 overlayViewProj = overlayProjection * view;
+  const acgs::math::Mat4 gridViewProj = gridProjection * view;
 
   bool gridPlaneVisible = false;
   if (useOrthoProjection())
@@ -8332,13 +8329,13 @@ void render()
   {
     frustumCaptureRequested = false;
     frustumWireframeVisible = true;
-    const glm::mat4 invVP = glm::inverse(overlayViewProj);
+    const acgs::math::Mat4 invVP = acgs::math::inverse(overlayViewProj);
     for (int i = 0; i < 8; ++i)
     {
       const float ndcX = (i & 1) ? 1.0f : -1.0f;
       const float ndcY = (i & 2) ? 1.0f : -1.0f;
       const float ndcZ = (i & 4) ? 1.0f : -1.0f;
-      glm::vec4 p = invVP * glm::vec4(ndcX, ndcY, ndcZ, 1.0f);
+      acgs::math::Vec4 p = invVP * acgs::math::Vec4(ndcX, ndcY, ndcZ, 1.0f);
       if (std::abs(p.w) > 1e-10f)
         p /= p.w;
       frustumCorners[i] =
@@ -8350,7 +8347,7 @@ void render()
     // plane clipped by all four side planes *and* by near/far.  Without
     // the depth clip the debug polygon would show regions whose grid
     // fragments are discarded outside the active depth slab.
-    std::array<glm::dvec3, 16> gridPolygon{};
+    std::array<acgs::math::DVec3, 16> gridPolygon{};
     int gridPolygonCount = 0;
     if (useOrthoProjection() && orthoPlaneValid)
     {
@@ -8381,7 +8378,7 @@ void render()
           gridVisibleQuadValid = false;
           break;
         }
-        gridPolygon[i] = glm::dvec3(
+        gridPolygon[i] = acgs::math::DVec3(
             camPos + dir * (planeDist / denom));
       }
       gridPolygonCount = gridVisibleQuadValid ? 4 : 0;
@@ -8393,7 +8390,7 @@ void render()
 
     if (gridVisibleQuadValid)
     {
-      std::array<glm::dvec3, 16> clippedGridPolygon{};
+      std::array<acgs::math::DVec3, 16> clippedGridPolygon{};
       int clippedGridPolygonCount = gridPolygonCount;
       clipPolygonAgainstDepth(
           gridPolygon.data(), clippedGridPolygonCount,
@@ -8422,30 +8419,30 @@ void render()
     const rendering::GridRenderData gridRenderData{
       .view = view,
         .projection = gridProjection,
-        .invViewProj = glm::inverse(gridViewProj),
+        .invViewProj = acgs::math::inverse(gridViewProj),
       .viewProj = gridViewProj,
       .camFront = AcGeVector3d(orbitCam.Front),
-      .orthoPlaneCenter = AcGePoint3d(glm::dvec3(orthoPlaneCenter)),
-      .orthoRight = AcGeVector3d(glm::dvec3(orthoRight)),
-      .orthoUp = AcGeVector3d(glm::dvec3(orthoUp)),
-      .planeOriginRelative = AcGePoint3d(glm::dvec3(planeOriginRelative)),
+      .orthoPlaneCenter = AcGePoint3d(acgs::math::DVec3(orthoPlaneCenter)),
+      .orthoRight = AcGeVector3d(acgs::math::DVec3(orthoRight)),
+      .orthoUp = AcGeVector3d(acgs::math::DVec3(orthoUp)),
+      .planeOriginRelative = AcGePoint3d(acgs::math::DVec3(planeOriginRelative)),
       .plane = (float)(gridPlane == GridPlaneType::XZ ? 0
                       : gridPlane == GridPlaneType::XY ? 1
                        : gridPlane == GridPlaneType::YZ ? 2
                                                         : 3),
       .planeNormal = AcGeVector3d(planeNormal),
-      .planeTangentU = AcGeVector3d(glm::dvec3(planeTangentU)),
-      .planeTangentV = AcGeVector3d(glm::dvec3(planeTangentV)),
+      .planeTangentU = AcGeVector3d(acgs::math::DVec3(planeTangentU)),
+      .planeTangentV = AcGeVector3d(acgs::math::DVec3(planeTangentV)),
       .axisColorU = axisColorU,
       .axisColorV = axisColorV,
-      .startAxisOrigin = AcGePoint3d(glm::dvec3(startAxisOrigin)),
-      .startAxisDirection = AcGeVector3d(glm::dvec3(startAxisDirection)),
+      .startAxisOrigin = AcGePoint3d(acgs::math::DVec3(startAxisOrigin)),
+      .startAxisDirection = AcGeVector3d(acgs::math::DVec3(startAxisDirection)),
       .startAxisVisible = startAxisVisible,
-      .startAxisLine = AcGeVector3d(glm::dvec3(startAxisLine)),
+      .startAxisLine = AcGeVector3d(acgs::math::DVec3(startAxisLine)),
       .axisOriginGridRelative =
           AcGePoint2d(axisOriginGridRelative.x, axisOriginGridRelative.y),
-      .axisLineX = AcGeVector3d(glm::dvec3(axisLineX)),
-      .axisLineZ = AcGeVector3d(glm::dvec3(axisLineZ)),
+      .axisLineX = AcGeVector3d(acgs::math::DVec3(axisLineX)),
+      .axisLineZ = AcGeVector3d(acgs::math::DVec3(axisLineZ)),
       .orthoPlaneValid = orthoPlaneValid ? 1.0f : 0.0f,
       .groundRelativeY = 0.0f, // unused in current shader; was (float)(-rebase.y) which lost precision
       .isOrtho = useOrthoProjection() ? 1.0f : 0.0f,
@@ -8453,8 +8450,8 @@ void render()
       .axisVisible = axisVisible,
       .screenHeight = static_cast<float>(drawableHeight),
       .screenWidth = static_cast<float>(drawableWidth),
-      .gridColorMajor = glm::vec3(0.5f, 0.5f, 0.5f),
-      .gridColorMinor = glm::vec3(0.3f, 0.3f, 0.3f),
+      .gridColorMajor = acgs::math::Vec3(0.5f, 0.5f, 0.5f),
+      .gridColorMinor = acgs::math::Vec3(0.3f, 0.3f, 0.3f),
       .gridOpacity = 0.6f,
       .logDepth = logDepth,
   };
@@ -8482,7 +8479,7 @@ void render()
   if (referenceLineVisible)
   {
     appendSceneLine(sceneOverlay, referenceLineStart, referenceLineEnd,
-                    glm::vec3(0.15f, 1.0f, 0.25f), 0.9f);
+                    acgs::math::Vec3(0.15f, 1.0f, 0.25f), 0.9f);
   }
   // Push the complete per-frame viewport context for every acgi
   // submission this frame (submit, text flush, outline primitives).
@@ -8503,7 +8500,7 @@ void render()
     ctx.ortho = useOrthoProjection();
     ctx.orthoSize = orbitCam.orthoSize();
     ctx.orbitDistance =
-        glm::length(orbitCam.Position - orbitCam.Target);
+        acgs::math::length(orbitCam.Position - orbitCam.Target);
     ctx.pixelSizeWorld = pixelSize;
     ctx.meshTextureIndex = gMeshTextureIndex;
     ctx.meshHeadlight = meshHeadlight();
@@ -8554,10 +8551,10 @@ void render()
         continue;
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::CadText, nullptr, nullptr, nullptr, &request});
-      const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+      const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
       static std::vector<rendering::FillVertex> textPickVertices;
       textPickVertices.clear();
-      glm::dvec3 layoutCenter(0.0);
+      acgs::math::DVec3 layoutCenter(0.0);
       // GRID_TEXT_PICK_QUADS=1: regression switch forcing the full-quad
       // pick shape (pre glyph-coverage behavior).
       static const bool textPickQuads = [] {
@@ -8567,7 +8564,7 @@ void render()
       }();
       for (const acgi::TextEngine::GlyphPlacement &placement : placements)
       {
-        for (const glm::dvec3 &worldCorner : placement.corners)
+        for (const acgs::math::DVec3 &worldCorner : placement.corners)
           layoutCenter += worldCorner;
         // Glyph-shaped coverage: the SDF iso-contour soup instead of the
         // full quad, so the ID texture and the selection highlight follow
@@ -8581,7 +8578,7 @@ void render()
           // Raster unavailable: keep the quad as the conservative shape.
           for (const int index : {0, 1, 2, 0, 2, 3})
             textPickVertices.push_back(
-                {glm::vec3(placement.corners[index] - cameraPos), idColor});
+                {acgs::math::Vec3(placement.corners[index] - cameraPos), idColor});
           continue;
         }
         for (size_t tri = 0; tri + 2 < coverage->size(); tri += 3)
@@ -8594,14 +8591,14 @@ void render()
             // while quad cornerV=1 is the top (see AcGiTextEngine::drawText:
             // cornerV carries uv v = 1 - cornerV). Invert v here so the
             // coverage lands on the glyph instead of its mirror.
-            const glm::dvec3 world =
+            const acgs::math::DVec3 world =
                 placement.corners[0] +
                 (placement.corners[1] - placement.corners[0]) *
                     double(uv.u) +
                 (placement.corners[3] - placement.corners[0]) *
                     double(1.0 - uv.v);
             textPickVertices.push_back(
-                {glm::vec3(world - cameraPos), idColor});
+                {acgs::math::Vec3(world - cameraPos), idColor});
           }
         }
       }
@@ -8638,8 +8635,8 @@ void render()
       // (the visible SDF pass never slab-discards).
       constexpr size_t kMaxTextPickChunkVertices = 3 * 21000;
       const double textPickDepth =
-          glm::dot(glm::dvec3(layoutCenter - cameraPos), frontVec);
-      const glm::vec4 textSlab(
+          acgs::math::dot(acgs::math::DVec3(layoutCenter - cameraPos), frontVec);
+      const acgs::math::Vec4 textSlab(
           1.0f, float(std::max(1.0, textPickDepth * 0.5)),
           float(std::max(2.0, textPickDepth * 2.0)), 0.0f);
       for (size_t first = 0; first < textPickVertices.size();
@@ -8654,24 +8651,24 @@ void render()
       }
       if (pickDebugEnabled())
       {
-        const glm::vec4 clip = projection * viewRte *
-                               glm::vec4(glm::vec3(layoutCenter - cameraPos),
+        const acgs::math::Vec4 clip = projection * viewRte *
+                               acgs::math::Vec4(acgs::math::Vec3(layoutCenter - cameraPos),
                                          1.0f);
-        const glm::dvec2 ndc(double(clip.x) / clip.w,
+        const acgs::math::DVec2 ndc(double(clip.x) / clip.w,
                              double(clip.y) / clip.w);
         int winW = 0, winH = 0;
         SDL_GetWindowSize(window, &winW, &winH);
-        glm::dvec2 ndcMin(1e9), ndcMax(-1e9);
+        acgs::math::DVec2 ndcMin(1e9), ndcMax(-1e9);
         double wMin = 1e9, wMax = -1e9;
         for (const rendering::FillVertex &v : textPickVertices)
         {
-          const glm::vec4 c = projection * viewRte *
-                              glm::vec4(v.position, 1.0f);
+          const acgs::math::Vec4 c = projection * viewRte *
+                              acgs::math::Vec4(v.position, 1.0f);
           if (c.w <= 1.0e-6)
             continue;
-          const glm::dvec2 n(double(c.x) / c.w, double(c.y) / c.w);
-          ndcMin = glm::min(ndcMin, n);
-          ndcMax = glm::max(ndcMax, n);
+          const acgs::math::DVec2 n(double(c.x) / c.w, double(c.y) / c.w);
+          ndcMin = acgs::math::min(ndcMin, n);
+          ndcMax = acgs::math::max(ndcMax, n);
           wMin = std::min(wMin, double(c.w));
           wMax = std::max(wMax, double(c.w));
         }
@@ -8704,8 +8701,8 @@ void render()
         outlineEntity->kind == VisibilityKind::MeshObject &&
         outlineEntity->mesh == object;
     appendScenePoint(sceneOverlay, object->worldPosition,
-                     meshSelected ? glm::vec3(kSelectionHighlightRGB)
-                                  : glm::vec3(meshEntityColor(*object)),
+                     meshSelected ? acgs::math::Vec3(kSelectionHighlightRGB)
+                                  : acgs::math::Vec3(meshEntityColor(*object)),
                      2.0);
   }
 
@@ -8719,17 +8716,17 @@ void render()
       !tinyDraws.empty())
   {
     static std::vector<rendering::FillVertex> tinyMeshPickVertices;
-    const glm::vec3 pickRight(orbitCam.Right);
-    const glm::vec3 pickUp(orbitCam.Up);
+    const acgs::math::Vec3 pickRight(orbitCam.Right);
+    const acgs::math::Vec3 pickUp(orbitCam.Up);
     const double referenceDistance =
-        glm::length(orbitCam.Position - orbitCam.Target);
+        acgs::math::length(orbitCam.Position - orbitCam.Target);
     for (const LargeCoordinateObject *object : tinyDraws)
     {
       if (!object || !meshEntityVisible(*object))
         continue;
 
-      const glm::dvec3 center = object->worldPosition;
-      const double depth = glm::dot(center - orbitCam.Position, orbitCam.Front);
+      const acgs::math::DVec3 center = object->worldPosition;
+      const double depth = acgs::math::dot(center - orbitCam.Position, orbitCam.Front);
       const double objectPixelSize =
           useOrthoProjection()
               ? double(pixelSize)
@@ -8741,16 +8738,16 @@ void render()
       const float radius = std::max(1.5f, float(2.0 * objectPixelSize));
       const uint32_t objectId = registerGpuPickEntity(
           {VisibilityKind::MeshObject, object, nullptr});
-      const glm::vec4 idColor = acgs::encodeGpuPickId(objectId);
+      const acgs::math::Vec4 idColor = acgs::encodeGpuPickId(objectId);
       // The visible impostor point draws with a half-pixel camera bias;
       // bias the ID quad identically or its depth z-fights with whatever
       // the tiny mesh sits on and the point's ID loses.
       const float pickBias = std::max(0.5f * float(objectPixelSize), 0.01f);
-      const glm::vec3 relative =
-          glm::vec3(center - orbitCam.Position) -
-          glm::vec3(orbitCam.Front) * pickBias;
-      const glm::vec3 right = pickRight * radius;
-      const glm::vec3 up = pickUp * radius;
+      const acgs::math::Vec3 relative =
+          acgs::math::Vec3(center - orbitCam.Position) -
+          acgs::math::Vec3(orbitCam.Front) * pickBias;
+      const acgs::math::Vec3 right = pickRight * radius;
+      const acgs::math::Vec3 up = pickUp * radius;
       tinyMeshPickVertices.clear();
       tinyMeshPickVertices.push_back({relative - right - up, idColor});
       tinyMeshPickVertices.push_back({relative + right - up, idColor});
@@ -8770,16 +8767,16 @@ void render()
   // every other draw call.
   // The camera focus marker remains a camera overlay, not a CAD entity.
   appendScenePoint(sceneOverlay, orbitCam.Target,
-                   glm::vec3(1.0f, 0.15f, 0.15f), 5.0);
+                   acgs::math::Vec3(1.0f, 0.15f, 0.15f), 5.0);
 
   if (frustumWireframeVisible)
   {
     constexpr int nearEdges[4][2] = {{0,1},{1,2},{2,3},{3,0}};
     constexpr int farEdges[4][2] = {{4,5},{5,6},{6,7},{7,4}};
     constexpr int sideEdges[4][2] = {{0,4},{1,5},{2,6},{3,7}};
-    const glm::vec3 nearColor(1.0f, 0.2f, 0.2f);
-    const glm::vec3 farColor(0.2f, 0.4f, 1.0f);
-    const glm::vec3 sideColor(1.0f, 1.0f, 1.0f);
+    const acgs::math::Vec3 nearColor(1.0f, 0.2f, 0.2f);
+    const acgs::math::Vec3 farColor(0.2f, 0.4f, 1.0f);
+    const acgs::math::Vec3 sideColor(1.0f, 1.0f, 1.0f);
     for (const auto &e : nearEdges)
       appendSceneLine(sceneOverlay, frustumCorners[e[0]],
                       frustumCorners[e[1]], nearColor, 0.9f);
@@ -8791,7 +8788,7 @@ void render()
                       frustumCorners[e[1]], sideColor, 0.9f);
     if (gridVisibleQuadValid)
     {
-      const glm::vec3 gridQuadColor(1.0f, 0.85f, 0.1f);
+      const acgs::math::Vec3 gridQuadColor(1.0f, 0.85f, 0.1f);
       for (int i = 0; i < gridVisibleQuadCount; ++i)
         appendSceneLine(sceneOverlay, gridVisibleQuad[i],
                         gridVisibleQuad[(i + 1) % gridVisibleQuadCount],
@@ -8894,7 +8891,7 @@ void render()
               : document.viewportTable().add(
                     "Top", document.allocateHandle());
       top->orbitCamera().setOrbit(acgsView().orbitCamera().Target, 2000.0);
-      top->orbitCamera().setViewDirection(glm::dvec3(0.0, 0.0, -1.0));
+      top->orbitCamera().setViewDirection(acgs::math::DVec3(0.0, 0.0, -1.0));
       top->orthoMode() = true;
       top->writeToViewportRecord(record);
     }
@@ -8906,7 +8903,7 @@ void render()
       const int pipWidth = std::max(1, currentDrawableWidth() / 4);
       const int pipHeight = std::max(1, currentDrawableHeight() / 4);
       const double pipHalfH = pipView->orbitCamera().orthoSize();
-      const glm::mat4 pipProjection = glm::mat4(glm::ortho(
+      const acgs::math::Mat4 pipProjection = acgs::math::Mat4(acgs::math::ortho(
           -pipHalfH * (double)aspect, pipHalfH * (double)aspect,
           -pipHalfH, pipHalfH, 1.0, 4.0e6));
       acgs::ViewFrameContext pipContext;
@@ -8921,7 +8918,7 @@ void render()
       pipContext.viewportHeight = pipHeight;
       pipContext.ortho = true;
       pipContext.orthoSize = pipHalfH;
-      pipContext.orbitDistance = glm::length(
+      pipContext.orbitDistance = acgs::math::length(
           pipView->orbitCamera().Position - pipView->orbitCamera().Target);
       pipContext.pixelSizeWorld =
           float((2.0 * pipHalfH) / double(pipHeight));
@@ -8937,11 +8934,11 @@ void render()
             pipCadDraws.push_back(&candidate);
         drawVectorPrimitivesDemo(
             pipContext.view, pipProjection, pipProjection, rebase,
-            glm::vec4(0.0f), pipContext.cameraPos, pipContext.cameraFront,
+            acgs::math::Vec4(0.0f), pipContext.cameraPos, pipContext.cameraFront,
             pipContext.cameraRight, pipContext.cameraUp,
             pipContext.pixelSizeWorld, pipCadDraws, {});
         drawLargeCoordinateObjects(pipContext.view, pipProjection, rebase,
-                                   drawOrder, glm::vec4(0.0f),
+                                   drawOrder, acgs::math::Vec4(0.0f),
                                    pipContext.pixelSizeWorld, 0.15f);
         acgsView().submit(sceneOverlay, {nullptr, pipContext.pixelSizeWorld});
         pipManager->endPipScene();
@@ -9089,14 +9086,14 @@ static void drawScenePanels()
       }
       const acgs::ViewFrameContext &frame = panelView.frame();
       const cadui::GripProjector project =
-          [&](const glm::dvec3 &world) -> std::optional<glm::vec2> {
-        const glm::vec4 clip =
+          [&](const acgs::math::DVec3 &world) -> std::optional<acgs::math::Vec2> {
+        const acgs::math::Vec4 clip =
             frame.overlayProjection * frame.view *
-            glm::vec4(glm::vec3(world - frame.cameraPos), 1.0f);
+            acgs::math::Vec4(acgs::math::Vec3(world - frame.cameraPos), 1.0f);
         if (!(clip.w > 0.0f))
           return std::nullopt;
-        const glm::vec2 ndc = glm::vec2(clip) / clip.w;
-        return glm::vec2((ndc.x * 0.5f + 0.5f) * avail.x,
+        const acgs::math::Vec2 ndc = acgs::math::Vec2(clip) / clip.w;
+        return acgs::math::Vec2((ndc.x * 0.5f + 0.5f) * avail.x,
                          (0.5f - ndc.y * 0.5f) * avail.y);
       };
       const std::vector<cadui::GripMarker> markers =
@@ -9210,9 +9207,9 @@ int main(int argc, char *argv[])
                                    &tx, &ty, &tz, &dist, &gx, &gy, &gz);
     if (fields >= 3)
     {
-      orbitCam.setOrbit(glm::dvec3(tx, ty, tz), std::max(1.0, dist));
+      orbitCam.setOrbit(acgs::math::DVec3(tx, ty, tz), std::max(1.0, dist));
       if (fields >= 7)
-        orbitCam.setViewDirection(glm::dvec3(gx, gy, gz));
+        orbitCam.setViewDirection(acgs::math::DVec3(gx, gy, gz));
       std::cout << "Camera start target: (" << tx << ", " << ty << ", "
                 << tz << ") distance=" << dist << std::endl;
     }
@@ -9227,7 +9224,7 @@ int main(int argc, char *argv[])
   // Distance after the OpenCAD-style fit has chosen its orientation.
   if (requestedOrthoHalfHeight > 0.0)
   {
-    const double tanHalfFov = std::tan(glm::radians(orbitCam.Zoom) * 0.5);
+    const double tanHalfFov = std::tan(acgs::math::radians(orbitCam.Zoom) * 0.5);
     orbitCam.setTargetDistance(requestedOrthoHalfHeight / tanHalfFov);
   }
   acgsView().resetDepthSlabs();
@@ -9530,7 +9527,7 @@ int main(int argc, char *argv[])
             top->orbitCamera().setOrbit(
                 acgsView().orbitCamera().Target, 200.0);
             top->orbitCamera().setViewDirection(
-                glm::dvec3(0.0, 0.0, -1.0));
+                acgs::math::DVec3(0.0, 0.0, -1.0));
             top->orthoMode() = true;
             top->writeToViewportRecord(record);
           }
@@ -9661,7 +9658,7 @@ int main(int argc, char *argv[])
       if (testAtValue && currentFrame >= std::atof(testAtValue))
       {
         largeCoordinateCameraView = false;
-        cubeWorldPosition = glm::dvec3(0.0);
+        cubeWorldPosition = acgs::math::DVec3(0.0);
         orbitCam.clearDepthBounds();
         orbitCam.setOrbit(cubeWorldPosition, 15.0);
         switchProjectionMode();
