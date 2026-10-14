@@ -4643,8 +4643,8 @@ int currentDrawableWidth()
 // uses double precision.  The direction is normalized in double.
 struct PickRay
 {
-    glm::dvec3 origin;
-    glm::dvec3 direction;
+    AcGePoint3d origin;
+    AcGeVector3d direction;
 };
 
 // Construct a picking ray from cursor NDC coordinates.
@@ -4654,7 +4654,8 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
                        const GpuPickCameraBasis &basis)
 {
     PickRay ray;
-    ray.origin = basis.position;
+    ray.origin = AcGePoint3d(basis.position);
+    const AcGeVector3d front(basis.front);
 
     if (basis.ortho)
     {
@@ -4664,9 +4665,9 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
         const double aspect = (double)currentDrawableWidth() /
                                (double)currentDrawableHeight();
         const double halfW = halfH * aspect;
-        ray.origin += basis.right * (ndcX * halfW) +
-                       basis.up * (ndcY * halfH);
-        ray.direction = glm::normalize(basis.front);
+        ray.origin += AcGeVector3d(basis.right) * (ndcX * halfW) +
+                      AcGeVector3d(basis.up) * (ndcY * halfH);
+        ray.direction = front.normal();
     }
     else
     {
@@ -4677,10 +4678,9 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
         const double aspect = (double)currentDrawableWidth() /
                                (double)currentDrawableHeight();
         const double tanHalfH = tanHalfV * aspect;
-        ray.direction = glm::normalize(
-            basis.front +
-            basis.right * (ndcX * tanHalfH) +
-            basis.up * (ndcY * tanHalfV));
+        ray.direction = (front + AcGeVector3d(basis.right) * (ndcX * tanHalfH) +
+                         AcGeVector3d(basis.up) * (ndcY * tanHalfV))
+                            .normal();
     }
     return ray;
 }
@@ -4729,22 +4729,27 @@ bool rayIntersectsAabb(const PickRay &ray,
                        const WorldAabb2 &bounds,
                        double &hitDepth)
 {
-    glm::dvec3 inverseDirection(1.0);
+    const double origin[] = {ray.origin.x, ray.origin.y, ray.origin.z};
+    const double direction[] = {ray.direction.x, ray.direction.y,
+                                ray.direction.z};
+    const double minimum[] = {bounds.min.x, bounds.min.y, bounds.min.z};
+    const double maximum[] = {bounds.max.x, bounds.max.y, bounds.max.z};
+    double enter = -std::numeric_limits<double>::infinity();
+    double exit = std::numeric_limits<double>::infinity();
     for (int axis = 0; axis < 3; ++axis)
     {
-        const double component = ray.direction[axis];
-        inverseDirection[axis] =
-            std::abs(component) < 1.0e-20
-                ? std::numeric_limits<double>::infinity()
-                : 1.0 / component;
+        if (std::abs(direction[axis]) < 1.0e-20)
+        {
+            if (origin[axis] < minimum[axis] || origin[axis] > maximum[axis])
+                return false;
+            continue;
+        }
+        const double inverse = 1.0 / direction[axis];
+        const double first = (minimum[axis] - origin[axis]) * inverse;
+        const double second = (maximum[axis] - origin[axis]) * inverse;
+        enter = std::max(enter, std::min(first, second));
+        exit = std::min(exit, std::max(first, second));
     }
-
-    const glm::dvec3 minimum = (bounds.min - ray.origin) * inverseDirection;
-    const glm::dvec3 maximum = (bounds.max - ray.origin) * inverseDirection;
-    const glm::dvec3 nearDeltas = glm::min(minimum, maximum);
-    const glm::dvec3 farDeltas  = glm::max(minimum, maximum);
-    const double enter = std::max({nearDeltas.x, nearDeltas.y, nearDeltas.z});
-    const double exit  = std::min({farDeltas.x,  farDeltas.y,  farDeltas.z});
     const double minDepth = pickMinDepth();
     if (exit < std::max(enter, minDepth))
         return false;
@@ -4824,7 +4829,7 @@ const CadRangeBvh &getCadRangeBvh()
     return bvh;
 }
 
-double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint);
+double cadPickTolerance(const PickRay &ray, const AcGePoint3d &worldPoint);
 
 // Closest approach between a normalized picking ray and a finite segment.
 // Keeping every intermediate value in double avoids false hits/misses in the
@@ -4835,32 +4840,32 @@ double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint);
 // true miss distance.
 static double raySegmentClosestRayParameter(
     const PickRay &ray,
-    const glm::dvec3 &start,
-    const glm::dvec3 &end,
+    const AcGePoint3d &start,
+    const AcGePoint3d &end,
     double &segmentParameter,
     double depthNear,
     double depthFar,
     bool semiInfiniteRay)
 {
-    const glm::dvec3 segment = end - start;
-    const double segmentLength2 = glm::dot(segment, segment);
+    const AcGeVector3d segment = end - start;
+    const double segmentLength2 = segment.lengthSq();
     if (segmentLength2 < 1.0e-24)
     {
         segmentParameter = 0.0;
         return std::numeric_limits<double>::quiet_NaN();
     }
 
-    const glm::dvec3 originToStart = ray.origin - start;
-    const double uu = glm::dot(ray.direction, ray.direction);
-    const double uv = glm::dot(ray.direction, segment);
+    const AcGeVector3d originToStart = ray.origin - start;
+    const double uu = ray.direction.lengthSq();
+    const double uv = ray.direction.dotProduct(segment);
     const double vv = segmentLength2;
-    const double wd = glm::dot(originToStart, ray.direction);
-    const double we = glm::dot(originToStart, segment);
+    const double wd = originToStart.dotProduct(ray.direction);
+    const double we = originToStart.dotProduct(segment);
     const double denominator = uu * vv - uv * uv;
 
     auto clampSegmentParameter = [&](double value) {
-        return semiInfiniteRay ? glm::max(0.0, value)
-                               : glm::clamp(value, 0.0, 1.0);
+        return semiInfiniteRay ? std::max(0.0, value)
+                               : std::clamp(value, 0.0, 1.0);
     };
 
     double segmentParameterValue;
@@ -4875,7 +4880,7 @@ static double raySegmentClosestRayParameter(
     // outside the object slab.  Do not let the slab reject that screen-space
     // entity; autofocus still ignores infinite entities.
     if (!semiInfiniteRay || !pickIsOrthoProjection())
-        rayParameter = glm::clamp(rayParameter, depthNear, depthFar);
+        rayParameter = std::clamp(rayParameter, depthNear, depthFar);
     // The closest point on the segment must follow the clamped ray parameter.
     segmentParameterValue = denominator > std::max(1.0e-24, vv * 1.0e-14)
         ? clampSegmentParameter((uv * rayParameter + we) / vv)
@@ -4891,8 +4896,8 @@ static double raySegmentClosestRayParameter(
 // stroke steal every pick in the view.
 bool rayIntersectsSegmentWithTolerance(
     const PickRay &ray,
-    const glm::dvec3 &start,
-    const glm::dvec3 &end,
+    const AcGePoint3d &start,
+    const AcGePoint3d &end,
     const std::function<double(double rayDepth)> &toleranceAtDepth,
     double &hitDepth,
     double depthNear = pickMinDepth(),
@@ -4906,9 +4911,9 @@ bool rayIntersectsSegmentWithTolerance(
     if (!std::isfinite(rayParameter))
         return false;
 
-    const glm::dvec3 rayPoint = ray.origin + ray.direction * rayParameter;
-    const glm::dvec3 segmentPoint = start + (end - start) * segmentParameter;
-    if (glm::distance(rayPoint, segmentPoint) >
+    const AcGePoint3d rayPoint = ray.origin + ray.direction * rayParameter;
+    const AcGePoint3d segmentPoint = start + (end - start) * segmentParameter;
+    if (rayPoint.distanceTo(segmentPoint) >
         toleranceAtDepth(rayParameter))
         return false;
 
@@ -4917,8 +4922,8 @@ bool rayIntersectsSegmentWithTolerance(
 }
 
 bool rayIntersectsSegment(const PickRay &ray,
-                          const glm::dvec3 &start,
-                          const glm::dvec3 &end,
+                          const AcGePoint3d &start,
+                          const AcGePoint3d &end,
                           double tolerance,
                           double &hitDepth,
                           double depthNear = pickMinDepth(),
@@ -4931,32 +4936,32 @@ bool rayIntersectsSegment(const PickRay &ray,
 }
 
 bool rayIntersectsTriangle(const PickRay &ray,
-                           const glm::dvec3 &a,
-                           const glm::dvec3 &b,
-                           const glm::dvec3 &c,
+                           const AcGePoint3d &a,
+                           const AcGePoint3d &b,
+                           const AcGePoint3d &c,
                            double &hitDepth,
                            double depthNear = pickMinDepth(),
                            double depthFar = pickMaxDepth())
 {
-    const glm::dvec3 edge1 = b - a;
-    const glm::dvec3 edge2 = c - a;
-    const glm::dvec3 pvec = glm::cross(ray.direction, edge2);
-    const double determinant = glm::dot(edge1, pvec);
+    const AcGeVector3d edge1 = b - a;
+    const AcGeVector3d edge2 = c - a;
+    const AcGeVector3d pvec = ray.direction.crossProduct(edge2);
+    const double determinant = edge1.dotProduct(pvec);
     if (std::abs(determinant) < 1.0e-24)
         return false;
 
     const double inverseDeterminant = 1.0 / determinant;
-    const glm::dvec3 tvec = ray.origin - a;
-    const double u = glm::dot(tvec, pvec) * inverseDeterminant;
+    const AcGeVector3d tvec = ray.origin - a;
+    const double u = tvec.dotProduct(pvec) * inverseDeterminant;
     if (u < 0.0 || u > 1.0)
         return false;
 
-    const glm::dvec3 qvec = glm::cross(tvec, edge1);
-    const double v = glm::dot(ray.direction, qvec) * inverseDeterminant;
+    const AcGeVector3d qvec = tvec.crossProduct(edge1);
+    const double v = ray.direction.dotProduct(qvec) * inverseDeterminant;
     if (v < 0.0 || u + v > 1.0)
         return false;
 
-    const double depth = glm::dot(edge2, qvec) * inverseDeterminant;
+    const double depth = edge2.dotProduct(qvec) * inverseDeterminant;
     if (depth < depthNear || depth > depthFar)
         return false;
 
@@ -5000,8 +5005,8 @@ bool rayIntersectsCadPairedBand(const PickRay &ray,
 
     bool hit = false;
     double best = std::numeric_limits<double>::infinity();
-    auto consider = [&](const glm::dvec3 &a, const glm::dvec3 &b,
-                        const glm::dvec3 &c) {
+    auto consider = [&](const AcGePoint3d &a, const AcGePoint3d &b,
+                        const AcGePoint3d &c) {
         double depth = 0.0;
         if (rayIntersectsTriangle(ray, a, b, c, depth) && depth < best)
         {
@@ -5026,15 +5031,15 @@ bool rayIntersectsCadPairedBand(const PickRay &ray,
 }
 
 bool rayIntersectsPoint(const PickRay &ray,
-                        const glm::dvec3 &location,
+                        const AcGePoint3d &location,
                         double tolerance,
                         double &hitDepth)
 {
-    const double depth = glm::dot(location - ray.origin, ray.direction);
+    const double depth = (location - ray.origin).dotProduct(ray.direction);
     if (!pickDepthInRange(depth))
         return false;
-    const glm::dvec3 rayPoint = ray.origin + ray.direction * depth;
-    if (glm::distance(rayPoint, location) > tolerance)
+    const AcGePoint3d rayPoint = ray.origin + ray.direction * depth;
+    if (rayPoint.distanceTo(location) > tolerance)
         return false;
 
     hitDepth = depth;
@@ -5050,7 +5055,6 @@ bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
 {
     const std::vector<float> &edges =
         rendering::proceduralMeshFeatureEdges(object.mesh);
-    const glm::dvec3 objectCenter(object.worldPosition);
     bool hit = false;
     double best = std::numeric_limits<double>::infinity();
 
@@ -5058,13 +5062,13 @@ bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
     {
         auto position = [&](size_t index) {
             const size_t first = index * 8;
-            return glm::dvec3(edges[first], edges[first + 1],
-                              edges[first + 2]);
+            return AcGePoint3d(edges[first], edges[first + 1],
+                               edges[first + 2]);
         };
-        const glm::dvec3 a = position(vertex);
-        const glm::dvec3 b = position(vertex + 1);
-        const glm::dvec3 worldPoint =
-            object.worldPosition + ((a + b) * 0.5) * scale;
+        const AcGePoint3d a = position(vertex);
+        const AcGePoint3d b = position(vertex + 1);
+        const AcGePoint3d worldPoint =
+            object.worldPosition + (a.asVector() + b.asVector()) * (0.5 * scale);
         const double tolerance =
             cadPickTolerance(ray, worldPoint) / scale;
         double depth = 0.0;
@@ -5091,7 +5095,7 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
                                double &hitDepth, size_t *faceIndex = nullptr)
 {
     const double scale = std::max(1.0e-12, static_cast<double>(object.size));
-    const double directionLength = glm::length(ray.direction);
+    const double directionLength = ray.direction.length();
     if (directionLength < 1.0e-20)
         return false;
 
@@ -5101,11 +5105,12 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     const double localDepthFar = ortho
         ? g_pickDepthFar * directionLength / scale
         : std::numeric_limits<double>::infinity();
-    const glm::dvec3 origin =
-        (ray.origin - glm::dvec3(object.worldPosition)) / scale;
-    const glm::dvec3 direction = ray.direction / directionLength;
+    const AcGeVector3d origin =
+        (ray.origin - object.worldPosition) / scale;
+    const AcGeVector3d direction = ray.direction / directionLength;
     double best = std::numeric_limits<double>::infinity();
-    const PickRay localRay{origin, direction};
+    const PickRay localRay{AcGePoint3d(origin.x, origin.y, origin.z),
+                           direction};
 
     const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
         ? acgs::acgsGetManager()->deviceRenderModeFlags()
@@ -5168,19 +5173,20 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
 // CAD strokes and points are visible as screen-space primitives, so use a
 // cursor-sized tolerance instead of a fixed radius that disappears when the
 // large-coordinate demo is zoomed out.
-double cadPickTolerance(const PickRay &ray, const glm::dvec3 &worldPoint)
+double cadPickTolerance(const PickRay &ray, const AcGePoint3d &worldPoint)
 {
     const double worldPerPixel = useOrthoProjection()
         ? 2.0 * orbitCam.orthoSize() / currentDrawableHeight()
         : 2.0 * std::max(0.0,
-              glm::dot(worldPoint - ray.origin, orbitCam.Front)) *
+              (worldPoint - ray.origin)
+                  .dotProduct(AcGeVector3d(orbitCam.Front))) *
           std::tan(glm::radians(45.0) * 0.5) /
           currentDrawableHeight();
     return worldPerPixel * 5.0;
 }
 
 double cadCurvePickTolerance(const PickRay &ray,
-                             const glm::dvec3 &worldPoint)
+                             const AcGePoint3d &worldPoint)
 {
     // CurveBatchCommand is projected like every other cursor-sized overlay.
     // A fixed world-space radius is wrong as soon as ortho zoom changes.
@@ -5189,7 +5195,7 @@ double cadCurvePickTolerance(const PickRay &ray,
 
 double cadStrokePickTolerance(const PickRay &ray,
                               const acdb::Stroke &stroke,
-                              const glm::dvec3 &worldPoint)
+                              const AcGePoint3d &worldPoint)
 {
     const double renderedHalfWidth = acgsView().strokeHalfWidth(stroke);
     return std::max(cadPickTolerance(ray, worldPoint), renderedHalfWidth);
@@ -5771,9 +5777,9 @@ std::optional<AutofocusResult> autofocusAtNdc(
 // refinement so both sides address the identical rectangle.
 struct TextBlockFrame
 {
-  glm::dvec3 right{1.0, 0.0, 0.0};
-  glm::dvec3 up{0.0, 1.0, 0.0};
-  glm::dvec3 normal{0.0, 0.0, 1.0};
+  AcGeVector3d right{1.0, 0.0, 0.0};
+  AcGeVector3d up{0.0, 1.0, 0.0};
+  AcGeVector3d normal{0.0, 0.0, 1.0};
   double width = 1.0;
   double minV = 0.0;
   double maxV = 1.0;
@@ -5782,15 +5788,15 @@ struct TextBlockFrame
 static TextBlockFrame textBlockFrame(const acgi::TextRequest &request)
 {
   TextBlockFrame frame;
-  frame.right = request.direction;
-  if (glm::dot(frame.right, frame.right) < 1.0e-18)
-    frame.right = glm::dvec3(1.0, 0.0, 0.0);
-  frame.right = glm::normalize(frame.right);
-  frame.normal = glm::normalize(request.normal);
-  frame.up = glm::cross(frame.normal, frame.right);
-  if (glm::dot(frame.up, frame.up) < 1.0e-18)
-    frame.up = glm::dvec3(0.0, 0.0, 1.0);
-  frame.up = glm::normalize(frame.up);
+  frame.right = AcGeVector3d(request.direction);
+  if (frame.right.lengthSq() < 1.0e-18)
+    frame.right = AcGeVector3d(1.0, 0.0, 0.0);
+  frame.right.normalize();
+  frame.normal = AcGeVector3d(request.normal).normal();
+  frame.up = frame.normal.crossProduct(frame.right);
+  if (frame.up.lengthSq() < 1.0e-18)
+    frame.up = AcGeVector3d(0.0, 0.0, 1.0);
+  frame.up.normalize();
 
   size_t lineCount = 1;
   double longest = 0.0;
@@ -5897,19 +5903,21 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
       // plane and block rectangle (the same frame the ID quads used).
       const acgi::TextRequest &request = *pickEntity->text;
       const TextBlockFrame frame = textBlockFrame(request);
-      const double denom = glm::dot(ray.direction, frame.normal);
+      const double denom = ray.direction.dotProduct(frame.normal);
       double hitDepth = 0.0;
       bool hit = false;
       if (std::abs(denom) > 1.0e-12)
       {
         const double t =
-            glm::dot(request.position - ray.origin, frame.normal) / denom;
+            (AcGePoint3d(request.position) - ray.origin)
+                    .dotProduct(frame.normal) /
+                denom;
         if (t > 0.0)
         {
-          const glm::dvec3 local =
-              ray.origin + ray.direction * t - request.position;
-          const double u = glm::dot(local, frame.right);
-          const double v = glm::dot(local, frame.up);
+          const AcGeVector3d local =
+              ray.origin + ray.direction * t - AcGePoint3d(request.position);
+          const double u = local.dotProduct(frame.right);
+          const double v = local.dotProduct(frame.up);
           const double margin = request.height * 0.25;
           if (-margin <= u && u <= frame.width + margin &&
               frame.minV - margin <= v && v <= frame.maxV + margin)
