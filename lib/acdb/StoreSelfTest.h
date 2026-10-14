@@ -84,13 +84,47 @@ inline int runStoreSelfTest()
     // ---------------- document ↔ scene bridge ----------------
     {
         AcDbDatabase doc;
+        AcDbLayerTableRecord &importedLayer =
+            doc.layerTable().add("Imported", doc.allocateHandle());
+        importedLayer.isFrozen = true;
         acgs::SceneStore store;
         {
             acgs::DocumentSceneBridge bridge(doc, store);
             bridge.open();
-            check(store.count() == doc.entityCount() +
-                                       doc.nonGraphicalObjectCount(),
-                  "open mirrors every current resident");
+            std::size_t expectedResidents =
+                doc.entityCount() + doc.nonGraphicalObjectCount();
+            doc.layerTable().forEach(
+                [&](const std::string &, const AcDbLayerTableRecord &) {
+                    ++expectedResidents;
+                });
+            doc.linetypeTable().forEach(
+                [&](const std::string &, const AcDbLinetypeTableRecord &) {
+                    ++expectedResidents;
+                });
+            doc.textStyleTable().forEach(
+                [&](const std::string &, const AcDbTextStyleTableRecord &) {
+                    ++expectedResidents;
+                });
+            doc.blockTable().forEach(
+                [&](const std::string &, const AcDbBlockTableRecord &) {
+                    ++expectedResidents;
+                });
+            doc.viewportTable().forEach(
+                [&](const std::string &, const AcDbViewportTableRecord &) {
+                    ++expectedResidents;
+                });
+            doc.viewTable().forEach(
+                [&](const std::string &, const AcDbViewTableRecord &) {
+                    ++expectedResidents;
+                });
+            check(store.count() == expectedResidents,
+                  "open mirrors entity, table, and dictionary records");
+            const entt::entity importedLayerEntity =
+                store.find(AcDbObjectId{importedLayer.handle});
+            check(store.registry()
+                          .get<acgs::LayerTablePayload>(importedLayerEntity)
+                          .value.isFrozen,
+                  "open mirrors full layer table data");
 
             AcDbLine line;
             line.start = {0.0, 0.0, 0.0};
@@ -104,6 +138,13 @@ inline int runStoreSelfTest()
                               store.find(live))
                           .name == "0",
                   "appended entity mirrors its layer (LayerRef)");
+            check(std::get<AcDbLine>(
+                      store.registry()
+                          .get<acgs::DocumentEntityPayload>(
+                              store.find(live))
+                          .value)
+                          .end.x == 1.0,
+                  "appended entity mirrors its full database payload");
 
             // Block references additionally mirror their placement.
             AcDbPoint member;
@@ -233,12 +274,34 @@ inline int runStoreSelfTest()
             replacementLine.end = {21.0, 0.0, 0.0};
             const AcDbHandle replacementHandle =
                 replacement.addEntity(std::move(replacementLine));
+            AcDbPoint replacementPoint;
+            replacementPoint.location = {22.0, 0.0, 0.0};
+            const AcDbHandle replacementPointHandle =
+                replacement.addEntity(std::move(replacementPoint));
+            const entt::entity oldReusedHandleEntity =
+                store.find(AcDbObjectId{replacementPointHandle});
+            if (oldReusedHandleEntity != entt::null)
+                store.registry().assign<acgs::Drawable>(
+                    oldReusedHandleEntity, acgs::Drawable{123});
+            const std::uint64_t beforeReplaceRevision = store.revision();
             doc.replaceContents(std::move(replacement));
             check(store.contains(AcDbObjectId{replacementHandle}) &&
                       store.isDirty(AcDbObjectId{replacementHandle}) &&
                       !store.contains(editedId) &&
-                      !store.contains(referenceId),
+                      !store.contains(referenceId) &&
+                      store.revision() > beforeReplaceRevision,
                   "database replacement refreshes and reconciles the scene");
+            const entt::entity replacedPointEntity =
+                store.find(AcDbObjectId{replacementPointHandle});
+            check(replacedPointEntity != entt::null &&
+                      !store.registry().has<acgs::Drawable>(
+                          replacedPointEntity) &&
+                      std::holds_alternative<AcDbPoint>(
+                          store.registry()
+                              .get<acgs::DocumentEntityPayload>(
+                                  replacedPointEntity)
+                              .value),
+                  "database replacement resets and repopulates ECS payloads");
             AcDbPoint afterReplace;
             const AcDbHandle afterReplaceHandle =
                 doc.addEntity(std::move(afterReplace));

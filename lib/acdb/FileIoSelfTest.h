@@ -741,6 +741,42 @@ inline void verifyDwgImportHelpers(FILE *log, int &fails)
     check(closeEnough(lineWeightValueToPixels(25),
                       0.25 * 96.0 / 25.4),
           "lineweight physical-to-pixel conversion");
+
+    AcDbDatabase visibilityDatabase;
+    AcDbLayerTableRecord &offLayer =
+        visibilityDatabase.layerTable().add(
+            "Off", visibilityDatabase.allocateHandle());
+    offLayer.isOff = true;
+    AcDbLayerTableRecord &frozenLayer =
+        visibilityDatabase.layerTable().add(
+            "Frozen", visibilityDatabase.allocateHandle());
+    frozenLayer.isFrozen = true;
+    check(!importedLayerIsVisible(visibilityDatabase, "Off") &&
+              !importedLayerIsVisible(visibilityDatabase, "Frozen") &&
+              importedLayerIsVisible(visibilityDatabase, "0"),
+          "DWG off/frozen layer visibility");
+
+    AcDbHatch hatch;
+    hatch.outerLoop = {AcGePoint3d(0.0, 0.0, 0.0),
+                       AcGePoint3d(10.0, 0.0, 0.0),
+                       AcGePoint3d(10.0, 10.0, 0.0),
+                       AcGePoint3d(0.0, 10.0, 0.0)};
+    hatch.innerLoops.push_back({AcGePoint3d(3.0, 3.0, 0.0),
+                                AcGePoint3d(7.0, 3.0, 0.0),
+                                AcGePoint3d(7.0, 7.0, 0.0),
+                                AcGePoint3d(3.0, 7.0, 0.0)});
+    const std::vector<Triangle> hatchTriangles =
+        hatchSolidFillTriangles(hatch);
+    double filledArea = 0.0;
+    for (const Triangle &triangle : hatchTriangles)
+    {
+        const double twiceArea =
+            (triangle.b.x - triangle.a.x) * (triangle.c.y - triangle.a.y) -
+            (triangle.b.y - triangle.a.y) * (triangle.c.x - triangle.a.x);
+        filledArea += std::abs(twiceArea) * 0.5;
+    }
+    check(closeEnough(filledArea, 84.0),
+          "solid hatch inner-loop area");
 }
 
 inline void verifyArchitecturalFixture(FILE *log, int &fails)

@@ -227,6 +227,21 @@ Value encodePayload(const AcDbHatch &e)
     out.set("patternName", e.patternName);
     out.set("patternScale", e.patternScale);
     out.set("patternAngle", e.patternAngle);
+    Value patternLines(json::Array{});
+    for (const AcDbHatchPatternLine &line : e.patternLines)
+    {
+        Value encoded(json::Object{});
+        encoded.set("angle", line.angle);
+        encoded.set("basePoint",
+                    Value(json::Array{Value(line.basePoint.x),
+                                      Value(line.basePoint.y)}));
+        encoded.set("offset",
+                    Value(json::Array{Value(line.offset.x),
+                                      Value(line.offset.y)}));
+        encoded.set("dashes", doublesToJson(line.dashes));
+        patternLines.push(std::move(encoded));
+    }
+    out.set("patternLines", std::move(patternLines));
     return out;
 }
 
@@ -295,6 +310,7 @@ Value encodePayload(const AcDbMline &e)
     out.set("vertices", pointsToJson(e.vertices));
     out.set("scale", vec3ToJson(e.scale));
     out.set("closed", e.closed);
+    out.set("styleName", e.styleName);
     return out;
 }
 
@@ -808,6 +824,32 @@ bool decodeInto(const Value &commonData, const Value &data,
             payload.patternScale = v->asNumber(1.0);
         if (const Value *v = data.find("patternAngle"))
             payload.patternAngle = v->asNumber();
+        if (const Value *v = data.find("patternLines"))
+            for (const Value &item : v->asArray())
+            {
+                AcDbHatchPatternLine line;
+                if (const Value *angle = item.find("angle"))
+                    line.angle = angle->asNumber();
+                if (const Value *basePoint = item.find("basePoint"))
+                {
+                    const json::Array &point = basePoint->asArray();
+                    if (point.size() >= 2)
+                        line.basePoint =
+                            AcGePoint2d(point[0].asNumber(),
+                                        point[1].asNumber());
+                }
+                if (const Value *offset = item.find("offset"))
+                {
+                    const json::Array &vector = offset->asArray();
+                    if (vector.size() >= 2)
+                        line.offset =
+                            AcGeVector2d(vector[0].asNumber(),
+                                         vector[1].asNumber());
+                }
+                if (const Value *dashes = item.find("dashes"))
+                    line.dashes = jsonToDoubles(*dashes);
+                payload.patternLines.push_back(std::move(line));
+            }
     }
     else if constexpr (std::is_same_v<Payload, AcDb3dPolyline>)
     {
@@ -888,6 +930,8 @@ bool decodeInto(const Value &commonData, const Value &data,
             payload.scale = jsonToVec3(*v, {1.0, 1.0, 1.0});
         if (const Value *v = data.find("closed"))
             payload.closed = v->asBool();
+        if (const Value *v = data.find("styleName"))
+            payload.styleName = v->asString();
     }
     else if constexpr (std::is_same_v<Payload, AcDbPolyFaceMesh>)
     {
@@ -1507,6 +1551,19 @@ void executeSchema(SQLite::Database &db)
             "is_frozen INTEGER, is_plottable INTEGER)");
     db.exec("CREATE TABLE IF NOT EXISTS linetypes("
             "name TEXT PRIMARY KEY, handle INTEGER, description TEXT)");
+    auto hasColumn = [&](const char *name) {
+        SQLite::Statement columns(db, "PRAGMA table_info(linetypes)");
+        while (columns.executeStep())
+            if (columns.getColumn(1).getString() == name)
+                return true;
+        return false;
+    };
+    if (!hasColumn("pattern"))
+        db.exec("ALTER TABLE linetypes ADD COLUMN pattern TEXT "
+                "NOT NULL DEFAULT '[]'");
+    if (!hasColumn("pattern_length"))
+        db.exec("ALTER TABLE linetypes ADD COLUMN pattern_length REAL "
+                "NOT NULL DEFAULT 0");
     db.exec("CREATE TABLE IF NOT EXISTS text_styles("
             "name TEXT PRIMARY KEY, handle INTEGER, file_name TEXT,"
             "big_font TEXT, text_size REAL, oblique REAL)");
@@ -1597,11 +1654,15 @@ StoreResult saveDatabase(const AcDbDatabase &database, const char *path)
         });
         database.linetypeTable().forEach([&](const std::string &name,
                                              const AcDbLinetypeTableRecord &r) {
-            SQLite::Statement insert(db,
-                "INSERT INTO linetypes VALUES (?,?,?)");
+            SQLite::Statement insert(
+                db, "INSERT INTO linetypes"
+                    "(name, handle, description, pattern, pattern_length) "
+                    "VALUES (?,?,?,?,?)");
             insert.bind(1, name);
             insert.bind(2, std::int64_t(r.handle.value));
             insert.bind(3, r.description);
+            insert.bind(4, doublesToJson(r.pattern).dump());
+            insert.bind(5, r.patternLength);
             insert.exec();
         });
         database.textStyleTable().forEach([&](const std::string &name,
@@ -1907,8 +1968,9 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
             }
         }
         {
-            SQLite::Statement rows(db,
-                "SELECT name, handle, description FROM linetypes");
+            SQLite::Statement rows(
+                db, "SELECT name, handle, description, pattern, "
+                    "pattern_length FROM linetypes");
             while (rows.executeStep())
             {
                 const std::string name = rows.getColumn(0).getString();
@@ -1920,6 +1982,16 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
                     loaded.linetypeTable()
                         .getMutable(name)
                         ->handle = handle;
+                AcDbLinetypeTableRecord *record =
+                    loaded.linetypeTable().getMutable(name);
+                if (record != nullptr)
+                {
+                    record->description = rows.getColumn(2).getString();
+                    if (const auto pattern =
+                            json::parse(rows.getColumn(3).getString()))
+                        record->pattern = jsonToDoubles(*pattern);
+                    record->patternLength = rows.getColumn(4).getDouble();
+                }
             }
         }
         {

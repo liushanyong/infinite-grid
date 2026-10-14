@@ -16,6 +16,7 @@ struct AcDbMline
     std::vector<AcGePoint3d> vertices;
     AcGeVector3d scale{1.0, 1.0, 1.0};
     bool closed = false;
+    std::string styleName;
 };
 
 } // namespace acdb

@@ -21,6 +21,7 @@
 #include "acdb/AcDbDatabase.h"
 #include "acdb/AcDbEntityWorldDraw.h"
 #include "acdb/AcDbTransform.h"
+#include "acgi/AcGiLineType.h"
 #include "acgi/AcGiTextEngine.h"
 #include "acgs/model/DrawContext.h"
 #include "acgs/model/AcGsModel.h"
@@ -88,6 +89,7 @@ public:
   void record(const acdb::AcDbDatabase &document,
               const acdb::TesselationOptions &options, MetafileT &target)
   {
+    registerLineTypes(document);
     for (const acdb::AcDbHandle handle :
          document.modelSpace().entityHandles())
     {
@@ -104,6 +106,7 @@ public:
                      const acdb::TesselationOptions &options,
                      MetafileT &target)
   {
+    registerLineTypes(document);
     for (const acdb::AcDbHandle handle : handles)
       recordEntity(document, handle, options, target);
   }
@@ -115,8 +118,11 @@ public:
                            const acdb::TesselationOptions &options,
                            MetafileT &target, bool fillIs3DFace = false,
                            AcGsPickShape pickShape =
-                               AcGsPickShape::Primitives)
+                               AcGsPickShape::Primitives,
+                           const std::string &lineType = {})
   {
+    if (!entity.common.visible)
+      return;
     auto addRange = [name, pickShape](
                         std::vector<AcGsEntityRange> &ranges, std::size_t begin,
                         std::size_t end) {
@@ -128,6 +134,8 @@ public:
     const std::size_t pointBegin = target.geometry.points.size();
     ViewportDraw draw(target.geometry, options);
     draw.subEntityTraits().setFrom(entity.common);
+    if (!lineType.empty())
+      draw.subEntityTraits().setLineType(lineType);
     acdb::worldDraw(entity, draw, fillIs3DFace);
     addRange(target.strokeRanges, strokeBegin,
              target.geometry.strokes.size());
@@ -198,6 +206,25 @@ private:
     }
   }
 
+  static std::string effectiveLineType(
+      const acdb::AcDbDatabase &document, const acdb::AcDbEntity &entity)
+  {
+    if (entity.lineType != "ByLayer")
+      return entity.lineType;
+    const acdb::AcDbLayerTableRecord *layer =
+        document.layerTable().get(entity.layer);
+    return layer != nullptr ? layer->lineType : "Continuous";
+  }
+
+  static void registerLineTypes(const acdb::AcDbDatabase &document)
+  {
+    document.linetypeTable().forEach(
+        [](const std::string &name,
+           const acdb::AcDbLinetypeTableRecord &record) {
+          acgiRegisterLineType(name, record.pattern);
+        });
+  }
+
   template <typename MetafileT>
   static void appendBlockReference(
       const acdb::AcDbDatabase &document, acdb::AcDbHandle insertHandle,
@@ -223,7 +250,10 @@ private:
           std::visit(
               [&](const auto &entity) {
                 appendEntity(entity, acdb::common(instance).name.c_str(),
-                             options, target);
+                             options, target, false,
+                             AcGsPickShape::Primitives,
+                             effectiveLineType(document,
+                                               acdb::common(instance)));
               },
               instance);
         });
@@ -285,7 +315,10 @@ private:
                   [&](const auto &entity) {
                     appendEntity(entity,
                                  acdb::common(instance).name.c_str(),
-                                 options, target);
+                                 options, target, false,
+                                 AcGsPickShape::Primitives,
+                                 effectiveLineType(document,
+                                                   acdb::common(instance)));
                   },
                   instance);
             });
@@ -303,7 +336,8 @@ private:
                     MetafileT &target)
   {
     const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
-    if (payload == nullptr || document.isErased(handle))
+    if (payload == nullptr || document.isErased(handle) ||
+        !acdb::common(*payload).visible)
       return;
     if (const auto *reference =
             std::get_if<acdb::AcDbBlockReference>(payload))
@@ -330,7 +364,9 @@ private:
     std::visit(
         [&](const auto &entity) {
           appendEntity(entity, name.c_str(), options, target,
-                       hints.fillIs3DFace, hints.pickShape);
+                       hints.fillIs3DFace, hints.pickShape,
+                       effectiveLineType(document,
+                                         acdb::common(*payload)));
         },
         *payload);
   }
