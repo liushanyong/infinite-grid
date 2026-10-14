@@ -247,8 +247,12 @@ public:
     };
 
     // Expand a collected draw list into the renderer's channels.
+    void submit(acgs::AcGsModel &drawList)
+    {
+        submit(drawList, SubmitOptions{});
+    }
     void submit(acgs::AcGsModel &drawList,
-                const SubmitOptions &options = {});
+                const SubmitOptions &options);
 
     // Flush the queued text requests as SDF glyph quads; returns the number
     // of glyphs drawn.
