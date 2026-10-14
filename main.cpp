@@ -56,6 +56,7 @@
 #include <limits>
 #include <chrono>
 #include <functional>
+#include <numbers>
 
 #include "text/text_font.h"
 
@@ -4673,8 +4674,7 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
     {
         // Object rendering intentionally keeps a fixed 45 degree perspective
         // FOV; OrbitCamera::Zoom controls only orthographic framing.
-        const double tanHalfV =
-            std::tan(glm::radians(45.0) * 0.5);
+        const double tanHalfV = std::tan(std::numbers::pi_v<double> / 8.0);
         const double aspect = (double)currentDrawableWidth() /
                                (double)currentDrawableHeight();
         const double tanHalfH = tanHalfV * aspect;
@@ -5018,10 +5018,10 @@ bool rayIntersectsCadPairedBand(const PickRay &ray,
     for (size_t i = 0; i < band.segmentCount; ++i)
     {
         const size_t next = (i + 1) % band.left->points.size();
-        const glm::dvec3 &li = band.left->points[i];
-        const glm::dvec3 &ln = band.left->points[next];
-        const glm::dvec3 &ri = band.right->points[i];
-        const glm::dvec3 &rn = band.right->points[next];
+        const AcGePoint3d li(band.left->points[i]);
+        const AcGePoint3d ln(band.left->points[next]);
+        const AcGePoint3d ri(band.right->points[i]);
+        const AcGePoint3d rn(band.right->points[next]);
         consider(li, ri, rn);
         consider(li, rn, ln);
     }
@@ -5132,8 +5132,8 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
         {
             const auto position = [&](size_t index) {
                 const size_t first = index * kVertexFloats;
-                return glm::dvec3(soup[first], soup[first + 1],
-                                  soup[first + 2]);
+                return AcGePoint3d(soup[first], soup[first + 1],
+                                   soup[first + 2]);
             };
 
             double depth = 0.0;
@@ -5180,7 +5180,7 @@ double cadPickTolerance(const PickRay &ray, const AcGePoint3d &worldPoint)
         : 2.0 * std::max(0.0,
               (worldPoint - ray.origin)
                   .dotProduct(AcGeVector3d(orbitCam.Front))) *
-          std::tan(glm::radians(45.0) * 0.5) /
+          std::tan(std::numbers::pi_v<double> / 8.0) /
           currentDrawableHeight();
     return worldPerPixel * 5.0;
 }
@@ -5390,7 +5390,7 @@ struct PickDebugTrace
 // to O(log n) for typical spatially coherent scenes.
 struct PickResult
 {
-    glm::dvec3 pivot;
+    AcGePoint3d pivot;
     double hitDepth = 0.0;
     bool hit = false;
     std::string objectName = "Scene";
@@ -5401,7 +5401,7 @@ struct PickResult
 struct AutofocusResult
 {
     std::string entityName;
-    glm::dvec3 hitPivot;
+    AcGePoint3d hitPivot;
     double viewDepth = 0.0;
     std::optional<size_t> faceIndex;
 };
@@ -5644,8 +5644,12 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                 {
                     if (!candidate.curve)
                         break;
-                    const std::vector<glm::dvec3> points =
+                    const std::vector<glm::dvec3> sampledPoints =
                         acgs::AcGsView::sampleCurveBatch(*candidate.curve);
+                    std::vector<AcGePoint3d> points;
+                    points.reserve(sampledPoints.size());
+                    for (const glm::dvec3 &point : sampledPoints)
+                        points.emplace_back(point);
                     for (size_t i = 0; i + 1 < points.size(); ++i)
                     {
                         double hitDepth = 0.0;
@@ -5693,7 +5697,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
 
     if (trace.cadOverlayHit)
     {
-        const glm::dvec3 overlayPivot =
+        const AcGePoint3d overlayPivot =
             ray.origin + ray.direction * trace.cadOverlayDepth;
         // Overlay priority matches non-depth-writing compositing: choose an
         // overlay behind a transparent mesh, but never behind an opaque one.
@@ -5715,7 +5719,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
 }
 
 // OpenCADStudio-style view-center pivot: casts from the viewport center.
-std::optional<glm::dvec3> viewCenterObjectPivot()
+std::optional<AcGePoint3d> viewCenterObjectPivot()
 {
     const PickRay ray = pickRayFromNdc(0.0, 0.0);
     const PickResult result = pickObjectAlongRay(ray);
@@ -5762,7 +5766,8 @@ std::optional<AutofocusResult> autofocusAtNdc(
     // orbit target stays on the camera's center axis; it is intentionally not
     // moved to an off-center cursor ray's world-space hit pivot.
     const double viewDepth =
-        glm::dot(result.pivot - orbitCam.Position, orbitCam.Front);
+        (result.pivot - AcGePoint3d(orbitCam.Position))
+            .dotProduct(AcGeVector3d(orbitCam.Front));
     if (!entityNameIsInfinite(result.objectName))
         orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
     return AutofocusResult{result.objectName, result.pivot, viewDepth};
@@ -5856,9 +5861,10 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                        &faceIndex))
             return std::nullopt;
 
-        const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
+        const AcGePoint3d hitPivot = ray.origin + ray.direction * hitDepth;
         const double viewDepth =
-            glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+            (hitPivot - AcGePoint3d(orbitCam.Position))
+                .dotProduct(AcGeVector3d(orbitCam.Front));
         if (!entityNameIsInfinite(meshEntity->displayName()))
             orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
         std::optional<size_t> pickedFace;
@@ -5871,8 +5877,12 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
     if (pickEntity && pickEntity->kind == VisibilityKind::CadCurve &&
         pickEntity->curve)
     {
-        const std::vector<glm::dvec3> points =
+        const std::vector<glm::dvec3> sampledPoints =
             acgs::AcGsView::sampleCurveBatch(*pickEntity->curve);
+        std::vector<AcGePoint3d> points;
+        points.reserve(sampledPoints.size());
+        for (const glm::dvec3 &point : sampledPoints)
+            points.emplace_back(point);
         bool hit = false;
         double bestDepth = std::numeric_limits<double>::infinity();
         for (size_t i = 0; i + 1 < points.size(); ++i)
@@ -5888,9 +5898,10 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
         }
         if (!hit)
             return std::nullopt;
-        const glm::dvec3 hitPivot = ray.origin + ray.direction * bestDepth;
+        const AcGePoint3d hitPivot = ray.origin + ray.direction * bestDepth;
         const double viewDepth =
-            glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+            (hitPivot - AcGePoint3d(orbitCam.Position))
+                .dotProduct(AcGeVector3d(orbitCam.Front));
         if (!entityNameIsInfinite(pickEntity->curve->name))
             orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
         return AutofocusResult{pickEntity->curve->name, hitPivot, viewDepth};
@@ -5929,9 +5940,10 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
       }
       if (!hit)
         return std::nullopt;
-      const glm::dvec3 hitPivot = ray.origin + ray.direction * hitDepth;
+      const AcGePoint3d hitPivot = ray.origin + ray.direction * hitDepth;
       const double viewDepth =
-          glm::dot(hitPivot - orbitCam.Position, orbitCam.Front);
+          (hitPivot - AcGePoint3d(orbitCam.Position))
+              .dotProduct(AcGeVector3d(orbitCam.Front));
       if (!entityNameIsInfinite(request.message))
         orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
       return AutofocusResult{request.message, hitPivot, viewDepth};
@@ -6054,9 +6066,10 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
     if (!hit)
         return std::nullopt;
 
-    const glm::dvec3 hitPivot = ray.origin + ray.direction * bestDepth;
-    const double viewDepth = glm::dot(hitPivot - orbitCam.Position,
-                                      orbitCam.Front);
+    const AcGePoint3d hitPivot = ray.origin + ray.direction * bestDepth;
+    const double viewDepth =
+        (hitPivot - AcGePoint3d(orbitCam.Position))
+            .dotProduct(AcGeVector3d(orbitCam.Front));
     if (!entityNameIsInfinite(range.name))
         orbitCam.setTargetDepth(viewDepth, useOrthoProjection());
     return AutofocusResult{range.name, hitPivot, viewDepth, primitiveIndex};
@@ -6417,8 +6430,9 @@ bool runCadPickAudit()
     const UnifiedVisibilityQuery visibility = makePickingVisibilityQuery();
     AuditStats &stats =
         results[AuditKey{sample.kind, sample.name}];
-    const PickRay ray{orbitCam.Position,
-                      glm::normalize(sample.location - orbitCam.Position)};
+    const PickRay ray{
+        AcGePoint3d(orbitCam.Position),
+        AcGeVector3d(sample.location - orbitCam.Position).normal()};
     bool directHit = false;
     if (sample.kind == VisibilityKind::CadStroke)
     {
@@ -6478,7 +6492,8 @@ bool runCadPickAudit()
 
     for (int azimuth = 0; azimuth < kAzimuthCount; ++azimuth)
     {
-      const double angle = glm::two_pi<double>() * azimuth / kAzimuthCount;
+      const double angle =
+          2.0 * std::numbers::pi_v<double> * azimuth / kAzimuthCount;
       for (const double elevation : kElevations)
       {
         const glm::dvec3 viewDirection = glm::normalize(glm::dvec3(
@@ -6486,18 +6501,19 @@ bool runCadPickAudit()
             std::cos(elevation) * std::sin(angle),
             std::sin(elevation)));
         setAuditCamera(sample.location, viewDirection, distance);
-        const PickRay ray{orbitCam.Position,
-                          glm::normalize(sample.location - orbitCam.Position)};
+        const PickRay ray{
+            AcGePoint3d(orbitCam.Position),
+            AcGeVector3d(sample.location - orbitCam.Position).normal()};
         recordSample(sample, pickObjectAlongRay(ray));
       }
     }
 
     setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, -1.0), distance);
     recordSample(sample, pickObjectAlongRay(
-        {orbitCam.Position, glm::dvec3(0.0, 0.0, -1.0)}));
+        {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, -1.0)}));
     setAuditCamera(sample.location, glm::dvec3(0.0, 0.0, 1.0), distance);
     recordSample(sample, pickObjectAlongRay(
-        {orbitCam.Position, glm::dvec3(0.0, 0.0, 1.0)}));
+        {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, 1.0)}));
 
   }
 
