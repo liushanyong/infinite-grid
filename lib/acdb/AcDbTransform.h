@@ -7,8 +7,6 @@
 // non-uniform scales of curves degrade through their sampled forms, so
 // they are out of scope here).
 
-#include <glm/glm.hpp>
-
 #include "acdb/AcDbEntities.h"
 
 namespace acdb
@@ -16,46 +14,44 @@ namespace acdb
 
 // AcDbEntity::transformBy (translation): shifts every geometric point of
 // |payload| by |offset|.
-inline void transformBy(AcDbEntityVariant &payload, const glm::dvec3 &offset)
+inline void transformBy(AcDbEntityVariant &payload,
+                        const AcGeVector3d &offset)
 {
-    // AcGe value types add vectors, not points.
-    const AcGeVector3d shift(offset.x, offset.y, offset.z);
     std::visit([&](auto &entity) {
         using T = std::decay_t<decltype(entity)>;
         if constexpr (std::is_same_v<T, AcDbBlockReference>)
         {
-            // AcGePoint3d takes the offset as a vector.
-            entity.position += AcGeVector3d(offset);
+            entity.position += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbLine>)
         {
-            entity.start += shift;
-            entity.end += shift;
+            entity.start += offset;
+            entity.end += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbRay>)
         {
-            entity.start += shift;
+            entity.start += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbArc> ||
                            std::is_same_v<T, AcDbCircle> ||
                            std::is_same_v<T, AcDbEllipse>)
         {
-            entity.center += shift;
+            entity.center += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbPoint>)
         {
-            entity.location += shift;
+            entity.location += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbXline>)
         {
-            entity.point += shift;
+            entity.point += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbSolid>)
         {
-            entity.firstCorner += shift;
-            entity.secondCorner += shift;
-            entity.thirdCorner += shift;
-            entity.fourthCorner += shift;
+            entity.firstCorner += offset;
+            entity.secondCorner += offset;
+            entity.thirdCorner += offset;
+            entity.fourthCorner += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbPolyline>)
         {
@@ -69,100 +65,99 @@ inline void transformBy(AcDbEntityVariant &payload, const glm::dvec3 &offset)
         else if constexpr (std::is_same_v<T, AcDb3dPolyline>)
         {
             for (auto &vertex : entity.vertices)
-                vertex += shift;
+                vertex += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbSpline>)
         {
             for (auto &point : entity.controlPoints)
-                point += shift;
+                point += offset;
             for (auto &point : entity.fitPoints)
-                point += shift;
+                point += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbText> ||
                            std::is_same_v<T, AcDbMText>)
         {
-            entity.insertion += shift;
+            entity.insertion += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbLight>)
         {
-            entity.position += shift;
-            entity.target += shift;
+            entity.position += offset;
+            entity.target += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbHatch>)
         {
             for (auto &point : entity.outerLoop)
-                point += shift;
+                point += offset;
             for (auto &loop : entity.innerLoops)
                 for (auto &point : loop)
-                    point += shift;
+                    point += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbPolyFaceMesh>)
         {
-            // glm positions take the glm offset directly.
             for (auto &position : entity.geometry.positions)
-                position += AcGeVector3d(offset);
+                position += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbMline>)
         {
             for (auto &vertex : entity.vertices)
-                vertex += shift;
+                vertex += offset;
         }
         else if constexpr (std::is_same_v<T, AcDb3dSolid>)
         {
             for (auto &vertex : entity.vertices)
-                vertex += shift;
+                vertex += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbRotatedDimension> ||
                            std::is_same_v<T, AcDbAlignedDimension>)
         {
-            entity.xLine1Point += shift;
-            entity.xLine2Point += shift;
-            entity.dimensionLinePoint += shift;
+            entity.xLine1Point += offset;
+            entity.xLine2Point += offset;
+            entity.dimensionLinePoint += offset;
         }
         else if constexpr (std::is_same_v<T, AcDb2LineAngularDimension>)
         {
-            entity.xLine1StartPoint += shift;
-            entity.xLine1EndPoint += shift;
-            entity.xLine2StartPoint += shift;
-            entity.xLine2EndPoint += shift;
-            entity.arcPoint += shift;
+            entity.xLine1StartPoint += offset;
+            entity.xLine1EndPoint += offset;
+            entity.xLine2StartPoint += offset;
+            entity.xLine2EndPoint += offset;
+            entity.arcPoint += offset;
         }
         else if constexpr (std::is_same_v<T, AcDb3PointAngularDimension>)
         {
-            entity.centerPoint += shift;
-            entity.xLine1Point += shift;
-            entity.xLine2Point += shift;
+            entity.centerPoint += offset;
+            entity.xLine1Point += offset;
+            entity.xLine2Point += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbRadialDimension>)
         {
-            entity.centerPoint += shift;
-            entity.radiusPoint += shift;
+            entity.centerPoint += offset;
+            entity.radiusPoint += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbDiametricDimension>)
         {
-            entity.chordPoint += shift;
-            entity.farChordPoint += shift;
+            entity.chordPoint += offset;
+            entity.farChordPoint += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbOrdinateDimension>)
         {
-            entity.featureLocationPoint += shift;
-            entity.leaderEndPoint += shift;
+            entity.featureLocationPoint += offset;
+            entity.leaderEndPoint += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbLeader>)
         {
             for (auto &point : entity.points)
-                point += shift;
+                point += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbFcf> ||
                            std::is_same_v<T, AcDbShape> ||
                            std::is_same_v<T, AcDbAttributeDefinition> ||
                            std::is_same_v<T, AcDbAttribute>)
         {
-            entity.insertion += shift;
+            entity.insertion += offset;
         }
         else if constexpr (std::is_same_v<T, AcDbMInsertBlock>)
         {
-            entity.position += shift;
+            entity.position += offset;
         }
         else
         {
