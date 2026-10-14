@@ -48,6 +48,10 @@ intersection and hierarchy APIs.
 interval, and parametric point/normal evaluation; it does not implement
 surface intersection or the full `AcGeSurface` interface.
 
+`AcGeTorus` supports major/minor radii, a normalized axis/reference frame,
+angular segment domains, parametric evaluation, and basic topology predicates.
+It does not provide the complete torus classification or intersection API.
+
 `AcGeInterval` provides finite and one-sided/unbounded parameter domains,
 tolerance-aware containment, intersection, merge, and extent queries.
 Advanced periodicity and interval subtraction APIs remain unimplemented.

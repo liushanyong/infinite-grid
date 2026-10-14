@@ -215,6 +215,15 @@ inline int runKernelSelfTest()
                   reportedHeight.lowerBound() == -2.0 &&
                   reportedHeight.upperBound() == 3.0 && cylinder.isClosed(),
               "cylinder parameterization and height interval");
+        AcGeTorus torus{3.0, 1.0, AcGePoint3d{0.0, 0.0, 0.0},
+                        AcGeVector3d::kZAxis, AcGeVector3d::kXAxis,
+                        0.0, 6.2831853071795864769,
+                        0.0, 6.2831853071795864769};
+        check(torus.pointAt(0.0, 0.0).isEqualTo({4.0, 0.0, 0.0}) &&
+                  torus.normalAt(0.0, 0.0).isEqualTo({1.0, 0.0, 0.0}) &&
+                  torus.isDoughnut() && torus.isHollow() &&
+                  !torus.isDegenerate(),
+              "torus parametric surface and topology predicates");
         check(AcGeVector2d{2.0, 0.0}.isParallelTo({-1.0, 0.0}) &&
                   AcGeVector2d{2.0, 0.0}.isCodirectionalTo({1.0, 0.0}) &&
                   AcGeVector2d{1.0, 0.0}.isPerpendicularTo({0.0, 4.0}) &&

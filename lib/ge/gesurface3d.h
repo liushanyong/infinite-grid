@@ -258,3 +258,146 @@ public:
                tol.equalVector();
     }
 };
+
+struct AcGeTorus
+{
+private:
+    double m_majorRadius = 2.0;
+    double m_minorRadius = 1.0;
+    AcGePoint3d m_center{0.0, 0.0, 0.0};
+    AcGeVector3d m_axis{0.0, 0.0, 1.0};
+    AcGeVector3d m_refAxis{1.0, 0.0, 0.0};
+    double m_startAngleU = 0.0;
+    double m_endAngleU = 6.2831853071795864769;
+    double m_startAngleV = 0.0;
+    double m_endAngleV = 6.2831853071795864769;
+
+    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference)
+    {
+        m_axis = axis.normal();
+        if (m_axis.isZeroLength())
+            m_axis = AcGeVector3d::kZAxis;
+
+        m_refAxis = reference - m_axis * reference.dotProduct(m_axis);
+        if (m_refAxis.isZeroLength())
+            m_refAxis = m_axis.perpVector();
+        m_refAxis.normalize();
+    }
+
+public:
+    AcGeTorus() = default;
+    AcGeTorus(double majorRadius, double minorRadius,
+              const AcGePoint3d &center, const AcGeVector3d &axis)
+        : m_majorRadius(std::abs(majorRadius)),
+          m_minorRadius(std::abs(minorRadius)), m_center(center)
+    {
+        setFrame(axis, axis.perpVector());
+    }
+    AcGeTorus(double majorRadius, double minorRadius,
+              const AcGePoint3d &center, const AcGeVector3d &axis,
+              const AcGeVector3d &refAxis, double startU, double endU,
+              double startV, double endV)
+        : m_majorRadius(std::abs(majorRadius)),
+          m_minorRadius(std::abs(minorRadius)), m_center(center),
+          m_startAngleU(startU), m_endAngleU(endU),
+          m_startAngleV(startV), m_endAngleV(endV)
+    {
+        setFrame(axis, refAxis);
+    }
+
+    AcGeTorus &set(double majorRadius, double minorRadius,
+                   const AcGePoint3d &center, const AcGeVector3d &axis)
+    {
+        m_majorRadius = std::abs(majorRadius);
+        m_minorRadius = std::abs(minorRadius);
+        m_center = center;
+        setFrame(axis, axis.perpVector());
+        m_startAngleU = 0.0;
+        m_endAngleU = 6.2831853071795864769;
+        m_startAngleV = 0.0;
+        m_endAngleV = 6.2831853071795864769;
+        return *this;
+    }
+    AcGeTorus &set(double majorRadius, double minorRadius,
+                   const AcGePoint3d &center, const AcGeVector3d &axis,
+                   const AcGeVector3d &refAxis, double startU, double endU,
+                   double startV, double endV)
+    {
+        m_majorRadius = std::abs(majorRadius);
+        m_minorRadius = std::abs(minorRadius);
+        m_center = center;
+        setFrame(axis, refAxis);
+        m_startAngleU = startU;
+        m_endAngleU = endU;
+        m_startAngleV = startV;
+        m_endAngleV = endV;
+        return *this;
+    }
+
+    double majorRadius() const { return m_majorRadius; }
+    double minorRadius() const { return m_minorRadius; }
+    AcGePoint3d center() const { return m_center; }
+    AcGeVector3d axisOfSymmetry() const { return m_axis; }
+    AcGeVector3d refAxis() const { return m_refAxis; }
+    void getAnglesInU(double &start, double &end) const
+    {
+        start = m_startAngleU;
+        end = m_endAngleU;
+    }
+    void getAnglesInV(double &start, double &end) const
+    {
+        start = m_startAngleV;
+        end = m_endAngleV;
+    }
+    AcGeTorus &setAnglesInU(double start, double end)
+    {
+        m_startAngleU = start;
+        m_endAngleU = end;
+        return *this;
+    }
+    AcGeTorus &setAnglesInV(double start, double end)
+    {
+        m_startAngleV = start;
+        m_endAngleV = end;
+        return *this;
+    }
+    AcGeTorus &setMajorRadius(double radius)
+    {
+        m_majorRadius = std::abs(radius);
+        return *this;
+    }
+    AcGeTorus &setMinorRadius(double radius)
+    {
+        m_minorRadius = std::abs(radius);
+        return *this;
+    }
+
+    AcGePoint3d pointAt(double u, double v) const
+    {
+        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
+        const AcGeVector3d radial =
+            m_refAxis * std::cos(u) + sideAxis * std::sin(u);
+        const double ringRadius = m_majorRadius + m_minorRadius * std::cos(v);
+        return m_center + radial * ringRadius +
+               m_axis * (m_minorRadius * std::sin(v));
+    }
+    AcGeVector3d normalAt(double u, double v) const
+    {
+        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
+        const AcGeVector3d radial =
+            m_refAxis * std::cos(u) + sideAxis * std::sin(u);
+        return (radial * std::cos(v) + m_axis * std::sin(v)).normal();
+    }
+
+    bool isDoughnut() const { return m_majorRadius > m_minorRadius; }
+    bool isHollow() const { return isDoughnut(); }
+    bool isVortex(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return std::abs(m_majorRadius - m_minorRadius) <= tol.equalPoint();
+    }
+    bool isDegenerate() const
+    {
+        return m_minorRadius <= 0.0 ||
+               m_majorRadius <= -m_minorRadius;
+    }
+};
