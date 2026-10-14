@@ -8428,7 +8428,9 @@ void render()
       glm::vec4 p = invVP * glm::vec4(ndcX, ndcY, ndcZ, 1.0f);
       if (std::abs(p.w) > 1e-10f)
         p /= p.w;
-      frustumCorners[i] = glm::dvec3(p) + rebase;
+      frustumCorners[i] =
+          AcGePoint3d(p.x, p.y, p.z) +
+          AcGeVector3d(rebase.x, rebase.y, rebase.z);
     }
 
     // The grid plane's visible extent inside the frustum.  This is the
@@ -9552,7 +9554,7 @@ int main(int argc, char *argv[])
           }
           else
           {
-            cubeWorldPosition = glm::dvec3(0.0);
+            cubeWorldPosition = AcGePoint3d(0.0, 0.0, 0.0);
             orbitCam.clearDepthBounds();
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
             acgsView().resetDepthSlabs();
