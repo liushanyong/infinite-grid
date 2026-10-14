@@ -709,13 +709,13 @@ inline void tessellate(const AcDbMText &text, TessellatedEntity &result,
     if (!(text.height > 0.0) || !std::isfinite(text.height))
         return;
     const size_t lineBreaks = static_cast<size_t>(
-        std::count(text.text.begin(), text.text.end(), '\n'));
+        std::count(text.text.begin(), text.text.end(), L'\n'));
     const size_t longest = [&] {
         size_t best = 0;
         size_t current = 0;
-        for (char character : text.text)
+        for (ACHAR character : text.text)
         {
-            if (character == '\n')
+            if (character == L'\n')
             {
                 best = std::max(best, current);
                 current = 0;

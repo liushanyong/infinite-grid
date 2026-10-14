@@ -273,7 +273,7 @@ Value encodePayload(const AcDbText &e)
     out.set("insertion", point3ToJson(e.insertion));
     out.set("height", e.height);
     out.set("rotation", e.rotation);
-    out.set("text", e.text);
+    out.set("text", arxcompat::toUtf8(e.text));
     out.set("styleName", e.styleName);
     return out;
 }
@@ -285,7 +285,7 @@ Value encodePayload(const AcDbMText &e)
     out.set("direction", vec3ToJson(e.direction));
     out.set("width", e.width);
     out.set("height", e.height);
-    out.set("text", e.text);
+    out.set("text", arxcompat::toUtf8(e.text));
     return out;
 }
 
@@ -864,7 +864,7 @@ bool decodeInto(const Value &commonData, const Value &data,
         if (const Value *v = data.find("rotation"))
             payload.rotation = v->asNumber();
         if (const Value *v = data.find("text"))
-            payload.text = v->asString();
+            payload.text = arxcompat::fromUtf8(v->asString());
         if (const Value *v = data.find("styleName"))
             payload.styleName = v->asString();
     }
@@ -878,7 +878,7 @@ bool decodeInto(const Value &commonData, const Value &data,
         if (const Value *v = data.find("height"))
             payload.height = v->asNumber(1.0);
         if (const Value *v = data.find("text"))
-            payload.text = v->asString();
+            payload.text = arxcompat::fromUtf8(v->asString());
     }
     else if constexpr (std::is_same_v<Payload, AcDbMline>)
     {

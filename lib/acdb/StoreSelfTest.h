@@ -347,7 +347,7 @@ inline int runStoreSelfTest()
         AcDbText text;
         text.insertion = {0.0, 0.0, 0.0};
         text.height = 3.5;
-        text.text = "起居室\n面积 42m2";
+        text.text = L"起居室\n面积 42m2";
         text.styleName = "Standard";
         document.addEntity(std::move(text));
 
@@ -472,7 +472,7 @@ inline int runStoreSelfTest()
             loaded.modelSpace().entityHandles()[2]);
         check(text != nullptr &&
                   std::holds_alternative<AcDbText>(*text) &&
-                  std::get<AcDbText>(*text).text == "起居室\n面积 42m2",
+                  std::get<AcDbText>(*text).text == L"起居室\n面积 42m2",
               "text payload (UTF-8) round-trips");
     }
 

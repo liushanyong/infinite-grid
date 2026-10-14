@@ -133,7 +133,7 @@ inline AcDbDatabase buildSampleDocument()
     text.insertion = AcGePoint3d(0.0, 500.0, 0.0);
     text.height = 10.0;
     text.rotation = 0.2;
-    text.text = "Hello DWG";
+    text.text = L"Hello DWG";
     add(text);
 
     AcDbMText mtext;
@@ -141,7 +141,7 @@ inline AcDbDatabase buildSampleDocument()
     mtext.width = 80.0;
     mtext.height = 8.0;
     mtext.direction = AcGeVector3d(1.0, 0.0, 0.0);
-    mtext.text = "MTEXT body";
+    mtext.text = L"MTEXT body";
     add(mtext);
 
     AcDbHatch hatch;
