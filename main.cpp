@@ -5018,10 +5018,10 @@ bool rayIntersectsCadPairedBand(const PickRay &ray,
     for (size_t i = 0; i < band.segmentCount; ++i)
     {
         const size_t next = (i + 1) % band.left->points.size();
-        const glm::dvec3 &li = band.left->points[i];
-        const glm::dvec3 &ln = band.left->points[next];
-        const glm::dvec3 &ri = band.right->points[i];
-        const glm::dvec3 &rn = band.right->points[next];
+        const AcGePoint3d li(band.left->points[i]);
+        const AcGePoint3d ln(band.left->points[next]);
+        const AcGePoint3d ri(band.right->points[i]);
+        const AcGePoint3d rn(band.right->points[next]);
         consider(li, ri, rn);
         consider(li, rn, ln);
     }
@@ -5132,8 +5132,8 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
         {
             const auto position = [&](size_t index) {
                 const size_t first = index * kVertexFloats;
-                return glm::dvec3(soup[first], soup[first + 1],
-                                  soup[first + 2]);
+                return AcGePoint3d(soup[first], soup[first + 1],
+                                   soup[first + 2]);
             };
 
             double depth = 0.0;
@@ -5644,8 +5644,12 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                 {
                     if (!candidate.curve)
                         break;
-                    const std::vector<glm::dvec3> points =
+                    const std::vector<glm::dvec3> sampledPoints =
                         acgs::AcGsView::sampleCurveBatch(*candidate.curve);
+                    std::vector<AcGePoint3d> points;
+                    points.reserve(sampledPoints.size());
+                    for (const glm::dvec3 &point : sampledPoints)
+                        points.emplace_back(point);
                     for (size_t i = 0; i + 1 < points.size(); ++i)
                     {
                         double hitDepth = 0.0;
@@ -5873,8 +5877,12 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
     if (pickEntity && pickEntity->kind == VisibilityKind::CadCurve &&
         pickEntity->curve)
     {
-        const std::vector<glm::dvec3> points =
+        const std::vector<glm::dvec3> sampledPoints =
             acgs::AcGsView::sampleCurveBatch(*pickEntity->curve);
+        std::vector<AcGePoint3d> points;
+        points.reserve(sampledPoints.size());
+        for (const glm::dvec3 &point : sampledPoints)
+            points.emplace_back(point);
         bool hit = false;
         double bestDepth = std::numeric_limits<double>::infinity();
         for (size_t i = 0; i + 1 < points.size(); ++i)
