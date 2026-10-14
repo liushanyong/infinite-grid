@@ -7214,6 +7214,7 @@ void render()
         std::cout << "GPU pick buffer creation failed on "
                   << queueStats.resourceFailures
                   << " geometries" << std::endl;
+      acgs::acgsGetManager()->cancelGpuPick();
       reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
       gpuPickFocus.camera.reset();
     }

@@ -3530,6 +3530,9 @@ uint32_t BgfxRenderer::requestGpuPickPixel(float ndcX, float ndcY)
     // the texel to sample; renderGpuPickPass blits it after the scene
     // pass has rendered the current frame.
     m_gpuPickPrimitives.clear();
+    m_gpuPickQueueStats = {};
+    m_gpuPickQueueStats.meshCapacity = kMaxGpuPickInstances;
+    m_gpuPickQueueStats.triangleCapacity = kMaxGpuPickTriangleBatches;
     m_gpuPickActive = true;
     m_pixelReadPending = true;
     m_pixelReadNdcX = ndcX;
