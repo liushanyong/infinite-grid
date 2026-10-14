@@ -224,6 +224,18 @@ inline int runKernelSelfTest()
                   torus.isDoughnut() && torus.isHollow() &&
                   !torus.isDegenerate(),
               "torus parametric surface and topology predicates");
+        AcGeInterval coneHeight{0.0, 2.0};
+        AcGeCone cone{0.7071067811865475244, 0.7071067811865475244,
+                      AcGePoint3d{0.0, 0.0, 0.0}, 2.0,
+                      AcGeVector3d::kZAxis, AcGeVector3d::kXAxis,
+                      coneHeight, 0.0, 6.2831853071795864769};
+        check(cone.apex().isEqualTo({0.0, 0.0, 2.0}) &&
+                  cone.pointAt(0.0, 1.0).isEqualTo({1.0, 0.0, 1.0}) &&
+                  cone.normalAt(0.0, 1.0).isEqualTo(
+                      {0.7071067811865475244, 0.0,
+                       0.7071067811865475244}) &&
+                  cone.isClosed(),
+              "cone apex and parametric surface");
         check(AcGeVector2d{2.0, 0.0}.isParallelTo({-1.0, 0.0}) &&
                   AcGeVector2d{2.0, 0.0}.isCodirectionalTo({1.0, 0.0}) &&
                   AcGeVector2d{1.0, 0.0}.isPerpendicularTo({0.0, 4.0}) &&

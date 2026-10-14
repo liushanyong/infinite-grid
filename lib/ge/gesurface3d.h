@@ -401,3 +401,156 @@ public:
                m_majorRadius <= -m_minorRadius;
     }
 };
+
+struct AcGeCone
+{
+private:
+    double m_halfAngle = 0.78539816339744830962;
+    AcGePoint3d m_baseCenter{0.0, 0.0, 0.0};
+    double m_baseRadius = 1.0;
+    AcGeVector3d m_axis{0.0, 0.0, 1.0};
+    AcGeVector3d m_refAxis{1.0, 0.0, 0.0};
+    AcGeInterval m_height{0.0, 1.0};
+    double m_startAngle = 0.0;
+    double m_endAngle = 6.2831853071795864769;
+
+    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference)
+    {
+        m_axis = axis.normal();
+        if (m_axis.isZeroLength())
+            m_axis = AcGeVector3d::kZAxis;
+
+        m_refAxis = reference - m_axis * reference.dotProduct(m_axis);
+        if (m_refAxis.isZeroLength())
+            m_refAxis = m_axis.perpVector();
+        m_refAxis.normalize();
+    }
+    void setAngle(double cosine, double sine)
+    {
+        m_halfAngle = std::atan2(std::abs(sine), cosine);
+    }
+    double apexHeight() const
+    {
+        const double sine = std::sin(m_halfAngle);
+        return std::abs(sine) <= 1.0e-15
+                   ? 0.0
+                   : m_baseRadius * std::cos(m_halfAngle) / sine;
+    }
+    double radiusAtHeight(double height) const
+    {
+        return std::max(0.0, m_baseRadius -
+                                  height * std::tan(m_halfAngle));
+    }
+
+public:
+    AcGeCone() = default;
+    AcGeCone(double cosineAngle, double sineAngle,
+             const AcGePoint3d &baseCenter, double baseRadius,
+             const AcGeVector3d &axis)
+        : m_baseCenter(baseCenter), m_baseRadius(std::abs(baseRadius))
+    {
+        setAngle(cosineAngle, sineAngle);
+        setFrame(axis, axis.perpVector());
+        m_height.set(0.0, apexHeight());
+    }
+    AcGeCone(double cosineAngle, double sineAngle,
+             const AcGePoint3d &baseCenter, double baseRadius,
+             const AcGeVector3d &axis, const AcGeVector3d &refAxis,
+             const AcGeInterval &height, double startAngle, double endAngle)
+        : m_baseCenter(baseCenter), m_baseRadius(std::abs(baseRadius)),
+          m_height(height), m_startAngle(startAngle), m_endAngle(endAngle)
+    {
+        setAngle(cosineAngle, sineAngle);
+        setFrame(axis, refAxis);
+    }
+
+    AcGeCone &set(double cosineAngle, double sineAngle,
+                  const AcGePoint3d &baseCenter, double baseRadius,
+                  const AcGeVector3d &axis)
+    {
+        m_baseCenter = baseCenter;
+        m_baseRadius = std::abs(baseRadius);
+        setAngle(cosineAngle, sineAngle);
+        setFrame(axis, axis.perpVector());
+        m_height.set(0.0, apexHeight());
+        m_startAngle = 0.0;
+        m_endAngle = 6.2831853071795864769;
+        return *this;
+    }
+    AcGeCone &set(double cosineAngle, double sineAngle,
+                  const AcGePoint3d &baseCenter, double baseRadius,
+                  const AcGeVector3d &axis, const AcGeVector3d &refAxis,
+                  const AcGeInterval &height, double startAngle,
+                  double endAngle)
+    {
+        m_baseCenter = baseCenter;
+        m_baseRadius = std::abs(baseRadius);
+        setAngle(cosineAngle, sineAngle);
+        setFrame(axis, refAxis);
+        m_height = height;
+        m_startAngle = startAngle;
+        m_endAngle = endAngle;
+        return *this;
+    }
+
+    AcGePoint3d baseCenter() const { return m_baseCenter; }
+    AcGePoint3d apex() const
+    {
+        return m_baseCenter + m_axis * apexHeight();
+    }
+    double baseRadius() const { return m_baseRadius; }
+    AcGeVector3d axisOfSymmetry() const { return m_axis; }
+    AcGeVector3d refAxis() const { return m_refAxis; }
+    double halfAngle() const { return m_halfAngle; }
+    void getHalfAngle(double &cosine, double &sine) const
+    {
+        cosine = std::cos(m_halfAngle);
+        sine = std::sin(m_halfAngle);
+    }
+    void getHeight(AcGeInterval &height) const { height = m_height; }
+    AcGeCone &setHeight(const AcGeInterval &height)
+    {
+        m_height = height;
+        return *this;
+    }
+    void getAngles(double &start, double &end) const
+    {
+        start = m_startAngle;
+        end = m_endAngle;
+    }
+    AcGeCone &setAngles(double start, double end)
+    {
+        m_startAngle = start;
+        m_endAngle = end;
+        return *this;
+    }
+    AcGeCone &setBaseRadius(double radius)
+    {
+        m_baseRadius = std::abs(radius);
+        return *this;
+    }
+
+    AcGePoint3d pointAt(double angle, double height) const
+    {
+        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
+        const AcGeVector3d radial =
+            m_refAxis * std::cos(angle) + sideAxis * std::sin(angle);
+        return m_baseCenter + m_axis * height +
+               radial * radiusAtHeight(height);
+    }
+    AcGeVector3d normalAt(double angle, double) const
+    {
+        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
+        const AcGeVector3d radial =
+            m_refAxis * std::cos(angle) + sideAxis * std::sin(angle);
+        return (radial * std::cos(m_halfAngle) +
+                m_axis * std::sin(m_halfAngle))
+            .normal();
+    }
+    bool isClosed(const AcGeTol &tol = AcGeTol{}) const
+    {
+        constexpr double twoPi = 6.2831853071795864769;
+        return std::abs((m_endAngle - m_startAngle) - twoPi) <=
+               tol.equalVector();
+    }
+};

@@ -52,6 +52,10 @@ surface intersection or the full `AcGeSurface` interface.
 angular segment domains, parametric evaluation, and basic topology predicates.
 It does not provide the complete torus classification or intersection API.
 
+`AcGeCone` provides base/apex geometry, an angular domain, an axial height
+interval, and parametric point/normal evaluation. Cone/surface intersections
+and advanced domain semantics remain outside this subset.
+
 `AcGeInterval` provides finite and one-sided/unbounded parameter domains,
 tolerance-aware containment, intersection, merge, and extent queries.
 Advanced periodicity and interval subtraction APIs remain unimplemented.
