@@ -6,6 +6,8 @@
 // pattern repeats along the line, mirroring the AutoCAD .lin format that
 // libredwg/LTYPE data models.
 #include <vector>
+#include <map>
+#include <string>
 
 struct AcGiLineType
 {
@@ -34,7 +36,33 @@ constexpr AcGiLineType kLineTypes[] = {
     {"PHANTOM", kPhantom, 6},
 };
 } // namespace
+struct RegisteredLineType
+{
+    std::string name;
+    std::vector<double> elements;
+    AcGiLineType view{};
+};
+
+inline std::map<std::string, RegisteredLineType> &registeredLineTypes()
+{
+    static std::map<std::string, RegisteredLineType> lineTypes;
+    return lineTypes;
+}
 } // namespace acgi_line_types
+
+inline void acgiRegisterLineType(const std::string &name,
+                                 const std::vector<double> &elements)
+{
+    if (name.empty() || elements.empty())
+        return;
+    AcGiLineType &view =
+        acgi_line_types::registeredLineTypes()[name].view;
+    auto &registered = acgi_line_types::registeredLineTypes()[name];
+    registered.name = name;
+    registered.elements = elements;
+    view = {registered.name.c_str(), registered.elements.data(),
+            registered.elements.size()};
+}
 
 // Case-sensitive lookup matching the entity lineType string.  A missing
 // name (or "ByLayer"/"CONTINUOUS") means a solid line.
@@ -42,6 +70,10 @@ inline const AcGiLineType *acgiFindLineType(const char *name)
 {
     if (!name)
         return nullptr;
+    const auto registered =
+        acgi_line_types::registeredLineTypes().find(name);
+    if (registered != acgi_line_types::registeredLineTypes().end())
+        return &registered->second.view;
     for (const AcGiLineType &type : acgi_line_types::kLineTypes)
     {
         if (std::string_view(type.name) == name)
