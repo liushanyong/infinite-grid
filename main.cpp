@@ -32,6 +32,7 @@
 #include "acgs/model/AcGsModel.h"
 #include "acgs/model/AcGsDocumentReplayer.h"
 #include "ge/gebvh.h"
+#include "ge/gepoint.h"
 #include "rendering/RenderTypes.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
@@ -201,10 +202,10 @@ enum class GridPlaneType
 };
 
 GridPlaneType gridPlane = GridPlaneType::XY;
-glm::dvec3 gridPlaneOrigin(0.0);
-glm::dvec3 gridPlaneNormal(0.0, 0.0, 1.0);
-glm::dvec3 gridPlaneStartAxisOrigin(0.0);
-glm::dvec3 gridPlaneStartAxisDirection(1.0, 0.0, 0.0);
+AcGePoint3d gridPlaneOrigin;
+AcGeVector3d gridPlaneNormal{0.0, 0.0, 1.0};
+AcGePoint3d gridPlaneStartAxisOrigin;
+AcGeVector3d gridPlaneStartAxisDirection{1.0, 0.0, 0.0};
 
 // Keep the CPU visibility test, slab construction, and grid shader discard
 // aligned.  A plane within five degrees of the view direction is hidden.
@@ -212,12 +213,12 @@ constexpr double kMinGridPlaneCos = 0.087155743; // sin(5 degrees)
 
 // Edit these to define a non-axis-aligned infinite grid.  Key 4 activates it;
 // R rebuilds them from the current camera frame.
-glm::dvec3 customGridPlaneOrigin(1.0, 0.5, -0.5);
-glm::dvec3 customGridPlaneNormal =
-    glm::normalize(glm::dvec3(0.25, 1.0, 0.15));
-glm::dvec3 customGridPlaneStartAxisOrigin(1.0, 0.5, -0.5);
-glm::dvec3 customGridPlaneStartAxisDirection =
-    glm::normalize(glm::dvec3(1.0, 0.0, 0.25));
+AcGePoint3d customGridPlaneOrigin{1.0, 0.5, -0.5};
+AcGeVector3d customGridPlaneNormal =
+    AcGeVector3d(0.25, 1.0, 0.15).normal();
+AcGePoint3d customGridPlaneStartAxisOrigin{1.0, 0.5, -0.5};
+AcGeVector3d customGridPlaneStartAxisDirection =
+    AcGeVector3d(1.0, 0.0, 0.25).normal();
 
 void enforceTargetPlaneConstraint();
 
@@ -247,16 +248,16 @@ void applyGridPlane(GridPlaneType plane)
     switch (plane)
     {
     case GridPlaneType::XY:
-        gridPlaneOrigin = glm::dvec3(0.0);
-        gridPlaneNormal = glm::dvec3(0.0, 0.0, 1.0);
-        gridPlaneStartAxisOrigin = glm::dvec3(0.0);
-        gridPlaneStartAxisDirection = glm::dvec3(1.0, 0.0, 0.0);
+        gridPlaneOrigin = AcGePoint3d(0.0, 0.0, 0.0);
+        gridPlaneNormal = AcGeVector3d(0.0, 0.0, 1.0);
+        gridPlaneStartAxisOrigin = AcGePoint3d(0.0, 0.0, 0.0);
+        gridPlaneStartAxisDirection = AcGeVector3d(1.0, 0.0, 0.0);
         break;
     case GridPlaneType::YZ:
-        gridPlaneOrigin = glm::dvec3(0.0);
-        gridPlaneNormal = glm::dvec3(1.0, 0.0, 0.0);
-        gridPlaneStartAxisOrigin = glm::dvec3(0.0);
-        gridPlaneStartAxisDirection = glm::dvec3(0.0, 1.0, 0.0);
+        gridPlaneOrigin = AcGePoint3d(0.0, 0.0, 0.0);
+        gridPlaneNormal = AcGeVector3d(1.0, 0.0, 0.0);
+        gridPlaneStartAxisOrigin = AcGePoint3d(0.0, 0.0, 0.0);
+        gridPlaneStartAxisDirection = AcGeVector3d(0.0, 1.0, 0.0);
         break;
     case GridPlaneType::Custom:
         gridPlaneOrigin = customGridPlaneOrigin;
@@ -266,10 +267,10 @@ void applyGridPlane(GridPlaneType plane)
         break;
     case GridPlaneType::XZ:
     default:
-        gridPlaneOrigin = glm::dvec3(0.0);
-        gridPlaneNormal = glm::dvec3(0.0, 1.0, 0.0);
-        gridPlaneStartAxisOrigin = glm::dvec3(0.0);
-        gridPlaneStartAxisDirection = glm::dvec3(1.0, 0.0, 0.0);
+        gridPlaneOrigin = AcGePoint3d(0.0, 0.0, 0.0);
+        gridPlaneNormal = AcGeVector3d(0.0, 1.0, 0.0);
+        gridPlaneStartAxisOrigin = AcGePoint3d(0.0, 0.0, 0.0);
+        gridPlaneStartAxisDirection = AcGeVector3d(1.0, 0.0, 0.0);
         break;
     }
     if (window)
@@ -287,39 +288,39 @@ void applyGridPlane(GridPlaneType plane)
         enforceTargetPlaneConstraint();
 }
 
-void activePlaneTangents(glm::dvec3 &tangentU, glm::dvec3 &tangentV)
+void activePlaneTangents(AcGeVector3d &tangentU, AcGeVector3d &tangentV)
 {
-    const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
+    const AcGeVector3d planeNormal = gridPlaneNormal.normal();
     if (gridPlane == GridPlaneType::XY)
     {
-        tangentU = glm::dvec3(1.0, 0.0, 0.0);
-        tangentV = glm::dvec3(0.0, 1.0, 0.0);
+        tangentU = AcGeVector3d(1.0, 0.0, 0.0);
+        tangentV = AcGeVector3d(0.0, 1.0, 0.0);
     }
     else if (gridPlane == GridPlaneType::XZ)
     {
-        tangentU = glm::dvec3(1.0, 0.0, 0.0);
-        tangentV = glm::dvec3(0.0, 0.0, 1.0);
+        tangentU = AcGeVector3d(1.0, 0.0, 0.0);
+        tangentV = AcGeVector3d(0.0, 0.0, 1.0);
     }
     else if (gridPlane == GridPlaneType::YZ)
     {
-        tangentU = glm::dvec3(0.0, 1.0, 0.0);
-        tangentV = glm::dvec3(0.0, 0.0, 1.0);
+        tangentU = AcGeVector3d(0.0, 1.0, 0.0);
+        tangentV = AcGeVector3d(0.0, 0.0, 1.0);
     }
     else
     {
         tangentU = gridPlaneStartAxisDirection -
-                   planeNormal * glm::dot(gridPlaneStartAxisDirection,
-                                          planeNormal);
-        if (glm::length(tangentU) < 1e-9)
+                   planeNormal *
+                       gridPlaneStartAxisDirection.dotProduct(planeNormal);
+        if (tangentU.length() < 1e-9)
         {
-            tangentU = glm::dvec3(1.0, 0.0, 0.0) -
+            tangentU = AcGeVector3d(1.0, 0.0, 0.0) -
                        planeNormal * planeNormal.x;
-            if (glm::length(tangentU) < 1e-9)
-                tangentU = glm::dvec3(0.0, 1.0, 0.0) -
+            if (tangentU.length() < 1e-9)
+                tangentU = AcGeVector3d(0.0, 1.0, 0.0) -
                            planeNormal * planeNormal.y;
         }
-        tangentU = glm::normalize(tangentU);
-        tangentV = glm::normalize(glm::cross(planeNormal, tangentU));
+        tangentU.normalize();
+        tangentV = planeNormal.crossProduct(tangentU).normal();
     }
 }
 // Validation scene adapted from external/large-coordinate-rendering.
@@ -344,11 +345,12 @@ std::optional<glm::dvec3> orbitPivot;
 // ordinary orbiting may then still place the eye off the plane.
 void enforceTargetPlaneConstraint()
 {
-    const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
+    const AcGeVector3d planeNormal = gridPlaneNormal.normal();
+    const AcGePoint3d target(orbitCam.Target);
     const double targetOnNormal =
-        glm::dot(orbitCam.Target - gridPlaneOrigin, planeNormal);
-    const glm::dvec3 correction = planeNormal * -targetOnNormal;
-    orbitCam.setTarget(orbitCam.Target + correction);
+        (target - gridPlaneOrigin).dotProduct(planeNormal);
+    const AcGeVector3d correction = planeNormal * -targetOnNormal;
+    orbitCam.setTarget(glm::dvec3(target + correction));
 }
 
 void setTargetPlaneConstraint(bool enabled)
@@ -374,11 +376,11 @@ void resetWorldUpAndPlaneFromCamera()
 {
     orbitCam.setWorldUp(orbitCam.Up);
 
-    const glm::dvec3 horizontalAxis =
-        glm::normalize(orbitCam.Right);
-    customGridPlaneOrigin = orbitCam.Target;
-    customGridPlaneNormal = glm::normalize(orbitCam.WorldUp);
-    customGridPlaneStartAxisOrigin = orbitCam.Target;
+    const AcGeVector3d horizontalAxis =
+        AcGeVector3d(orbitCam.Right).normal();
+    customGridPlaneOrigin = AcGePoint3d(orbitCam.Target);
+    customGridPlaneNormal = AcGeVector3d(orbitCam.WorldUp).normal();
+    customGridPlaneStartAxisOrigin = AcGePoint3d(orbitCam.Target);
     customGridPlaneStartAxisDirection = horizontalAxis;
 
     applyGridPlane(GridPlaneType::Custom);
@@ -7369,22 +7371,36 @@ void render()
 
   const glm::dvec3 cameraPos(orbitCam.Position);
   const glm::dvec3 &frontVec = orbitCam.Front;
-  glm::dvec3 planeNormal = glm::normalize(gridPlaneNormal);
-  glm::dvec3 tangentU;
-  glm::dvec3 tangentV;
-  activePlaneTangents(tangentU, tangentV);
+  // The grid shader consumes GLM, while its persistent plane geometry uses
+  // the AcGe point/vector interfaces.
+  const glm::dvec3 gridPlaneOriginRender =
+      static_cast<glm::dvec3>(gridPlaneOrigin);
+  const glm::dvec3 gridPlaneNormalRender =
+      static_cast<glm::dvec3>(gridPlaneNormal);
+  const glm::dvec3 gridPlaneStartAxisOriginRender =
+      static_cast<glm::dvec3>(gridPlaneStartAxisOrigin);
+  const glm::dvec3 gridPlaneStartAxisDirectionRender =
+      static_cast<glm::dvec3>(gridPlaneStartAxisDirection);
+  const glm::dvec3 planeNormal = glm::normalize(gridPlaneNormalRender);
+  AcGeVector3d tangentUGe;
+  AcGeVector3d tangentVGe;
+  activePlaneTangents(tangentUGe, tangentVGe);
+  const glm::dvec3 tangentU = static_cast<glm::dvec3>(tangentUGe);
+  const glm::dvec3 tangentV = static_cast<glm::dvec3>(tangentVGe);
 
   const double frontOnNormal = glm::dot(frontVec, planeNormal);
   glm::dvec3 planeCenter;
   if (std::abs(frontOnNormal) > 1e-6)
   {
-      const double planeDistance = glm::dot(gridPlaneOrigin - cameraPos, planeNormal);
+      const double planeDistance =
+          glm::dot(gridPlaneOriginRender - cameraPos, planeNormal);
       planeCenter = cameraPos + frontVec * (planeDistance / frontOnNormal);
   }
   else
   {
       planeCenter = cameraPos -
-                    planeNormal * glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
+                    planeNormal *
+                        glm::dot(cameraPos - gridPlaneOriginRender, planeNormal);
   }
 
   if (useOrthoProjection())
@@ -8152,12 +8168,12 @@ void render()
   bool orthoPlaneValid = false;
 
   {
-      const glm::dvec3 planeDelta = planeCenter - gridPlaneOrigin;
+      const glm::dvec3 planeDelta = planeCenter - gridPlaneOriginRender;
       const double centerU = glm::dot(planeDelta, tangentU);
       const double centerV = glm::dot(planeDelta, tangentV);
       const double snappedU = std::round(centerU / s) * s;
       const double snappedV = std::round(centerV / s) * s;
-      originWorld = gridPlaneOrigin +
+      originWorld = gridPlaneOriginRender +
                     tangentU * snappedU +
                     tangentV * snappedV;
   }
@@ -8243,7 +8259,8 @@ void render()
   // true world origin.  Float32 is still safe here because the active LOD
   // keeps one pixel worth of plane space at or above ULP(|constant|).
   {
-    const glm::dvec3 gridPlaneToAnchor = gridPlaneOrigin - originWorld;
+    const glm::dvec3 gridPlaneToAnchor =
+        gridPlaneOriginRender - originWorld;
     const double axisU = glm::dot(gridPlaneToAnchor, tangentU);
     const double axisV = glm::dot(gridPlaneToAnchor, tangentV);
     axisOriginGridRelative = glm::vec2(
@@ -8270,13 +8287,15 @@ void render()
   }
   else
   {
-      glm::dvec3 startAxisWorld = gridPlaneStartAxisOrigin -
-          planeNormal * glm::dot(gridPlaneStartAxisOrigin - gridPlaneOrigin,
-                                 planeNormal);
+      glm::dvec3 startAxisWorld = gridPlaneStartAxisOriginRender -
+          planeNormal * glm::dot(
+              gridPlaneStartAxisOriginRender - gridPlaneOriginRender,
+              planeNormal);
       startAxisOrigin = glm::vec3(startAxisWorld - originWorld);
       glm::dvec3 startAxisDirection =
-          gridPlaneStartAxisDirection -
-          planeNormal * glm::dot(gridPlaneStartAxisDirection, planeNormal);
+          gridPlaneStartAxisDirectionRender -
+          planeNormal * glm::dot(gridPlaneStartAxisDirectionRender,
+                                 planeNormal);
       if (glm::length(startAxisDirection) < 1e-9)
           startAxisDirection = tangentU;
       startAxisDirection = glm::normalize(startAxisDirection);
@@ -8331,7 +8350,7 @@ void render()
       const glm::dvec3 right(orbitCam.Right);
       const glm::dvec3 up(orbitCam.Up);
       const double cameraPlaneDistance =
-          glm::dot(cameraPos - gridPlaneOrigin, planeNormal);
+          glm::dot(cameraPos - gridPlaneOriginRender, planeNormal);
       const double groundCenterDepth =
           -cameraPlaneDistance / frontOnNormal;
       const double groundDepthRadius =
@@ -8352,7 +8371,7 @@ void render()
     {
       const double denom = glm::dot(front, planeNormal);
       const double t =
-          glm::dot(gridPlaneOrigin - cameraPos, planeNormal) / denom;
+          glm::dot(gridPlaneOriginRender - cameraPos, planeNormal) / denom;
       gridPlaneVisible = t > 0.0;
     }
   }
@@ -8395,8 +8414,9 @@ void render()
     else if (!useOrthoProjection())
     {
       const glm::dvec3 camPos = orbitCam.Position;
-      const glm::dvec3 n = glm::normalize(gridPlaneNormal);
-      const double planeDist = glm::dot(gridPlaneOrigin - camPos, n);
+      const glm::dvec3 n = glm::normalize(gridPlaneNormalRender);
+      const double planeDist =
+          glm::dot(gridPlaneOriginRender - camPos, n);
       gridVisibleQuadValid = true;
       for (int i = 0; i < 4; ++i)
       {
