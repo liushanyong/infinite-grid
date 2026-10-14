@@ -105,6 +105,20 @@ inline int runKernelSelfTest()
                   !arcArc.empty() &&
                   std::abs(arcArc[0].y - 0.8660254037844386) < 1.0e-6,
               "arc-arc filters to both spans");
+
+        const ::AcGeCircArc2d clockwise{
+            AcGePoint2d{0.0, 0.0}, 1.0, 0.0, 1.5707963267948966,
+            AcGeVector2d::kXAxis, true};
+        const ::AcGeCircArc2d rotatedFrame{
+            AcGePoint2d{0.0, 0.0}, 2.0, 0.0, 1.5707963267948966,
+            AcGeVector2d::kYAxis, false};
+        check(clockwise.isClockWise() &&
+                  clockwise.isInside({0.0, -1.0}) &&
+                  !clockwise.isInside({0.7071067811865476,
+                                       0.7071067811865476}) &&
+                  rotatedFrame.startPoint().isEqualTo({0.0, 2.0}) &&
+                  rotatedFrame.endPoint().isEqualTo({-2.0, 0.0}),
+              "2D circular arc direction and reference frame");
     }
 
     // ---------------- AcGeMatrix2d (ObjectARX 2026 baseline) ----------------

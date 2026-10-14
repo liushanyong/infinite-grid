@@ -52,6 +52,11 @@ available in namespace `ge`.
 `AcGeLineSeg3d` now exposes the same endpoint, midpoint, blend, length, and
 set operations, with its bisector represented by an `AcGePlane`.
 
+The existing planar circular arc is exported as global `AcGeCircArc2d` and
+supports reference vectors, clockwise/CCW parameterization, endpoints, and
+point-on-arc tests. Curve-curve intersection remains the existing focused
+`ge::intersect` subset.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string

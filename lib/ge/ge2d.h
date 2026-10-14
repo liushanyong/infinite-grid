@@ -56,6 +56,156 @@ public:
     }
 };
 
+struct AcGeCircArc2d
+{
+private:
+    AcGePoint2d m_center{0.0, 0.0};
+    double m_radius = 1.0;
+    double m_startAngle = 0.0;
+    double m_endAngle = 0.0;
+    AcGeVector2d m_refVec{1.0, 0.0};
+    bool m_clockwise = false;
+
+    static double normalizedAngle(double angle)
+    {
+        constexpr double twoPi = 6.2831853071795864769;
+        angle = std::fmod(angle, twoPi);
+        return angle < 0.0 ? angle + twoPi : angle;
+    }
+
+public:
+    AcGeCircArc2d() = default;
+    AcGeCircArc2d(const AcGePoint2d &center, double radius)
+        : m_center(center), m_radius(std::abs(radius))
+    {
+    }
+    AcGeCircArc2d(const AcGePoint2d &center, double radius,
+                  double startAngle, double endAngle)
+        : m_center(center), m_radius(std::abs(radius)),
+          m_startAngle(startAngle), m_endAngle(endAngle)
+    {
+    }
+    AcGeCircArc2d(const AcGePoint2d &center, double radius,
+                  double startAngle, double endAngle,
+                  const AcGeVector2d &reference, bool clockwise)
+        : m_center(center), m_radius(std::abs(radius)),
+          m_startAngle(startAngle), m_endAngle(endAngle),
+          m_refVec(reference.normal()), m_clockwise(clockwise)
+    {
+        if (m_refVec.isZeroLength())
+            m_refVec = AcGeVector2d::kXAxis;
+    }
+
+    AcGeCircArc2d &set(const AcGePoint2d &center, double radius)
+    {
+        m_center = center;
+        m_radius = std::abs(radius);
+        m_startAngle = 0.0;
+        m_endAngle = 0.0;
+        m_refVec = AcGeVector2d::kXAxis;
+        m_clockwise = false;
+        return *this;
+    }
+    AcGeCircArc2d &set(const AcGePoint2d &center, double radius,
+                       double startAngle, double endAngle,
+                       const AcGeVector2d &reference, bool clockwise)
+    {
+        m_center = center;
+        m_radius = std::abs(radius);
+        m_startAngle = startAngle;
+        m_endAngle = endAngle;
+        m_refVec = reference.normal();
+        if (m_refVec.isZeroLength())
+            m_refVec = AcGeVector2d::kXAxis;
+        m_clockwise = clockwise;
+        return *this;
+    }
+    AcGeCircArc2d &setCenter(const AcGePoint2d &center)
+    {
+        m_center = center;
+        return *this;
+    }
+    AcGeCircArc2d &setRadius(double radius)
+    {
+        m_radius = std::abs(radius);
+        return *this;
+    }
+    AcGeCircArc2d &setRefVec(const AcGeVector2d &reference)
+    {
+        const AcGeVector2d normalized = reference.normal();
+        if (!normalized.isZeroLength())
+            m_refVec = normalized;
+        return *this;
+    }
+    AcGeCircArc2d &setAngles(double startAngle, double endAngle)
+    {
+        m_startAngle = startAngle;
+        m_endAngle = endAngle;
+        return *this;
+    }
+    AcGeCircArc2d &setToComplement()
+    {
+        m_clockwise = !m_clockwise;
+        return *this;
+    }
+
+    AcGePoint2d center() const { return m_center; }
+    double radius() const { return m_radius; }
+    double startAng() const { return m_startAngle; }
+    double endAng() const { return m_endAngle; }
+    AcGeVector2d refVec() const { return m_refVec; }
+    bool isClockWise() const { return m_clockwise; }
+
+    double sweep() const
+    {
+        constexpr double twoPi = 6.2831853071795864769;
+        const double delta = m_clockwise
+            ? normalizedAngle(m_startAngle - m_endAngle)
+            : normalizedAngle(m_endAngle - m_startAngle);
+        return delta == 0.0 ? twoPi : delta;
+    }
+
+    AcGePoint2d pointAtAngle(double angle) const
+    {
+        const AcGeVector2d side{-m_refVec.y, m_refVec.x};
+        return m_center + m_refVec * (m_radius * std::cos(angle)) +
+               side * (m_radius * std::sin(angle));
+    }
+    AcGePoint2d startPoint() const { return pointAtAngle(m_startAngle); }
+    AcGePoint2d endPoint() const { return pointAtAngle(m_endAngle); }
+
+    bool angleOnArc(double worldAngle) const
+    {
+        const AcGeVector2d radial{std::cos(worldAngle), std::sin(worldAngle)};
+        const double relative =
+            std::atan2(m_refVec.x * radial.y - m_refVec.y * radial.x,
+                       m_refVec.dotProduct(radial));
+        const double fromStart = m_clockwise
+            ? normalizedAngle(m_startAngle - relative)
+            : normalizedAngle(relative - m_startAngle);
+        return fromStart <= sweep() + 1.0e-12;
+    }
+
+    bool isInside(const AcGePoint2d &point,
+                  const AcGeTol &tol = AcGeTol{}) const
+    {
+        const AcGeVector2d fromCenter = point - m_center;
+        if (std::abs(fromCenter.length() - m_radius) > tol.equalPoint())
+            return false;
+        if (fromCenter.isZeroLength(tol))
+            return m_radius <= tol.equalPoint();
+        const double relative =
+            std::atan2(m_refVec.x * fromCenter.y - m_refVec.y * fromCenter.x,
+                       m_refVec.dotProduct(fromCenter));
+        const double fromStart = m_clockwise
+            ? normalizedAngle(m_startAngle - relative)
+            : normalizedAngle(relative - m_startAngle);
+        return fromStart <= sweep() + tol.equalVector();
+    }
+
+    bool contains(const AcGePoint2d &point) const { return isInside(point); }
+};
+
 namespace ge
 {
 
@@ -78,54 +228,7 @@ struct AcGeCircle2d
     }
 };
 
-// ---- AcGeCircArc2d: CCW arc from startAngle to endAngle (radians) ----
-
-struct AcGeCircArc2d
-{
-    AcGePoint2d center{0.0, 0.0};
-    double radius = 1.0;
-    double startAngle = 0.0;
-    double endAngle = 0.0;
-
-    double sweep() const
-    {
-        double sweep = endAngle - startAngle;
-        while (sweep <= 0.0)
-            sweep += 2.0 * 3.14159265358979323846;
-        while (sweep > 2.0 * 3.14159265358979323846)
-            sweep -= 2.0 * 3.14159265358979323846;
-        return sweep;
-    }
-
-    AcGePoint2d pointAtAngle(double angle) const
-    {
-        return {center.x + radius * std::cos(angle),
-                center.y + radius * std::sin(angle)};
-    }
-
-    AcGePoint2d startPoint() const { return pointAtAngle(startAngle); }
-    AcGePoint2d endPoint() const { return pointAtAngle(endAngle); }
-
-    // Is |angle| within the CCW span [startAngle, startAngle + sweep]?
-    bool angleOnArc(double angle) const
-    {
-        const double sweep = this->sweep();
-        double rel = std::fmod(angle - startAngle, 2.0 * 3.14159265358979323846);
-        if (rel < 0.0)
-            rel += 2.0 * 3.14159265358979323846;
-        return rel <= sweep + kGeom2dTolerance;
-    }
-
-    bool contains(const AcGePoint2d &p) const
-    {
-        const double dx = p.x - center.x;
-        const double dy = p.y - center.y;
-        if (std::abs(std::sqrt(dx * dx + dy * dy) - radius) >
-            kGeom2dTolerance)
-            return false;
-        return angleOnArc(std::atan2(dy, dx));
-    }
-};
+using ::AcGeCircArc2d;
 
 // ---- intersections ----
 
@@ -247,7 +350,7 @@ inline std::vector<AcGePoint2d> intersect(const AcGeLineSeg2d &line,
 {
     std::vector<AcGePoint2d> out;
     for (const AcGePoint2d &p :
-         intersect(line, AcGeCircle2d{arc.center, arc.radius}))
+         intersect(line, AcGeCircle2d{arc.center(), arc.radius()}))
     {
         if (arc.contains(p))
             out.push_back(p);
@@ -267,8 +370,8 @@ inline std::vector<AcGePoint2d> intersect(const AcGeCircArc2d &a,
 {
     std::vector<AcGePoint2d> out;
     for (const AcGePoint2d &p :
-         intersect(AcGeCircle2d{a.center, a.radius},
-                   AcGeCircle2d{b.center, b.radius}))
+         intersect(AcGeCircle2d{a.center(), a.radius()},
+                   AcGeCircle2d{b.center(), b.radius()}))
     {
         if (a.contains(p) && b.contains(p))
             out.push_back(p);
