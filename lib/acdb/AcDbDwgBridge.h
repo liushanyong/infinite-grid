@@ -14,6 +14,7 @@
 // and counted, never fatal.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -56,13 +57,75 @@ inline glm::vec4 aciToColor(int index)
     case 8: return {0.5f, 0.5f, 0.5f, 1.0f};
     case 9: return {0.75f, 0.75f, 0.75f, 1.0f};
     case 250: return {0.2f, 0.2f, 0.2f, 1.0f};
-    case 251: return {0.357f, 0.357f, 0.357f, 1.0f};
-    case 252: return {0.517f, 0.517f, 0.517f, 1.0f};
-    case 253: return {0.678f, 0.678f, 0.678f, 1.0f};
-    case 254: return {0.839f, 0.839f, 0.839f, 1.0f};
+    case 251: return {0.314f, 0.314f, 0.314f, 1.0f};
+    case 252: return {0.412f, 0.412f, 0.412f, 1.0f};
+    case 253: return {0.51f, 0.51f, 0.51f, 1.0f};
+    case 254: return {0.745f, 0.745f, 0.745f, 1.0f};
     case 255: return {1.0f, 1.0f, 1.0f, 1.0f};
-    default: return {1.0f, 1.0f, 1.0f, 1.0f};
+    default: break;
     }
+
+    // ACI 10..249 is a 24-hue wheel with five value levels, each paired
+    // with a half-saturation tint. Keeping the full wheel avoids turning
+    // most imported layer and entity colors white.
+    if (index >= 10 && index <= 249)
+    {
+        static constexpr float values[] = {
+            1.0f, 1.0f, 0.647f, 0.647f, 0.498f,
+            0.498f, 0.298f, 0.298f, 0.149f, 0.149f};
+        const int hueIndex = (index - 10) / 10;
+        const int shade = (index - 10) % 10;
+        const float hue = static_cast<float>(hueIndex) * 15.0f;
+        const float value = values[shade];
+        const float saturation = (shade % 2 == 0) ? 1.0f : 0.5f;
+        const float chroma = value * saturation;
+        const float x = chroma *
+            (1.0f - std::abs(std::fmod(hue / 60.0f, 2.0f) - 1.0f));
+        float red = 0.0f;
+        float green = 0.0f;
+        float blue = 0.0f;
+        if (hue < 60.0f)
+            red = chroma, green = x;
+        else if (hue < 120.0f)
+            red = x, green = chroma;
+        else if (hue < 180.0f)
+            green = chroma, blue = x;
+        else if (hue < 240.0f)
+            green = x, blue = chroma;
+        else if (hue < 300.0f)
+            red = x, blue = chroma;
+        else
+            red = chroma, blue = x;
+        const float offset = value - chroma;
+        return {red + offset, green + offset, blue + offset, 1.0f};
+    }
+    return {1.0f, 1.0f, 1.0f, 1.0f};
+}
+
+inline glm::vec4 dwgColorToColor(const Dwg_Color &color)
+{
+    if (color.method == 0xc3)
+    {
+        const std::uint32_t rgb = color.rgb & 0x00ffffffu;
+        return {float((rgb >> 16) & 0xffu) / 255.0f,
+                float((rgb >> 8) & 0xffu) / 255.0f,
+                float(rgb & 0xffu) / 255.0f, 1.0f};
+    }
+    return aciToColor(color.index < 0 ? -color.index : color.index);
+}
+
+inline double lineWeightValueToPixels(int hundredthsOfMillimeter)
+{
+    return hundredthsOfMillimeter >= 0
+               ? (double(hundredthsOfMillimeter) / 100.0) * (96.0 / 25.4)
+               : 0.0;
+}
+
+inline double dwgLineWeightToPixels(BITCODE_RC lineWeight)
+{
+    const int hundredthsOfMillimeter =
+        dxf_cvt_lweight(static_cast<BITCODE_BSd>(lineWeight));
+    return lineWeightValueToPixels(hundredthsOfMillimeter);
 }
 
 // Write-side companion: nearest palette entry for a display color whose
@@ -437,6 +500,50 @@ inline AcDbLeader toEntity(const Dwg_Entity_LEADER &dwg)
     leader.hasArrowhead = dwg.arrowhead_on != 0;
     leader.hasHookLine = dwg.hookline_on != 0;
     return leader;
+}
+
+inline std::vector<AcDbEntityVariant> toEntities(
+    const Dwg_Entity_MULTILEADER &dwg)
+{
+    std::vector<AcDbEntityVariant> entities;
+    const Dwg_MLEADER_AnnotContext &context = dwg.ctx;
+    for (BITCODE_BL i = 0; i < context.num_leaders && context.leaders != nullptr;
+         ++i)
+    {
+        const Dwg_LEADER_Node &node = context.leaders[i];
+        for (BITCODE_BL j = 0; j < node.num_lines && node.lines != nullptr; ++j)
+        {
+            const Dwg_LEADER_Line &line = node.lines[j];
+            if (line.points == nullptr || line.num_points < 2)
+                continue;
+            AcDbLeader leader;
+            leader.points.reserve(line.num_points);
+            for (BITCODE_BL k = 0; k < line.num_points; ++k)
+                leader.points.emplace_back(line.points[k].x, line.points[k].y,
+                                           line.points[k].z);
+            leader.splinePath = line.type == 2;
+            leader.hasArrowhead = context.arrow_size > 0.0;
+            entities.emplace_back(std::move(leader));
+        }
+    }
+
+    if (context.has_content_txt && context.content.txt.default_text != nullptr &&
+        *context.content.txt.default_text != '\0')
+    {
+        const Dwg_MLEADER_Content_MText &content = context.content.txt;
+        AcDbMText text;
+        text.insertion = AcGePoint3d(content.location.x, content.location.y,
+                                     content.location.z);
+        text.direction = AcGeVector3d(content.direction.x, content.direction.y,
+                                      content.direction.z);
+        text.width = content.width;
+        text.height = context.text_height > 0.0
+                          ? context.text_height
+                          : content.height;
+        text.text = content.default_text;
+        entities.emplace_back(std::move(text));
+    }
+    return entities;
 }
 
 // TOLERANCE: the feature control frame.
@@ -868,15 +975,21 @@ inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
         if (layer.name == nullptr)
             continue;
         const std::string name = layer.name;
-        if (name.empty() || database.layerTable().contains(name))
+        if (name.empty())
             continue;
-        AcDbLayerTableRecord &record =
-            database.layerTable().add(name, database.allocateHandle());
+        AcDbLayerTableRecord *record = database.layerTable().getMutable(name);
+        if (record == nullptr)
+            record = &database.layerTable().add(name, database.allocateHandle());
         const int aci = static_cast<int>(layer.color.index);
-        record.color = aciToColor(aci == 256 || aci == 0 ? 7 : aci);
-        record.isOff = aci < 0; // CMC: negative index = layer off
-        record.isFrozen = layer.frozen;
-        record.isPlottable = layer.plotflag != 0;
+        record->color = layer.color.method == 0xc3
+                            ? dwgColorToColor(layer.color)
+                            : (aci == 256 || aci == 0)
+                                  ? aciToColor(7)
+                                  : dwgColorToColor(layer.color);
+        record->lineWeight = dwgLineWeightToPixels(layer.linewt);
+        record->isOff = aci < 0; // CMC: negative index = layer off
+        record->isFrozen = layer.frozen;
+        record->isPlottable = layer.plotflag != 0;
         ensureLineType(database, layer.ltype && layer.ltype->obj
                                      ? std::string(symbolTableName(
                                            layer.ltype->obj, DWG_TYPE_LTYPE))
@@ -900,7 +1013,11 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
 
     const int aci = static_cast<int>(ent.color.index);
     common.colorIndex = (aci >= 0 && aci <= 256) ? aci : 256;
-    if (aci == 256)
+    if (ent.color.method == 0xc3)
+    {
+        common.color = dwgColorToColor(ent.color);
+    }
+    else if (aci == 256)
     {
         // ByLayer: resolve the display color through the layer record.
         if (const AcDbLayerTableRecord *record =
@@ -915,7 +1032,19 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
     }
     else
     {
-        common.color = aciToColor(aci);
+        common.color = dwgColorToColor(ent.color);
+    }
+    const int lineWeight = dxf_cvt_lweight(
+        static_cast<BITCODE_BSd>(ent.linewt));
+    if (lineWeight == -1)
+    {
+        const AcDbLayerTableRecord *record =
+            database.layerTable().get(common.layer);
+        common.lineWeight = record != nullptr ? record->lineWeight : 0.0;
+    }
+    else
+    {
+        common.lineWeight = lineWeightValueToPixels(lineWeight);
     }
 
     if (const char *ltype = lineTypeNameOf(ctx, ent))
@@ -1114,6 +1243,7 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         // nullopt (not an empty variant — that would default-construct an
         // AcDbLine) marks "type unsupported".
         std::optional<AcDbEntityVariant> converted;
+        std::vector<AcDbEntityVariant> additional;
         switch (object.type)
         {
         case DWG_TYPE_LINE:
@@ -1221,6 +1351,22 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         case DWG_TYPE_LEADER:
             converted = toEntity(*ent.tio.LEADER);
             break;
+        case DWG_TYPE_MULTILEADER:
+        {
+            std::vector<AcDbEntityVariant> parts =
+                toEntities(*ent.tio.MULTILEADER);
+            if (!parts.empty())
+            {
+                converted = std::move(parts.front());
+                for (std::size_t part = 1; part < parts.size(); ++part)
+                    additional.push_back(std::move(parts[part]));
+            }
+            else
+            {
+                ++report.unsupported;
+            }
+            break;
+        }
         case DWG_TYPE_TOLERANCE:
             converted = toEntity(*ent.tio.TOLERANCE);
             break;
@@ -1312,6 +1458,10 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         std::visit(
             [&](auto &typed) { applyCommon(typed, ctx, object, database); },
             payload);
+        for (AcDbEntityVariant &part : additional)
+            std::visit(
+                [&](auto &typed) { applyCommon(typed, ctx, object, database); },
+                part);
 
         // TEXT carries its style by record name; MTEXT's payload has no
         // style slot, so its style falls back to the database default.
@@ -1386,6 +1536,24 @@ inline AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         {
             insertedHandle = addToSpace(std::move(payload),
                                         database.modelSpace());
+        }
+        for (AcDbEntityVariant &part : additional)
+        {
+            if (ent.entmode == 1)
+            {
+                if (AcDbBlockTableRecord *pspace =
+                        database.blockTable().getMutable(kPaperSpaceName))
+                    addToSpace(std::move(part), *pspace);
+            }
+            else if (ownedByBlock && ownerHandle != nullptr)
+            {
+                blockMembers[ownerHandle->absolute_ref].push_back(
+                    {object.handle.value, std::move(part)});
+            }
+            else
+            {
+                addToSpace(std::move(part), database.modelSpace());
+            }
         }
         if (insertedHandle.isValid() && isInsertLike)
             insertDbHandles[object.handle.value] = insertedHandle;
