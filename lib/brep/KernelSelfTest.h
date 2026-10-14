@@ -49,20 +49,32 @@ inline int runKernelSelfTest()
     // ---------------- geom2d (milestone 1 tail) ----------------
     {
         using namespace ge;
-        AcGeLineSeg2d a{{0.0, 0.0}, {4.0, 0.0}};
+        AcGeLineSeg2d a{AcGePoint2d{0.0, 0.0}, AcGePoint2d{4.0, 0.0}};
         check(a.startPoint() == AcGePoint2d{0.0, 0.0} &&
                   a.endPoint() == AcGePoint2d{4.0, 0.0} &&
                   a.midPoint() == AcGePoint2d{2.0, 0.0} &&
                   a.baryComb(0.25) == AcGePoint2d{1.0, 0.0},
               "2D segment endpoint and barycentric queries");
+        AcGeLineSeg2d vectorSegment2d{AcGePoint2d{1.0, 2.0},
+                                      AcGeVector2d{3.0, 4.0}};
+        vectorSegment2d.set(AcGePoint2d{2.0, 3.0},
+                            AcGeVector2d{4.0, 5.0});
+        check(vectorSegment2d.endPoint() == AcGePoint2d{6.0, 8.0},
+              "2D segment point-vector construction");
         AcGeLine2d bisector;
         a.getBisector(bisector);
         check(bisector.basePoint == AcGePoint2d{2.0, 0.0} &&
                   bisector.direction.isPerpendicularTo(a.direction()),
               "2D segment perpendicular bisector");
 
-        const AcGeLineSeg3d segment3d{{0.0, 0.0, 0.0},
-                                      {0.0, 0.0, 4.0}};
+        const AcGeLineSeg3d segment3d{AcGePoint3d{0.0, 0.0, 0.0},
+                                      AcGePoint3d{0.0, 0.0, 4.0}};
+        AcGeLineSeg3d vectorSegment3d{AcGePoint3d{1.0, 2.0, 3.0},
+                                      AcGeVector3d{3.0, 4.0, 5.0}};
+        vectorSegment3d.set(AcGePoint3d{2.0, 3.0, 4.0},
+                            AcGeVector3d{4.0, 5.0, 6.0});
+        check(vectorSegment3d.endPoint() == AcGePoint3d{6.0, 8.0, 10.0},
+              "3D segment point-vector construction");
         AcGePlane bisector3d;
         segment3d.getBisector(bisector3d);
         check(segment3d.length() == 4.0 &&
@@ -73,21 +85,25 @@ inline int runKernelSelfTest()
                   bisector3d.normal.isParallelTo(segment3d.direction()),
               "3D segment parameterization and bisector plane");
 
-        AcGeLineSeg2d cross{{2.0, -2.0}, {2.0, 2.0}};
+        AcGeLineSeg2d cross{AcGePoint2d{2.0, -2.0},
+                            AcGePoint2d{2.0, 2.0}};
         auto hit = intersect(a, cross);
         check(hit.size() == 1, "line-line crossing yields one point");
         check(!hit.empty() && std::abs(hit[0].x - 2.0) < 1.0e-9 &&
                   (!hit.empty() && std::abs(hit[0].y) < 1.0e-9),
               "line-line crossing point");
 
-        AcGeLineSeg2d par{{0.0, 1.0}, {4.0, 1.0}};
+        AcGeLineSeg2d par{AcGePoint2d{0.0, 1.0},
+                          AcGePoint2d{4.0, 1.0}};
         check(intersect(a, par).empty(), "parallel lines yield none");
 
         AcGeCircle2d unit{{0.0, 0.0}, 1.0};
-        AcGeLineSeg2d through{{-2.0, 0.0}, {2.0, 0.0}};
+        AcGeLineSeg2d through{AcGePoint2d{-2.0, 0.0},
+                              AcGePoint2d{2.0, 0.0}};
         check(intersect(through, unit).size() == 2,
               "line-circle yields two points");
-        AcGeLineSeg2d tangentY{{-2.0, 1.0}, {2.0, 1.0}};
+        AcGeLineSeg2d tangentY{AcGePoint2d{-2.0, 1.0},
+                               AcGePoint2d{2.0, 1.0}};
         auto tangentHit = intersect(tangentY, unit);
         check(tangentHit.size() == 1, "tangent line yields one point");
 
@@ -96,7 +112,8 @@ inline int runKernelSelfTest()
               "circle-circle yields two points");
 
         AcGeCircArc2d quarter{unit.center, 1.0, 0.0, 1.5707963267948966};
-        AcGeLineSeg2d diagonal{{-2.0, -2.0}, {2.0, 2.0}};
+        AcGeLineSeg2d diagonal{AcGePoint2d{-2.0, -2.0},
+                               AcGePoint2d{2.0, 2.0}};
         auto arcHit = intersect(diagonal, quarter);
         check(arcHit.size() == 1 &&
                   !arcHit.empty() &&

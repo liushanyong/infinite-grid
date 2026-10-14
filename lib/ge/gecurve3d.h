@@ -25,6 +25,10 @@ public:
     {
         set(start, end);
     }
+    AcGeLineSeg3d(const AcGePoint3d &start, const AcGeVector3d &direction)
+    {
+        set(start, direction);
+    }
 
     AcGeLineSeg3d &set(const AcGePoint3d &start, const AcGePoint3d &end)
     {
@@ -32,6 +36,15 @@ public:
             throw std::invalid_argument("AcGeLineSeg3d endpoints must differ.");
         m_startPoint = start;
         m_endPoint = end;
+        return *this;
+    }
+    AcGeLineSeg3d &set(const AcGePoint3d &start,
+                       const AcGeVector3d &direction)
+    {
+        if (direction.isZeroLength())
+            throw std::invalid_argument("AcGeLineSeg3d direction must be nonzero.");
+        m_startPoint = start;
+        m_endPoint = start + direction;
         return *this;
     }
 

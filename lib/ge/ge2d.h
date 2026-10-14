@@ -29,6 +29,10 @@ public:
     {
         set(start, end);
     }
+    AcGeLineSeg2d(const AcGePoint2d &start, const AcGeVector2d &direction)
+    {
+        set(start, direction);
+    }
 
     AcGeLineSeg2d &set(const AcGePoint2d &start, const AcGePoint2d &end)
     {
@@ -36,6 +40,15 @@ public:
             throw std::invalid_argument("AcGeLineSeg2d endpoints must differ.");
         m_start = start;
         m_end = end;
+        return *this;
+    }
+    AcGeLineSeg2d &set(const AcGePoint2d &start,
+                        const AcGeVector2d &direction)
+    {
+        if (direction.isZeroLength())
+            throw std::invalid_argument("AcGeLineSeg2d direction must be nonzero.");
+        m_start = start;
+        m_end = start + direction;
         return *this;
     }
 

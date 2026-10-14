@@ -67,11 +67,11 @@ Advanced periodicity and interval subtraction APIs remain unimplemented.
 
 The existing 2D segment implementation is also exported as global
 `AcGeLineSeg2d` and now includes the documented endpoint, midpoint, blend,
-length, set, and bisector operations. Its robust intersection helpers remain
-available in namespace `ge`.
+length, point-pair and point/vector set, and bisector operations. Its robust
+intersection helpers remain available in namespace `ge`.
 
-`AcGeLineSeg3d` now exposes the same endpoint, midpoint, blend, length, and
-set operations, with its bisector represented by an `AcGePlane`.
+`AcGeLineSeg3d` now exposes endpoint-pair and start-point/vector construction
+and setters, midpoint, blend, length, and bisector-plane operations.
 
 The existing planar circular arc is exported as global `AcGeCircArc2d` and
 supports reference vectors, clockwise/CCW parameterization, endpoints, and
