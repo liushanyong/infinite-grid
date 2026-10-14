@@ -7318,8 +7318,8 @@ void render()
 
   const acgs::math::DVec3 cameraPos(orbitCam.Position);
   const acgs::math::DVec3 &frontVec = orbitCam.Front;
-  // The grid shader consumes GLM, while its persistent plane geometry uses
-  // the AcGe point/vector interfaces.
+  // The grid shader consumes rendering types, while its persistent plane
+  // geometry uses the AcGe point/vector interfaces.
   const AcGeVector3d cameraFrontGe(orbitCam.Front);
   const AcGeVector3d cameraRightGe(orbitCam.Right);
   const AcGeVector3d cameraUpGe(orbitCam.Up);
