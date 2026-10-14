@@ -317,6 +317,24 @@ inline int runStoreSelfTest()
             check(manager->viewCount() == before &&
                       manager->activeView() != nullptr,
                   "destroyView keeps the active view valid");
+
+            const int originalActiveIndex = manager->activeViewIndex();
+            acgs::AcGsView *fallback =
+                manager->views()[before - 1].get();
+            acgs::AcGsView *first = manager->createView();
+            acgs::AcGsView *second = manager->createView();
+            manager->setActiveView(static_cast<int>(before + 1));
+            manager->destroyView(first);
+            check(manager->activeView() == second &&
+                      manager->activeViewIndex() ==
+                          static_cast<int>(before),
+                  "destroying an earlier view preserves the active view");
+            manager->destroyView(second);
+            check(manager->activeView() == fallback &&
+                      manager->activeViewIndex() ==
+                          static_cast<int>(before - 1),
+                  "destroying the active view selects its predecessor");
+            manager->setActiveView(originalActiveIndex);
         }
     }
 
