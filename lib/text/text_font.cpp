@@ -55,6 +55,11 @@ LoadedFont::~LoadedFont()
 
 bool LoadedFont::loadSdf(const SdfFontConfig &config)
 {
+    if (!(config.pixelsPerEm > 0.0f) ||
+        !std::isfinite(config.pixelsPerEm) ||
+        !(config.sdfSpread > 0.0f) || !std::isfinite(config.sdfSpread))
+        return false;
+
     fontData_ = readWholeFile(config.ttfPath);
     if (fontData_.empty())
         return false;

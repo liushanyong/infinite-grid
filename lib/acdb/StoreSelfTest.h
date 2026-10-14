@@ -5,6 +5,7 @@
 // the trusted WINDOW host, reporting through store_selftest.log (GUI
 // processes have no valid stderr handle).
 
+#include <cmath>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -14,6 +15,7 @@
 #include "acdb/AcDbDatabase.h"
 #include "acdb/AcDbEntities.h"
 #include "acdb/AcDbStore.h"
+#include "acdb/AcDbTessellate.h"
 #include "acgs/AcGsManager.h"
 #include "acgs/AcGsView.h"
 #include "acgs/DocumentSceneBridge.h"
@@ -37,6 +39,59 @@ inline int runStoreSelfTest()
             std::printf("FAIL %s\n", what);
         }
     };
+
+    {
+        const glm::dvec3 zero(0.0);
+        const glm::dvec3 basisU = planeBasisU(zero);
+        const glm::dvec3 basisV = planeBasisV(zero);
+        check(std::isfinite(basisU.x) && std::isfinite(basisU.y) &&
+                  std::isfinite(basisU.z) && std::isfinite(basisV.x) &&
+                  std::isfinite(basisV.y) && std::isfinite(basisV.z) &&
+                  std::abs(glm::length(basisU) - 1.0) < 1.0e-12 &&
+                  std::abs(glm::length(basisV) - 1.0) < 1.0e-12,
+              "zero plane normal yields finite unit basis vectors");
+
+        AcDbEllipse ellipse;
+        ellipse.majorAxis = {1.0, 0.0, 0.0};
+        ellipse.normal = {0.0, 0.0, 0.0};
+        TessellatedEntity tessellated;
+        tessellate(ellipse, tessellated);
+        bool finiteEllipse = !tessellated.strokes.empty();
+        for (const Stroke &stroke : tessellated.strokes)
+            for (const glm::dvec3 &point : stroke.points)
+                finiteEllipse = finiteEllipse && std::isfinite(point.x) &&
+                                std::isfinite(point.y) &&
+                                std::isfinite(point.z);
+        check(finiteEllipse,
+              "ellipse with zero normal tessellates to finite vertices");
+
+        AcDbPolyline polyline;
+        polyline.vertices = {{0.0, 0.0}, {2.0, 0.0}};
+        polyline.bulges = {0.5};
+        polyline.normal = {0.0, 0.0, 0.0};
+        polyline.thickness = 1.0;
+        TessellatedEntity polylineGeometry;
+        tessellate(polyline, polylineGeometry);
+        bool finitePolyline = !polylineGeometry.strokes.empty() &&
+                              !polylineGeometry.fills.empty();
+        for (const Stroke &stroke : polylineGeometry.strokes)
+            for (const glm::dvec3 &point : stroke.points)
+                finitePolyline = finitePolyline && std::isfinite(point.x) &&
+                                 std::isfinite(point.y) &&
+                                 std::isfinite(point.z);
+        for (const Triangle &triangle : polylineGeometry.fills)
+            finitePolyline = finitePolyline && std::isfinite(triangle.a.x) &&
+                             std::isfinite(triangle.a.y) &&
+                             std::isfinite(triangle.a.z) &&
+                             std::isfinite(triangle.b.x) &&
+                             std::isfinite(triangle.b.y) &&
+                             std::isfinite(triangle.b.z) &&
+                             std::isfinite(triangle.c.x) &&
+                             std::isfinite(triangle.c.y) &&
+                             std::isfinite(triangle.c.z);
+        check(finitePolyline,
+              "polyline with zero normal tessellates finite walls");
+    }
 
     // ---------------- ECS scene store (AcDbObjectId keys) ----------------
     {
