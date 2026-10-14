@@ -1,5 +1,9 @@
 # ObjectARX API compatibility types
 
+The bundled `/docs/arxref.chm` is the AutoCAD 2026 ObjectARX Reference Guide.
+It is used as a source-level API reference; it does not imply binary ABI
+compatibility. The AcGe implementation is being expanded incrementally.
+
 The source-level compatibility aliases in `lib/arx/ArxTypes.h` provide a
 shared starting point for ObjectARX-style declarations:
 
@@ -10,6 +14,11 @@ shared starting point for ObjectARX-style declarations:
 | `AcArray<T>` | `std::vector<T>` | Dynamic-array storage; this does not reproduce every `AcArray` member |
 | `Adesk::Boolean`, integer aliases | Corresponding fixed-width C++ types | `LongPtr`/`ULongPtr` follow pointer width |
 | `AcGePoint2d/3d`, `AcGeVector2d/3d`, `AcGeMatrix3d` | Project's geometry types | Defined in `lib/ge`; already use ObjectARX names |
+
+`AcGeMatrix2d` currently provides the core affine transform operations
+documented in the bundled reference. This is a partial compatibility layer,
+not a claim that all ObjectARX AcGe classes, methods, semantics, or ABI are
+implemented.
 
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text

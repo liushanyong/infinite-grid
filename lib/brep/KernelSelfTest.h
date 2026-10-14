@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ge/ge2d.h"
+#include "ge/gematrix2d.h"
 #include "brep/BRepBuild.h"
 #include "brep/Validate.h"
 #include "brep/BRepBoolean.h"
@@ -79,6 +80,42 @@ inline int runKernelSelfTest()
                   !arcArc.empty() &&
                   std::abs(arcArc[0].y - 0.8660254037844386) < 1.0e-6,
               "arc-arc filters to both spans");
+    }
+
+    // ---------------- AcGeMatrix2d (ObjectARX 2026 baseline) ----------------
+    {
+        const AcGePoint2d center{2.0, -1.0};
+        const AcGeMatrix2d rotate =
+            AcGeMatrix2d::rotation(1.5707963267948966, center);
+        const AcGePoint2d rotated = transformBy({3.0, -1.0}, rotate);
+        check(std::abs(rotated.x - 2.0) < 1.0e-9 &&
+                  std::abs(rotated.y) < 1.0e-9,
+              "2D rotation about center");
+
+        const AcGeMatrix2d translate =
+            AcGeMatrix2d::translation({4.0, 3.0});
+        const AcGePoint2d moved =
+            transformBy(transformBy({1.0, 2.0}, translate), rotate);
+        const AcGePoint2d composed =
+            transformBy({1.0, 2.0}, rotate * translate);
+        check(moved.distanceTo(composed) < 1.0e-9,
+              "2D affine multiplication order");
+
+        const AcGeMatrix2d inverse = (rotate * translate).inverse();
+        const AcGePoint2d restored =
+            transformBy(transformBy({1.0, 2.0}, rotate * translate), inverse);
+        check(restored.distanceTo({1.0, 2.0}) < 1.0e-9,
+              "2D affine inverse");
+
+        const AcGeVector2d unchanged =
+            transformBy({1.0, 2.0}, translate);
+        check(unchanged == AcGeVector2d{1.0, 2.0},
+              "2D vector transform ignores translation");
+
+        AcGeMatrix2d singular;
+        singular[1][0] = 0.0;
+        singular[1][1] = 0.0;
+        check(singular.isSingular(), "2D singular matrix detection");
     }
 
     // ---------------- brep (milestone 2) ----------------
