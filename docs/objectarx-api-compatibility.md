@@ -26,6 +26,10 @@ parameterized evaluation (rays clamp to their half-line), and scale-vector
 composition/inversion/matrix conversion. They do not yet reproduce the full
 `AcGeLinearEnt2d/3d` inheritance API or every documented overload.
 
+`AcGeBoundBlock2d/3d` provide coordinate-aligned box operations for setting,
+extending, swelling, querying extents, containment, and disjointness. They do
+not yet represent the documented oriented parallelogram/parallelepiped forms.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string

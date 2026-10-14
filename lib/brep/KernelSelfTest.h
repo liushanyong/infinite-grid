@@ -161,6 +161,36 @@ inline int runKernelSelfTest()
             (scale3d * scale3d.inverse()).isEqualTo(
                 AcGeScale3d::kIdentity),
         "3D scale matrix and inverse");
+
+        AcGeBoundBlock2d bounds2d{{3.0, 4.0}, {-1.0, 2.0}};
+        check(bounds2d.contains({0.0, 3.0}) &&
+            !bounds2d.contains({4.0, 3.0}) &&
+            bounds2d.isBox(),
+        "2D coordinate bound containment");
+        bounds2d.extend({5.0, -2.0});
+        check(bounds2d.contains({5.0, -2.0}) &&
+            bounds2d.isDisjoint(AcGeBoundBlock2d{{6.0, -1.0},
+                                                 {8.0, 1.0}}),
+        "2D bound extension and disjointness");
+        bounds2d.swell(1.0);
+        check(bounds2d.contains({-2.0, 1.0}),
+        "2D bound swelling");
+
+        AcGeBoundBlock3d bounds3d{{3.0, 4.0, 5.0}, {-1.0, 2.0, 3.0}};
+        AcGePoint3d origin;
+        AcGeVector3d side1, side2, side3;
+        bounds3d.get(origin, side1, side2, side3);
+        check(bounds3d.contains({0.0, 3.0, 4.0}) &&
+            !bounds3d.contains({4.0, 3.0, 4.0}) &&
+            origin == AcGePoint3d{-1.0, 2.0, 3.0} &&
+            side1 == AcGeVector3d{4.0, 0.0, 0.0} &&
+            bounds3d.isBox(),
+        "3D coordinate bound query");
+        bounds3d.swell(1.0);
+        check(bounds3d.contains({-2.0, 1.0, 2.0}) &&
+            bounds3d.isDisjoint(
+                AcGeBoundBlock3d{{5.0, 0.0, 0.0}, {6.0, 1.0, 1.0}}),
+        "3D bound swelling and disjointness");
     }
 
     // ---------------- brep (milestone 2) ----------------
