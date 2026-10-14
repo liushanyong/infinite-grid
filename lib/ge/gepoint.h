@@ -72,9 +72,14 @@ struct AcGeVector2d
     bool isParallelTo(const AcGeVector2d &other,
                       const AcGeTol &tol = AcGeTol{}) const
     {
-        return !isZeroLength(tol) && !other.isZeroLength(tol) &&
-               std::abs(x * other.y - y * other.x) <=
-                   tol.equalVector() * length() * other.length();
+        if (isZeroLength(tol) || other.isZeroLength(tol))
+            return false;
+        AcGeVector2d normalizedThis = normal();
+        AcGeVector2d normalizedOther = other.normal();
+        if (normalizedThis.dotProduct(normalizedOther) < 0.0)
+            normalizedOther.negate();
+        return (normalizedThis - normalizedOther).length() <=
+               tol.equalVector();
     }
     bool isPerpendicularTo(const AcGeVector2d &other,
                            const AcGeTol &tol = AcGeTol{}) const
@@ -196,8 +201,12 @@ struct AcGeVector3d
     {
         if (isZeroLength(tol) || other.isZeroLength(tol))
             return false;
-        const AcGeVector3d cross = crossProduct(other);
-        return cross.length() <= tol.equalVector() * length() * other.length();
+        AcGeVector3d normalizedThis = normal();
+        AcGeVector3d normalizedOther = other.normal();
+        if (normalizedThis.dotProduct(normalizedOther) < 0.0)
+            normalizedOther.negate();
+        return (normalizedThis - normalizedOther).length() <=
+               tol.equalVector();
     }
     bool isPerpendicularTo(const AcGeVector3d &other,
                            const AcGeTol &tol = AcGeTol{}) const
