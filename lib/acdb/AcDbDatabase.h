@@ -291,8 +291,8 @@ public:
         const AcDbBlockReference &reference) const;
 
     // ---- file IO (ObjectARX AcDbDatabase::readDwgFile/writeDwgFile/
-    // dxfIn/dxfOut; implemented in AcDbFileIo.cpp over the libredwg
-    // codec).  The readers APPEND into this database; the writers
+    // dxfIn/dxfOut; implemented in AcDbFileIo.cpp through AcDbFileCodec.
+    // The readers APPEND into this database; the writers
     // overwrite the target file. ----
     bool readDwgFile(const char *filePath, AcDbFileIoReport *report = nullptr);
     bool dxfIn(const char *filePath, AcDbFileIoReport *report = nullptr);

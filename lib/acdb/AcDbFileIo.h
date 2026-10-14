@@ -1,18 +1,18 @@
 #pragma once
 
-// File-IO facade over the libredwg codec (namespace acdb).  The four
+// File-IO facade over AcDbFileCodec (namespace acdb). The four
 // ObjectARX entry points live as AcDbDatabase methods — readDwgFile /
 // writeDwgFile for the binary DWG container, dxfIn / dxfOut for the DXF
 // interchange format:
 //
+// Current default-codec mapping:
 //   readDwgFile  dwg_read_file  -> Dwg_Data -> AcDbDwgBridge::addDwgEntities
 //   dxfIn        dxf_read_file  -> Dwg_Data -> AcDbDwgBridge::addDwgEntities
 //   writeDwgFile AcDbDwgWriteBridge::fillDwgFromDatabase -> dwg_write_file
 //   dxfOut       AcDbDwgWriteBridge::fillDwgFromDatabase -> dwg_write_dxf
 //
-// Both formats decode into the same Dwg_Data, so one fill serves the
-// two readers and one Dwg_Data feeds the two writers (OpenCADStudio's
-// one-document-four-IOs shape).  readDwgFile/dxfIn APPEND into this
+// The default codec currently decodes both formats into the same
+// intermediate document. readDwgFile/dxfIn APPEND into this
 // database (callers wanting a fresh document start from an empty one);
 // writeDwgFile overwrites an existing target (the codec refuses to).
 
@@ -21,8 +21,7 @@
 namespace acdb
 {
 
-// Counts reported by the readers (and error code from the codec, a
-// DWG_ERR_* bitmask — >= DWG_ERR_CRITICAL means the decode aborted).
+// Counts reported by readers; errorCode is the selected codec's native code.
 struct AcDbFileIoReport
 {
     std::size_t entitiesAdded = 0;
