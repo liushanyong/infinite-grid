@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #ifdef _WIN32
 #endif
@@ -41,6 +42,7 @@ bool TextEngine::loadSdfFont(const std::string &ttfPath, float pixelsPerEm)
     // allocates fresh ones.)
     glyphTextureIds_.clear();
     clearLayoutCache();
+    glyphCoverageCache_.clear();
     return true;
 }
 
@@ -66,6 +68,94 @@ const rendering::LoadedFont &TextEngine::shxFontFor(
     if (character >= 128 && shxBigFont_.hasShx())
         return shxBigFont_;
     return shxRegularFont_;
+}
+
+const std::vector<TextEngine::GlyphCoverageUv> &TextEngine::glyphCoverageUv(
+    std::uint32_t codepoint)
+{
+    auto [entry, inserted] = glyphCoverageCache_.try_emplace(codepoint);
+    if (!inserted)
+        return entry->second;
+    std::vector<GlyphCoverageUv> &soup = entry->second;
+    const rendering::GlyphSdfRaster &raster = sdfFont_.glyphSdf(codepoint);
+    if (!raster.valid || raster.width < 2 || raster.height < 2 ||
+        raster.sdf.empty())
+        return soup;
+
+    const int width = raster.width;
+    const int height = raster.height;
+    // Two-texel cells reduce the triangle count while keeping the contour
+    // within roughly one texel of the visible glyph edge.
+    constexpr int stride = 2;
+    const auto sample = [&](int i, int j) {
+        return float(raster.sdf[std::size_t(j) * width + i]) / 255.0f;
+    };
+    const auto texelUv = [&](int i, int j) {
+        return GlyphCoverageUv{
+            (float(i) + 0.5f) / float(width),
+            (float(j) + 0.5f) / float(height)};
+    };
+    const auto crossing = [](GlyphCoverageUv a, GlyphCoverageUv b,
+                             float va, float vb) {
+        const float t = (0.5f - va) / (vb - va);
+        return GlyphCoverageUv{a.u + (b.u - a.u) * t,
+                               a.v + (b.v - a.v) * t};
+    };
+    std::vector<GlyphCoverageUv> polygon;
+    polygon.reserve(8);
+    for (int j = 0; j + stride < height; j += stride)
+    {
+        for (int i = 0; i + stride < width; i += stride)
+        {
+            const float v00 = sample(i, j);
+            const float v10 = sample(i + stride, j);
+            const float v11 = sample(i + stride, j + stride);
+            const float v01 = sample(i, j + stride);
+            const bool in00 = v00 > 0.5f;
+            const bool in10 = v10 > 0.5f;
+            const bool in11 = v11 > 0.5f;
+            const bool in01 = v01 > 0.5f;
+            const GlyphCoverageUv p00 = texelUv(i, j);
+            const GlyphCoverageUv p10 = texelUv(i + stride, j);
+            const GlyphCoverageUv p11 = texelUv(i + stride, j + stride);
+            const GlyphCoverageUv p01 = texelUv(i, j + stride);
+            if (in00 && in10 && in11 && in01)
+            {
+                // Fill fully covered cells, not only the contour band.
+                soup.push_back(p00);
+                soup.push_back(p10);
+                soup.push_back(p11);
+                soup.push_back(p00);
+                soup.push_back(p11);
+                soup.push_back(p01);
+                continue;
+            }
+            if (!in00 && !in10 && !in11 && !in01)
+                continue;
+
+            // Emit inside corners and iso-0.5 edge crossings in cyclic order.
+            polygon.clear();
+            const auto walk = [&](const GlyphCoverageUv &a,
+                                  const GlyphCoverageUv &b, bool aIn,
+                                  float va, float vb) {
+                if (aIn)
+                    polygon.push_back(a);
+                if ((va > 0.5f) != (vb > 0.5f))
+                    polygon.push_back(crossing(a, b, va, vb));
+            };
+            walk(p00, p10, in00, v00, v10);
+            walk(p10, p11, in10, v10, v11);
+            walk(p11, p01, in11, v11, v01);
+            walk(p01, p00, in01, v01, v00);
+            for (std::size_t k = 2; k < polygon.size(); ++k)
+            {
+                soup.push_back(polygon[0]);
+                soup.push_back(polygon[k - 1]);
+                soup.push_back(polygon[k]);
+            }
+        }
+    }
+    return soup;
 }
 
 // Shared layout walk: the single source of glyph placement for BOTH the

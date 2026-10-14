@@ -81,10 +81,19 @@ public:
         std::array<glm::dvec3, 4> corners;
         std::uint32_t codepoint = 0;
     };
+    struct GlyphCoverageUv
+    {
+        float u = 0.0f;
+        float v = 0.0f;
+    };
     std::vector<GlyphPlacement> layoutGlyphs(
         const TextRequest &request,
         const glm::dvec3 &cameraPos, const glm::dvec3 &cameraRight,
         const glm::dvec3 &cameraUp, const glm::dvec3 &cameraFront);
+    // Triangulated 0.5 SDF coverage in glyph-quad UV space, cached per
+    // codepoint and invalidated when the SDF font is reloaded.
+    const std::vector<GlyphCoverageUv> &glyphCoverageUv(
+        std::uint32_t codepoint);
 
     // Cached layout access for the two per-frame consumers (visible SDF
     // pass and pick soup). Planar text layouts are camera-independent, so
@@ -122,6 +131,8 @@ private:
     };
     std::unordered_map<const TextRequest *, CachedGlyphLayout> layoutCache_;
     std::vector<GlyphPlacement> billboardLayout_;
+    std::unordered_map<std::uint32_t, std::vector<GlyphCoverageUv>>
+        glyphCoverageCache_;
 };
 
 // Global engine instance (the host loads fonts into it at startup).
