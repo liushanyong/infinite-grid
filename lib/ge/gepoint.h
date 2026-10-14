@@ -7,12 +7,22 @@
 // through implicit conversions for the tessellation bridge.
 
 #include <glm/glm.hpp>
+#include <algorithm>
+#include <cmath>
 #include <type_traits>
+
+#include "getol.h"
+
+struct AcGeMatrix2d;
 
 struct AcGeVector2d
 {
     double x = 0.0;
     double y = 0.0;
+
+    static const AcGeVector2d kIdentity;
+    static const AcGeVector2d kXAxis;
+    static const AcGeVector2d kYAxis;
 
     AcGeVector2d() = default;
     AcGeVector2d(double xx, double yy) : x(xx), y(yy) {}
@@ -32,7 +42,64 @@ struct AcGeVector2d
     }
 
     double lengthSq() const { return x * x + y * y; }
+    double lengthSqrd() const { return lengthSq(); }
     double length() const { return std::sqrt(lengthSq()); }
+    double angle() const
+    {
+        double result = std::atan2(y, x);
+        return result < 0.0 ? result + 6.2831853071795864769 : result;
+    }
+    double angleTo(const AcGeVector2d &other) const
+    {
+        const double denominator = length() * other.length();
+        if (denominator == 0.0)
+            return 0.0;
+        return std::acos(std::clamp(dotProduct(other) / denominator, -1.0, 1.0));
+    }
+    bool isEqualTo(const AcGeVector2d &other,
+                   const AcGeTol &tol = AcGeTol{}) const
+    {
+        return (*this - other).length() <= tol.equalVector();
+    }
+    bool isZeroLength(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return length() <= tol.equalVector();
+    }
+    bool isUnitLength(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return std::abs(length() - 1.0) <= tol.equalVector();
+    }
+    bool isParallelTo(const AcGeVector2d &other,
+                      const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (isZeroLength(tol) || other.isZeroLength(tol))
+            return false;
+        AcGeVector2d normalizedThis = normal();
+        AcGeVector2d normalizedOther = other.normal();
+        if (normalizedThis.dotProduct(normalizedOther) < 0.0)
+            normalizedOther.negate();
+        return (normalizedThis - normalizedOther).length() <=
+               tol.equalVector();
+    }
+    bool isPerpendicularTo(const AcGeVector2d &other,
+                           const AcGeTol &tol = AcGeTol{}) const
+    {
+        return !isZeroLength(tol) && !other.isZeroLength(tol) &&
+               std::abs(dotProduct(other)) <=
+                   tol.equalVector() * length() * other.length();
+    }
+    bool isCodirectionalTo(const AcGeVector2d &other,
+                           const AcGeTol &tol = AcGeTol{}) const
+    {
+        return isParallelTo(other, tol) && dotProduct(other) > 0.0;
+    }
+    AcGeVector2d perpVector() const { return {-y, x}; }
+    AcGeVector2d &negate()
+    {
+        x = -x;
+        y = -y;
+        return *this;
+    }
 
     AcGeVector2d &normalize()
     {
@@ -52,6 +119,8 @@ struct AcGeVector2d
         return copy;
     }
 
+    AcGeVector2d &transformBy(const AcGeMatrix2d &matrix);
+
     AcGeVector2d operator-() const { return {-x, -y}; }
     AcGeVector2d operator+(const AcGeVector2d &o) const { return {x + o.x, y + o.y}; }
     AcGeVector2d operator-(const AcGeVector2d &o) const { return {x - o.x, y - o.y}; }
@@ -64,11 +133,20 @@ struct AcGeVector2d
     bool operator!=(const AcGeVector2d &o) const { return !(*this == o); }
 };
 
+inline const AcGeVector2d AcGeVector2d::kIdentity{1.0, 1.0};
+inline const AcGeVector2d AcGeVector2d::kXAxis{1.0, 0.0};
+inline const AcGeVector2d AcGeVector2d::kYAxis{0.0, 1.0};
+
 struct AcGeVector3d
 {
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
+
+    static const AcGeVector3d kIdentity;
+    static const AcGeVector3d kXAxis;
+    static const AcGeVector3d kYAxis;
+    static const AcGeVector3d kZAxis;
 
     AcGeVector3d() = default;
     AcGeVector3d(double xx, double yy, double zz) : x(xx), y(yy), z(zz) {}
@@ -96,7 +174,69 @@ struct AcGeVector3d
     }
 
     double lengthSq() const { return dotProduct(*this); }
+    double lengthSqrd() const { return lengthSq(); }
     double length() const { return std::sqrt(lengthSq()); }
+    double angleTo(const AcGeVector3d &other) const
+    {
+        const double denominator = length() * other.length();
+        if (denominator == 0.0)
+            return 0.0;
+        return std::acos(std::clamp(dotProduct(other) / denominator, -1.0, 1.0));
+    }
+    bool isEqualTo(const AcGeVector3d &other,
+                   const AcGeTol &tol = AcGeTol{}) const
+    {
+        return (*this - other).length() <= tol.equalVector();
+    }
+    bool isZeroLength(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return length() <= tol.equalVector();
+    }
+    bool isUnitLength(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return std::abs(length() - 1.0) <= tol.equalVector();
+    }
+    bool isParallelTo(const AcGeVector3d &other,
+                      const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (isZeroLength(tol) || other.isZeroLength(tol))
+            return false;
+        AcGeVector3d normalizedThis = normal();
+        AcGeVector3d normalizedOther = other.normal();
+        if (normalizedThis.dotProduct(normalizedOther) < 0.0)
+            normalizedOther.negate();
+        return (normalizedThis - normalizedOther).length() <=
+               tol.equalVector();
+    }
+    bool isPerpendicularTo(const AcGeVector3d &other,
+                           const AcGeTol &tol = AcGeTol{}) const
+    {
+        return !isZeroLength(tol) && !other.isZeroLength(tol) &&
+               std::abs(dotProduct(other)) <=
+                   tol.equalVector() * length() * other.length();
+    }
+    bool isCodirectionalTo(const AcGeVector3d &other,
+                           const AcGeTol &tol = AcGeTol{}) const
+    {
+        return isParallelTo(other, tol) && dotProduct(other) > 0.0;
+    }
+    AcGeVector3d perpVector() const
+    {
+        const AcGeVector3d seed =
+            std::abs(x) < std::abs(y)
+                ? (std::abs(x) < std::abs(z) ? AcGeVector3d{1.0, 0.0, 0.0}
+                                             : AcGeVector3d{0.0, 0.0, 1.0})
+                : (std::abs(y) < std::abs(z) ? AcGeVector3d{0.0, 1.0, 0.0}
+                                             : AcGeVector3d{0.0, 0.0, 1.0});
+        return crossProduct(seed);
+    }
+    AcGeVector3d &negate()
+    {
+        x = -x;
+        y = -y;
+        z = -z;
+        return *this;
+    }
 
     AcGeVector3d &normalize()
     {
@@ -129,10 +269,17 @@ struct AcGeVector3d
     bool operator!=(const AcGeVector3d &o) const { return !(*this == o); }
 };
 
+inline const AcGeVector3d AcGeVector3d::kIdentity{1.0, 1.0, 1.0};
+inline const AcGeVector3d AcGeVector3d::kXAxis{1.0, 0.0, 0.0};
+inline const AcGeVector3d AcGeVector3d::kYAxis{0.0, 1.0, 0.0};
+inline const AcGeVector3d AcGeVector3d::kZAxis{0.0, 0.0, 1.0};
+
 struct AcGePoint2d
 {
     double x = 0.0;
     double y = 0.0;
+
+    static const AcGePoint2d kOrigin;
 
     AcGePoint2d() = default;
     AcGePoint2d(double xx, double yy) : x(xx), y(yy) {}
@@ -143,8 +290,14 @@ struct AcGePoint2d
     {
         return AcGeVector2d(x - other.x, y - other.y).length();
     }
+    bool isEqualTo(const AcGePoint2d &other,
+                   const AcGeTol &tol = AcGeTol{}) const
+    {
+        return distanceTo(other) <= tol.equalPoint();
+    }
 
     AcGeVector2d asVector() const { return {x, y}; }
+    AcGePoint2d &transformBy(const AcGeMatrix2d &matrix);
     AcGePoint2d operator+(const AcGeVector2d &o) const { return {x + o.x, y + o.y}; }
     AcGePoint2d operator-(const AcGeVector2d &o) const { return {x - o.x, y - o.y}; }
     AcGeVector2d operator-(const AcGePoint2d &o) const { return {x - o.x, y - o.y}; }
@@ -154,11 +307,15 @@ struct AcGePoint2d
     bool operator!=(const AcGePoint2d &o) const { return !(*this == o); }
 };
 
+inline const AcGePoint2d AcGePoint2d::kOrigin{0.0, 0.0};
+
 struct AcGePoint3d
 {
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
+
+    static const AcGePoint3d kOrigin;
 
     AcGePoint3d() = default;
     AcGePoint3d(double xx, double yy, double zz) : x(xx), y(yy), z(zz) {}
@@ -168,6 +325,11 @@ struct AcGePoint3d
     double distanceTo(const AcGePoint3d &other) const
     {
         return AcGeVector3d(x - other.x, y - other.y, z - other.z).length();
+    }
+    bool isEqualTo(const AcGePoint3d &other,
+                   const AcGeTol &tol = AcGeTol{}) const
+    {
+        return distanceTo(other) <= tol.equalPoint();
     }
 
     AcGeVector3d asVector() const { return {x, y, z}; }
@@ -234,4 +396,48 @@ struct AcGePoint3d
     }
     bool operator==(const AcGePoint3d &o) const { return x == o.x && y == o.y && z == o.z; }
     bool operator!=(const AcGePoint3d &o) const { return !(*this == o); }
+};
+
+inline const AcGePoint3d AcGePoint3d::kOrigin{0.0, 0.0, 0.0};
+
+struct AcGePosition2d : AcGePoint2d
+{
+    AcGePosition2d() = default;
+    AcGePosition2d(double x, double y) : AcGePoint2d(x, y) {}
+    AcGePosition2d(const AcGePoint2d &point) : AcGePoint2d(point) {}
+
+    AcGePosition2d &set(double x, double y)
+    {
+        this->x = x;
+        this->y = y;
+        return *this;
+    }
+    AcGePosition2d &set(const AcGePoint2d &point)
+    {
+        x = point.x;
+        y = point.y;
+        return *this;
+    }
+};
+
+struct AcGePosition3d : AcGePoint3d
+{
+    AcGePosition3d() = default;
+    AcGePosition3d(double x, double y, double z) : AcGePoint3d(x, y, z) {}
+    AcGePosition3d(const AcGePoint3d &point) : AcGePoint3d(point) {}
+
+    AcGePosition3d &set(double x, double y, double z)
+    {
+        this->x = x;
+        this->y = y;
+        this->z = z;
+        return *this;
+    }
+    AcGePosition3d &set(const AcGePoint3d &point)
+    {
+        x = point.x;
+        y = point.y;
+        z = point.z;
+        return *this;
+    }
 };
