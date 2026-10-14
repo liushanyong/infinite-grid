@@ -54,7 +54,7 @@ struct DrawTraits
         traits.handle = static_cast<std::uint32_t>(common.handle.value);
         traits.name = common.name;
         traits.layer = common.layer;
-        traits.color = common.color;
+        traits.color = common.color.renderColor();
         traits.lineType = common.lineType;
         traits.lineWeight = common.lineWeight;
         traits.visible = common.visible;

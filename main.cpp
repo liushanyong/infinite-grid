@@ -1060,12 +1060,14 @@ static bool gpuPickFocusWaiting()
 
 glm::vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
-  return acgsView().contrastColor(entity.entity.common.color);
+  return acgsView().contrastColor(
+      entity.entity.common.color.renderColor());
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
 {
-  return entity.entity.common.visible && entity.entity.common.color.a > 0.0f;
+  return entity.entity.common.visible &&
+         entity.entity.common.color.alpha() > 0.0f;
 }
 
 // In-scene selection recolor: the selected entity's primitives draw with
@@ -1279,9 +1281,9 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   const glm::vec4 color =
       colorOverride
           ? glm::vec4(*colorOverride,
-                      imported ? entity.entity.common.color.a
+                      imported ? entity.entity.common.color.alpha()
                                : meshEntityColor(entity).a)
-          : (imported ? entity.entity.common.color
+          : (imported ? entity.entity.common.color.renderColor()
                       : meshEntityColor(entity));
   const glm::vec4 material = meshEntityRenderMaterial(entity);
   acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
@@ -3081,7 +3083,7 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
     if (!triangle.common.visible)
       continue;
     const glm::vec4 fillColor =
-        acgsView().contrastColor(triangle.common.color);
+        acgsView().contrastColor(triangle.common.color.renderColor());
     vertices.push_back(
         {glm::vec3(triangle.a - tessellation.anchor), fillColor});
     vertices.push_back(
@@ -3532,7 +3534,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       // highlight blends exactly like the original).
       acdb::Stroke recolored = stroke;
       recolored.common.color =
-          glm::vec4(kSelectionHighlightRGB, stroke.common.color.a);
+          glm::vec4(kSelectionHighlightRGB, stroke.common.color.alpha());
       cadDrawList.geometry().strokes.push_back(std::move(recolored));
       continue;
     }
@@ -3583,7 +3585,8 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
       const acdb::Triangle &triangle = tess.fills[i];
       if (!triangle.common.visible)
         continue;
-      return acgsView().contrastColor(triangle.common.color);
+      return acgsView().contrastColor(
+          triangle.common.color.renderColor());
     }
     return glm::vec4(0.0f, 0.0f, 0.0f, -1.0f); // alpha<0: no visible color
   };
@@ -3642,7 +3645,7 @@ static void drawVectorPrimitivesDemo(const glm::mat4 &view,
     {
       acdb::TessellatedPoint recolored = point;
       recolored.common.color =
-          glm::vec4(kSelectionHighlightRGB, point.common.color.a);
+          glm::vec4(kSelectionHighlightRGB, point.common.color.alpha());
       cadDrawList.geometry().points.push_back(std::move(recolored));
       continue;
     }
@@ -5520,7 +5523,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             rayIntersectsRenderedMesh(ray, *object, hitDepth, &faceIndex))
         {
             considerMeshHit(hitDepth, object->displayName(), faceIndex,
-                            object->entity.common.color.a >= 0.999f);
+                            object->entity.common.color.alpha() >= 0.999f);
         }
     }
 
@@ -5537,7 +5540,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             hitDepth < nearestDepth)
         {
             considerMeshHit(hitDepth, centerCube.displayName(), faceIndex,
-                            centerCube.entity.common.color.a >= 0.999f);
+                            centerCube.entity.common.color.alpha() >= 0.999f);
         }
     }
 
@@ -6678,7 +6681,8 @@ VisibilityCandidate makeCadRangeCandidate(
           include(stroke.points.front() + direction / length *
                       kSemiInfiniteClassificationLength);
       }
-      candidate.overlayColor = acgsView().contrastColor(stroke.common.color);
+      candidate.overlayColor = acgsView().contrastColor(
+          stroke.common.color.renderColor());
       candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
     }
   }
@@ -6690,7 +6694,8 @@ VisibilityCandidate makeCadRangeCandidate(
       include(fill.a);
       include(fill.b);
       include(fill.c);
-      candidate.overlayColor = acgsView().contrastColor(fill.common.color);
+      candidate.overlayColor = acgsView().contrastColor(
+          fill.common.color.renderColor());
     }
   }
   else
@@ -6700,7 +6705,8 @@ VisibilityCandidate makeCadRangeCandidate(
       const acdb::TessellatedPoint &point =
           tessellation.geometry.points[i];
       include(point.location);
-      candidate.overlayColor = acgsView().contrastColor(point.common.color);
+      candidate.overlayColor = acgsView().contrastColor(
+          point.common.color.renderColor());
       candidate.overlayPointSize = float(point.pointSize);
     }
   }

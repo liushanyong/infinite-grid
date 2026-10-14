@@ -332,6 +332,9 @@ inline int runStoreSelfTest()
 
         AcDbLine line;
         line.common.setLayerName("Walls");
+        line.common.color.setFileColor(
+            AcCmEntityColor::ColorMethod::kByACI, 5,
+            glm::vec3(0.0f, 0.0f, 1.0f));
         line.start = {1.0, 2.0, 3.0};
         line.end = {4.0, 5.0, 6.0};
         line.thickness = 0.5;
@@ -465,6 +468,12 @@ inline int runStoreSelfTest()
                   "line geometry round-trips");
             check(payload.common.getLayerName() == "Walls",
                   "line layer round-trips");
+            check(payload.common.color.colorMethod() ==
+                          AcCmEntityColor::ColorMethod::kByACI &&
+                      payload.common.color.colorIndex() == 5 &&
+                      glm::distance(payload.common.color.rgb(),
+                                    glm::vec3(0.0f, 0.0f, 1.0f)) < 1.0e-6f,
+                  "entity color method/index/RGB round-trip");
             check(std::abs(payload.thickness - 0.5) < 1.0e-12,
                   "line thickness round-trips");
         }

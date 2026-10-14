@@ -102,16 +102,49 @@ inline glm::vec4 aciToColor(int index)
     return {1.0f, 1.0f, 1.0f, 1.0f};
 }
 
+inline AcCmEntityColor::ColorMethod dwgColorMethod(std::uint8_t method)
+{
+    switch (method)
+    {
+    case 0xc0: return AcCmEntityColor::ColorMethod::kByLayer;
+    case 0xc1: return AcCmEntityColor::ColorMethod::kByBlock;
+    case 0xc3: return AcCmEntityColor::ColorMethod::kByColor;
+    case 0xc4: return AcCmEntityColor::ColorMethod::kByPen;
+    case 0xc5: return AcCmEntityColor::ColorMethod::kForeground;
+    case 0xc6: return AcCmEntityColor::ColorMethod::kLayerOff;
+    case 0xc7: return AcCmEntityColor::ColorMethod::kLayerFrozen;
+    case 0xc8: return AcCmEntityColor::ColorMethod::kNone;
+    default: return AcCmEntityColor::ColorMethod::kByACI;
+    }
+}
+
+inline AcCmEntityColor dwgColorToEntityColor(const Dwg_Color &color)
+{
+    AcCmEntityColor result;
+    const int index = color.index < 0 ? -color.index : color.index;
+    AcCmEntityColor::ColorMethod method = dwgColorMethod(color.method);
+    if (method == AcCmEntityColor::ColorMethod::kByACI && index == 256)
+        method = AcCmEntityColor::ColorMethod::kByLayer;
+    else if (method == AcCmEntityColor::ColorMethod::kByACI && index == 0)
+        method = AcCmEntityColor::ColorMethod::kByBlock;
+    const glm::vec4 rgba = [&] {
+        if (color.method == 0xc3)
+        {
+            const std::uint32_t rgb = color.rgb & 0x00ffffffu;
+            return glm::vec4(float((rgb >> 16) & 0xffu) / 255.0f,
+                             float((rgb >> 8) & 0xffu) / 255.0f,
+                             float(rgb & 0xffu) / 255.0f, 1.0f);
+        }
+        return aciToColor(index);
+    }();
+    result.setFileColor(method, color.index, glm::vec3(rgba));
+    result.setAlpha(rgba.a);
+    return result;
+}
+
 inline glm::vec4 dwgColorToColor(const Dwg_Color &color)
 {
-    if (color.method == 0xc3)
-    {
-        const std::uint32_t rgb = color.rgb & 0x00ffffffu;
-        return {float((rgb >> 16) & 0xffu) / 255.0f,
-                float((rgb >> 8) & 0xffu) / 255.0f,
-                float(rgb & 0xffu) / 255.0f, 1.0f};
-    }
-    return aciToColor(color.index < 0 ? -color.index : color.index);
+    return dwgColorToEntityColor(color).renderColor();
 }
 
 inline double lineWeightValueToPixels(int hundredthsOfMillimeter)
@@ -155,15 +188,26 @@ inline int nearestAciIndex(const glm::vec4 &color)
     return best;
 }
 
-// The ACI a payload carries into a file: explicit index when set, else
-// derived from the rgba display color.
+// File index for the entity's color method. Truecolor keeps its sentinel
+// index; its RGB bytes are written separately.
 inline int fileColorIndex(const AcDbEntity &common)
 {
-    if (common.colorIndex > 0 && common.colorIndex < 256)
-        return common.colorIndex;
-    if (common.colorIndex == 0)
-        return 0; // ByBlock stays ByBlock
-    return nearestAciIndex(common.color);
+    switch (common.color.colorMethod())
+    {
+    case AcCmEntityColor::ColorMethod::kByLayer: return 256;
+    case AcCmEntityColor::ColorMethod::kByBlock: return 0;
+    case AcCmEntityColor::ColorMethod::kByACI:
+        return common.color.colorIndex();
+    case AcCmEntityColor::ColorMethod::kByColor:
+        return common.color.colorIndex();
+    case AcCmEntityColor::ColorMethod::kByPen:
+    case AcCmEntityColor::ColorMethod::kLayerOff:
+    case AcCmEntityColor::ColorMethod::kLayerFrozen:
+        return common.color.colorIndex();
+    case AcCmEntityColor::ColorMethod::kForeground: return 7;
+    case AcCmEntityColor::ColorMethod::kNone: return 0;
+    }
+    return 256;
 }
 
 // ---- symbol-table reference resolution (null-safe) ----
@@ -982,7 +1026,7 @@ inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
             record = &database.layerTable().add(name, database.allocateHandle());
         const int aci = static_cast<int>(layer.color.index);
         record->color = layer.color.method == 0xc3
-                            ? dwgColorToColor(layer.color)
+                            ? dwgColorToEntityColor(layer.color).renderColor()
                             : (aci == 256 || aci == 0)
                                   ? aciToColor(7)
                                   : dwgColorToColor(layer.color);
@@ -998,7 +1042,7 @@ inline void importLayerRecords(AcDbDatabase &database, const Dwg_Data &dwg)
 }
 
 // Fills the common-properties block from the DWG entity common data:
-// layer, color (raw ACI kept in colorIndex, rgba resolved for rendering),
+// layer, semantic entity color, resolved display color,
 // linetype, visibility, and the display name.
 template <typename Payload>
 void applyCommon(Payload &payload, const DwgImportContext &ctx,
@@ -1011,28 +1055,23 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
         common.layer = layer;
     ensureLayer(database, common.layer);
 
-    const int aci = static_cast<int>(ent.color.index);
-    common.colorIndex = (aci >= 0 && aci <= 256) ? aci : 256;
-    if (ent.color.method == 0xc3)
+    common.color = dwgColorToEntityColor(ent.color);
+    if (common.color.colorMethod() == AcCmEntityColor::ColorMethod::kByLayer)
     {
-        common.color = dwgColorToColor(ent.color);
+        const AcDbLayerTableRecord *record =
+            database.layerTable().get(common.layer);
+        const glm::vec4 displayColor =
+            record != nullptr ? record->color : aciToColor(7);
+        common.color.setFileColor(common.color.colorMethod(),
+                                  common.color.colorIndex(),
+                                  glm::vec3(displayColor), displayColor.a);
     }
-    else if (aci == 256)
+    else if (common.color.colorMethod() ==
+             AcCmEntityColor::ColorMethod::kByBlock)
     {
-        // ByLayer: resolve the display color through the layer record.
-        if (const AcDbLayerTableRecord *record =
-                database.layerTable().get(common.layer))
-            common.color = record->color;
-        else
-            common.color = aciToColor(7);
-    }
-    else if (aci == 0)
-    {
-        common.color = aciToColor(7); // ByBlock render fallback
-    }
-    else
-    {
-        common.color = dwgColorToColor(ent.color);
+        common.color.setFileColor(common.color.colorMethod(),
+                                  common.color.colorIndex(),
+                                  glm::vec3(aciToColor(7)));
     }
     const int lineWeight = dxf_cvt_lweight(
         static_cast<BITCODE_BSd>(ent.linewt));

@@ -50,10 +50,11 @@ inline AcDbDatabase buildSampleDocument()
     // Default ACI for the sample entities: explicit green (ByLayer 256
     // stays untouched so per-entity overrides survive).
     auto add = [&database](auto payload) {
-        if (payload.common.colorIndex == 256)
+        if (payload.common.color.colorIndex() == 256)
         {
-            payload.common.colorIndex = 3;
+            payload.common.color.setColorIndex(3);
             payload.common.color = {0.0, 1.0, 0.0, 1.0};
+            payload.common.color.setColorIndex(3);
         }
         return database.addEntity(std::move(payload));
     };
@@ -62,8 +63,9 @@ inline AcDbDatabase buildSampleDocument()
     line.start = AcGePoint3d(0.0, 0.0, 0.0);
     line.end = AcGePoint3d(100.0, 0.0, 0.0);
     line.common.layer = "Walls";
-    line.common.colorIndex = 1;
+    line.common.color.setColorIndex(1);
     line.common.color = {1.0, 0.0, 0.0, 1.0};
+    line.common.color.setColorIndex(1);
     add(line);
 
     AcDbCircle circle;
@@ -302,6 +304,9 @@ inline void comparePayload(const Payload &a, const Payload &b, FILE *log,
             std::fflush(log);
         }
     };
+    check(a.common.color.colorMethod() == b.common.color.colorMethod() &&
+              a.common.color.colorIndex() == b.common.color.colorIndex(),
+          "entity color method/index");
     if constexpr (std::is_same_v<Payload, AcDbLine>)
     {
         check(pointClose(a.start, b.start) && pointClose(a.end, b.end),
@@ -734,10 +739,25 @@ inline void verifyDwgImportHelpers(FILE *log, int &fails)
     trueColor.method = 0xc3;
     trueColor.rgb = 0xc3123456u;
     const glm::vec4 rgb = dwgColorToColor(trueColor);
+    const AcCmEntityColor importedTrueColor =
+        dwgColorToEntityColor(trueColor);
     check(closeEnough(rgb.r, 0x12 / 255.0) &&
               closeEnough(rgb.g, 0x34 / 255.0) &&
               closeEnough(rgb.b, 0x56 / 255.0),
           "DWG truecolor");
+    check(importedTrueColor.colorMethod() ==
+                  AcCmEntityColor::ColorMethod::kByColor &&
+              importedTrueColor.colorIndex() == trueColor.index,
+          "DWG truecolor method/index");
+    Dwg_Color byLayer{};
+    byLayer.method = 0xc0;
+    byLayer.index = 256;
+    const AcCmEntityColor importedByLayer =
+        dwgColorToEntityColor(byLayer);
+    check(importedByLayer.colorMethod() ==
+                  AcCmEntityColor::ColorMethod::kByLayer &&
+              importedByLayer.colorIndex() == 256,
+          "DWG ByLayer method/index");
     check(closeEnough(lineWeightValueToPixels(25),
                       0.25 * 96.0 / 25.4),
           "lineweight physical-to-pixel conversion");

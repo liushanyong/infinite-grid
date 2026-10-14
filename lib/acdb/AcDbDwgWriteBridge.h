@@ -200,12 +200,43 @@ inline Dwg_Object_Ref *dimStyleRef(DwgWriteContext &ctx,
                              dwg_obj_generic_handlevalue(style), NULL);
 }
 
-// Common properties: ACI color, layer/linetype as record references,
-// lineweight (100ths of a mm in DWG), and visibility.
+// Common properties: AcCmEntityColor method/index/RGB, layer/linetype as
+// record references, lineweight (100ths of a mm in DWG), and visibility.
 inline void applyCommon(DwgWriteContext &ctx, Dwg_Object_Entity *ent,
                         const AcDbEntity &common)
 {
     ent->color.index = fileColorIndex(common);
+    switch (common.color.colorMethod())
+    {
+    case AcCmEntityColor::ColorMethod::kByLayer:
+        ent->color.method = 0xc0;
+        break;
+    case AcCmEntityColor::ColorMethod::kByBlock:
+        ent->color.method = 0xc1;
+        break;
+    case AcCmEntityColor::ColorMethod::kByColor:
+        ent->color.method = 0xc3;
+        ent->color.rgb = 0xc3000000u | common.color.rgbValue();
+        break;
+    case AcCmEntityColor::ColorMethod::kByACI:
+        ent->color.method = 0xc2;
+        break;
+    case AcCmEntityColor::ColorMethod::kByPen:
+        ent->color.method = 0xc4;
+        break;
+    case AcCmEntityColor::ColorMethod::kForeground:
+        ent->color.method = 0xc5;
+        break;
+    case AcCmEntityColor::ColorMethod::kLayerOff:
+        ent->color.method = 0xc6;
+        break;
+    case AcCmEntityColor::ColorMethod::kLayerFrozen:
+        ent->color.method = 0xc7;
+        break;
+    case AcCmEntityColor::ColorMethod::kNone:
+        ent->color.method = 0xc8;
+        break;
+    }
     if (Dwg_Object_Ref *ref = layerRef(ctx, common.layer))
         ent->layer = ref;
     if (!common.lineType.empty() && common.lineType != "ByLayer" &&
