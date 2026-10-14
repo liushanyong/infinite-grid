@@ -119,6 +119,27 @@ inline int runKernelSelfTest()
                   rotatedFrame.startPoint().isEqualTo({0.0, 2.0}) &&
                   rotatedFrame.endPoint().isEqualTo({-2.0, 0.0}),
               "2D circular arc direction and reference frame");
+
+        const ::AcGeEllipArc2d ellipse2d{
+            AcGePoint2d{1.0, 2.0}, AcGeVector2d::kXAxis,
+            AcGeVector2d::kYAxis, 3.0, 1.5, 0.0,
+            1.5707963267948966};
+        check(ellipse2d.majorRadius() == 3.0 &&
+                  ellipse2d.minorRadius() == 1.5 &&
+                  ellipse2d.startPoint().isEqualTo({4.0, 2.0}) &&
+                  ellipse2d.endPoint().isEqualTo({1.0, 3.5}) &&
+                  ellipse2d.isInside({1.0, 3.5}) &&
+                  !ellipse2d.isInside({1.0, 0.5}) &&
+                  !ellipse2d.isCircular(),
+              "2D ellipse axes, parameterization, and membership");
+        const ::AcGeEllipArc2d circleAsEllipse{clockwise};
+        check(circleAsEllipse.isClockWise() &&
+                  circleAsEllipse.startPoint().isEqualTo({1.0, 0.0}) &&
+                  circleAsEllipse.endPoint().isEqualTo({0.0, 1.0}) &&
+                  circleAsEllipse.isInside({0.0, -1.0}) &&
+                  !circleAsEllipse.isInside({0.7071067811865476,
+                                             0.7071067811865476}),
+              "circular arc conversion preserves clockwise span");
     }
 
     // ---------------- AcGeMatrix2d (ObjectARX 2026 baseline) ----------------

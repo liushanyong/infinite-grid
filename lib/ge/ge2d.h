@@ -206,12 +206,188 @@ public:
     bool contains(const AcGePoint2d &point) const { return isInside(point); }
 };
 
+struct AcGeEllipArc2d
+{
+private:
+    AcGePoint2d m_center{0.0, 0.0};
+    AcGeVector2d m_majorAxis{1.0, 0.0};
+    AcGeVector2d m_minorAxis{0.0, 1.0};
+    double m_majorRadius = 1.0;
+    double m_minorRadius = 1.0;
+    double m_startAngle = 0.0;
+    double m_endAngle = 6.2831853071795864769;
+
+    static double normalizedAngle(double angle)
+    {
+        constexpr double twoPi = 6.2831853071795864769;
+        angle = std::fmod(angle, twoPi);
+        return angle < 0.0 ? angle + twoPi : angle;
+    }
+
+public:
+    AcGeEllipArc2d() = default;
+    AcGeEllipArc2d(const AcGeCircArc2d &circle)
+    {
+        set(circle);
+    }
+    AcGeEllipArc2d(const AcGePoint2d &center,
+                   const AcGeVector2d &majorAxis,
+                   const AcGeVector2d &minorAxis, double majorRadius,
+                   double minorRadius)
+    {
+        set(center, majorAxis, minorAxis, majorRadius, minorRadius);
+    }
+    AcGeEllipArc2d(const AcGePoint2d &center,
+                   const AcGeVector2d &majorAxis,
+                   const AcGeVector2d &minorAxis, double majorRadius,
+                   double minorRadius, double startAngle, double endAngle)
+    {
+        set(center, majorAxis, minorAxis, majorRadius, minorRadius);
+        setAngles(startAngle, endAngle);
+    }
+
+    AcGeEllipArc2d &set(const AcGePoint2d &center,
+                        const AcGeVector2d &majorAxis,
+                        const AcGeVector2d &minorAxis, double majorRadius,
+                        double minorRadius)
+    {
+        m_center = center;
+        m_majorAxis = majorAxis.normal();
+        if (m_majorAxis.isZeroLength())
+            m_majorAxis = AcGeVector2d::kXAxis;
+        m_minorAxis = minorAxis -
+                      m_majorAxis * minorAxis.dotProduct(m_majorAxis);
+        if (m_minorAxis.isZeroLength())
+            m_minorAxis = m_majorAxis.perpVector();
+        m_minorAxis.normalize();
+        m_majorRadius = std::abs(majorRadius);
+        m_minorRadius = std::abs(minorRadius);
+        m_startAngle = 0.0;
+        m_endAngle = 6.2831853071795864769;
+        return *this;
+    }
+
+    AcGeEllipArc2d &set(const AcGeCircArc2d &circle)
+    {
+        const AcGeVector2d major = circle.refVec();
+        AcGeVector2d minor{-major.y, major.x};
+        set(circle.center(), major, minor, circle.radius(), circle.radius());
+        if (circle.isClockWise())
+        {
+            m_minorAxis.negate();
+            m_startAngle = normalizedAngle(-circle.startAng());
+            m_endAngle = m_startAngle + circle.sweep();
+        }
+        else
+        {
+            m_startAngle = circle.startAng();
+            m_endAngle = m_startAngle + circle.sweep();
+        }
+        return *this;
+    }
+
+    AcGeEllipArc2d &setCenter(const AcGePoint2d &center)
+    {
+        m_center = center;
+        return *this;
+    }
+    AcGeEllipArc2d &setAxes(const AcGeVector2d &majorAxis,
+                            const AcGeVector2d &minorAxis)
+    {
+        const double majorRadius = m_majorRadius;
+        const double minorRadius = m_minorRadius;
+        const double start = m_startAngle;
+        const double end = m_endAngle;
+        set(m_center, majorAxis, minorAxis, majorRadius, minorRadius);
+        m_startAngle = start;
+        m_endAngle = end;
+        return *this;
+    }
+    AcGeEllipArc2d &setMajorRadius(double radius)
+    {
+        m_majorRadius = std::abs(radius);
+        return *this;
+    }
+    AcGeEllipArc2d &setMinorRadius(double radius)
+    {
+        m_minorRadius = std::abs(radius);
+        return *this;
+    }
+    AcGeEllipArc2d &setAngles(double startAngle, double endAngle)
+    {
+        if (endAngle <= startAngle)
+            throw std::invalid_argument(
+                "AcGeEllipArc2d end angle must exceed start angle.");
+        m_startAngle = startAngle;
+        m_endAngle = endAngle;
+        return *this;
+    }
+    AcGeEllipArc2d &setToComplement()
+    {
+        const double start = m_startAngle;
+        m_startAngle = m_endAngle;
+        m_endAngle = start + 6.2831853071795864769;
+        return *this;
+    }
+
+    AcGePoint2d center() const { return m_center; }
+    AcGeVector2d majorAxis() const { return m_majorAxis; }
+    AcGeVector2d minorAxis() const { return m_minorAxis; }
+    double majorRadius() const { return m_majorRadius; }
+    double minorRadius() const { return m_minorRadius; }
+    double startAng() const { return m_startAngle; }
+    double endAng() const { return m_endAngle; }
+    bool isClockWise() const
+    {
+        return m_majorAxis.x * m_minorAxis.y -
+                   m_majorAxis.y * m_minorAxis.x <
+               0.0;
+    }
+    bool isCircular(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return std::abs(m_majorRadius - m_minorRadius) <=
+               tol.equalVector();
+    }
+
+    AcGePoint2d pointAt(double angle) const
+    {
+        return m_center + m_majorAxis * (m_majorRadius * std::cos(angle)) +
+               m_minorAxis * (m_minorRadius * std::sin(angle));
+    }
+    AcGePoint2d startPoint() const { return pointAt(m_startAngle); }
+    AcGePoint2d endPoint() const { return pointAt(m_endAngle); }
+
+    bool isInside(const AcGePoint2d &point,
+                  const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (m_majorRadius <= tol.equalVector() ||
+            m_minorRadius <= tol.equalVector())
+            return false;
+        const AcGeVector2d offset = point - m_center;
+        const double majorCoordinate =
+            offset.dotProduct(m_majorAxis) / m_majorRadius;
+        const double minorCoordinate =
+            offset.dotProduct(m_minorAxis) / m_minorRadius;
+        const double angle = normalizedAngle(
+            std::atan2(minorCoordinate, majorCoordinate));
+        if (pointAt(angle).distanceTo(point) > tol.equalPoint())
+            return false;
+
+        constexpr double twoPi = 6.2831853071795864769;
+        const double span = m_endAngle - m_startAngle;
+        const double fromStart = normalizedAngle(angle - m_startAngle);
+        return span >= twoPi - tol.equalVector() ||
+               fromStart <= span + tol.equalVector();
+    }
+};
+
 namespace ge
 {
 
 inline constexpr double kGeom2dTolerance = 1.0e-12;
 
 using ::AcGeLineSeg2d;
+using ::AcGeEllipArc2d;
 
 // ---- AcGeCircle2d ----
 

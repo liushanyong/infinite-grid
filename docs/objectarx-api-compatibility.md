@@ -57,6 +57,10 @@ supports reference vectors, clockwise/CCW parameterization, endpoints, and
 point-on-arc tests. Curve-curve intersection remains the existing focused
 `ge::intersect` subset.
 
+`AcGeEllipArc2d` provides orthogonal axis/radius storage, angular evaluation,
+endpoints, and point-on-ellipse-arc testing. Ellipse intersection and broader
+planar-entity APIs are not yet implemented.
+
 `AcGeCircArc3d` and the newly exposed `AcGeEllipArc3d` name provide endpoint,
 plane, and point-on-curve helpers alongside parameter evaluation. The legacy
 `AcGeEllip3d` spelling remains an alias for the ellipse arc value type.
