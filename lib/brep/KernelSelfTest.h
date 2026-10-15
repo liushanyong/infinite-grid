@@ -193,6 +193,61 @@ inline int runKernelSelfTest()
               "finite segment-triangle intersection");
     }
 
+    // ---------------- 2D bounds and 3D ray/segment queries ---------------
+    {
+        const ge::AcGeBoundBox2d bounds{{-1.0, -2.0}, {3.0, 4.0}};
+        const ge::AcGeBoundBox2d overlapping{{2.0, 3.0}, {5.0, 6.0}};
+        const ge::AcGeBoundBox2d separated{{4.0, 5.0}, {6.0, 7.0}};
+        const AcGeTriangle3d triangle{{0.0, 0.0, 0.0},
+                                     {2.0, 0.0, 0.0},
+                                     {0.0, 2.0, 0.0}};
+        const auto rayHit = ge::intersectRayTriangle(
+            AcGeRay3d{AcGePoint3d{0.5, 0.5, 2.0},
+                      AcGeVector3d{0.0, 0.0, -2.0}},
+            triangle);
+        const auto rayMiss = ge::intersectRayTriangle(
+            AcGeRay3d{AcGePoint3d{2.0, 2.0, 2.0},
+                      AcGeVector3d{0.0, 0.0, -1.0}},
+            triangle);
+        const auto behindRay = ge::intersectRayTriangle(
+            AcGeRay3d{AcGePoint3d{0.5, 0.5, -2.0},
+                      AcGeVector3d{0.0, 0.0, -1.0}},
+            triangle);
+        const auto closest = ge::closestPoints(
+            AcGeLineSeg3d{AcGePoint3d{0.0, 0.0, 0.0},
+                          AcGePoint3d{2.0, 0.0, 0.0}},
+            AcGeLineSeg3d{AcGePoint3d{1.0, -1.0, 2.0},
+                          AcGePoint3d{1.0, 1.0, 2.0}});
+        const auto parallelClosest = ge::closestPoints(
+            AcGeLineSeg3d{AcGePoint3d{0.0, 0.0, 0.0},
+                          AcGePoint3d{1.0, 0.0, 0.0}},
+            AcGeLineSeg3d{AcGePoint3d{2.0, 0.0, 1.0},
+                          AcGePoint3d{3.0, 0.0, 1.0}});
+        check(bounds.center().x == 1.0 && bounds.center().y == 1.0 &&
+                 bounds.containsPoint({3.1, 0.0}, 0.2) &&
+                 bounds.intersects(overlapping) &&
+                 !bounds.intersects(separated) &&
+                 ge::AcGeBoundBox2d::aroundPoint({1.0, 2.0}, -1.0)
+                     .containsPoint({2.0, 3.0}),
+              "2D axis-aligned bounds center, containment, and overlap");
+        check(rayHit && rayHit->point.isEqualTo({0.5, 0.5, 0.0}) &&
+                 std::abs(rayHit->parameter - 1.0) < 1.0e-12 &&
+                 std::abs(rayHit->barycentricU - 0.25) < 1.0e-12 &&
+                 std::abs(rayHit->barycentricV - 0.25) < 1.0e-12 &&
+                 !rayMiss && !behindRay,
+              "ray-triangle hit parameters, barycentrics, and rejection");
+        check(std::abs(closest.parameterA - 0.5) < 1.0e-12 &&
+                 std::abs(closest.parameterB - 0.5) < 1.0e-12 &&
+                 closest.pointA.isEqualTo({1.0, 0.0, 0.0}) &&
+                 closest.pointB.isEqualTo({1.0, 0.0, 2.0}) &&
+                 std::abs(closest.distance - 2.0) < 1.0e-12 &&
+                 parallelClosest.pointA.isEqualTo({1.0, 0.0, 0.0}) &&
+                 parallelClosest.pointB.isEqualTo({2.0, 0.0, 1.0}) &&
+                 std::abs(parallelClosest.distance - std::sqrt(2.0)) <
+                     1.0e-12,
+              "closest points between skew and parallel finite segments");
+    }
+
     // ---------------- triangle mesh topology queries ---------------------
     {
         const AcGeMesh3d openMesh{
