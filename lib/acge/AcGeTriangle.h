@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
-#include "gepoint.h"
-#include "geoctree.h"
+#include "AcGePoint.h"
+#include "AcGeOctree.h"
 
 struct AcGeTriangle2d
 {

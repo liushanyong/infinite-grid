@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "brep/BRepBuild.h"
-#include "ge/gepredicates.h"
+#include "acge/AcGePredicates.h"
 
 namespace brep
 {

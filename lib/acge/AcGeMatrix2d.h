@@ -4,8 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "gepoint.h"
-#include "geutil.h"
+#include "AcGePoint.h"
+#include "AcGeUtil.h"
 
 // Source-level AcGeMatrix2d subset based on the ObjectARX 2026 reference.
 // The matrix stores the full homogeneous 3x3 matrix used for 2D affine
@@ -360,32 +360,7 @@ struct AcGeMatrix2d
 
 inline const AcGeMatrix2d AcGeMatrix2d::kIdentity{};
 
-inline AcGePoint2d transformBy(const AcGePoint2d &point,
-                               const AcGeMatrix2d &matrix)
-{
-    return {
-        matrix.entry[0][0] * point.x +
-            matrix.entry[0][1] * point.y + matrix.entry[0][2],
-        matrix.entry[1][0] * point.x +
-            matrix.entry[1][1] * point.y + matrix.entry[1][2]};
-}
-
-inline AcGeVector2d transformBy(const AcGeVector2d &vector,
-                                const AcGeMatrix2d &matrix)
-{
-    return {
-        matrix.entry[0][0] * vector.x + matrix.entry[0][1] * vector.y,
-        matrix.entry[1][0] * vector.x + matrix.entry[1][1] * vector.y};
-}
-
-inline AcGePoint2d &AcGePoint2d::transformBy(const AcGeMatrix2d &matrix)
-{
-    *this = ::transformBy(*this, matrix);
-    return *this;
-}
-
-inline AcGeVector2d &AcGeVector2d::transformBy(const AcGeMatrix2d &matrix)
-{
-    *this = ::transformBy(*this, matrix);
-    return *this;
-}
+AcGePoint2d transformBy(const AcGePoint2d &point,
+                        const AcGeMatrix2d &matrix);
+AcGeVector2d transformBy(const AcGeVector2d &vector,
+                         const AcGeMatrix2d &matrix);

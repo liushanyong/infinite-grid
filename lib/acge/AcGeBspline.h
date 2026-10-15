@@ -15,8 +15,8 @@
 #include <utility>
 #include <vector>
 
-#include "gepoint.h"
-#include "genurbscore.h"
+#include "AcGePoint.h"
+#include "AcGeNurbsCore.h"
 
 namespace ge
 {

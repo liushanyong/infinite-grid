@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-#include "ge/gebvh.h"
+#include "acge/AcGeBvh.h"
 
 #include "brep/BRep.h"
 #include "brep/BRepBlend.h" // faceRingPoints

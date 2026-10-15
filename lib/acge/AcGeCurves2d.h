@@ -6,8 +6,8 @@
 #include <utility>
 #include <vector>
 
-#include "gebspline.h"
-#include "genspline.h"
+#include "AcGeBspline.h"
+#include "AcGeNurbsSpline.h"
 
 namespace ge
 {

@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-#include "gepoint.h"
-#include "geinterval.h"
+#include "AcGePoint.h"
+#include "AcGeInterval.h"
 
 // Source-level AcGeSphere subset for a spherical surface or angular segment.
 struct AcGeSphere

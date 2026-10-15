@@ -25,7 +25,7 @@
 
 #include "arx/ArxTypes.h"
 #include "arx/AcCmEntityColor.h"
-#include "ge/gepoint.h"
+#include "acge/AcGePoint.h"
 
 namespace acdb
 {

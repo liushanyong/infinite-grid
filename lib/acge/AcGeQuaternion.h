@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "gematrix.h"
+#include "AcGeMatrix.h"
 
 // AcGe-compatible quaternion for 3D rotations. Components use the common
 // vector-first (x, y, z, w) layout while multiplication follows Hamilton order.

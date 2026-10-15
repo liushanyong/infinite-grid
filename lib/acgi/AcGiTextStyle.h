@@ -4,7 +4,7 @@
 // worldText callback).  The glyph engine consumes these fields; until it
 // lands, the text callback uses textSize and xScale for layout framing.
 
-#include "../ge/gepoint.h"
+#include "../acge/AcGePoint.h"
 
 struct AcGiTextStyle
 {

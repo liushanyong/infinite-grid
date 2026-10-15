@@ -22,8 +22,8 @@
 #include <unordered_map>
 
 #include "acdb/AcDbCore.h"
-#include "ge/gematrix.h"
-#include "ge/gepoint.h"
+#include "acge/AcGeMatrix.h"
+#include "acge/AcGePoint.h"
 
 namespace acdb
 {

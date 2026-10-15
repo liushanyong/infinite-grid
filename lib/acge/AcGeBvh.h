@@ -29,8 +29,8 @@
 #include <optional>
 #include <vector>
 
-#include "ge/gepoint.h"
-#include "ge/geoctree.h" // AcGeBoundBox3d
+#include "AcGePoint.h"
+#include "AcGeOctree.h" // AcGeBoundBox3d
 
 namespace ge
 {

@@ -100,6 +100,10 @@ target_compile_definitions(glm INTERFACE GLM_FORCE_RADIANS)
 # geometric predicates provide the compiled kernel object in the static lib.
 add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/external/predicates/predicates.c"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix2d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGePoint.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeTol.cpp"
 )
 target_include_directories(acge PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acge PUBLIC glm::glm)

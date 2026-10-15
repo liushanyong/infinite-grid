@@ -11,8 +11,8 @@
 #include <optional>
 #include <vector>
 
-#include "gebspline.h"
-#include "gepoint.h"
+#include "AcGeBspline.h"
+#include "AcGePoint.h"
 
 namespace ge
 {
