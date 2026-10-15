@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "gecurve3d.h"
 #include "gematrix.h"
 #include "gelinear.h"
 #include "gesurface3d.h"
+#include "getriangle.h"
 
 namespace ge
 {
@@ -118,6 +120,94 @@ inline std::vector<AcGePoint3d> intersect(const AcGeLineSeg3d &segment,
 {
     return detail::intersectParametricPlane(
         segment.startPoint(), segment.direction(), 0.0, 1.0, plane, tol);
+}
+
+inline std::optional<AcGeLine3d> intersect(const AcGePlane &first,
+                                          const AcGePlane &second,
+                                          const AcGeTol &tol = AcGeTol{})
+{
+    const AcGeVector3d direction =
+        first.normal.crossProduct(second.normal);
+    const double directionLengthSquared = direction.lengthSq();
+    const double parallelTolerance = std::abs(tol.equalVector()) *
+                                     first.normal.length() *
+                                     second.normal.length();
+    if (directionLengthSquared <= parallelTolerance * parallelTolerance)
+        return std::nullopt;
+
+    const double firstOffset = first.normal.dotProduct(first.origin.asVector());
+    const double secondOffset =
+        second.normal.dotProduct(second.origin.asVector());
+    const AcGeVector3d pointVector =
+        (second.normal.crossProduct(direction) * firstOffset +
+         direction.crossProduct(first.normal) * secondOffset) /
+        directionLengthSquared;
+    const AcGePoint3d point{pointVector.x, pointVector.y, pointVector.z};
+    return AcGeLine3d{point, direction};
+}
+
+inline std::optional<AcGePoint3d> intersect(const AcGeLine3d &first,
+                                          const AcGeLine3d &second,
+                                          const AcGeTol &tol = AcGeTol{})
+{
+    const AcGeVector3d &u = first.direction;
+    const AcGeVector3d &v = second.direction;
+    const AcGeVector3d w = first.basePoint - second.basePoint;
+    const double a = u.dotProduct(u);
+    const double b = u.dotProduct(v);
+    const double c = v.dotProduct(v);
+    const double d = u.dotProduct(w);
+    const double e = v.dotProduct(w);
+    const double denominator = a * c - b * b;
+    const double scale = a * c;
+    if (a <= std::pow(std::abs(tol.equalVector()), 2.0) ||
+        c <= std::pow(std::abs(tol.equalVector()), 2.0) ||
+        denominator <= std::pow(std::abs(tol.equalVector()), 2.0) * scale)
+        return std::nullopt;
+
+    const double firstParameter = (b * e - c * d) / denominator;
+    const double secondParameter = (a * e - b * d) / denominator;
+    const AcGePoint3d firstPoint = first.pointAt(firstParameter);
+    const AcGePoint3d secondPoint = second.pointAt(secondParameter);
+    if (!firstPoint.isEqualTo(secondPoint, tol))
+        return std::nullopt;
+    return firstPoint + (secondPoint - firstPoint) * 0.5;
+}
+
+inline std::optional<AcGePoint3d> intersect(
+    const AcGeLineSeg3d &segment, const AcGeTriangle3d &triangle,
+    const AcGeTol &tol = AcGeTol{})
+{
+    const AcGeVector3d direction = segment.direction();
+    const AcGeVector3d edge1 = triangle.b - triangle.a;
+    const AcGeVector3d edge2 = triangle.c - triangle.a;
+    const AcGeVector3d p = direction.crossProduct(edge2);
+    const double determinant = edge1.dotProduct(p);
+    const double determinantTolerance =
+        std::abs(tol.equalVector()) * edge1.length() * edge2.length() *
+        direction.length();
+    if (std::abs(determinant) <= determinantTolerance)
+        return std::nullopt;
+
+    const double inverseDeterminant = 1.0 / determinant;
+    const AcGeVector3d offset = segment.startPoint() - triangle.a;
+    const double u = offset.dotProduct(p) * inverseDeterminant;
+    const AcGeVector3d q = offset.crossProduct(edge1);
+    const double v = direction.dotProduct(q) * inverseDeterminant;
+    const double parameter = edge2.dotProduct(q) * inverseDeterminant;
+    const double pointTolerance = std::abs(tol.equalPoint());
+    const double barycentricTolerance =
+        pointTolerance /
+        std::max({edge1.length(), edge2.length(), pointTolerance});
+    const double parameterTolerance =
+        pointTolerance / std::max(direction.length(), pointTolerance);
+    if (u < -barycentricTolerance || v < -barycentricTolerance ||
+        u + v > 1.0 + barycentricTolerance ||
+        parameter < -parameterTolerance ||
+        parameter > 1.0 + parameterTolerance)
+        return std::nullopt;
+
+    return segment.pointAt(std::clamp(parameter, 0.0, 1.0));
 }
 
 inline std::vector<AcGePoint3d> intersect(const AcGeLine3d &line,
