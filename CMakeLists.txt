@@ -109,6 +109,8 @@ endif()
 
 add_library(acgi STATIC
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextEngine.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/text/text_font.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/text/shx_parser.cpp"
 )
 target_include_directories(acgi PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acgi PUBLIC acge)
@@ -192,8 +194,6 @@ set(WINDOW_SOURCES
     lib/rendering/ImGuiBgfxPass.cpp
     lib/rendering/WebGpuRenderer.cpp
     lib/rendering/ProceduralMesh.cpp
-    lib/text/text_font.cpp
-    lib/text/shx_parser.cpp
     lib/brep/BRep.cpp
 )
 
