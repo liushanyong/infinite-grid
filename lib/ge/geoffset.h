@@ -12,8 +12,10 @@ inline std::vector<AcGePoint2d> offsetPolylineVertices(
     const std::vector<AcGePoint2d> &vertices, bool closed, double distance,
     const AcGeTol &tol)
 {
-    if (!std::isfinite(distance) ||
-        !std::isfinite(tol.equalPoint()) || !std::isfinite(tol.equalVector()))
+    const double pointTolerance = std::abs(tol.equalPoint());
+    const double vectorTolerance = std::abs(tol.equalVector());
+    if (!std::isfinite(distance) || !std::isfinite(pointTolerance) ||
+        !std::isfinite(vectorTolerance))
         throw std::invalid_argument(
             "AcGe offset distance and tolerances must be finite.");
 
@@ -37,7 +39,7 @@ inline std::vector<AcGePoint2d> offsetPolylineVertices(
                 "AcGe offset polyline vertices must be finite.");
 
         const AcGeVector2d direction = end - start;
-        if (direction.isZeroLength(tol))
+        if (direction.length() <= vectorTolerance)
             throw std::invalid_argument(
                 "AcGe offset polyline cannot contain zero-length segments.");
         directions.push_back(direction.normal());
@@ -71,7 +73,7 @@ inline std::vector<AcGePoint2d> offsetPolylineVertices(
         const double denominator =
             previous.x * next.y - previous.y * next.x;
         const double alignment = previous.dotProduct(next);
-        if (std::abs(denominator) <= std::abs(tol.equalVector()))
+        if (std::abs(denominator) <= vectorTolerance)
         {
             if (alignment < 0.0)
                 throw std::invalid_argument(
@@ -163,7 +165,8 @@ public:
             !std::isfinite(vectorTolerance) || !std::isfinite(distance))
             throw std::invalid_argument(
                 "AcGe offset distance and tolerances must be finite.");
-        if (normal.isZeroLength(tol))
+        if (!std::isfinite(normal.x) || !std::isfinite(normal.y) ||
+            !std::isfinite(normal.z) || normal.length() <= vectorTolerance)
             throw std::invalid_argument(
                 "AcGe 3D offset polyline requires a nonzero plane normal.");
         if (polyline.isEmpty())
