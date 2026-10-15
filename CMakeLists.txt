@@ -96,17 +96,51 @@ target_include_directories(glm INTERFACE "${WINDOW_GLM_DIR}")
 # GLM uses some intrinsics; the upstream defaults are the right baseline.
 target_compile_definitions(glm INTERFACE GLM_FORCE_RADIANS)
 
-# Keep the math implementation dependency behind the CAD library interfaces.
-# The current source layout builds these modules into WINDOW, while their
-# interface targets preserve the intended dependency direction.
-add_library(acge INTERFACE)
-target_link_libraries(acge INTERFACE glm::glm)
-add_library(acgi INTERFACE)
-target_link_libraries(acgi INTERFACE acge)
-add_library(acgs INTERFACE)
-target_link_libraries(acgs INTERFACE acge acgi)
-add_library(acdb INTERFACE)
-target_link_libraries(acdb INTERFACE acge acgi)
+# AcGe's value-type implementation is predominantly header-only.  Its exact
+# geometric predicates provide the compiled kernel object in the static lib.
+add_library(acge STATIC
+    "${CMAKE_SOURCE_DIR}/external/predicates/predicates.c"
+)
+target_include_directories(acge PUBLIC "${CMAKE_SOURCE_DIR}/lib")
+target_link_libraries(acge PUBLIC glm::glm)
+if(MSVC)
+    target_compile_options(acge PRIVATE /fp:precise)
+endif()
+
+add_library(acgi STATIC
+    "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextEngine.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/text/text_font.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/text/shx_parser.cpp"
+)
+target_include_directories(acgi PUBLIC "${CMAKE_SOURCE_DIR}/lib")
+target_link_libraries(acgi PUBLIC acge)
+
+add_library(acgs STATIC
+    "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsView.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsManager.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsSelectionManager.cpp"
+)
+target_include_directories(acgs
+    PUBLIC "${CMAKE_SOURCE_DIR}/lib"
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/lib/SDL/include"
+        "${CMAKE_SOURCE_DIR}/lib/SDL/include/SDL3"
+)
+target_link_libraries(acgs
+    PUBLIC acge acgi
+    PRIVATE SDL3::SDL3
+)
+
+add_library(acdb STATIC
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDatabase.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbStore.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbFileIo.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbLibredwgFileCodec.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbGltf.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransaction.cpp"
+)
+target_include_directories(acdb PUBLIC "${CMAKE_SOURCE_DIR}/lib")
+target_link_libraries(acdb PUBLIC acge acgi)
 
 # ---------------------------------------------------------------------------
 # Dear ImGui + BGFX overlay widgets
@@ -160,19 +194,7 @@ set(WINDOW_SOURCES
     lib/rendering/ImGuiBgfxPass.cpp
     lib/rendering/WebGpuRenderer.cpp
     lib/rendering/ProceduralMesh.cpp
-    lib/text/text_font.cpp
-    lib/text/shx_parser.cpp
-    lib/acgi/AcGiTextEngine.cpp
-    lib/acgs/AcGsView.cpp
-    lib/acgs/AcGsManager.cpp
-    lib/acdb/AcDbDatabase.cpp
-    lib/acdb/AcDbStore.cpp
-    lib/acdb/AcDbFileIo.cpp
-    lib/acdb/AcDbLibredwgFileCodec.cpp
-    lib/acdb/AcDbGltf.cpp
     lib/brep/BRep.cpp
-    lib/acdb/AcDbTransaction.cpp
-    lib/acgs/AcGsSelectionManager.cpp
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})
@@ -216,32 +238,20 @@ set(LIBREDWG_LIBONLY ON)
 set(LIBREDWG_DISABLE_WRITE OFF)
 set(LIBREDWG_DISABLE_JSON ON)
 set(ENABLE_LTO OFF)
+if(MSVC)
+    set(WINDOW_LIBREDWG_TARGET libredwg)
+else()
+    set(WINDOW_LIBREDWG_TARGET redwg)
+endif()
 add_subdirectory("${CMAKE_SOURCE_DIR}/lib/libredwg"
                  "${CMAKE_BINARY_DIR}/libredwg")
 
-target_link_libraries(WINDOW PRIVATE libredwg)
 # The DXF writer surface (out_dxf.h) sits behind the library-private
 # bits.h, which includes the generated config.h; expose both the source
-# dir (bits.h/out_dxf.h) and the build dir (config.h) to the facade.
-target_include_directories(WINDOW PRIVATE
+# dir (bits.h/out_dxf.h) and the build dir (config.h) to the AcDb codec.
+target_include_directories(acdb PRIVATE
     "${CMAKE_SOURCE_DIR}/lib/libredwg/src"
     "${CMAKE_BINARY_DIR}/libredwg/src")
-
-# Shewchuk robust predicates (public domain): exact-sign orient2d/3d,
-# incircle, insphere for CPU-side sign decisions (picking degeneracies,
-# future triangulation/intersection).  The translation unit MUST keep
-# IEEE double semantics: fast-math silently destroys the exactness that
-# the ge:: wrappers rely on, so /fp:precise is locked on this target.
-add_library(predicates STATIC
-    "${CMAKE_SOURCE_DIR}/external/predicates/predicates.c"
-    "${CMAKE_SOURCE_DIR}/external/predicates/predicates.h")
-target_include_directories(predicates PUBLIC
-    "${CMAKE_SOURCE_DIR}/external/predicates")
-if(MSVC)
-    target_compile_options(predicates PRIVATE /fp:precise)
-endif()
-
-target_link_libraries(WINDOW PRIVATE predicates)
 
 # ---------------------------------------------------------------------------
 # tinygltf -- glTF 2.0 loader/writer (vendored, single-TU static lib).
@@ -276,24 +286,25 @@ set(SQLITECPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SQLITECPP_INTERNAL_SQLITE ON CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_SOURCE_DIR}/lib/SQLiteCpp"
                  "${CMAKE_BINARY_DIR}/SQLiteCpp")
-target_link_libraries(WINDOW PRIVATE SQLiteCpp)
 
-target_link_libraries(WINDOW PRIVATE tinygltf)
+# AcDb's codecs and persistence are implementation dependencies.  Link them
+# after their bundled targets have been declared.
+target_link_libraries(acdb PRIVATE
+    "${WINDOW_LIBREDWG_TARGET}"
+    SQLiteCpp
+    tinygltf
+)
 
 # ---------------------------------------------------------------------------
 # fileio_repro -- minimal ASAN-instrumented repro for the DXF second-
 # generation write path (tools/fileio_repro.cpp).  Not part of WINDOW.
 # ---------------------------------------------------------------------------
-add_executable(fileio_repro tools/fileio_repro.cpp
-    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDatabase.cpp"
-    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransaction.cpp"
-    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbFileIo.cpp"
-    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbLibredwgFileCodec.cpp")
+add_executable(fileio_repro tools/fileio_repro.cpp)
 target_include_directories(fileio_repro PRIVATE
     "${CMAKE_SOURCE_DIR}/lib"
     "${CMAKE_SOURCE_DIR}/lib/libredwg/src"
     "${CMAKE_BINARY_DIR}/libredwg/src")
-target_link_libraries(fileio_repro PRIVATE libredwg glm::glm)
+target_link_libraries(fileio_repro PRIVATE acdb)
 if(MSVC)
     target_compile_options(fileio_repro PRIVATE /fsanitize=address)
     target_link_options(fileio_repro PRIVATE /INCREMENTAL:NO)
