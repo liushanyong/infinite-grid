@@ -166,7 +166,7 @@ inline int runKernelSelfTest()
                      .isEqualTo({3.0, 2.0, 3.0}) &&
                  std::abs(circle.circumference() -
                           12.566370614359172) < 1.0e-12 &&
-                 plane.normal().isEqualTo(AcGeVector3d::kZAxis) &&
+                 plane.normal.isEqualTo({0.0, 0.0, 5.0}) &&
                  ellipse2d.pointAt(0.0).isEqualTo({3.0, 0.0}) &&
                  ellipse3d.pointAt(0.0).isEqualTo({3.0, 0.0, 0.0}),
               "3D circle evaluation, membership, and ellipse naming aliases");
