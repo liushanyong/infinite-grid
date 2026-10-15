@@ -25,6 +25,7 @@
 #include "geintersect.h"
 #include "geproject.h"
 #include "geoctree.h"
+#include "gequadtree.h"
 #include "ge2d.h"
 #include "gepolyline.h"
 #include "geoffset.h"
