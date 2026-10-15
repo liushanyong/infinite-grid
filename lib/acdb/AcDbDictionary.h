@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbDictionary / AcDbXrecord (namespace acdb) — the Named Objects
 // Dictionary subtree, the naming container that sits BESIDE the four
 // symbol tables: symbol tables hold the table-keyed records (layer /
@@ -44,7 +46,7 @@ inline constexpr const char *kAcadMaterialDictionary = "ACAD_MATERIAL";
 
 // ---- AcDbDictionary: ordered name -> object-handle entries ----
 
-class AcDbDictionary : public AcDbObject
+class ACDB_PORT AcDbDictionary : public AcDbObject
 {
 public:
     // AcDbDictionary::numEntries
@@ -66,26 +68,11 @@ public:
 
     // AcDbDictionary::setAt — inserts or repoints |name| at
     // |objectHandle|.  Returns false when the handle is invalid.
-    bool setAt(const std::string &name, AcDbHandle objectHandle)
-    {
-        if (!objectHandle.isValid())
-            return false;
-        entries_[name] = objectHandle;
-        return true;
-    }
+    bool setAt(const std::string &name, AcDbHandle objectHandle);
 
     // AcDbDictionary::setName — renames an entry in place (the object
     // handle and its identity are untouched).
-    bool setName(const std::string &oldName, const std::string &newName)
-    {
-        const auto found = entries_.find(oldName);
-        if (found == entries_.end() || oldName == newName)
-            return false;
-        const AcDbHandle handle = found->second;
-        entries_.erase(found);
-        entries_[newName] = handle;
-        return true;
-    }
+    bool setName(const std::string &oldName, const std::string &newName);
 
     // AcDbDictionary::remove
     bool remove(const std::string &name)
@@ -105,7 +92,7 @@ private:
 
 // ---- AcDbXrecord: tagged data slots keyed by integer id ----
 
-class AcDbXrecord : public AcDbObject
+class ACDB_PORT AcDbXrecord : public AcDbObject
 {
 public:
     // Tagged slot values (the value-semantic form of a resbuf chain).
@@ -133,13 +120,7 @@ public:
     {
         values_[id] = Value(v);
     }
-    void setValue(int id, const std::vector<int> &v)
-    {
-        Value out(std::vector<std::int32_t>{});
-        auto &target = std::get<std::vector<std::int32_t>>(out);
-        target.assign(v.begin(), v.end());
-        values_[id] = std::move(out);
-    }
+    void setValue(int id, const std::vector<int> &v);
     void setValue(int id, const std::vector<std::uint8_t> &v)
     {
         values_[id] = Value(v);
@@ -156,14 +137,7 @@ public:
     {
         return readValue(id, v);
     }
-    bool getValue(int id, int &v) const
-    {
-        std::int32_t stored = 0;
-        if (!readValue(id, stored))
-            return false;
-        v = stored;
-        return true;
-    }
+    bool getValue(int id, int &v) const;
     bool getValue(int id, double &v) const { return readValue(id, v); }
     bool getValue(int id, std::string &v) const
     {
@@ -181,14 +155,7 @@ public:
     {
         return readValue(id, v);
     }
-    bool getValue(int id, std::vector<int> &v) const
-    {
-        std::vector<std::int32_t> stored;
-        if (!readValue(id, stored))
-            return false;
-        v.assign(stored.begin(), stored.end());
-        return true;
-    }
+    bool getValue(int id, std::vector<int> &v) const;
     bool getValue(int id, std::vector<std::uint8_t> &v) const
     {
         return readValue(id, v);
@@ -197,14 +164,7 @@ public:
     {
         return readValue(id, v);
     }
-    bool getValue(int id, Value &v) const
-    {
-        const auto found = values_.find(id);
-        if (found == values_.end())
-            return false;
-        v = found->second;
-        return true;
-    }
+    bool getValue(int id, Value &v) const;
 
     int numValues() const { return int(values_.size()); }
     void removeValue(int id) { values_.erase(id); }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGiPort.h"
+
 // AcGi-compatible text style (ObjectARX signature subset used by the
 // worldText callback).  The glyph engine consumes these fields; until it
 // lands, the text callback uses textSize and xScale for layout framing.

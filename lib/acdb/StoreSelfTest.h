@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDb store self-test (hidden runtime mode): GRID_SELFTEST=store runs
 // the SQLite persistence round-trip and the ECS scene-store checks in
 // the trusted WINDOW host, reporting through store_selftest.log (GUI

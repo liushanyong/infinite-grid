@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include "../acge/AcGe.h"
@@ -8,7 +10,7 @@
 namespace acdb
 {
 
-struct AcDbMText
+struct ACDB_PORT AcDbMText
 {
     AcDbEntity common;
     AcGePoint3d insertion{0.0, 0.0, 0.0};

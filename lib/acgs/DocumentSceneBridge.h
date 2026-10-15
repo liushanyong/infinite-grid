@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGsPort.h"
+
 // acgs::DocumentSceneBridge — the document↔memory binding behind the
 // identity split "SQLite 管理 AcDbHandle 管文件，ECS 管理
 // AcDbObjectId 管内存": an acdb::AcDbDatabaseReactor that keeps one
@@ -30,46 +32,18 @@
 namespace acgs
 {
 
-class DocumentSceneBridge : public acdb::AcDbDatabaseReactor
+class ACGS_PORT DocumentSceneBridge : public acdb::AcDbDatabaseReactor
 {
 public:
-    DocumentSceneBridge(acdb::AcDbDatabase &document, SceneStore &store)
-        : document_(document), store_(store)
-    {
-        document_.addReactor(this);
-    }
-
-    ~DocumentSceneBridge() override { document_.removeReactor(this); }
+    DocumentSceneBridge(acdb::AcDbDatabase &document, SceneStore &store);
+    ~DocumentSceneBridge() override;
 
     DocumentSceneBridge(const DocumentSceneBridge &) = delete;
     DocumentSceneBridge &operator=(const DocumentSceneBridge &) = delete;
 
     // Mirrors current document residents, refreshes drawable attributes,
     // marks resident entities dirty, and forgets handles absent after load.
-    void open()
-    {
-        std::unordered_set<std::uint64_t> residents;
-        document_.forEachEntity([&](acdb::AcDbHandle handle,
-                                    const acdb::AcDbEntityVariant &) {
-            residents.insert(handle.value);
-            store_.ensure(acdb::AcDbObjectId{handle});
-            attachAttributes(handle);
-            store_.markDirty(acdb::AcDbObjectId{handle});
-        });
-        document_.forEachNonGraphicalObject(
-            [&](acdb::AcDbHandle handle,
-                const acdb::AcDbNonGraphicalObject &) {
-                residents.insert(handle.value);
-                store_.ensure(acdb::AcDbObjectId{handle});
-            });
-        std::vector<acdb::AcDbObjectId> stale;
-        store_.forEachObjectId([&](acdb::AcDbObjectId objectId) {
-            if (!residents.contains(objectId.persistentHandle().value))
-                stale.push_back(objectId);
-        });
-        for (const acdb::AcDbObjectId objectId : stale)
-            store_.forget(objectId);
-    }
+    void open();
 
     SceneStore &store() { return store_; }
     const SceneStore &store() const { return store_; }
@@ -77,39 +51,16 @@ public:
     // ---- AcDbDatabaseReactor ----
 
     void objectAppended(const acdb::AcDbDatabase &,
-                        acdb::AcDbHandle handle) override
-    {
-        store_.ensure(acdb::AcDbObjectId{handle});
-        attachAttributes(handle);
-    }
-
+                        acdb::AcDbHandle handle) override;
     void objectErased(const acdb::AcDbDatabase &,
-                      acdb::AcDbHandle handle) override
-    {
-        store_.markDirty(acdb::AcDbObjectId{handle});
-    }
-
+                      acdb::AcDbHandle handle) override;
     void objectUnerased(const acdb::AcDbDatabase &,
-                        acdb::AcDbHandle handle) override
-    {
-        attachAttributes(handle);
-        store_.markDirty(acdb::AcDbObjectId{handle});
-    }
-
+                        acdb::AcDbHandle handle) override;
     void objectRemoved(const acdb::AcDbDatabase &,
-                       acdb::AcDbHandle handle) override
-    {
-        store_.forget(acdb::AcDbObjectId{handle});
-    }
-
+                       acdb::AcDbHandle handle) override;
     void objectModified(const acdb::AcDbDatabase &,
-                        acdb::AcDbHandle handle) override
-    {
-        attachAttributes(handle);
-        store_.markDirty(acdb::AcDbObjectId{handle});
-    }
-
-    void databaseReplaced(const acdb::AcDbDatabase &) override { open(); }
+                        acdb::AcDbHandle handle) override;
+    void databaseReplaced(const acdb::AcDbDatabase &) override;
 
 private:
     // Populates the attribute components of one mirrored entity from its
@@ -117,38 +68,7 @@ private:
     // block references — the resolved placement matrix).  Payload edits
     // re-attach through markDirty + the batch-sync follow-up; today a
     // mutated payload refreshes only when its entity is re-ensured.
-    void attachAttributes(acdb::AcDbHandle handle)
-    {
-        const entt::entity entity = store_.find(acdb::AcDbObjectId{handle});
-        if (entity == entt::null)
-            return;
-        const acdb::AcDbEntityVariant *payload =
-            document_.getEntity(handle);
-        if (payload == nullptr)
-            return;
-        entt::registry &registry = store_.registry();
-        const auto assignOrReplace = [&](auto &&component) {
-            using Component =
-                std::decay_t<decltype(component)>;
-            if (registry.has<Component>(entity))
-                registry.replace<Component>(
-                    entity, std::forward<decltype(component)>(component));
-            else
-                registry.assign<Component>(
-                    entity, std::forward<decltype(component)>(component));
-        };
-        assignOrReplace(LayerRef{acdb::common(*payload).getLayerName()});
-        if (const auto *reference =
-                std::get_if<acdb::AcDbBlockReference>(payload))
-        {
-            assignOrReplace(
-                InstanceXform{document_.referenceTransform(*reference)});
-        }
-        else if (registry.has<InstanceXform>(entity))
-        {
-            registry.remove<InstanceXform>(entity);
-        }
-    }
+    void attachAttributes(acdb::AcDbHandle handle);
 
     acdb::AcDbDatabase &document_;
     SceneStore &store_;

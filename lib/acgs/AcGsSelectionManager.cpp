@@ -114,4 +114,21 @@ std::uint64_t AcGsSelectionManager::hashSceneBytes(std::uint64_t hash,
     return hash;
 }
 
+
+std::size_t AcGsPickEntityHash::operator()(const AcGsPickEntity &entity) const
+{
+    std::size_t hash = 0xcbf29ce484222325ull;
+    auto mix = [&hash](std::uintptr_t value)
+    {
+        hash ^= value + 0x9e3779b97f4a7c15ull +
+                (hash << 6) + (hash >> 2);
+    };
+    mix(entity.kind);
+    mix(reinterpret_cast<std::uintptr_t>(entity.mesh));
+    mix(reinterpret_cast<std::uintptr_t>(entity.range));
+    mix(reinterpret_cast<std::uintptr_t>(entity.curve));
+    mix(reinterpret_cast<std::uintptr_t>(entity.text));
+    return hash;
+}
+
 } // namespace acgs

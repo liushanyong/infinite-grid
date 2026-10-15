@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbEntity transform helpers (namespace acdb) — ObjectARX
 // AcDbEntity::transformBy over the value-type payloads.  Translation
 // covers every supported type; the matrix overload applies to the types

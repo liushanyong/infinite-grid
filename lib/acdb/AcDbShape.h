@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbShape (namespace acdb) — the SHAPE entity, aligned with ObjectARX
 // AcDbShape: a reference to a shape glyph inside a compiled shape/font
 // file (STYLE table record whose file is a .shx shape set).  The stroke
@@ -17,7 +19,7 @@
 namespace acdb
 {
 
-struct AcDbShape
+struct ACDB_PORT AcDbShape
 {
     AcDbEntity common;
     AcGePoint3d insertion{0.0, 0.0, 0.0};

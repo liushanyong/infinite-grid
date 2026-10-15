@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbDatabase (namespace acdb) — the drawing document, aligned with
 // ObjectARX AcDbDatabase as mirrored by the wecad_sdk CoreDB reference:
 // symbol tables (layer / linetype / text style / block), a model-space
@@ -44,7 +46,7 @@ struct AcDbFileIoReport;
 // silent — a fresh load mirrors in bulk through the bridge's open();
 // undo replays fire through the same notifications; non-graphical NOD
 // mutations do not notify yet.
-class AcDbDatabaseReactor
+class ACDB_PORT AcDbDatabaseReactor
 {
 public:
     virtual ~AcDbDatabaseReactor() = default;
@@ -62,7 +64,7 @@ public:
     virtual void databaseReplaced(const AcDbDatabase &database);
 };
 
-class AcDbLayerTable
+class ACDB_PORT AcDbLayerTable
 {
 public:
     const AcDbLayerTableRecord *get(const std::string &name) const;
@@ -79,7 +81,7 @@ private:
     std::unordered_map<std::string, AcDbLayerTableRecord> records_;
 };
 
-class AcDbLinetypeTable
+class ACDB_PORT AcDbLinetypeTable
 {
 public:
     const AcDbLinetypeTableRecord *get(const std::string &name) const;
@@ -97,7 +99,7 @@ private:
     std::unordered_map<std::string, AcDbLinetypeTableRecord> records_;
 };
 
-class AcDbTextStyleTable
+class ACDB_PORT AcDbTextStyleTable
 {
 public:
     const AcDbTextStyleTableRecord *get(const std::string &name) const;
@@ -114,7 +116,7 @@ private:
     std::unordered_map<std::string, AcDbTextStyleTableRecord> records_;
 };
 
-class AcDbBlockTable
+class ACDB_PORT AcDbBlockTable
 {
 public:
     const AcDbBlockTableRecord *get(const std::string &name) const;
@@ -131,7 +133,7 @@ private:
     std::unordered_map<std::string, AcDbBlockTableRecord> records_;
 };
 
-class AcDbDatabase
+class ACDB_PORT AcDbDatabase
 {
 public:
     // ObjectARX: creates the standard tables and their default records
@@ -348,13 +350,7 @@ public:
     // under a known handle (no allocation, no NOD entry — the parent
     // dictionary rows restore the entries themselves).
     bool insertNonGraphicalObject(AcDbHandle handle,
-                                  AcDbNonGraphicalObject object)
-    {
-        if (!handle.isValid() || nonGraphicalObjects_.count(handle) != 0)
-            return false;
-        nonGraphicalObjects_.emplace(handle, std::move(object));
-        return true;
-    }
+                                  AcDbNonGraphicalObject object);
 
     // Store/import path: repoints the NOD root at the persisted handle.
     void restoreNamedObjectsDictionary(AcDbHandle handle)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDb file-IO self-test (hidden runtime mode): GRID_SELFTEST=fileio
 // drives the write/read roundtrips of the four ObjectARX entry points —
 // sample document -> writeDwgFile -> readDwgFile, sample document ->

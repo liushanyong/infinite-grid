@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbBlockReference (namespace acdb) — the INSERT entity, aligned with
 // ObjectARX AcDbBlockReference and the wecad_sdk CoreDB
 // AcDbBlockReference: a named reference to an AcDbBlockTableRecord plus
@@ -19,7 +21,7 @@ namespace acdb
 
 class AcDbBlockTableRecord;
 
-class AcDbBlockReference
+class ACDB_PORT AcDbBlockReference
 {
 public:
     // Common entity properties (same payload shape as the lib/entities

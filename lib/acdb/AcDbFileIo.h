@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // File-IO facade over AcDbFileCodec (namespace acdb). The four
 // ObjectARX entry points live as AcDbDatabase methods — readDwgFile /
 // writeDwgFile for the binary DWG container, dxfIn / dxfOut for the DXF
@@ -22,7 +24,7 @@ namespace acdb
 {
 
 // Counts reported by readers; errorCode is the selected codec's native code.
-struct AcDbFileIoReport
+struct ACDB_PORT AcDbFileIoReport
 {
     std::size_t entitiesAdded = 0;
     std::size_t unsupportedSkipped = 0;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbAttribute (namespace acdb) — the ATTRIB entity, aligned with
 // ObjectARX AcDbAttribute: a text value stamped from an
 // AcDbAttributeDefinition when an INSERT referencing that block is
@@ -17,7 +19,7 @@
 namespace acdb
 {
 
-struct AcDbAttribute
+struct ACDB_PORT AcDbAttribute
 {
     AcDbEntity common;
     AcGePoint3d insertion{0.0, 0.0, 0.0};

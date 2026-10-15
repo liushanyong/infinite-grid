@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include <vector>
@@ -10,7 +12,7 @@
 namespace acdb
 {
 
-struct AcDb3dPolyline
+struct ACDB_PORT AcDb3dPolyline
 {
     AcDbEntity common;
     std::vector<AcGePoint3d> vertices;

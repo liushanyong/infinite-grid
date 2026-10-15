@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGiPort.h"
+
 // acgi::TextDevice — the device capabilities the text protocol needs
 // (ObjectARX: the AcGi device interface consumed by AcGiTextEngine).
 // The concrete device (rendering::RendererBackend) implements this
@@ -13,7 +15,7 @@
 namespace acgi
 {
 
-class TextDevice
+class ACGI_PORT TextDevice
 {
 public:
     virtual ~TextDevice() = default;

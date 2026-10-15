@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 // AcGe-compatible matrix and plane value types (ObjectARX signature subset
 // used by the graphics interface).  glm::dmat4 storage; column-major like
 // AcGeMatrix3d's entry[0..3][0..3].
@@ -16,7 +18,7 @@
 #include "AcGeLinear.h"
 #include "AcGePoint.h"
 
-struct AcGeMatrix3d
+struct ACGE_PORT AcGeMatrix3d
 {
     glm::dmat4 m{1.0};
 
@@ -99,7 +101,7 @@ AcGePoint3d transformBy(const AcGePoint3d &point,
 AcGeVector3d transformBy(const AcGeVector3d &vector,
                          const AcGeMatrix3d &matrix);
 
-struct AcGePlane
+struct ACGE_PORT AcGePlane
 {
     AcGePoint3d origin{0.0, 0.0, 0.0};
     AcGeVector3d normal{0.0, 0.0, 1.0};
@@ -110,24 +112,10 @@ struct AcGePlane
     {
     }
     AcGePlane(const AcGePoint3d &pntU, const AcGePoint3d &org,
-              const AcGePoint3d &pntV)
-        : origin(org),
-          normal((pntU - org).crossProduct(pntV - org))
-    {
-        if (normal.isZeroLength())
-            throw std::invalid_argument("AcGePlane points must not be collinear.");
-    }
+              const AcGePoint3d &pntV);
     AcGePlane(const AcGePoint3d &org, const AcGeVector3d &uAxis,
-              const AcGeVector3d &vAxis)
-        : origin(org), normal(uAxis.crossProduct(vAxis))
-    {
-        if (normal.isZeroLength())
-            throw std::invalid_argument("AcGePlane axes must not be collinear.");
-    }
-    AcGePlane(double a, double b, double c, double d)
-    {
-        set(a, b, c, d);
-    }
+              const AcGeVector3d &vAxis);
+    AcGePlane(double a, double b, double c, double d);
 
     AcGePlane &set(const AcGePoint3d &pointOnPlane,
                    const AcGeVector3d &planeNormal)
@@ -137,57 +125,18 @@ struct AcGePlane
         return *this;
     }
     AcGePlane &set(const AcGePoint3d &pntU, const AcGePoint3d &org,
-                   const AcGePoint3d &pntV)
-    {
-        const AcGeVector3d newNormal =
-            (pntU - org).crossProduct(pntV - org);
-        if (newNormal.isZeroLength())
-            throw std::invalid_argument("AcGePlane points must not be collinear.");
-        origin = org;
-        normal = newNormal;
-        return *this;
-    }
+                   const AcGePoint3d &pntV);
     AcGePlane &set(const AcGePoint3d &org, const AcGeVector3d &uAxis,
-                   const AcGeVector3d &vAxis)
-    {
-        const AcGeVector3d newNormal = uAxis.crossProduct(vAxis);
-        if (newNormal.isZeroLength())
-            throw std::invalid_argument("AcGePlane axes must not be collinear.");
-        origin = org;
-        normal = newNormal;
-        return *this;
-    }
-    AcGePlane &set(double a, double b, double c, double d)
-    {
-        const AcGeVector3d equationNormal{a, b, c};
-        const double normalLengthSq = equationNormal.lengthSq();
-        if (normalLengthSq == 0.0)
-            throw std::invalid_argument("AcGePlane equation normal must be nonzero.");
-        normal = equationNormal;
-        origin = AcGePoint3d::kOrigin +
-                 equationNormal * (-d / normalLengthSq);
-        return *this;
-    }
+                   const AcGeVector3d &vAxis);
+    AcGePlane &set(double a, double b, double c, double d);
 
     double distanceTo(const AcGePoint3d &point) const
     {
         return (point - origin).dotProduct(normal);
     }
 
-    double signedDistanceTo(const AcGePoint3d &point) const
-    {
-        const double normalLength = normal.length();
-        return normalLength == 0.0 ? 0.0 : distanceTo(point) / normalLength;
-    }
-
-    AcGePoint3d closestPointTo(const AcGePoint3d &point) const
-    {
-        const double normalLength = normal.length();
-        if (normalLength == 0.0)
-            return point;
-        const AcGeVector3d unitNormal = normal / normalLength;
-        return point - unitNormal * signedDistanceTo(point);
-    }
+    double signedDistanceTo(const AcGePoint3d &point) const;
+    AcGePoint3d closestPointTo(const AcGePoint3d &point) const;
 
     bool isOn(const AcGePoint3d &point,
               const AcGeTol &tol = AcGeTol{}) const
@@ -196,23 +145,8 @@ struct AcGePlane
                std::abs(signedDistanceTo(point)) <= tol.equalPoint();
     }
 
-    AcGeVector3d projectVector(const AcGeVector3d &vector) const
-    {
-        const double normalLength = normal.length();
-        if (normalLength == 0.0)
-            return vector;
-        const AcGeVector3d unitNormal = normal / normalLength;
-        return vector - unitNormal * vector.dotProduct(unitNormal);
-    }
-
-    AcGePoint3d mirrorPoint(const AcGePoint3d &point) const
-    {
-        const double normalLength = normal.length();
-        if (normalLength == 0.0)
-            return point;
-        const AcGeVector3d unitNormal = normal / normalLength;
-        return point - unitNormal * (2.0 * signedDistanceTo(point));
-    }
+    AcGeVector3d projectVector(const AcGeVector3d &vector) const;
+    AcGePoint3d mirrorPoint(const AcGePoint3d &point) const;
 
     bool isParallelTo(const AcGePlane &other,
                       const AcGeTol &tol = AcGeTol{}) const
@@ -242,49 +176,11 @@ struct AcGePlane
 
     bool project(const AcGePoint3d &point, const AcGeVector3d &direction,
                  AcGePoint3d &projected,
-                 const AcGeTol &tol = AcGeTol{}) const
-    {
-        const double denominator = direction.dotProduct(normal);
-        if (std::abs(denominator) <=
-            tol.equalVector() * direction.length() * normal.length())
-            return false;
-        const double parameter = -distanceTo(point) / denominator;
-        projected = point + direction * parameter;
-        return true;
-    }
-
+                 const AcGeTol &tol = AcGeTol{}) const;
     bool intersectWith(const AcGeLine3d &line, AcGePoint3d &result,
-                       const AcGeTol &tol = AcGeTol{}) const
-    {
-        const double denominator = normal.dotProduct(line.direction);
-        if (std::abs(denominator) <=
-            tol.equalVector() * normal.length() * line.direction.length())
-            return false;
-        const double parameter =
-            normal.dotProduct(origin - line.basePoint) / denominator;
-        result = line.pointAt(parameter);
-        return true;
-    }
-
+                       const AcGeTol &tol = AcGeTol{}) const;
     bool intersectWith(const AcGePlane &other, AcGeLine3d &result,
-                       const AcGeTol &tol = AcGeTol{}) const
-    {
-        const AcGeVector3d direction = normal.crossProduct(other.normal);
-        const double directionLengthSq = direction.lengthSq();
-        if (directionLengthSq <=
-            std::pow(tol.equalVector() * normal.length() * other.normal.length(),
-                     2.0))
-            return false;
-        const double thisOffset = normal.dotProduct(origin.asVector());
-        const double otherOffset = other.normal.dotProduct(other.origin.asVector());
-        const AcGePoint3d intersection =
-            AcGePoint3d::kOrigin +
-            (other.normal.crossProduct(direction) * thisOffset +
-             direction.crossProduct(normal) * otherOffset) /
-                directionLengthSq;
-        result.set(intersection, direction);
-        return true;
-    }
+                       const AcGeTol &tol = AcGeTol{}) const;
 };
 
 // AutoCAD arbitrary axis algorithm: the OCS x-axis derived from an

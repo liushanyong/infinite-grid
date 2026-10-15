@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGiPort.h"
+
 // Text-draw request queue for the AcGi layer.  worldDraw(Text/MText) calls
 // AcGiWorldDraw::text(); the callback records WHAT to draw here (message,
 // placement, style) without depending on any font subsystem.  The host
@@ -17,7 +19,7 @@
 namespace acgi
 {
 
-struct TextRequest
+struct ACGI_PORT TextRequest
 {
     glm::dvec3 position{0.0};
     glm::dvec3 normal{0.0, 0.0, 1.0};
@@ -35,20 +37,12 @@ struct TextRequest
 // Global request list.  Entities tessellate once into the cached draw
 // list, so requests accumulate at tessellation time and persist for the
 // lifetime of the cache; the renderer reads them every frame.
-inline AcArray<TextRequest> &textRequests()
-{
-    static AcArray<TextRequest> requests;
-    return requests;
-}
+AcArray<TextRequest> &textRequests();
 
 // When true (no glyph backend available), AcGiWorldDraw::text() also emits
 // the layout-frame stroke so text entities stay visible as boxes.  When a
 // glyph backend is loaded, the host sets this to false and renders the
 // queued requests instead.
-inline bool &textFrameFallback()
-{
-    static bool fallback = true;
-    return fallback;
-}
+bool &textFrameFallback();
 
 } // namespace acgi

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include "../acge/AcGe.h"
@@ -15,7 +17,7 @@ enum class LightType
     Spot,
 };
 
-struct AcDbLight
+struct ACDB_PORT AcDbLight
 {
     AcDbEntity common;
     LightType type = LightType::AcDbPoint;

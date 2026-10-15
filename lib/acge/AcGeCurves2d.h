@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -14,15 +16,7 @@ namespace ge
 namespace detail
 {
 
-inline std::vector<AcGePoint3d> liftPoints(
-    const std::vector<AcGePoint2d> &points)
-{
-    std::vector<AcGePoint3d> lifted;
-    lifted.reserve(points.size());
-    for (const AcGePoint2d &point : points)
-        lifted.emplace_back(point.x, point.y, 0.0);
-    return lifted;
-}
+std::vector<AcGePoint3d> liftPoints(const std::vector<AcGePoint2d> &points);
 
 inline AcGePoint2d projectPoint(const AcGePoint3d &point)
 {
@@ -36,18 +30,13 @@ inline AcGeVector2d projectVector(const AcGeVector3d &vector)
 
 } // namespace detail
 
-class AcGeBezierCurve2d
+class ACGE_PORT AcGeBezierCurve2d
 {
 public:
     std::vector<AcGePoint2d> controlPoints;
 
     AcGeBezierCurve2d() = default;
-    explicit AcGeBezierCurve2d(std::vector<AcGePoint2d> points)
-        : controlPoints(std::move(points))
-    {
-        if (controlPoints.empty())
-            throw std::invalid_argument("Bezier curve needs at least one point.");
-    }
+    explicit AcGeBezierCurve2d(std::vector<AcGePoint2d> points);
 
     size_t degree() const
     {
@@ -67,7 +56,7 @@ public:
     }
 };
 
-class AcGeBsplineCurve2d
+class ACGE_PORT AcGeBsplineCurve2d
 {
 public:
     size_t degree = 3;
@@ -76,64 +65,29 @@ public:
 
     AcGeBsplineCurve2d() = default;
     AcGeBsplineCurve2d(std::vector<double> knotVector,
-                       std::vector<AcGePoint2d> points, size_t curveDegree)
-        : degree(curveDegree), knots(std::move(knotVector)),
-          controlPoints(std::move(points))
-    {
-        validate();
-    }
+                       std::vector<AcGePoint2d> points, size_t curveDegree);
 
-    void validate() const { (void)as3d(); }
+    void validate() const;
     double minParameter() const { return knots.front(); }
     double maxParameter() const { return knots.back(); }
     AcGePoint2d pointAt(double parameter) const
     {
         return detail::projectPoint(as3d().pointAt(parameter));
     }
-    AcGeBsplineCurve2d differentiated() const
-    {
-        const AcGeBsplineCurve3d derivative = as3d().differentiated();
-        return {derivative.knots, projectPoints(derivative.controlPoints),
-                derivative.degree};
-    }
+    AcGeBsplineCurve2d differentiated() const;
     std::vector<AcGeVector2d> derivativesAt(
-        double parameter, size_t derivativeCount) const
-    {
-        const auto derivatives = as3d().derivativesAt(parameter,
-                                                       derivativeCount);
-        std::vector<AcGeVector2d> result;
-        result.reserve(derivatives.size());
-        for (const AcGeVector3d &derivative : derivatives)
-            result.push_back(detail::projectVector(derivative));
-        return result;
-    }
+        double parameter, size_t derivativeCount) const;
     static AcGeBsplineCurve2d interpolate(
         const std::vector<AcGePoint2d> &fitPoints, size_t curveDegree,
-        double alpha = 0.0)
-    {
-        const AcGeBsplineCurve3d curve =
-            AcGeBsplineCurve3d::interpolate(detail::liftPoints(fitPoints),
-                                            curveDegree, alpha);
-        return {curve.knots, projectPoints(curve.controlPoints), curve.degree};
-    }
+        double alpha = 0.0);
 
 private:
-    AcGeBsplineCurve3d as3d() const
-    {
-        return {knots, detail::liftPoints(controlPoints), degree};
-    }
+    AcGeBsplineCurve3d as3d() const;
     static std::vector<AcGePoint2d> projectPoints(
-        const std::vector<AcGePoint3d> &points)
-    {
-        std::vector<AcGePoint2d> projected;
-        projected.reserve(points.size());
-        for (const AcGePoint3d &point : points)
-            projected.push_back(detail::projectPoint(point));
-        return projected;
-    }
+        const std::vector<AcGePoint3d> &points);
 };
 
-class AcGeNurbsCurve2d
+class ACGE_PORT AcGeNurbsCurve2d
 {
 public:
     size_t degree = 3;
@@ -142,14 +96,9 @@ public:
 
     AcGeNurbsCurve2d() = default;
     AcGeNurbsCurve2d(std::vector<double> knotVector,
-                     std::vector<AcGePoint4d> points, size_t curveDegree)
-        : degree(curveDegree), knots(std::move(knotVector)),
-          controlPoints(std::move(points))
-    {
-        validate();
-    }
+                     std::vector<AcGePoint4d> points, size_t curveDegree);
 
-    void validate() const { (void)as3d(); }
+    void validate() const;
     double minParameter() const { return knots.front(); }
     double maxParameter() const { return knots.back(); }
     AcGePoint2d pointAt(double parameter) const
@@ -157,40 +106,14 @@ public:
         return detail::projectPoint(as3d().pointAt(parameter));
     }
     std::vector<AcGeVector2d> derivativesAt(
-        double parameter, size_t derivativeCount) const
-    {
-        const auto derivatives = as3d().derivativesAt(parameter,
-                                                       derivativeCount);
-        std::vector<AcGeVector2d> result;
-        result.reserve(derivatives.size());
-        for (const AcGeVector3d &derivative : derivatives)
-            result.push_back(detail::projectVector(derivative));
-        return result;
-    }
-    double curvatureAt(double parameter) const
-    {
-        const auto derivatives = derivativesAt(parameter, 2);
-        const double speed = derivatives[1].length();
-        if (speed < 1.0e-14)
-            return 0.0;
-        const double cross =
-            derivatives[1].x * derivatives[2].y -
-            derivatives[1].y * derivatives[2].x;
-        return std::abs(cross) / (speed * speed * speed);
-    }
+        double parameter, size_t derivativeCount) const;
+    double curvatureAt(double parameter) const;
 
 private:
-    AcGeNurbsCurve3d as3d() const
-    {
-        std::vector<AcGePoint4d> lifted;
-        lifted.reserve(controlPoints.size());
-        for (const AcGePoint4d &point : controlPoints)
-            lifted.emplace_back(point.x, point.y, 0.0, point.w);
-        return {knots, std::move(lifted), degree};
-    }
+    AcGeNurbsCurve3d as3d() const;
 };
 
-class AcGeFitSpline2d
+class ACGE_PORT AcGeFitSpline2d
 {
 public:
     AcGeFitSpline2d() = default;
@@ -202,15 +125,7 @@ public:
     }
 
     static AcGeFitSpline2d fromChordLength(
-        const std::vector<AcGePoint2d> &points, bool periodic = false)
-    {
-        if (points.size() < 2)
-            throw std::invalid_argument(
-                "Fit-point spline needs at least two points.");
-        return AcGeFitSpline2d(
-            AcGeFitSpline3d::fromChordLength(detail::liftPoints(points),
-                                             periodic));
-    }
+        const std::vector<AcGePoint2d> &points, bool periodic = false);
 
     bool isEmpty() const { return curve_.isEmpty(); }
     double minParameter() const { return curve_.minParameter(); }

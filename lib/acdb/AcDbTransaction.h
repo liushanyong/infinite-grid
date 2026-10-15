@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbTransaction + undo (namespace acdb) — symmetric delta snapshots in
 // the OpenCADStudio style: a transaction records the before-image of every
 // entity handle it touches; commit pairs the before-images with after
@@ -26,7 +28,7 @@ class AcDbDatabase;
 
 // One symmetric undo step: (handle, before, after) with either side
 // nullopt when the entity did not exist / was removed in that state.
-struct AcDbUndoEntry
+struct ACDB_PORT AcDbUndoEntry
 {
     AcDbHandle handle;
     std::optional<AcDbEntityVariant> before;
@@ -35,7 +37,7 @@ struct AcDbUndoEntry
 
 using AcDbUndoDelta = std::vector<AcDbUndoEntry>;
 
-class AcDbTransaction
+class ACDB_PORT AcDbTransaction
 {
 public:
     bool isActive() const { return active_; }
@@ -52,7 +54,7 @@ private:
 };
 
 // Bounded undo history (OpenCADStudio: 256 entries, push clears redo).
-class AcDbUndoStack
+class ACDB_PORT AcDbUndoStack
 {
 public:
     static constexpr std::size_t kMaxEntries = 256;

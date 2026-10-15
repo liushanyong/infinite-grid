@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGsPort.h"
+
 // acgs::SceneStore (namespace acgs) — the ECS scene layer the roadmap
 // assigns to attributes/scene/selection ("拓扑用紧凑 arena，属性/场景/
 // 选择/撤销才上 ECS").  entt-backed; the in-memory identity split is
@@ -64,22 +66,11 @@ struct LayerRef
     std::string name;
 };
 
-class SceneStore
+class ACGS_PORT SceneStore
 {
 public:
     // Creates (or returns) the ECS entity bound to |objectId|.
-    entt::entity ensure(acdb::AcDbObjectId objectId)
-    {
-        const auto key = objectId.persistentHandle().value;
-        auto found = byId_.find(key);
-        if (found != byId_.end())
-            return found->second;
-        const entt::entity entity = registry_.create();
-        byId_.emplace(key, entity);
-        registry_.assign<SceneIdentity>(entity, SceneIdentity{objectId});
-        ++revision_;
-        return entity;
-    }
+    entt::entity ensure(acdb::AcDbObjectId objectId);
 
     // The bound ECS entity or entt::null.
     entt::entity find(acdb::AcDbObjectId objectId) const
@@ -95,36 +86,13 @@ public:
 
     // The objectId bound to |entity|, or kNullObjectId for entities
     // outside the mirror (entt::null included).
-    acdb::AcDbObjectId objectIdOf(entt::entity entity) const
-    {
-        if (entity == entt::null || !registry_.has<SceneIdentity>(entity))
-            return acdb::kNullObjectId;
-        return registry_.get<SceneIdentity>(entity).objectId;
-    }
+    acdb::AcDbObjectId objectIdOf(entt::entity entity) const;
 
     // Drops the ECS entity and every component (the AcDb record itself
     // is untouched — the store mirrors the document, never owns it).
-    void forget(acdb::AcDbObjectId objectId)
-    {
-        const auto found = byId_.find(objectId.persistentHandle().value);
-        if (found == byId_.end())
-            return;
-        registry_.destroy(found->second);
-        byId_.erase(found);
-        ++revision_;
-    }
+    void forget(acdb::AcDbObjectId objectId);
 
-    void markDirty(acdb::AcDbObjectId objectId)
-    {
-        const entt::entity entity = ensure(objectId);
-        if (registry_.has<Dirty>(entity))
-            registry_.replace<Dirty>(entity);
-        else
-        {
-            registry_.assign<Dirty>(entity);
-            ++revision_;
-        }
-    }
+    void markDirty(acdb::AcDbObjectId objectId);
 
     bool isDirty(acdb::AcDbObjectId objectId) const
     {
@@ -132,12 +100,7 @@ public:
         return entity != entt::null && registry_.has<Dirty>(entity);
     }
 
-    void clearDirty(acdb::AcDbObjectId objectId)
-    {
-        const entt::entity entity = find(objectId);
-        if (entity != entt::null && registry_.has<Dirty>(entity))
-            registry_.remove<Dirty>(entity);
-    }
+    void clearDirty(acdb::AcDbObjectId objectId);
 
     // Visits every dirty entity; |fn|(AcDbObjectId).  Clearing dirtiness
     // during the walk is allowed (visited first, cleared after).

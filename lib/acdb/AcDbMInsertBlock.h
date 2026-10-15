@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbMInsertBlock (namespace acdb) — the MINSERT entity, aligned with
 // ObjectARX AcDbMInsertBlock (derived from AcDbBlockReference): a block
 // placement repeated on a rectangular row/column grid.  The fields
@@ -18,7 +20,7 @@
 namespace acdb
 {
 
-struct AcDbMInsertBlock
+struct ACDB_PORT AcDbMInsertBlock
 {
     AcDbEntity common;
 

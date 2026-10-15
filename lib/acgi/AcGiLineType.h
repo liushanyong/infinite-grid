@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGiPort.h"
+
 // AcGi-compatible line type definitions.  Elements follow the LTYPE
 // dash/dot/gap semantics: a positive length is a stroke (dash), a negative
 // length is a gap, and zero is a dot.  Lengths are world units and the
@@ -7,7 +9,7 @@
 // libredwg/LTYPE data models.
 #include <vector>
 
-struct AcGiLineType
+struct ACGI_PORT AcGiLineType
 {
     const char *name;
     const double *elements;
@@ -38,19 +40,9 @@ constexpr AcGiLineType kLineTypes[] = {
 
 // Case-sensitive lookup matching the entity lineType string.  A missing
 // name (or "ByLayer"/"CONTINUOUS") means a solid line.
-inline const AcGiLineType *acgiFindLineType(const char *name)
-{
-    if (!name)
-        return nullptr;
-    for (const AcGiLineType &type : acgi_line_types::kLineTypes)
-    {
-        if (std::string_view(type.name) == name)
-            return &type;
-    }
-    return nullptr;
-}
+ACGI_PORT const AcGiLineType *acgiFindLineType(const char *name);
 
-struct AcGiLineTypeMark
+struct ACGI_PORT AcGiLineTypeMark
 {
     double length;
     bool stroke;
@@ -59,21 +51,4 @@ struct AcGiLineTypeMark
 // Flatten the dash/dot/gap elements into render marks.  A dot carries no
 // length by definition; it renders as a short stroke so it stays visible
 // at any zoom.
-inline std::vector<AcGiLineTypeMark> acgiLineTypeMarks(
-    const AcGiLineType &type)
-{
-    constexpr double kDotRenderLength = 2.0;
-    std::vector<AcGiLineTypeMark> marks;
-    marks.reserve(type.elementCount);
-    for (size_t i = 0; i < type.elementCount; ++i)
-    {
-        const double element = type.elements[i];
-        if (element > 0.0)
-            marks.push_back({element, true});
-        else if (element < 0.0)
-            marks.push_back({-element, false});
-        else
-            marks.push_back({kDotRenderLength, true});
-    }
-    return marks;
-}
+ACGI_PORT std::vector<AcGiLineTypeMark> acgiLineTypeMarks(const AcGiLineType &type);

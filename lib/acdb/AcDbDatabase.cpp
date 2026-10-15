@@ -684,4 +684,14 @@ bool AcDbDatabase::removeEntity(AcDbHandle handle)
     return true;
 }
 
+
+bool AcDbDatabase::insertNonGraphicalObject(AcDbHandle handle,
+                                            AcDbNonGraphicalObject object)
+{
+    if (!handle.isValid() || nonGraphicalObjects_.count(handle) != 0)
+        return false;
+    nonGraphicalObjects_.emplace(handle, std::move(object));
+    return true;
+}
+
 } // namespace acdb

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // glTF 2.0 bridge (lib/acdb layer).  Mirrors AcDbDwgBridge: one file format
 // in, acdb entities out -- plus the reverse direction.  Import decodes a
 // .glb / .gltf document into one AcDbPolyFaceMesh per primitive (node
@@ -27,14 +29,14 @@ namespace acdb
 // One referenced glTF image, kept as the encoded file bytes (PNG/JPG/...).
 // |key| is the stable name stored in AcDbMaterial::diffuseTexture so a
 // session-level cache can map it to a renderer texture slot.
-struct AcDbGltfTexture
+struct ACDB_PORT AcDbGltfTexture
 {
     std::string key;
     std::string name; // image name / uri as authored, for diagnostics
     std::vector<std::uint8_t> bytes;
 };
 
-struct AcDbGltfImport
+struct ACDB_PORT AcDbGltfImport
 {
     std::vector<AcDbPolyFaceMesh> meshes;
     std::vector<AcDbGltfTexture> textures;
@@ -54,7 +56,7 @@ struct AcDbGltfImport
 bool importGltf(const std::filesystem::path &path, AcDbGltfImport &out,
                 std::string *error = nullptr);
 
-struct AcDbGltfExportOptions
+struct ACDB_PORT AcDbGltfExportOptions
 {
     bool binary = true;      // .glb container when true, JSON .gltf otherwise
     bool embedBuffers = true; // base64-embedded buffer in .gltf, binary chunk in .glb

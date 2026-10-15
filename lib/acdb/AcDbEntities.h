@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // The concrete entity payload set (namespace acdb).  Each member is an
 // ObjectARX-aligned value type; geometry stays plain data while AcDb
 // owns identity and membership.  Kept separate from AcDbCore.h so the

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDb — the database layer (namespace acdb), aligned with ObjectARX AcDb.
 //
 // ObjectARX organizes a drawing as AcDbDatabase owning symbol tables
@@ -32,7 +34,7 @@ namespace acdb
 
 // ---- AcDbHandle: persistent object identifier (DXF/DWG handle) ----
 
-struct AcDbHandle
+struct ACDB_PORT AcDbHandle
 {
     std::uint64_t value = 0;
 
@@ -72,7 +74,7 @@ namespace acdb
 // never blur at a call site.  The in-memory mirror (acgs::SceneStore)
 // is keyed by this; SQLite stays handle-keyed end to end.
 
-struct AcDbObjectId
+struct ACDB_PORT AcDbObjectId
 {
     AcDbHandle handle{};
 
@@ -106,7 +108,7 @@ namespace acdb
 
 // ---- AcDbObject: base state shared by every database-resident object ----
 
-class AcDbObject
+class ACDB_PORT AcDbObject
 {
 public:
     // Public fields: the entity payloads embed these by value and the
@@ -125,7 +127,7 @@ public:
 // applies the database's active settings exactly like
 // AcDbEntity::setDatabaseDefaults.
 
-class AcDbEntity : public AcDbObject
+class ACDB_PORT AcDbEntity : public AcDbObject
 {
 public:
     // AcDbEntity::setLayerName / getLayerName
@@ -170,7 +172,7 @@ public:
 
 // ---- Symbol tables (AcDbLayerTable / AcDbLinetypeTable / ...) ----
 
-class AcDbSymbolTableRecord : public AcDbObject
+class ACDB_PORT AcDbSymbolTableRecord : public AcDbObject
 {
 public:
     const std::string &getRecordName() const { return name_; }
@@ -180,7 +182,7 @@ private:
     std::string name_;
 };
 
-struct AcDbLayerTableRecord : AcDbSymbolTableRecord
+struct ACDB_PORT AcDbLayerTableRecord : AcDbSymbolTableRecord
 {
     glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
     std::string lineType = "Continuous";
@@ -190,12 +192,12 @@ struct AcDbLayerTableRecord : AcDbSymbolTableRecord
     bool isPlottable = true;
 };
 
-struct AcDbLinetypeTableRecord : AcDbSymbolTableRecord
+struct ACDB_PORT AcDbLinetypeTableRecord : AcDbSymbolTableRecord
 {
     std::string description;
 };
 
-struct AcDbTextStyleTableRecord : AcDbSymbolTableRecord
+struct ACDB_PORT AcDbTextStyleTableRecord : AcDbSymbolTableRecord
 {
     std::string fileName = "txt.shx";
     std::string bigFontFileName;
@@ -205,7 +207,7 @@ struct AcDbTextStyleTableRecord : AcDbSymbolTableRecord
 
 // ---- AcDbBlockTableRecord: named container of entity handles ----
 
-class AcDbBlockTableRecord : public AcDbSymbolTableRecord
+class ACDB_PORT AcDbBlockTableRecord : public AcDbSymbolTableRecord
 {
 public:
     const AcGePoint3d &basePoint() const { return basePoint_; }

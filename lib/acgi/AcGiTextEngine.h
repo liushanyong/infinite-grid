@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGiPort.h"
+
 // AcGi text engine: the consolidated text-rendering entry point for the
 // acgi system, following the ObjectARX pattern where AcGiTextStyle
 // carries the font reference and AcGiGeometry::text() performs the draw.
@@ -27,7 +29,7 @@
 namespace acgi
 {
 
-class TextEngine
+class ACGI_PORT TextEngine
 {
 public:
     // ---- font management (AcGiTextStyle::setFont analogue) ----
@@ -136,6 +138,6 @@ private:
 };
 
 // Global engine instance (the host loads fonts into it at startup).
-TextEngine &textEngine();
+ACGI_PORT TextEngine &textEngine();
 
 } // namespace acgi

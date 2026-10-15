@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -7,7 +9,7 @@
 
 // AcGe-compatible quaternion for 3D rotations. Components use the common
 // vector-first (x, y, z, w) layout while multiplication follows Hamilton order.
-struct AcGeQuaternion3d
+struct ACGE_PORT AcGeQuaternion3d
 {
     double x = 0.0;
     double y = 0.0;

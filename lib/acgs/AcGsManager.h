@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGsPort.h"
+
 // acgs::AcGsManager (namespace acgs) — the GS top-level manager, aligned
 // with ObjectARX AcGsManager and reached through acgsGetManager().
 //
@@ -52,7 +54,7 @@ namespace acgs
 
 class AcGsView;
 
-class AcGsManager
+class ACGS_PORT AcGsManager
 {
 public:
     AcGsManager();

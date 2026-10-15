@@ -325,3 +325,55 @@ void AcGsOrbitCamera::syncDerivedState()
   else
     Yaw = glm::degrees(std::atan2(eyeDirection.x, -eyeDirection.y));
 }
+
+glm::mat4 AcGsOrbitCamera::getViewMatrix(const glm::dvec3 &rebaseOrigin) const
+{
+  // VSG "double all the way": compute the lookAt matrix entirely in
+  // double precision, converting to float only at the final return.
+  // The basis vectors (Front, Up) are already glm::dvec3.
+  const glm::dvec3 eyeRelative = Position - rebaseOrigin;
+  const glm::dmat4 viewDouble = glm::lookAt(
+      eyeRelative,
+      eyeRelative + Front,
+      Up);
+  return glm::mat4(viewDouble);
+}
+
+glm::mat4 AcGsOrbitCamera::getViewRotationMatrix() const
+{
+  const glm::dvec3 forward = -glm::normalize(
+      Rotation * glm::dvec3(0.0, 0.0, 1.0));
+  const glm::dvec3 up = glm::normalize(
+      Rotation * glm::dvec3(0.0, 1.0, 0.0));
+
+  // Build the basis exactly like the reference implementation: look from
+  // the origin toward the eye direction and then force the translation
+  // column to zero.  This is guaranteed to match the old lookAt basis.
+  glm::dmat4 viewDouble = glm::lookAt(
+      glm::dvec3(0.0), forward, up);
+  viewDouble[3] = glm::dvec4(0.0, 0.0, 0.0, 1.0);
+  return glm::mat4(viewDouble);
+}
+
+void AcGsOrbitCamera::panScreen(float deltaX, float deltaY,
+                                float viewportHeight)
+{
+  if (viewportHeight <= 0.0f)
+    return;
+
+  const double worldPerPixel = (2.0 * orthoSize()) / (double)viewportHeight;
+  const glm::dvec3 &cameraRight = Right;
+  const glm::dvec3 &cameraUp = Up;
+  Target -= cameraRight * ((double)deltaX * worldPerPixel);
+  Target += cameraUp * ((double)deltaY * worldPerPixel);
+  syncDerivedState();
+}
+
+double AcGsOrbitCamera::orthoDepthRadius() const
+{
+  if (ModelMinimum && ModelMaximum)
+    return depthExtentInView(*ModelMinimum, *ModelMaximum);
+  if (DepthHalfRange > 0.0)
+    return std::max(10.0, DepthHalfRange);
+  return std::max(10.0, Distance * 1000.0);
+}

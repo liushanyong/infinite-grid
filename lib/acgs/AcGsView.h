@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGsPort.h"
+
 // AcGsView — the single app-facing render gateway, modeled on ObjectARX's
 // AcGsView + AcGiDefaultContext.  Everything the application draws goes
 // through here:
@@ -45,7 +47,7 @@ constexpr glm::vec4 kClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
 // Demo compositing layer override (GRID_LINE_LAYER / GRID_FILL_LAYER /
 // GRID_MESH_LAYER environment variables; 0 = the default layer).
-float envLayer(const char *name);
+ACGS_PORT float envLayer(const char *name);
 
 // Camera-space projection of a world point: lateral coordinates on the
 // camera basis plus the +Z-forward depth.  Equivalent to transforming by
@@ -59,14 +61,14 @@ struct CameraSpacePoint
     double depth;
 };
 
-CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
+ACGS_PORT CameraSpacePoint toCameraSpace(const glm::dvec3 &worldPosition,
                                const glm::dvec3 &cameraPosition,
                                const glm::dvec3 &cameraRight,
                                const glm::dvec3 &cameraUp,
                                const glm::dvec3 &cameraFront);
 
 // AcGiMaterial -> renderer surface-material translation.
-rendering::SurfaceMaterial toSurfaceMaterial(
+ACGS_PORT rendering::SurfaceMaterial toSurfaceMaterial(
     const acgs::AcGiMaterial &material);
 
 // Per-frame viewport state (ObjectARX: AcGsView + AcGsViewportData).
@@ -104,7 +106,7 @@ struct ViewFrameContext
     float meshTriplanar = 0.0f;
 };
 
-class AcGsView
+class ACGS_PORT AcGsView
 {
 public:
     // ObjectARX AcGsView is a first-class citizen created through the

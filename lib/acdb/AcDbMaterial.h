@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include <string>
@@ -12,7 +14,7 @@ namespace acdb
 // Field names and defaults follow vsg::AcDbMaterial.  The first implementation
 // packs metallic/roughness/emissive/alpha into mesh instance data, while these
 // fields remain the canonical authoring representation.
-struct AcDbMaterial
+struct ACDB_PORT AcDbMaterial
 {
     glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 emissiveFactor{0.0f, 0.0f, 0.0f, 1.0f};

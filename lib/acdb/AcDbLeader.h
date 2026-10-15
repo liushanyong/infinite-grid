@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbLeader (namespace acdb) — the LEADER entity, aligned with
 // ObjectARX AcDbLeader: a polyline (optionally fitted) from an arrowhead
 // to an annotation that lives as its own entity (MTEXT / AcDbFcf /
@@ -16,7 +18,7 @@
 namespace acdb
 {
 
-struct AcDbLeader
+struct ACDB_PORT AcDbLeader
 {
     AcDbEntity common;
     // Leader vertices in world coordinates; points[0] is the arrow end.

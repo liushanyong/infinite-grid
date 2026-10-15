@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -9,7 +11,7 @@
 
 // Source-level AcGe scale-vector subset aligned with the ObjectARX 2026
 // reference. Scale components are exposed as in the documented value types.
-struct AcGeScale2d
+struct ACGE_PORT AcGeScale2d
 {
     double sx = 1.0;
     double sy = 1.0;
@@ -26,12 +28,7 @@ struct AcGeScale2d
         sy = yScale;
         return *this;
     }
-    AcGeScale2d inverse() const
-    {
-        if (sx == 0.0 || sy == 0.0)
-            throw std::domain_error("Cannot invert a zero AcGeScale2d component.");
-        return {1.0 / sx, 1.0 / sy};
-    }
+    AcGeScale2d inverse() const;
     AcGeScale2d &invert()
     {
         *this = inverse();
@@ -88,7 +85,7 @@ struct AcGeScale2d
 
 inline const AcGeScale2d AcGeScale2d::kIdentity{1.0, 1.0};
 
-struct AcGeScale3d
+struct ACGE_PORT AcGeScale3d
 {
     double sx = 1.0;
     double sy = 1.0;
@@ -111,23 +108,13 @@ struct AcGeScale3d
         sz = zScale;
         return *this;
     }
-    AcGeScale3d inverse() const
-    {
-        if (sx == 0.0 || sy == 0.0 || sz == 0.0)
-            throw std::domain_error("Cannot invert a zero AcGeScale3d component.");
-        return {1.0 / sx, 1.0 / sy, 1.0 / sz};
-    }
+    AcGeScale3d inverse() const;
     AcGeScale3d &invert()
     {
         *this = inverse();
         return *this;
     }
-    AcGeMatrix3d getMatrix() const
-    {
-        AcGeMatrix3d result;
-        result.m = glm::scale(glm::dmat4(1.0), glm::dvec3(sx, sy, sz));
-        return result;
-    }
+    AcGeMatrix3d getMatrix() const;
     bool isEqualTo(const AcGeScale3d &other,
                    const AcGeTol &tol = AcGeTol{}) const
     {

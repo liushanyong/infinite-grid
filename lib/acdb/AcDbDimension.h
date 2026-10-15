@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbDimension family (namespace acdb), aligned with the ObjectARX
 // dimension class tree: one AcDbDimension common-annotation payload
 // embedded per concrete type, exactly like AcDbEntity rides along as
@@ -26,7 +28,7 @@ namespace acdb
 {
 
 // Shared annotation payload (ObjectARX: AcDbDimension accessors).
-struct AcDbDimension
+struct ACDB_PORT AcDbDimension
 {
     // Dimension text placement (DXF 11); empty when the text sits at the
     // dimension-line midpoint.
@@ -44,7 +46,7 @@ struct AcDbDimension
 
 // AcDbRotatedDimension (DXF/DWG DIMENSION_LINEAR): measures the distance
 // between two points along a rotated direction.
-struct AcDbRotatedDimension
+struct ACDB_PORT AcDbRotatedDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;
@@ -59,7 +61,7 @@ struct AcDbRotatedDimension
 
 // AcDbAlignedDimension (DIMENSION_ALIGNED): measures the true distance
 // between two points; the dimension line stays parallel to them.
-struct AcDbAlignedDimension
+struct ACDB_PORT AcDbAlignedDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;
@@ -72,7 +74,7 @@ struct AcDbAlignedDimension
 // AcDb2LineAngularDimension (DIMENSION_ANG2LN): angle between two lines,
 // each authored as a segment; the arc center is the lines' intersection
 // (DXF 10 carries it pre-computed).
-struct AcDb2LineAngularDimension
+struct ACDB_PORT AcDb2LineAngularDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;
@@ -86,7 +88,7 @@ struct AcDb2LineAngularDimension
 
 // AcDb3PointAngularDimension (DIMENSION_ANG3PT): angle at an explicit
 // center between two ray targets.
-struct AcDb3PointAngularDimension
+struct ACDB_PORT AcDb3PointAngularDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;
@@ -97,7 +99,7 @@ struct AcDb3PointAngularDimension
 
 // AcDbRadialDimension (DIMENSION_RADIUS): radius callout from the circle
 // center out to a point on the circle with a landing of leaderLength.
-struct AcDbRadialDimension
+struct ACDB_PORT AcDbRadialDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;
@@ -108,7 +110,7 @@ struct AcDbRadialDimension
 
 // AcDbDiametricDimension (DIMENSION_DIAMETER): a full chord through the
 // circle with arrows on both ends (DXF 10 = chord point, 15 = far point).
-struct AcDbDiametricDimension
+struct ACDB_PORT AcDbDiametricDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;
@@ -119,7 +121,7 @@ struct AcDbDiametricDimension
 
 // AcDbOrdinateDimension (DIMENSION_ORDINATE): X/Y datum coordinate of a
 // feature point with a jogged leader.
-struct AcDbOrdinateDimension
+struct ACDB_PORT AcDbOrdinateDimension
 {
     AcDbEntity common;
     AcDbDimension dimension;

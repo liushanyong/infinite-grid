@@ -4,6 +4,80 @@
 #include <cmath>
 #include <utility>
 
+bool AcGiWorldDraw::worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
+{
+    acdb::Stroke &stroke = sink().addStroke();
+    stroke.points = {apply(from), apply(to)};
+    applyTraits(stroke);
+    return true;
+}
+
+bool AcGiWorldDraw::worldPolyline(const AcGePoint3d *points, int count,
+                                  bool closed)
+{
+    if (!points || count < 2)
+        return false;
+    acdb::Stroke &stroke = sink().addStroke(closed);
+    stroke.points.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i)
+        stroke.points.push_back(apply(points[i]));
+    applyTraits(stroke);
+    return true;
+}
+
+bool AcGiWorldDraw::worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
+                                  const AcGePoint3d &c, bool fillIs3DFace)
+{
+    acdb::Triangle triangle{{}, apply(a), apply(b), apply(c)};
+    applyTraits(triangle, fillIs3DFace);
+    sink().appendTriangle(triangle);
+    return true;
+}
+
+bool AcGiWorldDraw::worldPoint(const AcGePoint3d &position,
+                               acge::PointDisplayStyle displayStyle)
+{
+    const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
+    acdb::TessellatedPoint point;
+    point.location = apply(position);
+    point.common = traits.toEntityCommon();
+    point.pointSize =
+        traits.lineWeight > 0.0 ? traits.lineWeight : 7.0;
+    point.displayStyle = displayStyle;
+    sink().appendPoint(point);
+    return true;
+}
+
+bool AcGiWorldDraw::worldInfiniteLine(const AcGePoint3d &start,
+                                      const AcGeVector3d &direction)
+{
+    const AcGeVector3d dir = direction.normal();
+    if (dir.lengthSq() <= 0.0)
+        return false;
+    constexpr double kProxyLength = 1.0e6;
+    acdb::Stroke &stroke = sink().addStroke(false);
+    stroke.points = {apply(start),
+                     apply(start + dir * kProxyLength)};
+    stroke.semiInfinite = true;
+    applyTraits(stroke);
+    return true;
+}
+
+void AcGiWorldDraw::applyTraits(acdb::Stroke &stroke) const
+{
+    const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
+    stroke.common = traits.toEntityCommon();
+    stroke.lineWeight = traits.lineWeight;
+}
+
+void AcGiWorldDraw::applyTraits(acdb::Triangle &triangle,
+                                bool fillIs3DFace) const
+{
+    const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
+    triangle.common = traits.toEntityCommon();
+    triangle.is3DFace = fillIs3DFace;
+}
+
 bool AcGiWorldDraw::worldCircle(const AcGeCircArc3d &arc)
 {
     const double sweep = arc.endAngle - arc.startAngle;

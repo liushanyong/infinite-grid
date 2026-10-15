@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include <string>
@@ -11,7 +13,7 @@
 namespace acdb
 {
 
-struct AcDbHatch
+struct ACDB_PORT AcDbHatch
 {
     AcDbEntity common;
     std::vector<AcGePoint3d> outerLoop;

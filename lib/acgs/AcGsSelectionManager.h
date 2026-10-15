@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGsPort.h"
+
 // AcGsSelectionManager — GPU-assisted selection bookkeeping, modeled on the
 // selection internals ObjectARX keeps inside AcGiManager: an entity-id
 // registry shared between the visible pass and the GPU ID pass, the
@@ -30,7 +32,7 @@ namespace acgs
 // discriminator; the three pointers carry whatever the application needs to
 // resolve the entity later (mesh record, tessellation range, curve command
 // — any may be null).
-struct AcGsPickEntity
+struct ACGS_PORT AcGsPickEntity
 {
     std::uint32_t kind = 0;
     const void *mesh = nullptr;
@@ -42,32 +44,18 @@ struct AcGsPickEntity
 };
 
 // Encode an entity id into the RGBA color the GPU ID pass writes.
-glm::vec4 encodeGpuPickId(std::uint32_t id);
+ACGS_PORT glm::vec4 encodeGpuPickId(std::uint32_t id);
 
 // Identity hash for the reverse entity->id lookup: the queue path
 // re-registers the same scene entities every frame, and ids must stay
 // stable across frames (the selection-outline uniform and the unified
 // pixel read resolve against the standing registry).
-struct AcGsPickEntityHash
+struct ACGS_PORT AcGsPickEntityHash
 {
-    std::size_t operator()(const AcGsPickEntity &entity) const
-    {
-        std::size_t hash = 0xcbf29ce484222325ull;
-        auto mix = [&hash](std::uintptr_t value)
-        {
-            hash ^= value + 0x9e3779b97f4a7c15ull +
-                    (hash << 6) + (hash >> 2);
-        };
-        mix(entity.kind);
-        mix(reinterpret_cast<std::uintptr_t>(entity.mesh));
-        mix(reinterpret_cast<std::uintptr_t>(entity.range));
-        mix(reinterpret_cast<std::uintptr_t>(entity.curve));
-        mix(reinterpret_cast<std::uintptr_t>(entity.text));
-        return hash;
-    }
+    std::size_t operator()(const AcGsPickEntity &entity) const;
 };
 
-class AcGsSelectionManager
+class ACGS_PORT AcGsSelectionManager
 {
 public:
     static AcGsSelectionManager &instance();

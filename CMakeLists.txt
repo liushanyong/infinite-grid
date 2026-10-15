@@ -96,15 +96,39 @@ target_include_directories(glm INTERFACE "${WINDOW_GLM_DIR}")
 # GLM uses some intrinsics; the upstream defaults are the right baseline.
 target_compile_definitions(glm INTERFACE GLM_FORCE_RADIANS)
 
-# AcGe's value-type implementation is predominantly header-only.  Its exact
-# geometric predicates provide the compiled kernel object in the static lib.
+# AcGe: value types keep small accessors inline; algorithm-bearing bodies
+# live in per-class translation units (declaration/definition split so the
+# lib can later be flipped to a DLL behind an export macro).
 add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/external/predicates/predicates.c"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGe2d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeBoundedPlane.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeBspline.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeBvh.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeConic.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCurve3d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCurves2d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeIntersect.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeIntersect3d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeInterval.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeLinear.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix2d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeNurbsCore.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeNurbsSpline.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeOctree.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeOffset.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGePoint.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGePolyline.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeProject.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeQBvh.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeQuadtree.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeQuaternion.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeScale.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeSurface3d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeTol.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeTriangle.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeUtil.cpp"
 )
 target_include_directories(acge PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acge PUBLIC glm::glm)
@@ -115,6 +139,8 @@ endif()
 add_library(acgi STATIC
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiWorldDraw.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextEngine.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiLineType.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextQueue.cpp"
     "${CMAKE_SOURCE_DIR}/lib/text/text_font.cpp"
     "${CMAKE_SOURCE_DIR}/lib/text/shx_parser.cpp"
 )
@@ -126,6 +152,8 @@ add_library(acgs STATIC
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsView.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsManager.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsSelectionManager.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgs/DocumentSceneBridge.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgs/EcsScene.cpp"
 )
 target_include_directories(acgs
     PUBLIC "${CMAKE_SOURCE_DIR}/lib"
@@ -140,12 +168,17 @@ target_link_libraries(acgs
 
 add_library(acdb STATIC
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDatabase.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDictionary.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbJson.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbStore.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbFileIo.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbLibredwgFileCodec.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbGltf.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransaction.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDwgBridge.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDwgWriteBridge.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTessellate.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbEntityWorldDraw.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransform.cpp"
 )
 target_include_directories(acdb PUBLIC "${CMAKE_SOURCE_DIR}/lib")
@@ -281,6 +314,9 @@ add_library(entt INTERFACE)
 target_include_directories(entt INTERFACE
     "${CMAKE_SOURCE_DIR}/lib/entt/include")
 target_link_libraries(WINDOW PRIVATE entt)
+# SceneStore (acgs/EcsScene) is compiled in the acgs target and includes
+# entt directly, so the header-only dependency must be visible here too.
+target_link_libraries(acgs PUBLIC entt)
 
 # ---------------------------------------------------------------------------
 # SQLiteCpp — MIT C++ wrapper over its bundled public-domain sqlite3

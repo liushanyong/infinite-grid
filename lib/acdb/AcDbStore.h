@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbStore (namespace acdb) — SQLite persistence for the drawing
 // document, backed by SQLiteCpp.  Layout follows the roadmap row
 // "存储：SQLite 索引 + 操作日志，不存 BLOB 快照":

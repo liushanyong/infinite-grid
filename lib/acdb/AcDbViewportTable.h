@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbViewportTable / AcDbViewTable (namespace acdb) — viewport and
 // named-view configuration as drawing data, aligned with ObjectARX:
 //
@@ -33,7 +35,7 @@ inline constexpr const char *kActiveViewportName = "*Active";
 
 // ---- AcDbAbstractViewTableRecord: fields shared by VPORT and VIEW ----
 
-class AcDbAbstractViewTableRecord : public AcDbSymbolTableRecord
+class ACDB_PORT AcDbAbstractViewTableRecord : public AcDbSymbolTableRecord
 {
 public:
     // View direction and aim point (ObjectARX: setViewDirection /
@@ -86,17 +88,17 @@ protected:
     AcGePoint2d upperRight_{1.0, 1.0};
 };
 
-struct AcDbViewportTableRecord : AcDbAbstractViewTableRecord
+struct ACDB_PORT AcDbViewportTableRecord : AcDbAbstractViewTableRecord
 {
 };
 
-struct AcDbViewTableRecord : AcDbAbstractViewTableRecord
+struct ACDB_PORT AcDbViewTableRecord : AcDbAbstractViewTableRecord
 {
 };
 
 // ---- containers (same shape as AcDbLayerTable) ----
 
-class AcDbViewportTable
+class ACDB_PORT AcDbViewportTable
 {
 public:
     const AcDbViewportTableRecord *get(const std::string &name) const;
@@ -116,7 +118,7 @@ private:
     std::unordered_map<std::string, AcDbViewportTableRecord> records_;
 };
 
-class AcDbViewTable
+class ACDB_PORT AcDbViewTable
 {
 public:
     const AcDbViewTableRecord *get(const std::string &name) const;

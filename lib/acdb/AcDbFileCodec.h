@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include "acdb/AcDbFileIo.h"
 
 namespace acdb
@@ -9,7 +11,7 @@ class AcDbDatabase;
 
 // Format codec boundary. Implementations own format-specific decoding,
 // encoding, and conversion between their document model and AcDbDatabase.
-class AcDbFileCodec
+class ACDB_PORT AcDbFileCodec
 {
 public:
     virtual ~AcDbFileCodec() = default;

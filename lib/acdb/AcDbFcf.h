@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbFcf (namespace acdb) — the TOLERANCE entity, aligned with
 // ObjectARX AcDbFcf ("feature control frame"): a boxed GD&T callout
 // whose text carries the AutoCAD formatting codes ({\f...;} font runs,
@@ -16,7 +18,7 @@
 namespace acdb
 {
 
-struct AcDbFcf
+struct ACDB_PORT AcDbFcf
 {
     AcDbEntity common;
     AcGePoint3d insertion{0.0, 0.0, 0.0};

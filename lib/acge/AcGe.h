@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 // Umbrella header for the AcGe-compatible geometry value-type layer.
 // Signatures follow the ObjectARX AcGe kernel (see ObjectARX docs,
 // "AcGe Overview"); the implementation is original and glm-interopable.

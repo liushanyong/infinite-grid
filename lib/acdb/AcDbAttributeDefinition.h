@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 // AcDbAttributeDefinition (namespace acdb) — the ATTDEF entity, aligned
 // with ObjectARX AcDbAttributeDefinition: the template that lives in a
 // block definition and stamps AcDbAttribute values onto INSERTs.  In the
@@ -16,7 +18,7 @@
 namespace acdb
 {
 
-struct AcDbAttributeDefinition
+struct ACDB_PORT AcDbAttributeDefinition
 {
     AcDbEntity common;
     AcGePoint3d insertion{0.0, 0.0, 0.0};

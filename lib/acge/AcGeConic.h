@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 #include <cmath>
 #include <stdexcept>
 
@@ -8,7 +10,7 @@
 namespace ge
 {
 
-class AcGeParabola2d
+class ACGE_PORT AcGeParabola2d
 {
 public:
     AcGePoint2d vertex{0.0, 0.0};
@@ -17,22 +19,9 @@ public:
 
     AcGeParabola2d() = default;
     AcGeParabola2d(const AcGePoint2d &parabolaVertex,
-                   const AcGeVector2d &axisDirection, double focalParameter)
-        : vertex(parabolaVertex), focalLength(std::abs(focalParameter))
-    {
-        setAxis(axisDirection);
-        if (focalLength == 0.0)
-            throw std::invalid_argument("Parabola focal length must be nonzero.");
-    }
+                   const AcGeVector2d &axisDirection, double focalParameter);
 
-    AcGeParabola2d &setAxis(const AcGeVector2d &direction)
-    {
-        const AcGeVector2d unit = direction.normal();
-        if (unit.isZeroLength())
-            throw std::invalid_argument("Parabola axis must be nonzero.");
-        axis = unit;
-        return *this;
-    }
+    AcGeParabola2d &setAxis(const AcGeVector2d &direction);
     AcGeVector2d sideAxis() const { return axis.perpVector(); }
     AcGePoint2d focus() const { return vertex + axis * focalLength; }
     AcGePoint2d pointAt(double parameter) const
@@ -56,7 +45,7 @@ public:
     }
 };
 
-class AcGeParabola3d
+class ACGE_PORT AcGeParabola3d
 {
 public:
     AcGePoint3d vertex{0.0, 0.0, 0.0};
@@ -67,26 +56,10 @@ public:
     AcGeParabola3d() = default;
     AcGeParabola3d(const AcGePoint3d &parabolaVertex,
                    const AcGeVector3d &axisDirection,
-                   const AcGeVector3d &planeNormal, double focalParameter)
-        : vertex(parabolaVertex), focalLength(std::abs(focalParameter))
-    {
-        setFrame(axisDirection, planeNormal);
-        if (focalLength == 0.0)
-            throw std::invalid_argument("Parabola focal length must be nonzero.");
-    }
+                   const AcGeVector3d &planeNormal, double focalParameter);
 
     AcGeParabola3d &setFrame(const AcGeVector3d &axisDirection,
-                             const AcGeVector3d &planeNormal)
-    {
-        normal = planeNormal.normal();
-        if (normal.isZeroLength())
-            throw std::invalid_argument("Parabola plane normal must be nonzero.");
-        axis = axisDirection - normal * axisDirection.dotProduct(normal);
-        axis.normalize();
-        if (axis.isZeroLength())
-            throw std::invalid_argument("Parabola axis must lie in its plane.");
-        return *this;
-    }
+                             const AcGeVector3d &planeNormal);
     AcGeVector3d sideAxis() const { return normal.crossProduct(axis).normal(); }
     AcGePoint3d focus() const { return vertex + axis * focalLength; }
     AcGePoint3d pointAt(double parameter) const
@@ -112,7 +85,7 @@ public:
     }
 };
 
-class AcGeHyperbola2d
+class ACGE_PORT AcGeHyperbola2d
 {
 public:
     AcGePoint2d center{0.0, 0.0};
@@ -127,28 +100,10 @@ public:
                     const AcGeVector2d &majorDirection,
                     const AcGeVector2d &minorDirection,
                     double semiMajorRadius, double semiMinorRadius,
-                    int branchSign = 1)
-        : center(hyperbolaCenter), majorRadius(std::abs(semiMajorRadius)),
-          minorRadius(std::abs(semiMinorRadius)), branch(branchSign < 0 ? -1 : 1)
-    {
-        setAxes(majorDirection, minorDirection);
-        if (majorRadius == 0.0 || minorRadius == 0.0)
-            throw std::invalid_argument("Hyperbola radii must be nonzero.");
-    }
+                    int branchSign = 1);
 
     AcGeHyperbola2d &setAxes(const AcGeVector2d &majorDirection,
-                             const AcGeVector2d &minorDirection)
-    {
-        majorAxis = majorDirection.normal();
-        if (majorAxis.isZeroLength())
-            throw std::invalid_argument("Hyperbola major axis must be nonzero.");
-        minorAxis = minorDirection -
-                    majorAxis * minorDirection.dotProduct(majorAxis);
-        minorAxis.normalize();
-        if (minorAxis.isZeroLength())
-            throw std::invalid_argument("Hyperbola axes must not be parallel.");
-        return *this;
-    }
+                             const AcGeVector2d &minorDirection);
     AcGePoint2d pointAt(double parameter) const
     {
         return center + majorAxis * (branch * majorRadius * std::cosh(parameter)) +
@@ -170,7 +125,7 @@ public:
     }
 };
 
-class AcGeHyperbola3d
+class ACGE_PORT AcGeHyperbola3d
 {
 public:
     AcGePoint3d center{0.0, 0.0, 0.0};
@@ -185,28 +140,10 @@ public:
                     const AcGeVector3d &majorDirection,
                     const AcGeVector3d &planeNormal,
                     double semiMajorRadius, double semiMinorRadius,
-                    int branchSign = 1)
-        : center(hyperbolaCenter), majorRadius(std::abs(semiMajorRadius)),
-          minorRadius(std::abs(semiMinorRadius)), branch(branchSign < 0 ? -1 : 1)
-    {
-        setFrame(majorDirection, planeNormal);
-        if (majorRadius == 0.0 || minorRadius == 0.0)
-            throw std::invalid_argument("Hyperbola radii must be nonzero.");
-    }
+                    int branchSign = 1);
 
     AcGeHyperbola3d &setFrame(const AcGeVector3d &majorDirection,
-                              const AcGeVector3d &planeNormal)
-    {
-        normal = planeNormal.normal();
-        if (normal.isZeroLength())
-            throw std::invalid_argument("Hyperbola plane normal must be nonzero.");
-        majorAxis =
-            majorDirection - normal * majorDirection.dotProduct(normal);
-        majorAxis.normalize();
-        if (majorAxis.isZeroLength())
-            throw std::invalid_argument("Hyperbola major axis must lie in its plane.");
-        return *this;
-    }
+                              const AcGeVector3d &planeNormal);
     AcGeVector3d minorAxis() const
     {
         return normal.crossProduct(majorAxis).normal();

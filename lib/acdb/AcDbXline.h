@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include "../acge/AcGe.h"
@@ -10,7 +12,7 @@ namespace acdb
 
 // The construction line extends without bound from the point in both
 // directions.
-struct AcDbXline
+struct ACDB_PORT AcDbXline
 {
     AcDbEntity common;
     AcGePoint3d point{0.0, 0.0, 0.0};

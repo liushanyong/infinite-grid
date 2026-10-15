@@ -1,6 +1,8 @@
 #ifndef ACGS_ORBIT_CAMERA_H
 #define ACGS_ORBIT_CAMERA_H
 
+#include "AcGsPort.h"
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -13,7 +15,7 @@
 // OpenCADStudio-style camera in Z-up convention.  Target/Rotation/Distance
 // are authoritative; Position and the screen basis are derived so navigation
 // cannot desynchronize.
-class AcGsOrbitCamera
+class ACGS_PORT AcGsOrbitCamera
 {
 public:
   glm::dquat Rotation; // columns are right, up, eye direction
@@ -52,38 +54,13 @@ public:
     return Distance * std::tan(glm::radians((double)Zoom) * 0.5);
   }
 
-  glm::mat4 getViewMatrix(const glm::dvec3 &rebaseOrigin) const
-  {
-    // VSG "double all the way": compute the lookAt matrix entirely in
-    // double precision, converting to float only at the final return.
-    // The basis vectors (Front, Up) are already glm::dvec3.
-    const glm::dvec3 eyeRelative = Position - rebaseOrigin;
-    const glm::dmat4 viewDouble = glm::lookAt(
-        eyeRelative,
-        eyeRelative + Front,
-        Up);
-    return glm::mat4(viewDouble);
-  }
+  glm::mat4 getViewMatrix(const glm::dvec3 &rebaseOrigin) const;
 
   // Strict RTE view basis: the GPU matrix contains rotation only.  Large
   // eye/target translations never enter the f32 view matrix; positions are
   // supplied relative to the eye (or split into high/low and subtracted in
   // shader).  This matches OpenCADStudio's view_proj_rte invariant.
-  glm::mat4 getViewRotationMatrix() const
-  {
-    const glm::dvec3 forward = -glm::normalize(
-        Rotation * glm::dvec3(0.0, 0.0, 1.0));
-    const glm::dvec3 up = glm::normalize(
-        Rotation * glm::dvec3(0.0, 1.0, 0.0));
-
-    // Build the basis exactly like the reference implementation: look from
-    // the origin toward the eye direction and then force the translation
-    // column to zero.  This is guaranteed to match the old lookAt basis.
-    glm::dmat4 viewDouble = glm::lookAt(
-        glm::dvec3(0.0), forward, up);
-    viewDouble[3] = glm::dvec4(0.0, 0.0, 0.0, 1.0);
-    return glm::mat4(viewDouble);
-  }
+  glm::mat4 getViewRotationMatrix() const;
 
   // Port of Camera::orbit (Z-up turntable).  Horizontal drag rotates around
   // world +Z; vertical drag rotates around the camera's current right axis.
@@ -101,18 +78,7 @@ public:
   void zoomAboutPoint(float delta, double ndcX, double ndcY, double aspect);
 
   // Port of Camera::pan_screen.
-  void panScreen(float deltaX, float deltaY, float viewportHeight)
-  {
-    if (viewportHeight <= 0.0f)
-      return;
-
-    const double worldPerPixel = (2.0 * orthoSize()) / (double)viewportHeight;
-    const glm::dvec3 &cameraRight = Right;
-    const glm::dvec3 &cameraUp = Up;
-    Target -= cameraRight * ((double)deltaX * worldPerPixel);
-    Target += cameraUp * ((double)deltaY * worldPerPixel);
-    syncDerivedState();
-  }
+  void panScreen(float deltaX, float deltaY, float viewportHeight);
 
   void setTarget(const glm::dvec3 &newTarget)
   {
@@ -183,14 +149,7 @@ public:
                            const glm::dvec3 &maximum) const;
 
   // Re-derive depth from live orientation, matching Camera::ortho_depth_range.
-  double orthoDepthRadius() const
-  {
-    if (ModelMinimum && ModelMaximum)
-      return depthExtentInView(*ModelMinimum, *ModelMaximum);
-    if (DepthHalfRange > 0.0)
-      return std::max(10.0, DepthHalfRange);
-    return std::max(10.0, Distance * 1000.0);
-  }
+  double orthoDepthRadius() const;
 
 private:
   void syncDerivedState();

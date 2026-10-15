@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include <vector>
@@ -10,7 +12,7 @@
 namespace acdb
 {
 
-struct AcDbSpline
+struct ACDB_PORT AcDbSpline
 {
     AcDbEntity common;
     int degree = 3;

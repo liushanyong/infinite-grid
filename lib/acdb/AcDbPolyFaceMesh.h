@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcDbPort.h"
+
 #include <glm/glm.hpp>
 
 #include <vector>
@@ -10,7 +12,7 @@
 namespace acdb
 {
 
-struct AcDbPolyFaceMeshGeometry
+struct ACDB_PORT AcDbPolyFaceMeshGeometry
 {
     // CPU authoring geometry remains double precision so tessellated CAD
     // picking and large-coordinate fills use the same world positions.
@@ -22,7 +24,7 @@ struct AcDbPolyFaceMeshGeometry
     std::vector<std::uint32_t> indices;
 };
 
-struct AcDbPolyFaceMesh
+struct ACDB_PORT AcDbPolyFaceMesh
 {
     AcDbEntity common;
     AcDbPolyFaceMeshGeometry geometry;
