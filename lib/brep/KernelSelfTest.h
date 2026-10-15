@@ -15,6 +15,7 @@
 #include "ge/geboundedplane.h"
 #include "ge/geinterval.h"
 #include "ge/geintersect3d.h"
+#include "ge/gecurve3d.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
 #include "ge/gequaternion.h"
@@ -143,6 +144,32 @@ inline int runKernelSelfTest()
                   tangentSphere[0].isEqualTo({0.0, 1.0, 0.0}) &&
                   beforeSphere.empty(),
               "3D line, ray, and segment sphere crossing and tangency");
+    }
+
+    // ---------------- 3D circles and ellipse aliases ----------------
+    {
+        const AcGeCircle3d circle{{1.0, 2.0, 3.0},
+                                 {0.0, 0.0, 5.0}, -2.0};
+        AcGePlane plane;
+        circle.getPlane(plane);
+        const AcGeEllipse2d ellipse2d{
+            {0.0, 0.0}, {1.0, 0.0}, {0.0, 1.0}, 3.0, 2.0};
+        const AcGeEllipse3d ellipse3d{
+            {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
+            {0.0, 0.0, 1.0}, 2.0};
+        check(circle.radius == 2.0 &&
+                 circle.pointAt(0.0).isEqualTo({3.0, 2.0, 3.0}) &&
+                 circle.isOn({1.0, 4.0, 3.0}) &&
+                 circle.contains({1.0, 3.0, 3.0}) &&
+                 !circle.contains({1.0, 2.0, 4.0}) &&
+                 circle.closestPointTo({1.0, 2.0, 8.0})
+                     .isEqualTo({3.0, 2.0, 3.0}) &&
+                 std::abs(circle.circumference() -
+                          12.566370614359172) < 1.0e-12 &&
+                 plane.normal().isEqualTo(AcGeVector3d::kZAxis) &&
+                 ellipse2d.pointAt(0.0).isEqualTo({3.0, 0.0}) &&
+                 ellipse3d.pointAt(0.0).isEqualTo({3.0, 0.0, 0.0}),
+              "3D circle evaluation, membership, and ellipse naming aliases");
     }
 
     // ---------------- triangle and indexed mesh geometry ----------------

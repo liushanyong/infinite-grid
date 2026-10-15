@@ -228,6 +228,99 @@ struct AcGeCircArc3d
     }
 };
 
+struct AcGeCircle3d
+{
+    AcGePoint3d center{0.0, 0.0, 0.0};
+    AcGeVector3d normal{0.0, 0.0, 1.0};
+    double radius = 1.0;
+
+    AcGeCircle3d() = default;
+    AcGeCircle3d(const AcGePoint3d &circleCenter,
+                 const AcGeVector3d &circleNormal, double circleRadius)
+        : center(circleCenter), normal(circleNormal),
+          radius(std::abs(circleRadius))
+    {
+    }
+
+    AcGeCircle3d &set(const AcGePoint3d &circleCenter,
+                      const AcGeVector3d &circleNormal, double circleRadius)
+    {
+        center = circleCenter;
+        normal = circleNormal;
+        radius = std::abs(circleRadius);
+        return *this;
+    }
+    AcGeCircle3d &setCenter(const AcGePoint3d &circleCenter)
+    {
+        center = circleCenter;
+        return *this;
+    }
+    AcGeCircle3d &setNormal(const AcGeVector3d &circleNormal)
+    {
+        normal = circleNormal;
+        return *this;
+    }
+    AcGeCircle3d &setRadius(double circleRadius)
+    {
+        radius = std::abs(circleRadius);
+        return *this;
+    }
+
+    AcGePoint3d pointAt(double angle) const
+    {
+        return AcGeCircArc3d{center, normal, radius}.pointAt(angle);
+    }
+    AcGeVector3d referenceAxis() const
+    {
+        return AcGeCircArc3d{center, normal, radius}.referenceAxis();
+    }
+    AcGePoint3d closestPointTo(const AcGePoint3d &point) const
+    {
+        const AcGeVector3d unitNormal = normal.normal();
+        if (unitNormal.isZeroLength())
+            return center;
+        const AcGeVector3d offset = point - center;
+        const AcGeVector3d radial =
+            offset - unitNormal * offset.dotProduct(unitNormal);
+        const AcGeVector3d direction =
+            radial.isZeroLength() ? referenceAxis() : radial.normal();
+        return center + direction * radius;
+    }
+
+    void getPlane(AcGePlane &plane) const
+    {
+        plane.set(center, normal);
+    }
+    double circumference() const
+    {
+        return 6.2831853071795864769 * radius;
+    }
+    double area() const
+    {
+        return 3.14159265358979323846 * radius * radius;
+    }
+    bool isOn(const AcGePoint3d &point,
+              const AcGeTol &tol = AcGeTol{}) const
+    {
+        const AcGeVector3d unitNormal = normal.normal();
+        if (unitNormal.isZeroLength(tol))
+            return false;
+        const AcGeVector3d offset = point - center;
+        return std::abs(offset.dotProduct(unitNormal)) <= tol.equalPoint() &&
+               std::abs(offset.length() - radius) <= tol.equalPoint();
+    }
+    bool contains(const AcGePoint3d &point,
+                  const AcGeTol &tol = AcGeTol{}) const
+    {
+        const AcGeVector3d unitNormal = normal.normal();
+        if (unitNormal.isZeroLength(tol))
+            return false;
+        const AcGeVector3d offset = point - center;
+        return std::abs(offset.dotProduct(unitNormal)) <= tol.equalPoint() &&
+               offset.length() <= radius + tol.equalPoint();
+    }
+};
+
 struct AcGeEllipArc3d
 {
     AcGePoint3d center{0.0, 0.0, 0.0};
@@ -349,3 +442,4 @@ struct AcGeEllipArc3d
 };
 
 using AcGeEllip3d = AcGeEllipArc3d;
+using AcGeEllipse3d = AcGeEllipArc3d;

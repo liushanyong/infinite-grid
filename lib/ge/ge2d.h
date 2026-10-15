@@ -441,6 +441,9 @@ public:
     }
 };
 
+using AcGeEllip2d = AcGeEllipArc2d;
+using AcGeEllipse2d = AcGeEllipArc2d;
+
 namespace ge
 {
 
