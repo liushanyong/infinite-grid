@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "gepredicates.h"
 #include "gepoint.h"
 
 // Source-level AcGe polyline subset. Parameters are segment indices with a
@@ -304,6 +305,93 @@ public:
                 inside = !inside;
         }
         return inside;
+    }
+};
+
+struct AcGeConvexHull2d
+{
+private:
+    std::vector<AcGePoint2d> m_vertices;
+
+public:
+    AcGeConvexHull2d() = default;
+    explicit AcGeConvexHull2d(const std::vector<AcGePoint2d> &points,
+                              const AcGeTol &tol = AcGeTol{})
+    {
+        setPoints(points, tol);
+    }
+
+    AcGeConvexHull2d &setPoints(const std::vector<AcGePoint2d> &points,
+                                const AcGeTol &tol = AcGeTol{})
+    {
+        const double pointTolerance = std::abs(tol.equalPoint());
+        if (!std::isfinite(pointTolerance))
+            throw std::invalid_argument(
+                "AcGeConvexHull2d tolerance must be finite.");
+
+        std::vector<AcGePoint2d> sorted = points;
+        for (const AcGePoint2d &point : sorted)
+        {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                throw std::invalid_argument(
+                    "AcGeConvexHull2d points must have finite coordinates.");
+        }
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const AcGePoint2d &a, const AcGePoint2d &b) {
+                      return a.x < b.x || (a.x == b.x && a.y < b.y);
+                  });
+
+        std::vector<AcGePoint2d> unique;
+        unique.reserve(sorted.size());
+        for (const AcGePoint2d &point : sorted)
+        {
+            if (unique.empty() ||
+                point.distanceTo(unique.back()) > pointTolerance)
+                unique.push_back(point);
+        }
+        if (unique.size() <= 2)
+        {
+            m_vertices = std::move(unique);
+            return *this;
+        }
+
+        std::vector<AcGePoint2d> lower;
+        std::vector<AcGePoint2d> upper;
+        lower.reserve(unique.size());
+        upper.reserve(unique.size());
+        for (const AcGePoint2d &point : unique)
+        {
+            while (lower.size() >= 2 &&
+                   ge::orient2d(lower[lower.size() - 2], lower.back(),
+                                point) <= 0.0)
+                lower.pop_back();
+            lower.push_back(point);
+        }
+        for (auto point = unique.rbegin(); point != unique.rend(); ++point)
+        {
+            while (upper.size() >= 2 &&
+                   ge::orient2d(upper[upper.size() - 2], upper.back(),
+                                *point) <= 0.0)
+                upper.pop_back();
+            upper.push_back(*point);
+        }
+        lower.pop_back();
+        upper.pop_back();
+        lower.insert(lower.end(), upper.begin(), upper.end());
+        m_vertices = std::move(lower);
+        return *this;
+    }
+
+    std::size_t numVerts() const { return m_vertices.size(); }
+    bool isEmpty() const { return m_vertices.empty(); }
+    const std::vector<AcGePoint2d> &vertices() const { return m_vertices; }
+
+    AcGePolygon2d polygon() const { return AcGePolygon2d(m_vertices); }
+    double area() const { return polygon().area(); }
+    bool contains(const AcGePoint2d &point,
+                  const AcGeTol &tol = AcGeTol{}) const
+    {
+        return polygon().contains(point, tol);
     }
 };
 
