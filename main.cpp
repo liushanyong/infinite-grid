@@ -28,8 +28,8 @@
 #include "acgs/model/DrawContext.h"
 #include "acgs/model/AcGsModel.h"
 #include "acgs/model/AcGsDocumentReplayer.h"
-#include "ge/gebvh.h"
-#include "ge/gepoint.h"
+#include "acge/AcGeBvh.h"
+#include "acge/AcGePoint.h"
 #include "rendering/RenderTypes.h"
 #include "rendering/ProceduralMesh.h"
 #include <iostream>

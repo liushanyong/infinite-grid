@@ -11,7 +11,7 @@
 #include <cmath>
 #include <type_traits>
 
-#include "getol.h"
+#include "AcGeTol.h"
 
 struct AcGeMatrix2d;
 

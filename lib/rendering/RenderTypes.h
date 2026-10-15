@@ -11,7 +11,7 @@
 
 #include <glm/glm.hpp>
 
-#include "ge/gepoint.h"
+#include "acge/AcGePoint.h"
 #include "RenderMode.h"
 
 namespace rendering

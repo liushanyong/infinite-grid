@@ -13,8 +13,8 @@
 
 #include <stdexcept>
 
-#include "gelinear.h"
-#include "gepoint.h"
+#include "AcGeLinear.h"
+#include "AcGePoint.h"
 
 struct AcGeMatrix3d
 {
@@ -94,21 +94,10 @@ struct AcGeMatrix3d
 };
 
 // Point/vector transformBy so entity code can apply matrices like ObjectARX.
-inline AcGePoint3d transformBy(const AcGePoint3d &point,
-                               const AcGeMatrix3d &matrix)
-{
-    const glm::dvec4 transformed =
-        matrix.m * glm::dvec4(glm::dvec3(point), 1.0);
-    return AcGePoint3d(transformed.x / transformed.w, transformed.y / transformed.w,
-                       transformed.z / transformed.w);
-}
-
-inline AcGeVector3d transformBy(const AcGeVector3d &vector,
-                                const AcGeMatrix3d &matrix)
-{
-    const glm::dvec4 transformed = matrix.m * glm::dvec4(glm::dvec3(vector), 0.0);
-    return AcGeVector3d(transformed.x, transformed.y, transformed.z);
-}
+AcGePoint3d transformBy(const AcGePoint3d &point,
+                        const AcGeMatrix3d &matrix);
+AcGeVector3d transformBy(const AcGeVector3d &vector,
+                         const AcGeMatrix3d &matrix);
 
 struct AcGePlane
 {

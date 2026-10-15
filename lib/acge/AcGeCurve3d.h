@@ -11,8 +11,8 @@
 
 #include <glm/glm.hpp>
 
-#include "gematrix.h"
-#include "gepoint.h"
+#include "AcGeMatrix.h"
+#include "AcGePoint.h"
 
 struct AcGeLineSeg3d
 {

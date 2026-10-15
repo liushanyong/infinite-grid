@@ -8,8 +8,8 @@
 #include <cstddef>
 #include <vector>
 
-#include "gepoint.h"
-#include "getol.h"
+#include "AcGePoint.h"
+#include "AcGeTol.h"
 
 struct AcGeBoundBlock2d
 {

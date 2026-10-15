@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "acdb/AcDbCore.h"
-#include "ge/gematrix.h"
+#include "acge/AcGeMatrix.h"
 
 namespace acdb
 {

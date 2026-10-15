@@ -30,7 +30,7 @@
 #include <vector>
 
 #include "acdb/AcDbCore.h"
-#include "ge/gepoint.h"
+#include "acge/AcGePoint.h"
 
 namespace acdb
 {

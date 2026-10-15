@@ -6,11 +6,11 @@
 #include <optional>
 #include <vector>
 
-#include "gecurve3d.h"
-#include "gematrix.h"
-#include "gelinear.h"
-#include "gesurface3d.h"
-#include "getriangle.h"
+#include "AcGeCurve3d.h"
+#include "AcGeMatrix.h"
+#include "AcGeLinear.h"
+#include "AcGeSurface3d.h"
+#include "AcGeTriangle.h"
 
 namespace ge
 {

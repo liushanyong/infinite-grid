@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "gepoint.h"
+#include "AcGePoint.h"
 
 // Source-level AcGe linear entity subset: infinite lines and rays in 2D/3D.
 // Directions are not implicitly normalized; parameters use the supplied vector.

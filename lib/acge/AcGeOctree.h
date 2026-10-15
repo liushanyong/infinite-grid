@@ -17,7 +17,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "gepoint.h"
+#include "AcGePoint.h"
 
 namespace ge
 {

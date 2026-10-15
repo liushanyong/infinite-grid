@@ -19,7 +19,7 @@
 
 #include <string>
 
-#include "../ge/ge.h"
+#include "../acge/AcGe.h"
 #include "acdb/AcDbCore.h"
 
 namespace acdb

@@ -4,8 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "gematrix2d.h"
-#include "gematrix.h"
+#include "AcGeMatrix2d.h"
+#include "AcGeMatrix.h"
 
 // Source-level AcGe scale-vector subset aligned with the ObjectARX 2026
 // reference. Scale components are exposed as in the documented value types.
