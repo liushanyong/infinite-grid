@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 // Robust geometric predicates (namespace ge) — thin wrappers over
 // Shewchuk's adaptive exact-sign arithmetic (external/predicates, public
 // domain).  orient2d/orient3d return the exact sign of the point

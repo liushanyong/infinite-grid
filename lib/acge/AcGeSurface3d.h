@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -7,7 +9,7 @@
 #include "AcGeInterval.h"
 
 // Source-level AcGeSphere subset for a spherical surface or angular segment.
-struct AcGeSphere
+struct ACGE_PORT AcGeSphere
 {
 private:
     double m_radius = 1.0;
@@ -19,18 +21,7 @@ private:
     double m_startAngleV = -1.5707963267948966192;
     double m_endAngleV = 1.5707963267948966192;
 
-    void setFrame(const AcGeVector3d &north, const AcGeVector3d &reference)
-    {
-        m_northAxis = north.normal();
-        if (m_northAxis.isZeroLength())
-            m_northAxis = AcGeVector3d::kZAxis;
-
-        m_refAxis = reference -
-                    m_northAxis * reference.dotProduct(m_northAxis);
-        if (m_refAxis.isZeroLength())
-            m_refAxis = m_northAxis.perpVector();
-        m_refAxis.normalize();
-    }
+    void setFrame(const AcGeVector3d &north, const AcGeVector3d &reference);
 
 public:
     AcGeSphere() = default;
@@ -40,41 +31,13 @@ public:
     }
     AcGeSphere(double radius, const AcGePoint3d &center,
                const AcGeVector3d &northAxis, const AcGeVector3d &refAxis,
-               double startU, double endU, double startV, double endV)
-        : m_radius(std::abs(radius)), m_center(center),
-          m_startAngleU(startU), m_endAngleU(endU),
-          m_startAngleV(startV), m_endAngleV(endV)
-    {
-        setFrame(northAxis, refAxis);
-    }
+               double startU, double endU, double startV, double endV);
 
-    AcGeSphere &set(double radius, const AcGePoint3d &center)
-    {
-        m_radius = std::abs(radius);
-        m_center = center;
-        m_northAxis = AcGeVector3d::kZAxis;
-        m_refAxis = AcGeVector3d::kXAxis;
-        m_startAngleU = 0.0;
-        m_endAngleU = 6.2831853071795864769;
-        m_startAngleV = -1.5707963267948966192;
-        m_endAngleV = 1.5707963267948966192;
-        return *this;
-    }
-
+    AcGeSphere &set(double radius, const AcGePoint3d &center);
     AcGeSphere &set(double radius, const AcGePoint3d &center,
                     const AcGeVector3d &northAxis,
                     const AcGeVector3d &refAxis, double startU, double endU,
-                    double startV, double endV)
-    {
-        m_radius = std::abs(radius);
-        m_center = center;
-        setFrame(northAxis, refAxis);
-        m_startAngleU = startU;
-        m_endAngleU = endU;
-        m_startAngleV = startV;
-        m_endAngleV = endV;
-        return *this;
-    }
+                    double startV, double endV);
 
     double radius() const { return m_radius; }
     AcGePoint3d center() const { return m_center; }
@@ -117,17 +80,7 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double u, double v) const
-    {
-        const AcGeVector3d sideAxis =
-            m_northAxis.crossProduct(m_refAxis).normal();
-        const double cosV = std::cos(v);
-        const AcGeVector3d radial =
-            m_refAxis * (cosV * std::cos(u)) +
-            sideAxis * (cosV * std::sin(u)) +
-            m_northAxis * std::sin(v);
-        return m_center + radial * m_radius;
-    }
+    AcGePoint3d pointAt(double u, double v) const;
 
     AcGeVector3d normalAt(double u, double v) const
     {
@@ -145,7 +98,7 @@ public:
     }
 };
 
-struct AcGeCylinder
+struct ACGE_PORT AcGeCylinder
 {
 private:
     double m_radius = 1.0;
@@ -156,60 +109,23 @@ private:
     double m_startAngle = 0.0;
     double m_endAngle = 6.2831853071795864769;
 
-    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference)
-    {
-        m_axis = axis.normal();
-        if (m_axis.isZeroLength())
-            m_axis = AcGeVector3d::kZAxis;
-
-        m_refAxis = reference - m_axis * reference.dotProduct(m_axis);
-        if (m_refAxis.isZeroLength())
-            m_refAxis = m_axis.perpVector();
-        m_refAxis.normalize();
-    }
+    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference);
 
 public:
     AcGeCylinder() = default;
     AcGeCylinder(double radius, const AcGePoint3d &origin,
-                 const AcGeVector3d &axis)
-        : m_radius(std::abs(radius)), m_origin(origin)
-    {
-        setFrame(axis, axis.perpVector());
-    }
+                 const AcGeVector3d &axis);
     AcGeCylinder(double radius, const AcGePoint3d &origin,
                  const AcGeVector3d &axis, const AcGeVector3d &refAxis,
                  const AcGeInterval &height, double startAngle,
-                 double endAngle)
-        : m_radius(std::abs(radius)), m_origin(origin), m_height(height),
-          m_startAngle(startAngle), m_endAngle(endAngle)
-    {
-        setFrame(axis, refAxis);
-    }
+                 double endAngle);
 
     AcGeCylinder &set(double radius, const AcGePoint3d &origin,
-                      const AcGeVector3d &axis)
-    {
-        m_radius = std::abs(radius);
-        m_origin = origin;
-        setFrame(axis, axis.perpVector());
-        m_height.set();
-        m_startAngle = 0.0;
-        m_endAngle = 6.2831853071795864769;
-        return *this;
-    }
+                      const AcGeVector3d &axis);
     AcGeCylinder &set(double radius, const AcGePoint3d &origin,
                       const AcGeVector3d &axis, const AcGeVector3d &refAxis,
                       const AcGeInterval &height, double startAngle,
-                      double endAngle)
-    {
-        m_radius = std::abs(radius);
-        m_origin = origin;
-        setFrame(axis, refAxis);
-        m_height = height;
-        m_startAngle = startAngle;
-        m_endAngle = endAngle;
-        return *this;
-    }
+                      double endAngle);
 
     double radius() const { return m_radius; }
     AcGePoint3d origin() const { return m_origin; }
@@ -238,19 +154,8 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double angle, double height) const
-    {
-        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
-        const AcGeVector3d radial =
-            m_refAxis * std::cos(angle) + sideAxis * std::sin(angle);
-        return m_origin + m_axis * height + radial * m_radius;
-    }
-    AcGeVector3d normalAt(double angle, double) const
-    {
-        return (m_refAxis * std::cos(angle) +
-                m_axis.crossProduct(m_refAxis) * std::sin(angle))
-            .normal();
-    }
+    AcGePoint3d pointAt(double angle, double height) const;
+    AcGeVector3d normalAt(double angle, double) const;
     bool isClosed(const AcGeTol &tol = AcGeTol{}) const
     {
         constexpr double twoPi = 6.2831853071795864769;
@@ -259,7 +164,7 @@ public:
     }
 };
 
-struct AcGeTorus
+struct ACGE_PORT AcGeTorus
 {
 private:
     double m_majorRadius = 2.0;
@@ -272,67 +177,23 @@ private:
     double m_startAngleV = 0.0;
     double m_endAngleV = 6.2831853071795864769;
 
-    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference)
-    {
-        m_axis = axis.normal();
-        if (m_axis.isZeroLength())
-            m_axis = AcGeVector3d::kZAxis;
-
-        m_refAxis = reference - m_axis * reference.dotProduct(m_axis);
-        if (m_refAxis.isZeroLength())
-            m_refAxis = m_axis.perpVector();
-        m_refAxis.normalize();
-    }
+    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference);
 
 public:
     AcGeTorus() = default;
     AcGeTorus(double majorRadius, double minorRadius,
-              const AcGePoint3d &center, const AcGeVector3d &axis)
-        : m_majorRadius(std::abs(majorRadius)),
-          m_minorRadius(std::abs(minorRadius)), m_center(center)
-    {
-        setFrame(axis, axis.perpVector());
-    }
+              const AcGePoint3d &center, const AcGeVector3d &axis);
     AcGeTorus(double majorRadius, double minorRadius,
               const AcGePoint3d &center, const AcGeVector3d &axis,
               const AcGeVector3d &refAxis, double startU, double endU,
-              double startV, double endV)
-        : m_majorRadius(std::abs(majorRadius)),
-          m_minorRadius(std::abs(minorRadius)), m_center(center),
-          m_startAngleU(startU), m_endAngleU(endU),
-          m_startAngleV(startV), m_endAngleV(endV)
-    {
-        setFrame(axis, refAxis);
-    }
+              double startV, double endV);
 
     AcGeTorus &set(double majorRadius, double minorRadius,
-                   const AcGePoint3d &center, const AcGeVector3d &axis)
-    {
-        m_majorRadius = std::abs(majorRadius);
-        m_minorRadius = std::abs(minorRadius);
-        m_center = center;
-        setFrame(axis, axis.perpVector());
-        m_startAngleU = 0.0;
-        m_endAngleU = 6.2831853071795864769;
-        m_startAngleV = 0.0;
-        m_endAngleV = 6.2831853071795864769;
-        return *this;
-    }
+                   const AcGePoint3d &center, const AcGeVector3d &axis);
     AcGeTorus &set(double majorRadius, double minorRadius,
                    const AcGePoint3d &center, const AcGeVector3d &axis,
                    const AcGeVector3d &refAxis, double startU, double endU,
-                   double startV, double endV)
-    {
-        m_majorRadius = std::abs(majorRadius);
-        m_minorRadius = std::abs(minorRadius);
-        m_center = center;
-        setFrame(axis, refAxis);
-        m_startAngleU = startU;
-        m_endAngleU = endU;
-        m_startAngleV = startV;
-        m_endAngleV = endV;
-        return *this;
-    }
+                   double startV, double endV);
 
     double majorRadius() const { return m_majorRadius; }
     double minorRadius() const { return m_minorRadius; }
@@ -372,22 +233,8 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double u, double v) const
-    {
-        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
-        const AcGeVector3d radial =
-            m_refAxis * std::cos(u) + sideAxis * std::sin(u);
-        const double ringRadius = m_majorRadius + m_minorRadius * std::cos(v);
-        return m_center + radial * ringRadius +
-               m_axis * (m_minorRadius * std::sin(v));
-    }
-    AcGeVector3d normalAt(double u, double v) const
-    {
-        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
-        const AcGeVector3d radial =
-            m_refAxis * std::cos(u) + sideAxis * std::sin(u);
-        return (radial * std::cos(v) + m_axis * std::sin(v)).normal();
-    }
+    AcGePoint3d pointAt(double u, double v) const;
+    AcGeVector3d normalAt(double u, double v) const;
 
     bool isDoughnut() const { return m_majorRadius > m_minorRadius; }
     bool isHollow() const { return isDoughnut(); }
@@ -402,7 +249,7 @@ public:
     }
 };
 
-struct AcGeCone
+struct ACGE_PORT AcGeCone
 {
 private:
     double m_halfAngle = 0.78539816339744830962;
@@ -414,84 +261,32 @@ private:
     double m_startAngle = 0.0;
     double m_endAngle = 6.2831853071795864769;
 
-    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference)
-    {
-        m_axis = axis.normal();
-        if (m_axis.isZeroLength())
-            m_axis = AcGeVector3d::kZAxis;
-
-        m_refAxis = reference - m_axis * reference.dotProduct(m_axis);
-        if (m_refAxis.isZeroLength())
-            m_refAxis = m_axis.perpVector();
-        m_refAxis.normalize();
-    }
+    void setFrame(const AcGeVector3d &axis, const AcGeVector3d &reference);
     void setAngle(double cosine, double sine)
     {
         m_halfAngle = std::atan2(std::abs(sine), cosine);
     }
-    double apexHeight() const
-    {
-        const double sine = std::sin(m_halfAngle);
-        return std::abs(sine) <= 1.0e-15
-                   ? 0.0
-                   : m_baseRadius * std::cos(m_halfAngle) / sine;
-    }
-    double radiusAtHeight(double height) const
-    {
-        return std::max(0.0, m_baseRadius -
-                                  height * std::tan(m_halfAngle));
-    }
+    double apexHeight() const;
+    double radiusAtHeight(double height) const;
 
 public:
     AcGeCone() = default;
     AcGeCone(double cosineAngle, double sineAngle,
              const AcGePoint3d &baseCenter, double baseRadius,
-             const AcGeVector3d &axis)
-        : m_baseCenter(baseCenter), m_baseRadius(std::abs(baseRadius))
-    {
-        setAngle(cosineAngle, sineAngle);
-        setFrame(axis, axis.perpVector());
-        m_height.set(0.0, apexHeight());
-    }
+             const AcGeVector3d &axis);
     AcGeCone(double cosineAngle, double sineAngle,
              const AcGePoint3d &baseCenter, double baseRadius,
              const AcGeVector3d &axis, const AcGeVector3d &refAxis,
-             const AcGeInterval &height, double startAngle, double endAngle)
-        : m_baseCenter(baseCenter), m_baseRadius(std::abs(baseRadius)),
-          m_height(height), m_startAngle(startAngle), m_endAngle(endAngle)
-    {
-        setAngle(cosineAngle, sineAngle);
-        setFrame(axis, refAxis);
-    }
+             const AcGeInterval &height, double startAngle, double endAngle);
 
     AcGeCone &set(double cosineAngle, double sineAngle,
                   const AcGePoint3d &baseCenter, double baseRadius,
-                  const AcGeVector3d &axis)
-    {
-        m_baseCenter = baseCenter;
-        m_baseRadius = std::abs(baseRadius);
-        setAngle(cosineAngle, sineAngle);
-        setFrame(axis, axis.perpVector());
-        m_height.set(0.0, apexHeight());
-        m_startAngle = 0.0;
-        m_endAngle = 6.2831853071795864769;
-        return *this;
-    }
+                  const AcGeVector3d &axis);
     AcGeCone &set(double cosineAngle, double sineAngle,
                   const AcGePoint3d &baseCenter, double baseRadius,
                   const AcGeVector3d &axis, const AcGeVector3d &refAxis,
                   const AcGeInterval &height, double startAngle,
-                  double endAngle)
-    {
-        m_baseCenter = baseCenter;
-        m_baseRadius = std::abs(baseRadius);
-        setAngle(cosineAngle, sineAngle);
-        setFrame(axis, refAxis);
-        m_height = height;
-        m_startAngle = startAngle;
-        m_endAngle = endAngle;
-        return *this;
-    }
+                  double endAngle);
 
     AcGePoint3d baseCenter() const { return m_baseCenter; }
     AcGePoint3d apex() const
@@ -530,23 +325,8 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double angle, double height) const
-    {
-        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
-        const AcGeVector3d radial =
-            m_refAxis * std::cos(angle) + sideAxis * std::sin(angle);
-        return m_baseCenter + m_axis * height +
-               radial * radiusAtHeight(height);
-    }
-    AcGeVector3d normalAt(double angle, double) const
-    {
-        const AcGeVector3d sideAxis = m_axis.crossProduct(m_refAxis);
-        const AcGeVector3d radial =
-            m_refAxis * std::cos(angle) + sideAxis * std::sin(angle);
-        return (radial * std::cos(m_halfAngle) +
-                m_axis * std::sin(m_halfAngle))
-            .normal();
-    }
+    AcGePoint3d pointAt(double angle, double height) const;
+    AcGeVector3d normalAt(double angle, double) const;
     bool isClosed(const AcGeTol &tol = AcGeTol{}) const
     {
         constexpr double twoPi = 6.2831853071795864769;

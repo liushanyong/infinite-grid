@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -7,7 +9,7 @@
 
 // Source-level AcGe linear entity subset: infinite lines and rays in 2D/3D.
 // Directions are not implicitly normalized; parameters use the supplied vector.
-struct AcGeLine2d
+struct ACGE_PORT AcGeLine2d
 {
     AcGePoint2d basePoint{0.0, 0.0};
     AcGeVector2d direction{1.0, 0.0};
@@ -51,14 +53,7 @@ struct AcGeLine2d
         return closestPointTo(point).distanceTo(point);
     }
     bool isOn(const AcGePoint2d &point, double &parameter,
-              const AcGeTol &tol = AcGeTol{}) const
-    {
-        const double candidate = parameterOf(point);
-        if (distanceTo(point) > std::abs(tol.equalPoint()))
-            return false;
-        parameter = candidate;
-        return true;
-    }
+              const AcGeTol &tol = AcGeTol{}) const;
 };
 
 inline const AcGeLine2d AcGeLine2d::kXAxis{
@@ -66,7 +61,7 @@ inline const AcGeLine2d AcGeLine2d::kXAxis{
 inline const AcGeLine2d AcGeLine2d::kYAxis{
     AcGePoint2d{0.0, 0.0}, AcGeVector2d{0.0, 1.0}};
 
-struct AcGeLine3d
+struct ACGE_PORT AcGeLine3d
 {
     AcGePoint3d basePoint{0.0, 0.0, 0.0};
     AcGeVector3d direction{1.0, 0.0, 0.0};
@@ -111,14 +106,7 @@ struct AcGeLine3d
         return closestPointTo(point).distanceTo(point);
     }
     bool isOn(const AcGePoint3d &point, double &parameter,
-              const AcGeTol &tol = AcGeTol{}) const
-    {
-        const double candidate = parameterOf(point);
-        if (distanceTo(point) > std::abs(tol.equalPoint()))
-            return false;
-        parameter = candidate;
-        return true;
-    }
+              const AcGeTol &tol = AcGeTol{}) const;
 };
 
 inline const AcGeLine3d AcGeLine3d::kXAxis{
@@ -128,7 +116,7 @@ inline const AcGeLine3d AcGeLine3d::kYAxis{
 inline const AcGeLine3d AcGeLine3d::kZAxis{
     AcGePoint3d{0.0, 0.0, 0.0}, AcGeVector3d{0.0, 0.0, 1.0}};
 
-struct AcGeRay2d
+struct ACGE_PORT AcGeRay2d
 {
     AcGePoint2d basePoint{0.0, 0.0};
     AcGeVector2d direction{1.0, 0.0};
@@ -169,21 +157,10 @@ struct AcGeRay2d
         return closestPointTo(point).distanceTo(point);
     }
     bool isOn(const AcGePoint2d &point, double &parameter,
-              const AcGeTol &tol = AcGeTol{}) const
-    {
-        const double candidate = parameterOf(point);
-        const double pointTolerance = std::abs(tol.equalPoint());
-        const double parameterTolerance =
-            pointTolerance / std::max(direction.length(), pointTolerance);
-        if (candidate < -parameterTolerance ||
-            distanceTo(point) > pointTolerance)
-            return false;
-        parameter = std::max(0.0, candidate);
-        return true;
-    }
+              const AcGeTol &tol = AcGeTol{}) const;
 };
 
-struct AcGeRay3d
+struct ACGE_PORT AcGeRay3d
 {
     AcGePoint3d basePoint{0.0, 0.0, 0.0};
     AcGeVector3d direction{1.0, 0.0, 0.0};
@@ -224,16 +201,5 @@ struct AcGeRay3d
         return closestPointTo(point).distanceTo(point);
     }
     bool isOn(const AcGePoint3d &point, double &parameter,
-              const AcGeTol &tol = AcGeTol{}) const
-    {
-        const double candidate = parameterOf(point);
-        const double pointTolerance = std::abs(tol.equalPoint());
-        const double parameterTolerance =
-            pointTolerance / std::max(direction.length(), pointTolerance);
-        if (candidate < -parameterTolerance ||
-            distanceTo(point) > pointTolerance)
-            return false;
-        parameter = std::max(0.0, candidate);
-        return true;
-    }
+              const AcGeTol &tol = AcGeTol{}) const;
 };

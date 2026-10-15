@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AcGePort.h"
+
 // AcGe-compatible 2D/3D point and vector value types, signature-aligned
 // with the ObjectARX geometry kernel (see ObjectARX docs: AcGe Overview).
 // The storage is hand-rolled doubles (matching the AcGe member layout so
@@ -15,7 +17,7 @@
 
 struct AcGeMatrix2d;
 
-struct AcGeVector2d
+struct ACGE_PORT AcGeVector2d
 {
     double x = 0.0;
     double y = 0.0;
@@ -137,7 +139,7 @@ inline const AcGeVector2d AcGeVector2d::kIdentity{1.0, 1.0};
 inline const AcGeVector2d AcGeVector2d::kXAxis{1.0, 0.0};
 inline const AcGeVector2d AcGeVector2d::kYAxis{0.0, 1.0};
 
-struct AcGeVector3d
+struct ACGE_PORT AcGeVector3d
 {
     double x = 0.0;
     double y = 0.0;
@@ -274,7 +276,7 @@ inline const AcGeVector3d AcGeVector3d::kXAxis{1.0, 0.0, 0.0};
 inline const AcGeVector3d AcGeVector3d::kYAxis{0.0, 1.0, 0.0};
 inline const AcGeVector3d AcGeVector3d::kZAxis{0.0, 0.0, 1.0};
 
-struct AcGePoint2d
+struct ACGE_PORT AcGePoint2d
 {
     double x = 0.0;
     double y = 0.0;
@@ -309,7 +311,7 @@ struct AcGePoint2d
 
 inline const AcGePoint2d AcGePoint2d::kOrigin{0.0, 0.0};
 
-struct AcGePoint3d
+struct ACGE_PORT AcGePoint3d
 {
     double x = 0.0;
     double y = 0.0;
@@ -400,7 +402,7 @@ struct AcGePoint3d
 
 inline const AcGePoint3d AcGePoint3d::kOrigin{0.0, 0.0, 0.0};
 
-struct AcGePosition2d : AcGePoint2d
+struct ACGE_PORT AcGePosition2d : AcGePoint2d
 {
     AcGePosition2d() = default;
     AcGePosition2d(double x, double y) : AcGePoint2d(x, y) {}
@@ -420,7 +422,7 @@ struct AcGePosition2d : AcGePoint2d
     }
 };
 
-struct AcGePosition3d : AcGePoint3d
+struct ACGE_PORT AcGePosition3d : AcGePoint3d
 {
     AcGePosition3d() = default;
     AcGePosition3d(double x, double y, double z) : AcGePoint3d(x, y, z) {}

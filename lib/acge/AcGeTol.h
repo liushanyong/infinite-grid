@@ -1,7 +1,9 @@
 #pragma once
 
+#include "AcGePort.h"
+
 // AcGeTol source-level API aligned with the ObjectARX reference.
-class AcGeTol
+class ACGE_PORT AcGeTol
 {
     double m_equalPoint = 1.0e-10;
     double m_equalVector = 1.0e-10;
