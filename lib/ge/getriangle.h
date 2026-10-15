@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -261,6 +263,7 @@ class AcGeMesh3d
 {
 public:
     using Triangle = std::array<std::uint32_t, 3>;
+    using Edge = std::array<std::uint32_t, 2>;
 
 private:
     std::vector<AcGePoint3d> m_vertices;
@@ -276,6 +279,24 @@ private:
         for (std::uint32_t index : triangle)
             if (index >= m_vertices.size())
                 throw std::out_of_range("AcGeMesh3d triangle index is out of range.");
+    }
+    std::map<Edge, std::vector<std::size_t>> edgeIncidence() const
+    {
+        std::map<Edge, std::vector<std::size_t>> incidence;
+        for (std::size_t face = 0; face < m_triangles.size(); ++face)
+        {
+            const Triangle &triangle = m_triangles[face];
+            for (std::size_t edgeIndex = 0; edgeIndex < triangle.size();
+                 ++edgeIndex)
+            {
+                std::uint32_t first = triangle[edgeIndex];
+                std::uint32_t second = triangle[(edgeIndex + 1) % 3];
+                if (second < first)
+                    std::swap(first, second);
+                incidence[{first, second}].push_back(face);
+            }
+        }
+        return incidence;
     }
 
 public:
@@ -373,6 +394,67 @@ public:
         for (AcGeVector3d &normal : result)
             normal.normalize();
         return result;
+    }
+    std::vector<std::uint32_t> vertexNeighbors(std::uint32_t vertex) const
+    {
+        if (vertex >= m_vertices.size())
+            throw std::out_of_range("AcGeMesh3d vertex index is out of range.");
+        std::set<std::uint32_t> neighbors;
+        for (const Triangle &triangle : m_triangles)
+        {
+            for (std::size_t i = 0; i < triangle.size(); ++i)
+            {
+                if (triangle[i] != vertex)
+                    continue;
+                neighbors.insert(triangle[(i + 1) % 3]);
+                neighbors.insert(triangle[(i + 2) % 3]);
+            }
+        }
+        return {neighbors.begin(), neighbors.end()};
+    }
+    std::vector<std::size_t> faceNeighbors(std::size_t face) const
+    {
+        const Triangle &triangle = m_triangles.at(face);
+        const auto incidence = edgeIncidence();
+        std::set<std::size_t> neighbors;
+        for (std::size_t edgeIndex = 0; edgeIndex < triangle.size();
+             ++edgeIndex)
+        {
+            std::uint32_t first = triangle[edgeIndex];
+            std::uint32_t second = triangle[(edgeIndex + 1) % 3];
+            if (second < first)
+                std::swap(first, second);
+            for (std::size_t adjacent : incidence.at({first, second}))
+                if (adjacent != face)
+                    neighbors.insert(adjacent);
+        }
+        return {neighbors.begin(), neighbors.end()};
+    }
+    std::vector<Edge> boundaryEdges() const
+    {
+        std::vector<Edge> result;
+        for (const auto &[edge, faces] : edgeIncidence())
+            if (faces.size() == 1)
+                result.push_back(edge);
+        return result;
+    }
+    std::vector<Edge> nonManifoldEdges() const
+    {
+        std::vector<Edge> result;
+        for (const auto &[edge, faces] : edgeIncidence())
+            if (faces.size() > 2)
+                result.push_back(edge);
+        return result;
+    }
+    bool isEdgeManifold() const { return nonManifoldEdges().empty(); }
+    bool isClosedEdgeManifold() const
+    {
+        const auto incidence = edgeIncidence();
+        return !incidence.empty() &&
+               std::all_of(incidence.begin(), incidence.end(),
+                           [](const auto &entry) {
+                               return entry.second.size() == 2;
+                           });
     }
     AcGeMesh3d &clear()
     {

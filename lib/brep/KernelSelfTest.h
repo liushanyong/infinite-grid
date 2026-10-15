@@ -158,18 +158,26 @@ inline int runKernelSelfTest()
                                  AcGeVector3d::kZAxis};
         const auto planeIntersection = ge::intersect(horizontal, vertical);
         const auto lineIntersection = ge::intersect(
-            AcGeLine3d{{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}},
-            AcGeLine3d{{1.0, 0.0, 0.0}, {-1.0, 1.0, 0.0}});
+            AcGeLine3d{AcGePoint3d{0.0, 0.0, 0.0},
+                       AcGeVector3d{1.0, 1.0, 0.0}},
+            AcGeLine3d{AcGePoint3d{1.0, 0.0, 0.0},
+                       AcGeVector3d{-1.0, 1.0, 0.0}});
         const auto skewIntersection = ge::intersect(
-            AcGeLine3d{{0.0, 0.0, 0.0}, AcGeVector3d::kXAxis},
-            AcGeLine3d{{0.0, 1.0, 1.0}, AcGeVector3d::kYAxis});
+            AcGeLine3d{AcGePoint3d{0.0, 0.0, 0.0},
+                       AcGeVector3d::kXAxis},
+            AcGeLine3d{AcGePoint3d{0.0, 1.0, 1.0},
+                       AcGeVector3d::kYAxis});
         const AcGeTriangle3d triangle{{0.0, 0.0, 0.0},
                                       {2.0, 0.0, 0.0},
                                       {0.0, 2.0, 0.0}};
         const auto triangleHit = ge::intersect(
-            AcGeLineSeg3d{{0.5, 0.5, -1.0}, {0.5, 0.5, 1.0}}, triangle);
+            AcGeLineSeg3d{AcGePoint3d{0.5, 0.5, -1.0},
+                          AcGePoint3d{0.5, 0.5, 1.0}},
+            triangle);
         const auto triangleMiss = ge::intersect(
-            AcGeLineSeg3d{{2.0, 2.0, -1.0}, {2.0, 2.0, 1.0}}, triangle);
+            AcGeLineSeg3d{AcGePoint3d{2.0, 2.0, -1.0},
+                          AcGePoint3d{2.0, 2.0, 1.0}},
+            triangle);
         check(planeIntersection &&
                   planeIntersection->basePoint.isEqualTo({1.0, 0.0, 2.0}) &&
                   planeIntersection->direction.isParallelTo(
@@ -183,6 +191,37 @@ inline int runKernelSelfTest()
         check(triangleHit && triangleHit->isEqualTo({0.5, 0.5, 0.0}) &&
                   !triangleMiss,
               "finite segment-triangle intersection");
+    }
+
+    // ---------------- triangle mesh topology queries ---------------------
+    {
+        const AcGeMesh3d openMesh{
+            {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+             {1.0, 1.0, 0.0}, {0.0, 1.0, 0.0}},
+            {{0, 1, 2}, {0, 2, 3}}};
+        const AcGeMesh3d closedMesh{
+            {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+             {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}},
+            {{0, 2, 1}, {0, 1, 3}, {1, 2, 3}, {2, 0, 3}}};
+        const AcGeMesh3d nonManifoldMesh{
+            {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+             {0.0, 1.0, 0.0}, {0.0, -1.0, 0.0},
+             {0.0, 0.0, 1.0}},
+            {{0, 1, 2}, {1, 0, 3}, {0, 1, 4}}};
+        const auto vertexNeighbors = openMesh.vertexNeighbors(0);
+        const auto faceNeighbors = openMesh.faceNeighbors(0);
+        check(vertexNeighbors == std::vector<std::uint32_t>{1, 2, 3} &&
+                  faceNeighbors == std::vector<std::size_t>{1} &&
+                  openMesh.boundaryEdges().size() == 4 &&
+                  openMesh.isEdgeManifold() &&
+                  !openMesh.isClosedEdgeManifold(),
+              "mesh vertex/face adjacency and boundary edge queries");
+        check(closedMesh.boundaryEdges().empty() &&
+                  closedMesh.isClosedEdgeManifold() &&
+                  nonManifoldMesh.nonManifoldEdges() ==
+                      std::vector<AcGeMesh3d::Edge>{{0, 1}} &&
+                  !nonManifoldMesh.isEdgeManifold(),
+              "closed and non-manifold mesh edge classification");
     }
 
     // ---------------- 3D circles and ellipse aliases ----------------

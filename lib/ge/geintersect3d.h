@@ -135,8 +135,9 @@ inline std::optional<AcGeLine3d> intersect(const AcGePlane &first,
     if (directionLengthSquared <= parallelTolerance * parallelTolerance)
         return std::nullopt;
 
-    const double firstOffset = first.normal.dotProduct(first.origin);
-    const double secondOffset = second.normal.dotProduct(second.origin);
+    const double firstOffset = first.normal.dotProduct(first.origin.asVector());
+    const double secondOffset =
+        second.normal.dotProduct(second.origin.asVector());
     const AcGeVector3d pointVector =
         (second.normal.crossProduct(direction) * firstOffset +
          direction.crossProduct(first.normal) * secondOffset) /
@@ -195,10 +196,13 @@ inline std::optional<AcGePoint3d> intersect(
     const double v = direction.dotProduct(q) * inverseDeterminant;
     const double parameter = edge2.dotProduct(q) * inverseDeterminant;
     const double pointTolerance = std::abs(tol.equalPoint());
+    const double barycentricTolerance =
+        pointTolerance /
+        std::max({edge1.length(), edge2.length(), pointTolerance});
     const double parameterTolerance =
         pointTolerance / std::max(direction.length(), pointTolerance);
-    if (u < -parameterTolerance || v < -parameterTolerance ||
-        u + v > 1.0 + parameterTolerance ||
+    if (u < -barycentricTolerance || v < -barycentricTolerance ||
+        u + v > 1.0 + barycentricTolerance ||
         parameter < -parameterTolerance ||
         parameter > 1.0 + parameterTolerance)
         return std::nullopt;
