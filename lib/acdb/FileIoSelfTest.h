@@ -21,6 +21,10 @@
 #include "acdb/AcDbEntities.h"
 #include "acdb/AcDbFileIo.h"
 
+#ifndef GRID_SOURCE_DIR
+#define GRID_SOURCE_DIR "."
+#endif
+
 namespace acdb
 {
 
@@ -734,7 +738,7 @@ inline void verifyDwgImportHelpers(FILE *log, int &fails)
 
     const glm::vec4 aci20 = aciToColor(20);
     check(closeEnough(aci20.r, 1.0) &&
-              closeEnough(aci20.g, 63.0 / 255.0) &&
+              closeEnough(aci20.g, 0.25) &&
               closeEnough(aci20.b, 0.0),
           "ACI hue palette");
     Dwg_Color trueColor{};
@@ -769,13 +773,14 @@ inline void verifyArchitecturalFixture(FILE *log, int &fails)
 {
     AcDbDatabase database;
     AcDbFileIoReport report;
-    if (!database.readDwgFile(
-            "resources/architectural_-_annotation_scaling_and_multileaders.dwg",
-            &report))
+    const std::string fixture =
+        std::string(GRID_SOURCE_DIR) +
+        "/resources/architectural_-_annotation_scaling_and_multileaders.dwg";
+    if (!database.readDwgFile(fixture.c_str(), &report))
     {
         ++fails;
-        std::fprintf(log, "FAIL architectural fixture: read error %u\n",
-                     report.errorCode);
+        std::fprintf(log, "FAIL architectural fixture '%s': read error %u\n",
+                     fixture.c_str(), report.errorCode);
         return;
     }
 

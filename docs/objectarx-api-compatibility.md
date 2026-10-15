@@ -106,6 +106,53 @@ tolerance-aware containment, and closest-point queries. `AcGeMesh3d` provides
 indexed triangle storage, validated indices, bounds, and area-weighted vertex
 normals; mesh topology editing and boolean operations are not included.
 
+`AcGeCompositeCurve2d/3d` provide owning, heterogeneous curve segments with
+explicit finite local parameter intervals. Each segment occupies one unit of
+the global parameter domain; interior integer parameters select the next
+segment, while the final parameter selects the last endpoint. They expose
+local/global parameter conversion, endpoints, positional continuity, and
+closedness checks. Disconnected segments are allowed, but are not reported as
+continuous. These value adapters do not implement `AcGeCurve` inheritance,
+native pointer-array ownership, derivatives, arc length, or nearest-point queries.
+
+`AcGeOffsetCurve2d/3d` evaluate signed, bounded parametric offsets from an owned
+curve and its analytic tangent, or explicit point/tangent callbacks. Positive
+offset is left of the increasing-parameter tangent in 2D, and in the direction
+`planeNormal × tangent` in 3D. For planar 3D offsets the caller must supply a
+normal perpendicular to the source plane; global planarity is not inferred.
+Zero-distance offsets evaluate only the source point, allowing stationary
+points. Nonzero offsets reject zero/ill-conditioned tangents. These wrappers do
+not trim self-intersections, remove cusps, or implement the complete native
+offset-curve API. Callback copies do not extend the lifetime of referenced data.
+
+`AcGeClipBoundary2d` provides rectangular or strictly convex polygonal clipping
+boundaries, point containment, segment clipping, convex polygon clipping, and
+polyline clipping into separate visible chains. Either winding and an optional
+repeated closing vertex are accepted. Nonfinite coordinates, degenerate,
+concave, collinear-edged, and self-intersecting boundaries are rejected.
+Clipping expands each boundary half-plane by `AcGeTol::equalPoint()` in world
+units; intersection coordinates remain subject to floating-point roundoff.
+This subset uses standard containers and exceptions rather than ObjectARX
+array/error-status signatures, and does not support concave subject polygons.
+
+`AcGeRuledSurface3d`, `AcGeExtrudedSurface3d`, and `AcGeRevolvedSurface3d` are
+**project extensions**, not native ObjectARX class/API compatibility claims.
+They provide finite parameter domains, owning `AcGeSweptCurve3d` source adapters,
+point evaluation, analytic partial derivatives, and normals oriented as
+`partialU × partialV`. Ruled surfaces interpolate between two source curves;
+extrusions use displacement per parameter unit; revolutions use radians and
+right-handed rotation about an arbitrary axis. Missing analytic derivatives
+and singular normals throw rather than silently approximating geometry.
+They do not implement trimming, tessellation, solid topology, intersections,
+or the native surface hierarchy.
+
+The new headers are exported by `lib/acge/AcGe.h`. Standalone regression
+executables follow the existing assert-based test convention and can be enabled
+with `-DACGE_BUILD_TESTS=ON` in the root CMake build. Build targets
+`AcGeClipBoundaryTests`, `AcGeCompositeCurveTests`, `AcGeOffsetCurveTests`, and
+`AcGeSweptSurfaceTests`, then run `ctest --test-dir <build-dir> -R "^AcGe"`.
+Assertions remain enabled for these tests in Release builds as well.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
