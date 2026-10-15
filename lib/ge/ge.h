@@ -8,6 +8,7 @@
 #include "getol.h"
 #include "gematrix2d.h"
 #include "gematrix.h"
+#include "gequaternion.h"
 #include "geinterval.h"
 #include "geboundedplane.h"
 #include "gesurface3d.h"

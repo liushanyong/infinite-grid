@@ -16,6 +16,7 @@
 #include "ge/geinterval.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
+#include "ge/gequaternion.h"
 #include "ge/gescale.h"
 #include "ge/gesurface3d.h"
 #include "ge/geutil.h"
@@ -47,6 +48,35 @@ inline int runKernelSelfTest()
             std::printf("FAIL %s\n", what);
         }
     };
+
+    // ---------------- 3D rotation quaternion ----------------
+    {
+        constexpr double halfPi = 1.5707963267948966192;
+        const AcGeQuaternion3d quarterTurn{AcGeVector3d::kZAxis, halfPi};
+        const AcGeVector3d rotated =
+            quarterTurn.rotateVector(AcGeVector3d::kXAxis);
+        const AcGeVector3d matrixRotated = transformBy(
+            AcGeVector3d::kXAxis, quarterTurn.toMatrix());
+        const AcGeQuaternion3d halfway =
+            AcGeQuaternion3d::slerp(AcGeQuaternion3d::identity(),
+                                    quarterTurn, 0.5);
+        const AcGeVector3d halfwayRotated =
+            halfway.rotateVector(AcGeVector3d::kXAxis);
+        const AcGeQuaternion3d nonUnit{0.0, 0.0, 2.0, 2.0};
+        const AcGeVector3d restored =
+            (nonUnit * nonUnit.inverse()).rotateVector({1.0, 2.0, 3.0});
+        const AcGeQuaternion3d zeroAxis{AcGeVector3d{}, halfPi};
+        check(rotated.isEqualTo({0.0, 1.0, 0.0}) &&
+                  matrixRotated.isEqualTo(rotated) &&
+                  halfwayRotated.isEqualTo(
+                      {0.7071067811865476, 0.7071067811865476, 0.0}) &&
+                  std::abs(quarterTurn.angle() - halfPi) < 1.0e-12 &&
+                  quarterTurn.axis().isEqualTo(AcGeVector3d::kZAxis) &&
+                  restored.isEqualTo({1.0, 2.0, 3.0}) &&
+                  zeroAxis.rotateVector(AcGeVector3d::kXAxis)
+                      .isEqualTo(AcGeVector3d::kXAxis),
+              "quaternion rotation, matrix conversion, interpolation, and inverse");
+    }
 
     // ---------------- triangle and indexed mesh geometry ----------------
     {
