@@ -19,6 +19,7 @@
 #include "ge/gescale.h"
 #include "ge/gesurface3d.h"
 #include "ge/geutil.h"
+#include "ge/getriangle.h"
 #include "brep/BRepBuild.h"
 #include "brep/Validate.h"
 #include "brep/BRepBoolean.h"
@@ -46,6 +47,64 @@ inline int runKernelSelfTest()
             std::printf("FAIL %s\n", what);
         }
     };
+
+    // ---------------- triangle and indexed mesh geometry ----------------
+    {
+        const AcGeTriangle2d triangle{{0.0, 0.0}, {4.0, 0.0}, {0.0, 3.0}};
+        double u = 0.0, v = 0.0, w = 0.0;
+        check(triangle.area() == 6.0 &&
+                  triangle.centroid() == AcGePoint2d{4.0 / 3.0, 1.0} &&
+                  triangle.barycentricCoordinates({1.0, 1.0}, u, v, w) &&
+                  std::abs(u - 5.0 / 12.0) < 1.0e-12 &&
+                  std::abs(v - 0.25) < 1.0e-12 &&
+                  std::abs(w - 1.0 / 3.0) < 1.0e-12 &&
+                  triangle.contains({1.0, 1.0}) &&
+                  !triangle.contains({3.0, 2.0}) &&
+                  triangle.closestPointTo({3.0, 2.0})
+                          .distanceTo({2.4, 1.2}) < 1.0e-12,
+              "2D triangle area, barycentrics, containment, and closest point");
+
+        const AcGeTriangle3d triangle3d{
+            {0.0, 0.0, 0.0}, {4.0, 0.0, 0.0}, {0.0, 3.0, 0.0}};
+        check(triangle3d.area() == 6.0 &&
+                  triangle3d.normal() == AcGeVector3d{0.0, 0.0, 1.0} &&
+                  triangle3d.contains({1.0, 1.0, 0.0}) &&
+                  !triangle3d.contains({1.0, 1.0, 0.1}) &&
+                  triangle3d.closestPointTo({1.0, 1.0, 2.0}) ==
+                      AcGePoint3d{1.0, 1.0, 0.0},
+              "3D triangle area, normal, containment, and closest point");
+        const AcGeTriangle3d degenerate{
+            {0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {4.0, 0.0, 0.0}};
+        check(degenerate.closestPointTo({1.0, 2.0, 0.0}) ==
+                  AcGePoint3d{1.0, 0.0, 0.0},
+              "3D degenerate triangle closest point");
+
+        AcGeMesh3d mesh{{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+                         {0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}},
+                        {{0, 1, 2}, {1, 3, 2}}};
+        const auto bounds = mesh.bounds();
+        const auto faceNormals = mesh.faceNormals();
+        const auto vertexNormals = mesh.vertexNormals();
+        check(mesh.numVertices() == 4 && mesh.numTriangles() == 2 &&
+                  bounds && bounds->min == AcGePoint3d{0.0, 0.0, 0.0} &&
+                  bounds->max == AcGePoint3d{1.0, 1.0, 0.0} &&
+                  mesh.triangleAt(1).area() == 0.5 &&
+                  faceNormals.size() == 2 &&
+                  faceNormals[0] == AcGeVector3d{0.0, 0.0, 1.0} &&
+                  vertexNormals.size() == 4 &&
+                  vertexNormals[3] == AcGeVector3d{0.0, 0.0, 1.0},
+              "indexed mesh bounds, triangle access, and normals");
+        bool rejectedIndex = false;
+        try
+        {
+            mesh.addTriangle(0, 1, 4);
+        }
+        catch (const std::out_of_range &)
+        {
+            rejectedIndex = true;
+        }
+        check(rejectedIndex, "indexed mesh rejects invalid triangle indices");
+    }
 
     // ---------------- bounded planar surface ----------------
     {

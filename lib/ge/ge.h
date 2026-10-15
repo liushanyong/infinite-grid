@@ -22,3 +22,4 @@
 #include "geoctree.h"
 #include "ge2d.h"
 #include "gepolyline.h"
+#include "getriangle.h"

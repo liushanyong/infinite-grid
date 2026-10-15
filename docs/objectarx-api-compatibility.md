@@ -96,6 +96,11 @@ planar-entity APIs are not yet implemented.
 plane, and point-on-curve helpers alongside parameter evaluation. The legacy
 `AcGeEllip3d` spelling remains an alias for the ellipse arc value type.
 
+`AcGeTriangle2d/3d` provide area, centroid, barycentric coordinates,
+tolerance-aware containment, and closest-point queries. `AcGeMesh3d` provides
+indexed triangle storage, validated indices, bounds, and area-weighted vertex
+normals; mesh topology editing and boolean operations are not included.
+
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
