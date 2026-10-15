@@ -21,6 +21,10 @@
 #include "acdb/AcDbEntities.h"
 #include "acdb/AcDbFileIo.h"
 
+#ifndef GRID_SOURCE_DIR
+#define GRID_SOURCE_DIR "."
+#endif
+
 namespace acdb
 {
 
@@ -52,11 +56,11 @@ inline AcDbDatabase buildSampleDocument()
     // Default ACI for the sample entities: explicit green (ByLayer 256
     // stays untouched so per-entity overrides survive).
     auto add = [&database](auto payload) {
-        if (payload.common.color.colorIndex() == 256)
+        if (payload.color.colorIndex() == 256)
         {
-            payload.common.color.setColorIndex(3);
-            payload.common.color = {0.0, 1.0, 0.0, 1.0};
-            payload.common.color.setColorIndex(3);
+            payload.color.setColorIndex(3);
+            payload.color = {0.0, 1.0, 0.0, 1.0};
+            payload.color.setColorIndex(3);
         }
         return database.addEntity(std::move(payload));
     };
@@ -64,10 +68,10 @@ inline AcDbDatabase buildSampleDocument()
     AcDbLine line;
     line.start = AcGePoint3d(0.0, 0.0, 0.0);
     line.end = AcGePoint3d(100.0, 0.0, 0.0);
-    line.common.layer = "Walls";
-    line.common.color.setColorIndex(1);
-    line.common.color = {1.0, 0.0, 0.0, 1.0};
-    line.common.color.setColorIndex(1);
+    line.layer = "Walls";
+    line.color.setColorIndex(1);
+    line.color = {1.0, 0.0, 0.0, 1.0};
+    line.color.setColorIndex(1);
     add(line);
 
     AcDbCircle circle;
@@ -251,9 +255,9 @@ inline AcDbDatabase buildSampleDocument()
     stamped.height = 8.0;
     stamped.tag = "PART_NO";
     stamped.textValue = "A-123";
-    stamped.common.handle = database.allocateHandle();
-    stamped.common.ownerHandle = titleRef;
-    const AcDbHandle stampedHandle = stamped.common.handle;
+    stamped.handle = database.allocateHandle();
+    stamped.ownerHandle = titleRef;
+    const AcDbHandle stampedHandle = stamped.handle;
     database.insertLoadedEntity(AcDbEntityVariant(std::move(stamped)));
     if (AcDbEntityVariant *reference = database.getEntityMutable(titleRef))
         if (auto *typed = std::get_if<AcDbBlockReference>(reference))
@@ -306,8 +310,10 @@ inline void comparePayload(const Payload &a, const Payload &b, FILE *log,
             std::fflush(log);
         }
     };
-    check(a.common.color.colorMethod() == b.common.color.colorMethod() &&
-              a.common.color.colorIndex() == b.common.color.colorIndex(),
+    const acdb::AcDbEntity &aCommon = a;
+    const acdb::AcDbEntity &bCommon = b;
+    check(aCommon.color.colorMethod() == bCommon.color.colorMethod() &&
+              aCommon.color.colorIndex() == bCommon.color.colorIndex(),
           "entity color method/index");
     if constexpr (std::is_same_v<Payload, AcDbLine>)
     {
@@ -734,7 +740,7 @@ inline void verifyDwgImportHelpers(FILE *log, int &fails)
 
     const glm::vec4 aci20 = aciToColor(20);
     check(closeEnough(aci20.r, 1.0) &&
-              closeEnough(aci20.g, 63.0 / 255.0) &&
+              closeEnough(aci20.g, 0.25) &&
               closeEnough(aci20.b, 0.0),
           "ACI hue palette");
     Dwg_Color trueColor{};
@@ -769,13 +775,14 @@ inline void verifyArchitecturalFixture(FILE *log, int &fails)
 {
     AcDbDatabase database;
     AcDbFileIoReport report;
-    if (!database.readDwgFile(
-            "resources/architectural_-_annotation_scaling_and_multileaders.dwg",
-            &report))
+    const std::string fixture =
+        std::string(GRID_SOURCE_DIR) +
+        "/resources/architectural_-_annotation_scaling_and_multileaders.dwg";
+    if (!database.readDwgFile(fixture.c_str(), &report))
     {
         ++fails;
-        std::fprintf(log, "FAIL architectural fixture: read error %u\n",
-                     report.errorCode);
+        std::fprintf(log, "FAIL architectural fixture '%s': read error %u\n",
+                     fixture.c_str(), report.errorCode);
         return;
     }
 

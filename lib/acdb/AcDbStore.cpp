@@ -729,7 +729,7 @@ bool decodeInto(const Value &commonData, const Value &data,
                 AcDbEntityVariant &out)
 {
     Payload payload;
-    commonFromJson(commonData, payload.common);
+    commonFromJson(commonData, payload);
     if constexpr (std::is_same_v<Payload, AcDbLine>)
     {
         payload.start = jsonToPoint3(data.find("start") ? *data.find("start")

@@ -91,21 +91,14 @@ struct LightCommand
     rendering::RealisticLightsRenderData data;
 };
 
-// The protocol root for every renderer-visible object in this project.  A
-// drawable may collect strokes/fills/points, mesh batches, or protocol commands
-// such as the infinite grid into one frame draw list.
-class AcGiDrawable
-{
-public:
-    virtual ~AcGiDrawable() = default;
-
-    virtual void collect(AcGsModel &drawList) const = 0;
-};
-
 // Frame-local and static draw lists share one command vocabulary.  Geometry
 // carries strokes/fills/points through the existing WorldDraw sink; mesh and
 // grid commands cover renderer-accelerated paths that must not be flattened.
-class AcGsModel final : public AcGiDrawable
+//
+// (The regen-protocol AcGiDrawable lives in acgi/AcGiDrawable.h: entity
+// drawables feed this draw list through the Gs replay, AcGsView::submit
+// consumes it.)
+class AcGsModel final
 {
 public:
     [[nodiscard]] acdb::TessellatedEntity &geometry() { return geometry_; }
@@ -194,11 +187,6 @@ public:
             grid_ = *other.grid_;
         if (other.lights_)
             lights_ = *other.lights_;
-    }
-
-    void collect(AcGsModel &drawList) const override
-    {
-        drawList.merge(*this);
     }
 
     void clear()

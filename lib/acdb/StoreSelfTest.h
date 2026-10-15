@@ -406,8 +406,8 @@ inline int runStoreSelfTest()
         walls.isFrozen = true;
 
         AcDbLine line;
-        line.common.setLayerName("Walls");
-        line.common.color.setFileColor(
+        line.setLayerName("Walls");
+        line.color.setFileColor(
             AcCmEntityColor::ColorMethod::kByACI, 5,
             glm::vec3(0.0f, 0.0f, 1.0f));
         line.start = {1.0, 2.0, 3.0};
@@ -541,12 +541,12 @@ inline int runStoreSelfTest()
             check(payload.start.distanceTo({1.0, 2.0, 3.0}) < 1.0e-12 &&
                       payload.end.distanceTo({4.0, 5.0, 6.0}) < 1.0e-12,
                   "line geometry round-trips");
-            check(payload.common.getLayerName() == "Walls",
+            check(payload.getLayerName() == "Walls",
                   "line layer round-trips");
-            check(payload.common.color.colorMethod() ==
+            check(payload.color.colorMethod() ==
                           AcCmEntityColor::ColorMethod::kByACI &&
-                      payload.common.color.colorIndex() == 5 &&
-                      glm::distance(payload.common.color.rgb(),
+                      payload.color.colorIndex() == 5 &&
+                      glm::distance(payload.color.rgb(),
                                     glm::vec3(0.0f, 0.0f, 1.0f)) < 1.0e-6f,
                   "entity color method/index/RGB round-trip");
             check(std::abs(payload.thickness - 0.5) < 1.0e-12,

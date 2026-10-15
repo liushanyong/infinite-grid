@@ -1,5 +1,5 @@
 // AcGsView implementation: every definition here was previously scattered
-// through main.cpp (submitAcGiDrawable, the text flush loop, the camera-
+// through main.cpp (the draw-list submit, the text flush loop, the camera-
 // space frustum-clip chain, the CPU curve sampler).  The behaviour is
 // unchanged; the only edits replace main.cpp globals with the injected
 // ViewFrameContext.

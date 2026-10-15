@@ -1268,7 +1268,7 @@ AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         auto addToSpace = [&](AcDbEntityVariant &&resident,
                               AcDbBlockTableRecord &space) -> AcDbHandle {
             AcDbEntity &commonRef = std::visit(
-                [](auto &typed) -> AcDbEntity & { return typed.common; },
+                [](auto &typed) -> AcDbEntity & { return typed; },
                 resident);
             commonRef.handle = database.allocateHandle();
             const AcDbHandle handle = commonRef.handle;
@@ -1353,7 +1353,7 @@ AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         for (DeferredMember &member : blockMembers[object.handle.value])
         {
             AcDbEntity &commonRef = std::visit(
-                [](auto &typed) -> AcDbEntity & { return typed.common; },
+                [](auto &typed) -> AcDbEntity & { return typed; },
                 member.payload);
             commonRef.handle = database.allocateHandle();
             commonRef.ownerHandle = record->handle;
@@ -1403,9 +1403,9 @@ AcDbDwgImportReport addDwgEntities(AcDbDatabase &database,
         }
         for (AcDbAttribute &attribute : parked)
         {
-            attribute.common.handle = database.allocateHandle();
-            attribute.common.ownerHandle = found->second;
-            const AcDbHandle attributeHandle = attribute.common.handle;
+            attribute.handle = database.allocateHandle();
+            attribute.ownerHandle = found->second;
+            const AcDbHandle attributeHandle = attribute.handle;
             if (database.insertLoadedEntity(
                     AcDbEntityVariant(std::move(attribute))))
             {

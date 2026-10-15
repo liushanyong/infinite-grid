@@ -46,9 +46,13 @@ struct ACDB_PORT AcDbDimension
 
 // AcDbRotatedDimension (DXF/DWG DIMENSION_LINEAR): measures the distance
 // between two points along a rotated direction.
-struct ACDB_PORT AcDbRotatedDimension
+struct ACDB_PORT AcDbRotatedDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d xLine1Point{0.0, 0.0, 0.0};
     AcGePoint3d xLine2Point{0.0, 0.0, 0.0};
@@ -61,9 +65,13 @@ struct ACDB_PORT AcDbRotatedDimension
 
 // AcDbAlignedDimension (DIMENSION_ALIGNED): measures the true distance
 // between two points; the dimension line stays parallel to them.
-struct ACDB_PORT AcDbAlignedDimension
+struct ACDB_PORT AcDbAlignedDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d xLine1Point{0.0, 0.0, 0.0};
     AcGePoint3d xLine2Point{0.0, 0.0, 0.0};
@@ -74,9 +82,13 @@ struct ACDB_PORT AcDbAlignedDimension
 // AcDb2LineAngularDimension (DIMENSION_ANG2LN): angle between two lines,
 // each authored as a segment; the arc center is the lines' intersection
 // (DXF 10 carries it pre-computed).
-struct ACDB_PORT AcDb2LineAngularDimension
+struct ACDB_PORT AcDb2LineAngularDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d xLine1StartPoint{0.0, 0.0, 0.0};
     AcGePoint3d xLine1EndPoint{0.0, 0.0, 0.0};
@@ -88,9 +100,13 @@ struct ACDB_PORT AcDb2LineAngularDimension
 
 // AcDb3PointAngularDimension (DIMENSION_ANG3PT): angle at an explicit
 // center between two ray targets.
-struct ACDB_PORT AcDb3PointAngularDimension
+struct ACDB_PORT AcDb3PointAngularDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d centerPoint{0.0, 0.0, 0.0};
     AcGePoint3d xLine1Point{0.0, 0.0, 0.0};
@@ -99,9 +115,13 @@ struct ACDB_PORT AcDb3PointAngularDimension
 
 // AcDbRadialDimension (DIMENSION_RADIUS): radius callout from the circle
 // center out to a point on the circle with a landing of leaderLength.
-struct ACDB_PORT AcDbRadialDimension
+struct ACDB_PORT AcDbRadialDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d centerPoint{0.0, 0.0, 0.0};
     AcGePoint3d radiusPoint{0.0, 0.0, 0.0};
@@ -110,9 +130,13 @@ struct ACDB_PORT AcDbRadialDimension
 
 // AcDbDiametricDimension (DIMENSION_DIAMETER): a full chord through the
 // circle with arrows on both ends (DXF 10 = chord point, 15 = far point).
-struct ACDB_PORT AcDbDiametricDimension
+struct ACDB_PORT AcDbDiametricDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d chordPoint{0.0, 0.0, 0.0};
     AcGePoint3d farChordPoint{0.0, 0.0, 0.0};
@@ -121,9 +145,13 @@ struct ACDB_PORT AcDbDiametricDimension
 
 // AcDbOrdinateDimension (DIMENSION_ORDINATE): X/Y datum coordinate of a
 // feature point with a jogged leader.
-struct ACDB_PORT AcDbOrdinateDimension
+struct ACDB_PORT AcDbOrdinateDimension : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    // Dimensions report kDrawableIsDimension (ObjectARX parity).
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
     AcDbDimension dimension;
     AcGePoint3d featureLocationPoint{0.0, 0.0, 0.0};
     AcGePoint3d leaderEndPoint{0.0, 0.0, 0.0};

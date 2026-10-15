@@ -199,11 +199,11 @@ public:
     template <typename EntityType>
     AcDbHandle addEntity(EntityType payload)
     {
-        AcDbHandle handle = payload.common.handle;
+        AcDbHandle handle = payload.handle;
         if (!handle.isValid())
         {
             handle = allocateHandle();
-            payload.common.handle = handle;
+            payload.handle = handle;
         }
         AcDbEntityVariant stored = std::move(payload);
         const AcDbHandle inserted = common(stored).handle;

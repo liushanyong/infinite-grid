@@ -21,12 +21,12 @@ namespace acdb
 
 class AcDbBlockTableRecord;
 
-class ACDB_PORT AcDbBlockReference
+class ACDB_PORT AcDbBlockReference : public AcDbEntity
 {
 public:
-    // Common entity properties (same payload shape as the lib/entities
-    // value types so the database variant's common() accessor applies).
-    acdb::AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
 
     // Name of the referenced AcDbBlockTableRecord.
     std::string blockTableRecordName;

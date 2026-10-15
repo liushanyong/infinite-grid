@@ -24,7 +24,9 @@ acgs::AcGsManager(acgsGetManager())── 设备工厂 + N 个 AcGsView + 轮转
   ├─ acgs::SceneStore(entt) ── 内存镜像,按 AcDbObjectId 键控
   └─ acgs::AcGsDevice ── 渲染目标抽象 = rendering::BgfxRenderer
   ▼
-acgi ── 协议层: WorldDraw / TextDevice / AcGiTextStyle(渲染器实现协议,方向不可反)
+acgi ── 协议层: AcGiDrawable(regen 协议根,**AcDbEntity 继承它 — ARX IS-A**) /
+        AcGiGeometry→AcGiWorldGeometry→AcGiWorldDraw(+AcGiSubEntityTraits)→
+        AcGiViewportDraw / TextDevice / AcGiTextStyle(渲染器实现协议,方向不可反)
 ```
 
 - **acdb 管配置**(AcDbViewportTable/ViewTable/CVPORT,SQLite 按句柄持久化);
@@ -32,6 +34,68 @@ acgi ── 协议层: WorldDraw / TextDevice / AcGiTextStyle(渲染器实现协
 - 设备类型在 acgs 之外不可见:main 只说 manager 语义 API。
 - **渲染是脏门控的**:静态场景不重渲(AcGsView invalidate/touchSceneViews);
   空闲帧禁止 blit。点击/D/V/O/U 等改状态后必须显式 invalidate。
+- **实体渲染一律走 AcGiDrawable regen 协议**(2026-10-15):**AcDbEntity :
+  AcDbObject + AcGiDrawable(ARX IS-A,2026-10-15 重构落地)**——实体载荷
+  直接继承(不再内嵌 `common`;字段在基类,`acdb::common(variant)` = 上
+  升引用),每个实体 override `subWorldDraw`(定义集中在
+  AcDbEntityWorldDraw.cpp 的 ACGI_ENTITY_WORLD_DRAW 宏;7 个 dimension 另
+  override subSetAttributes 返回 kDrawableIsDimension;AcDb3dSolid 用自己
+  的 fillIs3DFace 字段选 3DFace 通道)。Gs 回放对普通实体直接
+  `acgi::entityDrawable(variant)`(非拥有指针,零分配);AcGiEntityDrawable.h
+  只剩回放自有件:AcGiVariantDrawable(成员副本拥有)、AcGiShxTextDrawable
+  (SHX 分流)、AcGiCompoundDrawable+BlockRef/MInsert(块展开)。
+  **头文件环已破**:acdb/AcDbHandle.h(AcDbHandle+AcDbObjectId+hash)被
+  AcGiDrawable.h 与 AcDbCore.h 共同包含;AcGiDrawable.h 不含
+  AcGiWorldDraw.h(全部前向声明,draw() 嵌套定义移到 AcGiDrawable.cpp),
+  AcGiDrawableTraits 用独立字段+cpp 里定义 setFrom。**基类保持具体**
+  (soup 记录 Stroke/Triangle/Point 按值内嵌 AcDbEntity;ARX 里是纯虚抽
+  象,本项目有意偏离)。**遮蔽坑**:AcDbLight::color(glm::vec3,光度色)
+  遮蔽基类显示色——实体颜色一律走 setColor() 访问器。soup 记录的
+  `.common` 字段(Stroke/Triangle 内嵌)与实体字段访问共存,勿混淆。
+- **渲染物体归集进文档**(2026-10-16):demo 原型体(RedDebugCube/DemoCube/
+  DemoSphere/DemoCone/DemoTorus)在 buildDemoDocument 里烘焙为
+  AcDbPolyFaceMesh 实体(proceduralMeshVertices 汤按 8 浮点/顶点写入
+  positions/normals/uvs + 顺序索引,placement/scale 一次成型),经回放走
+  实体通道(shell 填充);仍受 GRID_DEMO_MESHES 门控。GPU 演示曲线
+  (Bezier/BSpline/NURBS)成为**控制点 AcDbSpline**(新增 weights 字段),
+  回放把控制点样条转回 CurveBatchCommand(degree/weights/颜色随实体;
+  样条无 fitPoints 故 subWorldDraw 不发 stroke);CurveArc 成为普通
+  AcDbArc(stroke 通道)。**glTF 模型也是文档实体**(2026-10-16):
+  loadGltfModelIntoDocument 把活动模型 addEntity 进文档(G 键切换时
+  removeEntity 旧句柄+载新),MeshEntityRecord 从文档实体构建;静态网格
+  GPU 缓存按句柄键控(gltfStaticMeshByHandle)留在渲染侧,回放经
+  replayer.skipHandles 跳过这些句柄(由纹理网格通道表现)——GRID_SAVE_DWG
+  从此包含 glTF 网格。**留在文档外**(代码注释已列):相机附着 UI(中心
+  立方体,逐帧文档变更破坏脏门控)、合成应力场(instanced ≤1e6)、无限
+  网格(环境着色器)、逐帧诊断叠盖。
+- **宿主 transient 内容也经 acgi 发射**(2026-10-15):main.cpp 的
+  appendSceneLine/appendScenePoint(参考线/焦点标记/轨目标/视锥线框/
+  网格 quad 诊断/tiny impostor)与 glTF 线框链都构造 AcGiWorldDraw 调
+  worldLine/worldPoint/worldPolyline,不再绕 acdb::AcDbLine/AcDbPoint
+  实体或手填 Stroke。
+- **原型体 mesh 走 AcGiGeometry**(2026-10-15):appendMeshEntityToScene
+  的原型体分支改为 AcGiWorldDraw——填充样式 emit 原型三角汤为 shell 面
+  表([3,i,i+1,i+2] 逐汤面,保证与 CPU 拾取同一份数据),线框样式 emit
+  proceduralMeshFeatureEdges 为 worldLine;位置/缩放经 pushModelTransform
+  (与旧 GPU 实例同一 T·S)。**GPU 拾取不变**:queueGpuMeshPick 直接从记
+  录栅格化 ID,与可见通道解耦。**保留批次**:glTF 静态网格(纹理/PBR 在
+  mesh 管线,AcGi 无纹理词汇)、应力场分组实例(最多 1e6 实例,P3.4 不展
+  平)。注意:CenterCube 默认视图隐藏(!largeCoordinateCameraView)、
+  demo 网格 GRID_DEMO_MESHES 门控——默认场景像素差分 0 是这两个门控的
+  结果,验证需显式开启。
+- **协议命令保留**:mesh 批次(实例化)、GPU 曲线批
+  次(双精度 CPU 曲线)、GridCommand(无限网格着色器)不走 AcGi 图元
+  (P3.4 验收:不展平成三角形汤);CAD 选中重色是缓存拷贝重色,不是图
+  元发射。
+- **AcGiGeometry 返回约定**(2026-10-15 对齐 arxref.chm):图元回调
+  **kFalse(false)=已存储,kTrue(true)=终止**;AcGiDrawable::worldDraw
+  反过来 kTrue=视口无关表示;push/popModelTransform、pushClipBoundary
+  则 kTrue=成功。图元表面已补齐:circle×2/circularArc×2(扇区·弦闭合
+  带填充)/ellipticalArc/polyline/polyPolyline/polygon/polypoint(真点
+  而非 ARX 退化线段)/rowOfDots/ray/xline/mesh/shell(ARX face-list 编码,
+  fan 三角化)/行为变换(视口·屏幕行为塌缩到 world)/剪裁边界(受理未
+  生效)。未移植:polyPolygon/image/ownerDraw 实体上传/edge/pline。
+  独立检查程序:build2022/gi_repro.cpp + compile_gi_repro.bat。
 
 ## bgfx view 地图(2026-10 现状)
 
@@ -121,6 +185,10 @@ acgi ── 协议层: WorldDraw / TextDevice / AcGiTextStyle(渲染器实现协
 | lib/acgs/AcGsView.h/.cpp | 活视口: 相机/交互/viewport record 绑定/submit 管线 |
 | lib/acgs/AcGsSelectionManager.h/.cpp | ID 注册表(身份稳定)/queueSoupChunks |
 | lib/acgs/AcGsProtocol.h | 提交词汇: 顶点/RenderData/GpuPick 结构 |
+| lib/acgs/model/AcGsDocumentReplayer.h | Gs 回放: 每实体建 drawable,密封协议 setAttributes→worldDraw,记录 metafile 范围 |
+| lib/acgi/AcGiDrawable.h/.cpp | regen 协议根 + AcGiDrawableTraits/Overrule(注册链)/Reactor/Event(acgiDrawableEvent 单例) |
+| lib/acgi/AcGiEntityDrawable.h | drawable 子类树 + makeEntityDrawable 工厂(叶/SHX/compound/INSERT/MINSERT) |
+| lib/acgi/AcGiWorldDraw.h/.cpp | AcGiGeometry→AcGiWorldGeometry→AcGiWorldDraw(+AcGiSubEntityTraits)→AcGiViewportDraw;draw() 嵌套 |
 | lib/rendering/BgfxRenderer.cpp | 全部 view 的实现;submitGpuPickPrimitives = ID pass 状态机 |
 | lib/shaders/present/fs_present.sc | FXAA + 选中描边/ID 调试合成(presentIdDebug 解码的是 **s_texColor**,非 ID 纹理——临时看 ID 别走这条路) |
 | lib/shaders/cadCore/depth.sh | cad_outputDepth: log 深度 + 深度板外 discard(所有几何共用,保证跨 pass 深度可比) |

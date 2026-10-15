@@ -28,80 +28,12 @@
 #include "arx/ArxTypes.h"
 #include "arx/AcCmEntityColor.h"
 #include "acge/AcGePoint.h"
+#include "acdb/AcDbHandle.h"
+#include "acgi/AcGiDrawable.h"
 
-namespace acdb
-{
-
-// ---- AcDbHandle: persistent object identifier (DXF/DWG handle) ----
-
-struct ACDB_PORT AcDbHandle
-{
-    std::uint64_t value = 0;
-
-    // Implicit conversions so payload field reads/writes
-    // (entity.common.handle = 0xCAFE) keep compiling against u64 handles.
-    AcDbHandle() = default;
-    constexpr AcDbHandle(std::uint64_t v) : value(v) {}
-    operator std::uint64_t() const { return value; }
-
-    bool isValid() const { return value != 0; }
-    bool operator==(const AcDbHandle &other) const = default;
-};
-
-constexpr AcDbHandle kNullHandle{};
-
-} // namespace acdb
-
-template <> struct std::hash<acdb::AcDbHandle>
-{
-    std::size_t operator()(const acdb::AcDbHandle &handle) const noexcept
-    {
-        return std::hash<std::uint64_t>()(handle.value);
-    }
-};
-
-namespace acdb
-{
-
-// ---- AcDbObjectId: session-scoped object identifier ----
-//
-// ObjectARX hands every database-resident object two identities: the
-// persistent AcDbHandle (file anchor, survives save/load through
-// AcDbStore) and the AcDbObjectId (session identity, what call sites
-// pass around and what the in-memory graphics scene resolves).  This
-// layer reproduces the split: AcDbObjectId wraps the handle 1:1 today,
-// but is a distinct type so runtime identity and file identity can
-// never blur at a call site.  The in-memory mirror (acgs::SceneStore)
-// is keyed by this; SQLite stays handle-keyed end to end.
-
-struct ACDB_PORT AcDbObjectId
-{
-    AcDbHandle handle{};
-
-    constexpr AcDbObjectId() = default;
-    constexpr explicit AcDbObjectId(AcDbHandle persistentHandle)
-        : handle(persistentHandle)
-    {
-    }
-
-    bool isValid() const { return handle.isValid(); }
-    // The file anchor this session identity currently maps to.
-    constexpr AcDbHandle persistentHandle() const { return handle; }
-
-    bool operator==(const AcDbObjectId &other) const = default;
-};
-
-constexpr AcDbObjectId kNullObjectId{};
-
-} // namespace acdb
-
-template <> struct std::hash<acdb::AcDbObjectId>
-{
-    std::size_t operator()(const acdb::AcDbObjectId &id) const noexcept
-    {
-        return std::hash<acdb::AcDbHandle>()(id.handle);
-    }
-};
+class AcGiWorldDraw;
+class AcGiViewportDraw;
+class AcGiDrawableTraits;
 
 namespace acdb
 {
@@ -121,15 +53,37 @@ public:
 
 // ---- AcDbEntity: common entity properties ----
 //
+// ObjectARX shape: AcDbEntity derives AcDbObject and AcGiDrawable, so
+// every concrete entity (AcDbPolyFaceMesh included) is-a AcGiDrawable and
+// the graphics system drives it through the sealed regen protocol.  The
+// base stays concrete (soup records embed AcDbEntity by value) — the
+// deviation from ARX, where the sub* hooks are pure and the class
+// abstract.  Concrete entities override subWorldDraw (the ARX
+// custom-entity contract); the default implementations live in
+// AcDbEntityWorldDraw.cpp.
+//
 // Field names intentionally mirror acdb::AcDbEntity (the demo
 // payload reads them directly); the accessors carry the ObjectARX
 // spellings (setLayerName/getLineWeight/...).  setDatabaseDefaults
 // applies the database's active settings exactly like
 // AcDbEntity::setDatabaseDefaults.
 
-class ACDB_PORT AcDbEntity : public AcDbObject
+class ACDB_PORT AcDbEntity : public AcDbObject, public AcGiDrawable
 {
 public:
+    // ---- AcGiDrawable identity ----
+
+    Adesk::Boolean isPersistent() const override
+    {
+        return handle.isValid();
+    }
+
+    acdb::AcDbObjectId id() const override
+    {
+        return isPersistent() ? acdb::AcDbObjectId(handle)
+                              : acdb::AcDbObjectId();
+    }
+
     // AcDbEntity::setLayerName / getLayerName
     void setLayerName(const std::string &layerName) { layer = layerName; }
     const std::string &getLayerName() const { return layer; }
@@ -168,6 +122,15 @@ public:
     std::string lineType = "ByLayer";
     double lineWeight = 0.0;
     bool visible = true;
+
+protected:
+    // Protocol hooks.  The base defaults: attributes stamp the entity
+    // common (kDrawableIsAnEntity), worldDraw emits nothing (concrete
+    // entities override), viewportDraw replays worldDraw.  Definitions in
+    // AcDbEntityWorldDraw.cpp.
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *traits) override;
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
+    void subViewportDraw(AcGiViewportDraw *vd) override;
 };
 
 // ---- Symbol tables (AcDbLayerTable / AcDbLinetypeTable / ...) ----

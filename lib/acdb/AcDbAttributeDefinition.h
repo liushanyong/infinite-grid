@@ -18,9 +18,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbAttributeDefinition
+struct ACDB_PORT AcDbAttributeDefinition : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     AcGePoint3d insertion{0.0, 0.0, 0.0};
     double height = 1.0;
     double rotation = 0.0;

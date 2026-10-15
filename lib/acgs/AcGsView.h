@@ -5,9 +5,9 @@
 // AcGsView — the single app-facing render gateway, modeled on ObjectARX's
 // AcGsView + AcGiDefaultContext.  Everything the application draws goes
 // through here:
-//   * acgs::AcGsModel submissions (AcGiDrawable::collect output) are
-//     expanded into the renderer's line-instance / ribbon / fill / point /
-//     mesh-instance channels,
+//   * acgs::AcGsModel draw lists (fed by the acgi::AcGiDrawable regen
+//     protocol through the Gs replay) are expanded into the renderer's
+//     line-instance / ribbon / fill / point / mesh-instance channels,
 //   * queued acgi::TextRequest records are flushed through the text engine,
 //   * selection highlighters and transient overlays reuse the shared
 //     ribbon / frustum-clip primitives exposed below.

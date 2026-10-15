@@ -18,9 +18,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbFcf
+struct ACDB_PORT AcDbFcf : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     AcGePoint3d insertion{0.0, 0.0, 0.0};
     // Frame's reading direction (DXF 11 x_direction).
     AcGeVector3d direction{1.0, 0.0, 0.0};

@@ -17,9 +17,11 @@ enum class LightType
     Spot,
 };
 
-struct ACDB_PORT AcDbLight
+struct ACDB_PORT AcDbLight : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     LightType type = LightType::AcDbPoint;
     AcGePoint3d position{0.0, 0.0, 0.0};
     AcGeVector3d target{0.0, 0.0, -1.0};

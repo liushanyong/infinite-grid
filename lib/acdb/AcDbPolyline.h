@@ -12,9 +12,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbPolyline
+struct ACDB_PORT AcDbPolyline : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     AcArray<AcGePoint2d> vertices;
     AcArray<double> bulges;
     double elevation = 0.0;

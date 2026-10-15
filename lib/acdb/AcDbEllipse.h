@@ -10,9 +10,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbEllipse
+struct ACDB_PORT AcDbEllipse : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     AcGePoint3d center{0.0, 0.0, 0.0};
     AcGeVector3d majorAxis{0.0, 0.0, 0.0};
     double radiusRatio = 1.0;

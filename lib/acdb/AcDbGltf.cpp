@@ -519,8 +519,8 @@ void walkGltfNodes(ImportContext &ctx, const std::vector<int> &nodeIndices,
                 ++used;
 
                 AcDbPolyFaceMesh entity;
-                entity.common.name = "GLTF/" + entityName;
-                entity.common.layer = "GLTF";
+                entity.name = "GLTF/" + entityName;
+                entity.layer = "GLTF";
                 std::string skipReason;
                 if (importGltfPrimitive(ctx, gltfMesh, primitiveIndex, world,
                                         entityName, entity, skipReason))
@@ -530,7 +530,7 @@ void walkGltfNodes(ImportContext &ctx, const std::vector<int> &nodeIndices,
                         ctx,
                         gltfMesh.primitives[size_t(primitiveIndex)].material,
                         &entityAlpha);
-                    entity.common.color = glm::vec4(
+                    entity.color = glm::vec4(
                         entity.material.baseColorFactor.r,
                         entity.material.baseColorFactor.g,
                         entity.material.baseColorFactor.b, entityAlpha);
@@ -813,7 +813,7 @@ bool exportGltf(const std::vector<const AcDbPolyFaceMesh *> &meshes,
         // One material per entity, deduped by the exported field set.
         std::size_t materialIndex = model.materials.size();
         const std::string materialKey =
-            entity->common.name + "/" +
+            entity->name + "/" +
             std::to_string(entity->material.metallicFactor) + "/" +
             std::to_string(entity->material.roughnessFactor);
         const auto materialFound = materialByName.find(materialKey);
@@ -824,7 +824,7 @@ bool exportGltf(const std::vector<const AcDbPolyFaceMesh *> &meshes,
         else
         {
             tinygltf::Material material;
-            material.name = entity->common.name + "_material";
+            material.name = entity->name + "_material";
             const glm::vec4 baseColor = entity->material.baseColorFactor;
             tinygltf::Parameter baseColorParameter;
             baseColorParameter.number_array = {
@@ -878,9 +878,9 @@ bool exportGltf(const std::vector<const AcDbPolyFaceMesh *> &meshes,
         primitive.mode = kGltfModeTriangles;
 
         tinygltf::Mesh mesh;
-        mesh.name = entity->common.name.empty()
+        mesh.name = entity->name.empty()
                         ? "mesh" + std::to_string(exported)
-                        : entity->common.name;
+                        : entity->name;
         mesh.primitives.push_back(std::move(primitive));
 
         tinygltf::Node node;

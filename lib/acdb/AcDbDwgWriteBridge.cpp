@@ -264,7 +264,7 @@ void writeAttachedAttributes(
                                           NULL);
                 }
             }
-            applyCommon(ctx, attrib->parent, attribute->common);
+            applyCommon(ctx, attrib->parent, *attribute);
             trackHandle(ctx, attrib);
             if (Dwg_Object *attribObject =
                     dwg_obj_generic_to_object(attrib, &ownerError))
@@ -329,7 +329,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->thickness = line.thickness;
     if (!isDefaultNormal(line.extrusion))
         assign3rd(obj->extrusion, toDwgVector(line.extrusion));
-    applyCommon(ctx, obj->parent, line.common);
+    applyCommon(ctx, obj->parent, line);
     trackHandle(ctx, obj);
     return true;
 }
@@ -345,7 +345,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->thickness = arc.thickness;
     if (!isDefaultNormal(arc.normal))
         assign3rd(obj->extrusion, toDwgVector(arc.normal));
-    applyCommon(ctx, obj->parent, arc.common);
+    applyCommon(ctx, obj->parent, arc);
     trackHandle(ctx, obj);
     return true;
 }
@@ -361,7 +361,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->thickness = circle.thickness;
     if (!isDefaultNormal(circle.normal))
         assign3rd(obj->extrusion, toDwgVector(circle.normal));
-    applyCommon(ctx, obj->parent, circle.common);
+    applyCommon(ctx, obj->parent, circle);
     trackHandle(ctx, obj);
     return true;
 }
@@ -381,7 +381,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->end_angle = ellipse.endParameter;
     if (!isDefaultNormal(ellipse.normal))
         assign3rd(obj->extrusion, toDwgVector(ellipse.normal));
-    applyCommon(ctx, obj->parent, ellipse.common);
+    applyCommon(ctx, obj->parent, ellipse);
     trackHandle(ctx, obj);
     return true;
 }
@@ -393,7 +393,7 @@ bool writePayload(DwgWriteContext &ctx,
     Dwg_Entity_POINT *obj = dwg_add_POINT(hdr, &location);
     if (obj == nullptr)
         return false;
-    applyCommon(ctx, obj->parent, point.common);
+    applyCommon(ctx, obj->parent, point);
     trackHandle(ctx, obj);
     return true;
 }
@@ -406,7 +406,7 @@ bool writePayload(DwgWriteContext &ctx,
     Dwg_Entity_RAY *obj = dwg_add_RAY(hdr, &start, &direction);
     if (obj == nullptr)
         return false;
-    applyCommon(ctx, obj->parent, ray.common);
+    applyCommon(ctx, obj->parent, ray);
     trackHandle(ctx, obj);
     return true;
 }
@@ -419,7 +419,7 @@ bool writePayload(DwgWriteContext &ctx,
     Dwg_Entity_XLINE *obj = dwg_add_XLINE(hdr, &point, &direction);
     if (obj == nullptr)
         return false;
-    applyCommon(ctx, obj->parent, xline.common);
+    applyCommon(ctx, obj->parent, xline);
     trackHandle(ctx, obj);
     return true;
 }
@@ -436,7 +436,7 @@ bool writePayload(DwgWriteContext &ctx,
     if (obj == nullptr)
         return false;
     obj->elevation = solid.firstCorner.z;
-    applyCommon(ctx, obj->parent, solid.common);
+    applyCommon(ctx, obj->parent, solid);
     trackHandle(ctx, obj);
     return true;
 }
@@ -490,7 +490,7 @@ bool writePayload(DwgWriteContext &ctx,
         flag |= 1;
     }
     obj->flag = flag; // presence bitmask the encoder keys off
-    applyCommon(ctx, obj->parent, polyline.common);
+    applyCommon(ctx, obj->parent, polyline);
     trackHandle(ctx, obj);
     return true;
 }
@@ -511,7 +511,7 @@ bool writePayload(DwgWriteContext &ctx,
     // instead of clobbering the type marker.
     if (polyline.closed)
         obj->flag |= FLAG_POLYLINE_CLOSED;
-    applyCommon(ctx, obj->parent, polyline.common);
+    applyCommon(ctx, obj->parent, polyline);
     trackHandle(ctx, obj);
     return true;
 }
@@ -567,7 +567,7 @@ bool writePayload(DwgWriteContext &ctx,
                 obj->fit_pts[i].z = spline.fitPoints[i].z;
             }
     }
-    applyCommon(ctx, obj->parent, spline.common);
+    applyCommon(ctx, obj->parent, spline);
     trackHandle(ctx, obj);
     return true;
 }
@@ -589,7 +589,7 @@ bool writePayload(DwgWriteContext &ctx,
     }
     if (text.styleName != "Standard")
         obj->style = textStyleRef(ctx, text.styleName);
-    applyCommon(ctx, obj->parent, text.common);
+    applyCommon(ctx, obj->parent, text);
     trackHandle(ctx, obj);
     return true;
 }
@@ -605,7 +605,7 @@ bool writePayload(DwgWriteContext &ctx,
         return false;
     obj->text_height = mtext.height;
     assign3rd(obj->x_axis_dir, toDwgVector(mtext.direction));
-    applyCommon(ctx, obj->parent, mtext.common);
+    applyCommon(ctx, obj->parent, mtext);
     trackHandle(ctx, obj);
     return true;
 }
@@ -658,7 +658,7 @@ bool writePayload(DwgWriteContext &ctx,
         }
     }
     obj->elevation = elevation;
-    applyCommon(ctx, obj->parent, hatch.common);
+    applyCommon(ctx, obj->parent, hatch);
     trackHandle(ctx, obj);
     return true;
 }
@@ -692,7 +692,7 @@ bool writePayload(DwgWriteContext &ctx,
         vertices.data(), faceTable);
     if (obj == nullptr)
         return false;
-    applyCommon(ctx, obj->parent, mesh.common);
+    applyCommon(ctx, obj->parent, mesh);
     trackHandle(ctx, obj);
     return true;
 }
@@ -710,7 +710,7 @@ bool writePayload(DwgWriteContext &ctx,
     if (obj == nullptr)
         return false;
     obj->scale = mline.scale.x;
-    applyCommon(ctx, obj->parent, mline.common);
+    applyCommon(ctx, obj->parent, mline);
     trackHandle(ctx, obj);
     return true;
 }
@@ -738,7 +738,7 @@ bool writePayload(DwgWriteContext &ctx,
     }
     if (!isDefaultNormal(reference.normal))
         assign3rd(obj->extrusion, toDwgVector(reference.normal));
-    applyCommon(ctx, obj->parent, reference.common);
+    applyCommon(ctx, obj->parent, reference);
     trackHandle(ctx, obj);
     writeAttachedAttributes(ctx, obj, reference.attributeHandles);
     return true;
@@ -757,7 +757,7 @@ bool writePayload(DwgWriteContext &ctx,
         return false;
     obj->oblique_angle = dimension.obliqueAngle;
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -776,7 +776,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->oblique_angle = dimension.obliqueAngle;
     assign3rd(obj->def_pt, toDwgPoint(dimension.dimensionLinePoint));
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -796,7 +796,7 @@ bool writePayload(DwgWriteContext &ctx,
     assign3rd(obj->xline1start_pt, toDwgPoint(dimension.xLine1StartPoint));
     assign3rd(obj->xline2start_pt, toDwgPoint(dimension.xLine2StartPoint));
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -814,7 +814,7 @@ bool writePayload(DwgWriteContext &ctx,
     if (obj == nullptr)
         return false;
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -830,7 +830,7 @@ bool writePayload(DwgWriteContext &ctx,
     if (obj == nullptr)
         return false;
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -846,7 +846,7 @@ bool writePayload(DwgWriteContext &ctx,
     if (obj == nullptr)
         return false;
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -866,7 +866,7 @@ bool writePayload(DwgWriteContext &ctx,
     // bit 0x80 in this flag, so mirror that for the DXF roundtrip.
     obj->flag = BITCODE_RC(6 | 32 | (dimension.useXAxis ? 0x80 : 0));
     fillDwgDimension(ctx, obj, dimension.dimension);
-    applyCommon(ctx, obj->parent, dimension.common);
+    applyCommon(ctx, obj->parent, dimension);
     trackHandle(ctx, obj);
     return true;
 }
@@ -892,7 +892,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->hookline_on = leader.hasHookLine ? 1 : 0;
     if (Dwg_Object_Ref *ref = dimStyleRef(ctx, leader.dimensionStyleName))
         obj->dimstyle = ref;
-    applyCommon(ctx, obj->parent, leader.common);
+    applyCommon(ctx, obj->parent, leader);
     trackHandle(ctx, obj);
     return true;
 }
@@ -910,7 +910,7 @@ bool writePayload(DwgWriteContext &ctx,
         obj->height = fcf.height;
     if (!isDefaultNormal(fcf.normal))
         assign3rd(obj->extrusion, toDwgVector(fcf.normal));
-    applyCommon(ctx, obj->parent, fcf.common);
+    applyCommon(ctx, obj->parent, fcf);
     trackHandle(ctx, obj);
     return true;
 }
@@ -930,7 +930,7 @@ bool writePayload(DwgWriteContext &ctx,
     obj->thickness = shape.thickness;
     if (!shape.shapeName.empty())
         obj->style = textStyleRef(ctx, shape.shapeName);
-    applyCommon(ctx, obj->parent, shape.common);
+    applyCommon(ctx, obj->parent, shape);
     trackHandle(ctx, obj);
     return true;
 }
@@ -961,7 +961,7 @@ bool writePayload(DwgWriteContext &ctx,
     }
     if (!definition.styleName.empty() && definition.styleName != "Standard")
         obj->style = textStyleRef(ctx, definition.styleName);
-    applyCommon(ctx, obj->parent, definition.common);
+    applyCommon(ctx, obj->parent, definition);
     trackHandle(ctx, obj);
     return true;
 }
@@ -990,7 +990,7 @@ bool writePayload(DwgWriteContext &ctx,
     }
     if (!isDefaultNormal(insert.normal))
         assign3rd(obj->extrusion, toDwgVector(insert.normal));
-    applyCommon(ctx, obj->parent, insert.common);
+    applyCommon(ctx, obj->parent, insert);
     trackHandle(ctx, obj);
     // Attached ATTRIBs are not written back: dwg_add_ATTRIB only accepts
     // a Dwg_Entity_INSERT*, and the two structs share no safe alias.

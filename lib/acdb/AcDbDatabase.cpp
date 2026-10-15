@@ -13,14 +13,14 @@ namespace acdb
 AcDbEntity &common(AcDbEntityVariant &payload)
 {
     return std::visit([](auto &entity) -> AcDbEntity & {
-        return entity.common;
+        return entity;
     }, payload);
 }
 
 const AcDbEntity &common(const AcDbEntityVariant &payload)
 {
     return std::visit([](const auto &entity) -> const AcDbEntity & {
-        return entity.common;
+        return entity;
     }, payload);
 }
 

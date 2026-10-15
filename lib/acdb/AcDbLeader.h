@@ -18,9 +18,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbLeader
+struct ACDB_PORT AcDbLeader : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     // Leader vertices in world coordinates; points[0] is the arrow end.
     std::vector<AcGePoint3d> points;
     // LEADER path_type: 0 = straight segments, 1 = spline fitted.

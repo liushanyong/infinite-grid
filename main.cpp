@@ -754,14 +754,11 @@ void appendSceneLine(acgs::AcGsModel &drawList,
                      const acgs::math::Vec3 &color, float opacity,
                      double lineWeight = 2.0)
 {
-  acgs::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgsView().contrastColor(acgs::math::Vec4(color, opacity)));
-  draw.subEntityTraits().setLineWeight(lineWeight);
-
-  acdb::AcDbLine line;
-  line.start = start;
-  line.end = end;
-  acdb::worldDraw(line, draw);
+  acgs::ViewportDraw draw(drawList.geometry());
+  AcGiWorldDraw graphics(draw);
+  graphics.setColor(acgsView().contrastColor(acgs::math::Vec4(color, opacity)));
+  graphics.setLineWeight(lineWeight);
+  graphics.worldLine(AcGePoint3d(start), AcGePoint3d(end));
 }
 
 bool lineDebugEnabled()
@@ -777,13 +774,11 @@ void appendScenePoint(acgs::AcGsModel &drawList,
                       const acgs::math::DVec3 &location, const acgs::math::Vec3 &color,
                       double pointSize)
 {
-  acgs::WorldDraw draw(drawList.geometry());
-  draw.subEntityTraits().setColor(acgsView().contrastColor(acgs::math::Vec4(color, 1.0f)));
-  draw.subEntityTraits().setLineWeight(pointSize);
-
-  acdb::AcDbPoint point;
-  point.location = location;
-  acdb::worldDraw(point, draw);
+  acgs::ViewportDraw draw(drawList.geometry());
+  AcGiWorldDraw graphics(draw);
+  graphics.setColor(acgsView().contrastColor(acgs::math::Vec4(color, 1.0f)));
+  graphics.setLineWeight(pointSize);
+  graphics.worldPoint(AcGePoint3d(location));
 }
 
 // Dynamic overlays stay in the AcGi-lite protocol but are never placed in the
@@ -829,7 +824,7 @@ struct MeshEntityRecord
 
   const std::string &displayName() const
   {
-    return entity.common.name;
+    return entity.name;
   }
 };
 
@@ -965,13 +960,13 @@ static bool gpuPickFocusWaiting()
 acgs::math::Vec4 meshEntityColor(const MeshEntityRecord &entity)
 {
   return acgsView().contrastColor(
-      entity.entity.common.color.renderColor());
+      entity.entity.color.renderColor());
 }
 
 bool meshEntityVisible(const MeshEntityRecord &entity)
 {
-  return entity.entity.common.visible &&
-         entity.entity.common.color.alpha() > 0.0f;
+  return entity.entity.visible &&
+         entity.entity.color.alpha() > 0.0f;
 }
 
 // In-scene selection recolor: the selected entity's primitives draw with
@@ -1162,55 +1157,121 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
   if (!meshEntityVisible(entity))
     return;
 
-  // Imported glTF meshes upload once and draw indexed static geometry.
-  if (entity.staticMesh && entity.staticMesh->gpuId == 0)
+  // Imported glTF meshes keep the static-mesh batch: the albedo texture and
+  // PBR factors live in the mesh pipeline, which the AcGi geometry toolkit
+  // does not carry.
+  if (entity.staticMesh)
   {
-    if (acgs::acgsGetManager()->deviceReady())
-      entity.staticMesh->gpuId =
-          acgs::acgsGetManager()->createStaticMesh(entity.staticMesh->cpu);
     if (entity.staticMesh->gpuId == 0)
     {
-      static bool warnedStaticUpload = false;
-      if (!warnedStaticUpload)
+      if (acgs::acgsGetManager()->deviceReady())
+        entity.staticMesh->gpuId =
+            acgs::acgsGetManager()->createStaticMesh(entity.staticMesh->cpu);
+      if (entity.staticMesh->gpuId == 0)
       {
-        warnedStaticUpload = true;
-        std::cerr << "glTF static mesh upload failed; model skipped"
-                  << std::endl;
+        static bool warnedStaticUpload = false;
+        if (!warnedStaticUpload)
+        {
+          warnedStaticUpload = true;
+          std::cerr << "glTF static mesh upload failed; model skipped"
+                    << std::endl;
+        }
+        return;
       }
-      return;
     }
-  }
 
-  const bool imported = entity.staticMesh != nullptr;
-  const acgs::math::Vec4 color =
-      colorOverride
-          ? acgs::math::Vec4(*colorOverride,
-                      imported ? entity.entity.common.color.alpha()
-                               : meshEntityColor(entity).a)
-          : (imported ? entity.entity.common.color.renderColor()
-                      : meshEntityColor(entity));
-  const acgs::math::Vec4 material = meshEntityRenderMaterial(entity);
-  acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
-      entity.mesh, color.a >= 1.0f, imported || entity.realistic(), material,
-      cadAlgorithm);
-  batch.acgiMaterial.algorithm = (imported || entity.realistic())
-      ? acgs::AcGiShaderAlgorithm::Realistic
-      : acgs::AcGiShaderAlgorithm::Shaded;
-  batch.acgiMaterial.baseColor = color;
-  batch.acgiMaterial.accentColor = entity.entity.material.specularFactor;
-  batch.acgiMaterial.metallic = entity.entity.material.metallicFactor;
-  batch.acgiMaterial.roughness = entity.entity.material.roughnessFactor;
-  batch.acgiMaterial.transparency = 1.0f - color.a;
-  batch.acgiMaterial.lineWidth = float(entity.entity.common.lineWeight);
-  // Imported models keep their authored albedo colors: the contrast pass
-  // exists for flat demo colors against the CAD background and would tint
-  // dark PBR base colors.
-  if (imported)
-  {
+    const acgs::math::Vec4 color =
+        colorOverride
+            ? acgs::math::Vec4(*colorOverride,
+                               entity.entity.color.alpha())
+            : entity.entity.color.renderColor();
+    const acgs::math::Vec4 material = meshEntityRenderMaterial(entity);
+    acgs::MeshBatchCommand &batch = drawList.addMeshBatch(
+        entity.mesh, color.a >= 1.0f, true /* imported: realistic */, material,
+        cadAlgorithm);
+    batch.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Realistic;
+    batch.acgiMaterial.baseColor = color;
+    batch.acgiMaterial.accentColor = entity.entity.material.specularFactor;
+    batch.acgiMaterial.metallic = entity.entity.material.metallicFactor;
+    batch.acgiMaterial.roughness = entity.entity.material.roughnessFactor;
+    batch.acgiMaterial.transparency = 1.0f - color.a;
+    batch.acgiMaterial.lineWidth = float(entity.entity.lineWeight);
+    // Imported models keep their authored albedo colors: the contrast pass
+    // exists for flat demo colors against the CAD background and would tint
+    // dark PBR base colors.
     batch.staticMeshId = entity.staticMesh->gpuId;
     batch.diffuseTextureIndex = entity.diffuseTextureIndex;
+    batch.instances.push_back(cachedMeshInstance(entity, material, colorOverride));
+    return;
   }
-  batch.instances.push_back(cachedMeshInstance(entity, material, colorOverride));
+
+  // Prototype meshes draw through the AcGiGeometry mesh toolkit: fill
+  // styles emit the prototype soup as a shell face list, wireframe styles
+  // emit the feature-edge list as worldLine strokes.  Placement rides the
+  // model transform stack — the same uniform scale + translation the former
+  // GPU instance carried.  GPU picking keeps rasterizing the record itself
+  // (queueGpuMeshPick), so the visible channel is free to move.
+  const rendering::RenderModeFlags renderFlags =
+      acgs::acgsGetManager()->deviceReady()
+          ? acgs::acgsGetManager()->deviceRenderModeFlags()
+          : rendering::RenderModeFlags{};
+  const acgs::math::Vec4 color =
+      colorOverride
+          ? acgs::math::Vec4(*colorOverride, meshEntityColor(entity).a)
+          : meshEntityColor(entity);
+
+  acgs::ViewportDraw draw(drawList.geometry());
+  AcGiWorldDraw graphics(draw);
+  acdb::AcDbEntity meshTraits;
+  meshTraits.name = entity.entity.name;
+  graphics.setFrom(meshTraits);
+  graphics.setColor(color);
+  graphics.pushModelTransform(entity.worldPosition.asVector());
+  graphics.pushModelTransform(AcGeMatrix3d::setToScaling(entity.instanceScale()));
+
+  if (renderFlags.meshFill)
+  {
+    // The prototype soup is the exact triangle data CPU picking uses, so
+    // the shell face list walks it verbatim (three consecutive soup
+    // vertices per face) instead of regenerating grid geometry.
+    const std::vector<float> &soup =
+        rendering::proceduralMeshVertices(entity.mesh);
+    const size_t vertexCount =
+        soup.size() / rendering::kProceduralMeshFloatStride;
+    std::vector<AcGePoint3d> vertices;
+    vertices.reserve(vertexCount);
+    for (size_t index = 0; index < vertexCount; ++index)
+      vertices.emplace_back(soup[index * 8 + 0], soup[index * 8 + 1],
+                            soup[index * 8 + 2]);
+    std::vector<Adesk::Int32> faceList;
+    faceList.reserve(vertexCount / 3 * 4);
+    for (size_t vertex = 0; vertex < vertexCount; vertex += 3)
+    {
+      faceList.push_back(3);
+      faceList.push_back(static_cast<Adesk::Int32>(vertex));
+      faceList.push_back(static_cast<Adesk::Int32>(vertex + 1));
+      faceList.push_back(static_cast<Adesk::Int32>(vertex + 2));
+    }
+    graphics.shell(static_cast<Adesk::UInt32>(vertexCount), vertices.data(),
+                   static_cast<Adesk::UInt32>(faceList.size()),
+                   faceList.data());
+  }
+  else
+  {
+    // Wireframe styles: the mesh channel used to rasterize the prototype's
+    // feature edges from this same line list.
+    const std::vector<float> &edges =
+        rendering::proceduralMeshFeatureEdges(entity.mesh);
+    const size_t edgeCount =
+        edges.size() / rendering::kProceduralMeshFloatStride / 2;
+    for (size_t index = 0; index < edgeCount; ++index)
+    {
+      const size_t base = index * 2 * rendering::kProceduralMeshFloatStride;
+      graphics.worldLine(
+          AcGePoint3d(edges[base + 0], edges[base + 1], edges[base + 2]),
+          AcGePoint3d(edges[base + 8], edges[base + 9], edges[base + 10]));
+    }
+  }
 }
 
 acgs::math::Vec4 meshEntityRenderMaterial(const MeshEntityRecord &entity)
@@ -1295,10 +1356,10 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
       {
         MeshEntityRecord object;
         object.worldPosition = detailCenter + point.offset;
-        object.entity.common.color = acgs::math::Vec4(point.color, 0.45f);
+        object.entity.color = acgs::math::Vec4(point.color, 0.45f);
         object.size = point.size;
         object.mesh = point.mesh;
-        object.entity.common.name =
+        object.entity.name =
             indexedDisplayName(meshDisplayName(object.mesh), objects.size());
         objects.push_back(std::move(object));
       }
@@ -1322,10 +1383,10 @@ const std::vector<LargeCoordinateObject> &getLargeCoordinateObjects()
 MeshEntityRecord getCenterCubeEntity()
 {
   MeshEntityRecord entity;
-  entity.entity.common.name = "CenterCube";
-  entity.entity.common.visible =
+  entity.entity.name = "CenterCube";
+  entity.entity.visible =
       !largeCoordinateCameraView || centerCubeForced();
-  entity.entity.common.color = acgs::math::Vec4(1.0f, 0.58f, 0.25f, 1.0f);
+  entity.entity.color = acgs::math::Vec4(1.0f, 0.58f, 0.25f, 1.0f);
   entity.worldPosition = cubeWorldPosition;
   entity.size = 1.0f;
   entity.mesh = rendering::MeshType::Cube;
@@ -1661,11 +1722,11 @@ static void appendDemoBlocks()
   const AcGePoint3d blockAnchor = vectorPrimitivesAnchor();
   const double base = 240.0;
   acdb::AcDbLine left;
-  left.common.color = acgs::math::Vec4(0.30f, 0.85f, 0.55f, 1.0f);
+  left.color = acgs::math::Vec4(0.30f, 0.85f, 0.55f, 1.0f);
   left.start = blockAnchor;
   left.end = blockAnchor + AcGeVector3d(0.0, base, 0.0);
   acdb::AcDbLine bottom;
-  bottom.common.color = acgs::math::Vec4(0.30f, 0.85f, 0.55f, 1.0f);
+  bottom.color = acgs::math::Vec4(0.30f, 0.85f, 0.55f, 1.0f);
   bottom.start = blockAnchor;
   bottom.end = blockAnchor + AcGeVector3d(base, 0.0, 0.0);
   const acdb::AcDbHandle leftHandle = document.addEntity(left);
@@ -1707,15 +1768,18 @@ static AcGePoint3d demoCadAnchor()
 
 // Authors one demo entity into the document under a stable label; the
 // label doubles as the acgs::AcGsEntityRange key for picking and selection.
+// fillIs3DFace lands on the entity itself (entity data drives drawing —
+// ARX style); only payloads carrying the field accept it.
 template <typename EntityType>
 static void addDemo(EntityType entity, const std::string &name,
                     bool fillIs3DFace = false,
                     acgs::AcGsPickShape pickShape =
                         acgs::AcGsPickShape::Primitives)
 {
-  entity.common.name = name;
+  entity.name = name;
+  if constexpr (requires(EntityType &e) { e.fillIs3DFace; })
+    entity.fillIs3DFace = fillIs3DFace;
   acgs::AcGsReplayHints hints;
-  hints.fillIs3DFace = fillIs3DFace;
   hints.pickShape = pickShape;
   acgs::replayHints()[name] = hints;
   acdbDocument().addEntity(std::move(entity));
@@ -2008,26 +2072,78 @@ static void exportGltfDemoRecords(
     std::cerr << "GRID_GLTF: gltf export failed: " << error << std::endl;
 }
 
+// The active glTF model lives in the document as AcDbPolyFaceMesh
+// entities — the document is the source of truth (GRID_SAVE_DWG captures
+// them, the revision system owns invalidation).  The static-mesh GPU cache
+// stays rendering-side, keyed by entity handle, and the Gs replay skips
+// these handles: the records below feed the textured mesh channel instead.
+static std::vector<acdb::AcDbHandle> gGltfDocumentHandles;
+static std::filesystem::path gGltfLoadedPath;
+
+static std::map<acdb::AcDbHandle, std::shared_ptr<GltfStaticMesh>>
+    &gltfStaticMeshByHandle()
+{
+  static std::map<acdb::AcDbHandle, std::shared_ptr<GltfStaticMesh>> cache;
+  return cache;
+}
+
+static void loadGltfModelIntoDocument()
+{
+  if (gGltfActivePath.empty() || gGltfLoadedPath == gGltfActivePath)
+    return;
+  acdb::AcDbDatabase &document = acdbDocument();
+  for (const acdb::AcDbHandle handle : gGltfDocumentHandles)
+  {
+    document.removeEntity(handle);
+    gltfStaticMeshByHandle().erase(handle);
+  }
+  gGltfDocumentHandles.clear();
+  gGltfLoadedPath = gGltfActivePath;
+
+  const GltfDemoModelAsset &asset = gltfDemoAsset(gGltfActivePath);
+  if (!asset.valid)
+    return;
+  for (size_t i = 0; i < asset.import.meshes.size(); ++i)
+  {
+    acdb::AcDbPolyFaceMesh entity = asset.import.meshes[i];
+    if (entity.name.empty())
+      entity.name = asset.name + "/" + std::to_string(i);
+    const acdb::AcDbHandle handle = document.addEntity(std::move(entity));
+    gGltfDocumentHandles.push_back(handle);
+    gltfStaticMeshByHandle()[handle] = asset.meshes[i];
+  }
+}
+
 static void appendGltfDemoMeshes(VectorPrimitivesTessellation &target)
 {
-  if (gGltfActivePath.empty())
+  loadGltfModelIntoDocument();
+  if (gGltfDocumentHandles.empty())
     return;
   const GltfDemoModelAsset &asset = gltfDemoAsset(gGltfActivePath);
   if (!asset.valid)
     return;
-
+  const acdb::AcDbDatabase &document = acdbDocument();
   const AcGePoint3d placement = gltfDemoPlacement();
-  for (size_t i = 0; i < asset.import.meshes.size(); ++i)
+  for (const acdb::AcDbHandle handle : gGltfDocumentHandles)
   {
+    const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
+    if (payload == nullptr)
+      continue;
+    const auto *entity = std::get_if<acdb::AcDbPolyFaceMesh>(payload);
+    if (entity == nullptr)
+      continue;
+    const auto staticIt = gltfStaticMeshByHandle().find(handle);
+    if (staticIt == gltfStaticMeshByHandle().end())
+      continue;
     MeshEntityRecord record;
-    record.entity = asset.import.meshes[i];
+    record.entity = *entity;
     record.worldPosition = placement;
     // |size| is the visibility-candidate extent (makeMeshCandidate uses
     // size/2 as the half extent); the normalization already lives in the
     // vertices, so the instance draws at scale 1.
     record.size = float(2.0 * kGltfDemoTargetRadius);
     record.renderScale = 1.0f;
-    record.staticMesh = asset.meshes[i];
+    record.staticMesh = staticIt->second;
     const std::string &textureKey = record.entity.material.diffuseTexture;
     if (!textureKey.empty())
     {
@@ -2112,13 +2228,13 @@ static void buildDemoDocument()
     const AcGePoint3d demoAnchor = demoAnchorPoint();
 
     acdb::AcDbLine line;
-    line.common.color = acgs::math::Vec4(1.0f, 0.24f, 0.20f, 1.0f);
+    line.color = acgs::math::Vec4(1.0f, 0.24f, 0.20f, 1.0f);
     line.start = cadAnchor;
     line.end = cadAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     addDemo(line, "Line");
 
     acdb::AcDbArc arc;
-    arc.common.color = acgs::math::Vec4(1.0f, 0.52f, 0.10f, 1.0f);
+    arc.color = acgs::math::Vec4(1.0f, 0.52f, 0.10f, 1.0f);
     arc.center = cadAnchor + AcGeVector3d(1024.0, 256.0, 0.0);
     arc.radius = 192.0;
     arc.startAngle = 0.0;
@@ -2126,13 +2242,13 @@ static void buildDemoDocument()
     addDemo(arc, "Arc");
 
     acdb::AcDbCircle circle;
-    circle.common.color = acgs::math::Vec4(0.20f, 0.60f, 0.90f, 1.0f);
+    circle.color = acgs::math::Vec4(0.20f, 0.60f, 0.90f, 1.0f);
     circle.center = cadAnchor + AcGeVector3d(256.0, 512.0, 0.0);
     circle.radius = 160.0;
     addDemo(circle, "Circle");
 
     acdb::AcDbEllipse ellipse;
-    ellipse.common.color = acgs::math::Vec4(0.65f, 0.30f, 0.85f, 1.0f);
+    ellipse.color = acgs::math::Vec4(0.65f, 0.30f, 0.85f, 1.0f);
     ellipse.center = cadAnchor + AcGeVector3d(768.0, 640.0, 0.0);
     ellipse.majorAxis = AcGeVector3d(224.0, 0.0, 0.0);
     ellipse.radiusRatio = 0.55;
@@ -2141,7 +2257,7 @@ static void buildDemoDocument()
     // Partial ellipse: the parameter range draws an elliptical arc instead
     // of the closed curve.
     acdb::AcDbEllipse ellipseArc;
-    ellipseArc.common.color = acgs::math::Vec4(0.75f, 0.40f, 0.95f, 1.0f);
+    ellipseArc.color = acgs::math::Vec4(0.75f, 0.40f, 0.95f, 1.0f);
     ellipseArc.center = cadAnchor + AcGeVector3d(1536.0, -640.0, 0.0);
     ellipseArc.majorAxis = AcGeVector3d(160.0, 0.0, 0.0);
     ellipseArc.radiusRatio = 0.55;
@@ -2150,7 +2266,7 @@ static void buildDemoDocument()
     addDemo(ellipseArc, "EllipseArc");
 
     acdb::AcDb3dPolyline polyline;
-    polyline.common.color = acgs::math::Vec4(0.60f, 0.20f, 1.00f, 1.0f);
+    polyline.color = acgs::math::Vec4(0.60f, 0.20f, 1.00f, 1.0f);
     polyline.vertices = {
         cadAnchor + AcGeVector3d(-384.0, 128.0, 0.0),
         cadAnchor + AcGeVector3d(-128.0, 384.0, 0.0),
@@ -2160,7 +2276,7 @@ static void buildDemoDocument()
     addDemo(polyline, "Polyline");
 
     acdb::AcDbPolyline lwpolyline;
-    lwpolyline.common.color = acgs::math::Vec4(0.25f, 0.80f, 0.45f, 1.0f);
+    lwpolyline.color = acgs::math::Vec4(0.25f, 0.80f, 0.45f, 1.0f);
     lwpolyline.vertices = {AcGePoint2d(-256.0, -384.0),
                            AcGePoint2d(0.0, -192.0),
                            AcGePoint2d(256.0, -448.0)};
@@ -2171,7 +2287,7 @@ static void buildDemoDocument()
     addDemo(lwpolyline, "LwPolyline");
 
     acdb::AcDbSpline spline;
-    spline.common.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    spline.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
     spline.degree = 3;
     spline.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
     spline.controlPoints = {
@@ -2182,7 +2298,7 @@ static void buildDemoDocument()
     addDemo(spline, "Spline");
 
     acdb::AcDbHatch hatch;
-    hatch.common.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 0.75f);
+    hatch.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 0.75f);
     hatch.outerLoop = {
         cadAnchor + AcGeVector3d(1024.0, -384.0, 0.0),
         cadAnchor + AcGeVector3d(1408.0, -384.0, 0.0),
@@ -2193,7 +2309,7 @@ static void buildDemoDocument()
     // ANSI31 line pattern at unit scale; the inner loop punches a hole via
     // the even-odd rule.
     acdb::AcDbHatch patternHatch;
-    patternHatch.common.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 0.90f);
+    patternHatch.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 0.90f);
     patternHatch.solidFill = false;
     patternHatch.patternName = "ANSI31";
     patternHatch.patternScale = 1.0;
@@ -2212,7 +2328,7 @@ static void buildDemoDocument()
 
     // Same pattern family rotated 45 degrees and widened by patternScale.
     acdb::AcDbHatch angledHatch;
-    angledHatch.common.color = acgs::math::Vec4(0.35f, 0.55f, 0.95f, 0.90f);
+    angledHatch.color = acgs::math::Vec4(0.35f, 0.55f, 0.95f, 0.90f);
     angledHatch.solidFill = false;
     angledHatch.patternName = "ANSI31";
     angledHatch.patternScale = 2.0;
@@ -2225,7 +2341,7 @@ static void buildDemoDocument()
     addDemo(angledHatch, "AngledHatch");
 
     acdb::AcDbSolid solid;
-    solid.common.color = acgs::math::Vec4(0.50f, 0.50f, 0.90f, 0.85f);
+    solid.color = acgs::math::Vec4(0.50f, 0.50f, 0.90f, 0.85f);
     solid.firstCorner = cadAnchor + AcGeVector3d(0.0, -128.0, 256.0);
     solid.secondCorner = solid.firstCorner + AcGeVector3d(512.0, 0.0, 0.0);
     solid.thirdCorner = solid.firstCorner + AcGeVector3d(0.0, 384.0, 0.0);
@@ -2233,24 +2349,25 @@ static void buildDemoDocument()
     addDemo(solid, "Solid");
 
     acdb::AcDbRay ray;
-    ray.common.color = acgs::math::Vec4(0.10f, 0.85f, 0.75f, 1.0f);
+    ray.color = acgs::math::Vec4(0.10f, 0.85f, 0.75f, 1.0f);
     ray.start = cadAnchor + AcGeVector3d(-640.0, -768.0, 0.0);
     ray.direction = AcGeVector3d(1.0, 0.25, 0.0);
     addDemo(ray, "Ray");
 
     acdb::AcDbXline xline;
-    xline.common.color = acgs::math::Vec4(0.65f, 0.35f, 0.95f, 1.0f);
+    xline.color = acgs::math::Vec4(0.65f, 0.35f, 0.95f, 1.0f);
     xline.point = cadAnchor + AcGeVector3d(256.0, -1152.0, 0.0);
     xline.direction = AcGeVector3d(2.0, -1.0, 0.0);
     addDemo(xline, "XLine");
 
-    // SHX vector-font text: authored as an AcDbText whose style
-    // ("SHX") routes rendering through the stroke-font engine, so
-    // picking/outlines/styles treat text like any other entity.
+    // SHX-styled text: an ordinary AcDbText entity — like every text
+    // entity it renders through its own subWorldDraw into the AcGi text
+    // engine, so picking/outlines/styles treat text like any other
+    // entity (the style name is entity data, not a render-path switch).
     if (gShxFontReady)
     {
       acdb::AcDbText shxText;
-      shxText.common.color = acgs::math::Vec4(0.95f, 0.85f, 0.30f, 1.0f);
+      shxText.color = acgs::math::Vec4(0.95f, 0.85f, 0.30f, 1.0f);
       shxText.styleName = "SHX";
       // SHX glyphs hang below their anchor (cap line at the anchor,
       // baseline one em down): the insertion is the cap line.
@@ -2262,7 +2379,7 @@ static void buildDemoDocument()
     }
 
     acdb::AcDbMline mline;
-    mline.common.color = acgs::math::Vec4(0.85f, 0.35f, 0.35f, 0.95f);
+    mline.color = acgs::math::Vec4(0.85f, 0.35f, 0.35f, 0.95f);
     mline.vertices = {
         cadAnchor + AcGeVector3d(-256.0, -768.0, 0.0),
         cadAnchor + AcGeVector3d(256.0, -704.0, 0.0),
@@ -2273,7 +2390,7 @@ static void buildDemoDocument()
     // Closed multi-line: the offset band wraps around and the enclosed
     // strip is filled between the two boundary strokes.
     acdb::AcDbMline closedMLine;
-    closedMLine.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 0.95f);
+    closedMLine.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 0.95f);
     closedMLine.vertices = {
         cadAnchor + AcGeVector3d(1472.0, -880.0, 0.0),
         cadAnchor + AcGeVector3d(1728.0, -960.0, 0.0),
@@ -2285,7 +2402,7 @@ static void buildDemoDocument()
     // Closed polyline with non-zero thickness: the outline extrudes into
     // wall quads along the normal.
     acdb::AcDb3dPolyline borderedPolyline;
-    borderedPolyline.common.color = acgs::math::Vec4(0.95f, 0.45f, 0.15f, 1.0f);
+    borderedPolyline.color = acgs::math::Vec4(0.95f, 0.45f, 0.15f, 1.0f);
     borderedPolyline.vertices = {
         cadAnchor + AcGeVector3d(1792.0, -576.0, 0.0),
         cadAnchor + AcGeVector3d(1984.0, -576.0, 0.0),
@@ -2298,7 +2415,7 @@ static void buildDemoDocument()
     // Fit-point splines: the C1 fallback interpolates the fit points, open
     // and closed forms.
     acdb::AcDbSpline fitSpline;
-    fitSpline.common.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    fitSpline.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
     fitSpline.degree = 3;
     fitSpline.fitPoints = {
         cadAnchor + AcGeVector3d(1024.0, -1152.0, 0.0),
@@ -2308,7 +2425,7 @@ static void buildDemoDocument()
     addDemo(fitSpline, "FitSpline");
 
     acdb::AcDbSpline closedFitSpline;
-    closedFitSpline.common.color = acgs::math::Vec4(0.55f, 0.85f, 0.25f, 1.0f);
+    closedFitSpline.color = acgs::math::Vec4(0.55f, 0.85f, 0.25f, 1.0f);
     closedFitSpline.degree = 3;
     closedFitSpline.closed = true;
     closedFitSpline.fitPoints = {
@@ -2321,7 +2438,7 @@ static void buildDemoDocument()
     // The closed ring through the same points: the interpolation visibly
     // smooths the corners of this reference polygon.
     acdb::AcDb3dPolyline closedFitRing;
-    closedFitRing.common.color = acgs::math::Vec4(0.55f, 0.55f, 0.55f, 0.9f);
+    closedFitRing.color = acgs::math::Vec4(0.55f, 0.55f, 0.55f, 0.9f);
     closedFitRing.vertices = closedFitSpline.fitPoints;
     closedFitRing.closed = true;
     addDemo(closedFitRing, "ClosedFitRing");
@@ -2330,7 +2447,7 @@ static void buildDemoDocument()
     // the curve bends out of the ground plane (the fit-point demos above
     // are flat for comparison).
     acdb::AcDbSpline spaceSpline;
-    spaceSpline.common.color = acgs::math::Vec4(0.30f, 0.65f, 0.95f, 1.0f);
+    spaceSpline.color = acgs::math::Vec4(0.30f, 0.65f, 0.95f, 1.0f);
     spaceSpline.degree = 3;
     spaceSpline.fitPoints = {
         cadAnchor + AcGeVector3d(1024.0, -1152.0, 480.0),
@@ -2341,12 +2458,12 @@ static void buildDemoDocument()
     addDemo(spaceSpline, "SpaceSpline");
 
     acdb::AcDbPoint cadPoint;
-    cadPoint.common.color = acgs::math::Vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    cadPoint.color = acgs::math::Vec4(0.95f, 0.95f, 0.95f, 1.0f);
     cadPoint.location = cadAnchor + AcGeVector3d(512.0, 0.0, 0.0);
     addDemo(cadPoint, "Point");
 
     acdb::AcDbText text;
-    text.common.color = acgs::math::Vec4(0.95f, 0.95f, 0.30f, 1.0f);
+    text.color = acgs::math::Vec4(0.95f, 0.95f, 0.30f, 1.0f);
     text.insertion = cadAnchor + AcGeVector3d(1152.0, 128.0, 384.0);
     text.height = 96.0;
     const AcString demoText = L"\u4E2D\u6587 TEXT";
@@ -2354,7 +2471,7 @@ static void buildDemoDocument()
     addDemo(text, "Text");
 
     acdb::AcDbMText mtext;
-    mtext.common.color = acgs::math::Vec4(0.35f, 0.90f, 0.95f, 1.0f);
+    mtext.color = acgs::math::Vec4(0.35f, 0.90f, 0.95f, 1.0f);
     mtext.insertion = cadAnchor + AcGeVector3d(1152.0, 320.0, 384.0);
     mtext.direction = AcGeVector3d(1.0, 0.0, 0.0);
     mtext.height = 64.0;
@@ -2366,14 +2483,14 @@ static void buildDemoDocument()
     // point, so the glyph position can be found from any distance while
     // debugging the SDF path.
     acdb::AcDbLine textLocator;
-    textLocator.common.color = acgs::math::Vec4(1.0f, 0.20f, 0.90f, 1.0f);
-    textLocator.common.lineWeight = 3.0;
+    textLocator.color = acgs::math::Vec4(1.0f, 0.20f, 0.90f, 1.0f);
+    textLocator.lineWeight = 3.0;
     textLocator.start = text.insertion + AcGeVector3d(0.0, 0.0, -320.0);
     textLocator.end = text.insertion;
     addDemo(textLocator, "TextLocator");
     acdb::AcDbLine mtextLocator;
-    mtextLocator.common.color = acgs::math::Vec4(1.0f, 0.20f, 0.90f, 1.0f);
-    mtextLocator.common.lineWeight = 3.0;
+    mtextLocator.color = acgs::math::Vec4(1.0f, 0.20f, 0.90f, 1.0f);
+    mtextLocator.lineWeight = 3.0;
     mtextLocator.start = mtext.insertion + AcGeVector3d(0.0, 0.0, -320.0);
     mtextLocator.end = mtext.insertion;
     addDemo(mtextLocator, "MTextLocator");
@@ -2385,28 +2502,28 @@ static void buildDemoDocument()
     const double dimTextHeight = 56.0;
 
     acdb::AcDbLine plateA;
-    plateA.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateA.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateA.start = dimAnchor;
     plateA.end = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     addDemo(plateA, "PlateBottom");
     acdb::AcDbLine plateB;
-    plateB.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateB.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateB.start = dimAnchor + AcGeVector3d(0.0, 512.0, 0.0);
     plateB.end = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     addDemo(plateB, "PlateTop");
     acdb::AcDbLine plateC;
-    plateC.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateC.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateC.start = dimAnchor;
     plateC.end = dimAnchor + AcGeVector3d(0.0, 512.0, 0.0);
     addDemo(plateC, "PlateLeft");
     acdb::AcDbLine plateD;
-    plateD.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    plateD.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     plateD.start = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     plateD.end = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
     addDemo(plateD, "PlateRight");
 
     acdb::AcDbRotatedDimension dimRotated;
-    dimRotated.common.color = acgs::math::Vec4(0.95f, 0.80f, 0.25f, 1.0f);
+    dimRotated.color = acgs::math::Vec4(0.95f, 0.80f, 0.25f, 1.0f);
     dimRotated.dimension.textHeight = dimTextHeight;
     dimRotated.xLine1Point = dimAnchor;
     dimRotated.xLine2Point = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
@@ -2416,7 +2533,7 @@ static void buildDemoDocument()
     addDemo(dimRotated, "DimRotated");
 
     acdb::AcDbAlignedDimension dimAligned;
-    dimAligned.common.color = acgs::math::Vec4(0.45f, 0.90f, 0.45f, 1.0f);
+    dimAligned.color = acgs::math::Vec4(0.45f, 0.90f, 0.45f, 1.0f);
     dimAligned.dimension.textHeight = dimTextHeight;
     dimAligned.xLine1Point = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     dimAligned.xLine2Point = dimAnchor + AcGeVector3d(768.0, 512.0, 0.0);
@@ -2425,13 +2542,13 @@ static void buildDemoDocument()
     addDemo(dimAligned, "DimAligned");
 
     acdb::AcDbCircle dimCircle;
-    dimCircle.common.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
+    dimCircle.color = acgs::math::Vec4(0.55f, 0.75f, 0.95f, 1.0f);
     dimCircle.center = dimAnchor + AcGeVector3d(192.0, 256.0, 0.0);
     dimCircle.radius = 96.0;
     addDemo(dimCircle, "DimBore");
 
     acdb::AcDbRadialDimension dimRadial;
-    dimRadial.common.color = acgs::math::Vec4(0.95f, 0.55f, 0.30f, 1.0f);
+    dimRadial.color = acgs::math::Vec4(0.95f, 0.55f, 0.30f, 1.0f);
     dimRadial.dimension.textHeight = dimTextHeight;
     dimRadial.centerPoint = dimCircle.center;
     dimRadial.radiusPoint =
@@ -2441,7 +2558,7 @@ static void buildDemoDocument()
     addDemo(dimRadial, "DimRadial");
 
     acdb::AcDbDiametricDimension dimDiameter;
-    dimDiameter.common.color = acgs::math::Vec4(0.95f, 0.45f, 0.55f, 1.0f);
+    dimDiameter.color = acgs::math::Vec4(0.95f, 0.45f, 0.55f, 1.0f);
     dimDiameter.dimension.textHeight = dimTextHeight;
     dimDiameter.chordPoint =
         dimCircle.center - AcGeVector3d(96.0, 0.0, 0.0);
@@ -2451,7 +2568,7 @@ static void buildDemoDocument()
     addDemo(dimDiameter, "DimDiameter");
 
     acdb::AcDb3PointAngularDimension dimAngular;
-    dimAngular.common.color = acgs::math::Vec4(0.75f, 0.55f, 0.95f, 1.0f);
+    dimAngular.color = acgs::math::Vec4(0.75f, 0.55f, 0.95f, 1.0f);
     dimAngular.dimension.textHeight = dimTextHeight;
     dimAngular.centerPoint = dimAnchor + AcGeVector3d(768.0, 0.0, 0.0);
     dimAngular.xLine1Point = dimAnchor + AcGeVector3d(384.0, 0.0, 0.0);
@@ -2461,7 +2578,7 @@ static void buildDemoDocument()
     addDemo(dimAngular, "DimAngular");
 
     acdb::AcDbOrdinateDimension dimOrdinate;
-    dimOrdinate.common.color = acgs::math::Vec4(0.85f, 0.85f, 0.35f, 1.0f);
+    dimOrdinate.color = acgs::math::Vec4(0.85f, 0.85f, 0.35f, 1.0f);
     dimOrdinate.dimension.textHeight = dimTextHeight;
     dimOrdinate.featureLocationPoint = dimAnchor;
     dimOrdinate.leaderEndPoint =
@@ -2470,7 +2587,7 @@ static void buildDemoDocument()
     addDemo(dimOrdinate, "DimOrdinate");
 
     acdb::AcDbLeader leader;
-    leader.common.color = acgs::math::Vec4(0.90f, 0.90f, 0.90f, 1.0f);
+    leader.color = acgs::math::Vec4(0.90f, 0.90f, 0.90f, 1.0f);
     leader.points = {
         dimAnchor + AcGeVector3d(192.0, 256.0, 0.0) +
             AcGeVector3d(96.0 * 0.7071, 96.0 * 0.7071, 0.0),
@@ -2480,7 +2597,7 @@ static void buildDemoDocument()
     addDemo(leader, "Leader");
 
     acdb::AcDbFcf fcf;
-    fcf.common.color = acgs::math::Vec4(0.95f, 0.95f, 0.95f, 1.0f);
+    fcf.color = acgs::math::Vec4(0.95f, 0.95f, 0.95f, 1.0f);
     fcf.insertion = dimAnchor + AcGeVector3d(716.0, 640.0, 0.0);
     fcf.direction = AcGeVector3d(1.0, 0.0, 0.0);
     fcf.text = "{|0.05|A}";
@@ -2488,7 +2605,7 @@ static void buildDemoDocument()
     addDemo(fcf, "Fcf");
 
     acdb::AcDb3dSolid solid3d;
-    solid3d.common.color = acgs::math::Vec4(0.75f, 0.65f, 0.25f, 1.0f);
+    solid3d.color = acgs::math::Vec4(0.75f, 0.65f, 0.25f, 1.0f);
     solid3d.renderClass = acdb::RenderClass::Cad;
     const AcGePoint3d boxMin = cadAnchor + AcGeVector3d(1536.0, 128.0, 384.0);
     const AcGePoint3d boxMax = boxMin + AcGeVector3d(256.0, 256.0, 256.0);
@@ -2513,7 +2630,9 @@ static void buildDemoDocument()
     addDemo(solid3d, "Solid3d", true);
 
     acdb::AcDbLight light;
-    light.common.color = acgs::math::Vec4(1.0f, 0.90f, 0.55f, 1.0f);
+    // Entity display color via the ARX accessor — AcDbLight::color (the
+    // photometric rgb) shadows the AcDbEntity base field.
+    light.setColor(acgs::math::Vec4(1.0f, 0.90f, 0.55f, 1.0f));
     light.type = acdb::LightType::Spot;
     light.position = cadAnchor + AcGeVector3d(-1152.0, 256.0, 512.0);
     light.target = AcGeVector3d(cadAnchor.x - 768.0, cadAnchor.y, cadAnchor.z);
@@ -2526,9 +2645,9 @@ static void buildDemoDocument()
     for (int i = 0; i < 24; ++i)
     {
       acdb::AcDbPoint gridPoint;
-      gridPoint.common.color = acgs::math::Vec4(
+      gridPoint.color = acgs::math::Vec4(
           0.2f + 0.03f * i, 0.9f - 0.025f * i, 0.3f + 0.02f * i, 1.0f);
-      gridPoint.common.lineWeight = 6.0;
+      gridPoint.lineWeight = 6.0;
       gridPoint.location =
           demoAnchor + AcGeVector3d((i % 8) * 96.0, (i / 8) * 96.0 - 640.0, 0.0) +
           AcGeVector3d(1024.0, 0.0, 0.0);
@@ -2536,9 +2655,9 @@ static void buildDemoDocument()
     }
 
     acdb::AcDbLine dashedArrow;
-    dashedArrow.common.color = acgs::math::Vec4(0.95f, 0.25f, 0.75f, 1.0f);
-    dashedArrow.common.lineType = "DASHED";
-    dashedArrow.common.lineWeight = 2.5;
+    dashedArrow.color = acgs::math::Vec4(0.95f, 0.25f, 0.75f, 1.0f);
+    dashedArrow.lineType = "DASHED";
+    dashedArrow.lineWeight = 2.5;
     dashedArrow.start = demoAnchor + AcGeVector3d(-1024.0, -640.0, -512.0);
     dashedArrow.end = dashedArrow.start + AcGeVector3d(1024.0, 256.0, 0.0);
     addDemo(dashedArrow, "DashedArrow");
@@ -2549,7 +2668,7 @@ static void buildDemoDocument()
           dir.crossProduct(AcGeVector3d(0.0, 0.0, 1.0)).normal() * 24.0;
       const AcGePoint3d base = dashedArrow.end - dir * 48.0;
       acdb::AcDbSolid arrowHead;
-      arrowHead.common = dashedArrow.common;
+      static_cast<acdb::AcDbEntity &>(arrowHead) = dashedArrow;
       arrowHead.firstCorner = dashedArrow.end;
       arrowHead.secondCorner = base - side;
       arrowHead.thirdCorner = base + side;
@@ -2570,8 +2689,8 @@ static void buildDemoDocument()
       };
 
       acdb::AcDbPolyFaceMesh surface;
-      surface.common.color = acgs::math::Vec4(0.20f, 0.45f, 0.85f, 0.80f);
-      surface.common.layer = "GRID_FILL_LAYER";
+      surface.color = acgs::math::Vec4(0.20f, 0.45f, 0.85f, 0.80f);
+      surface.layer = "GRID_FILL_LAYER";
       surface.style = acdb::MeshStyle::Cad;
       surface.geometry.positions.reserve(
           static_cast<size_t>(surfaceSegs + 1) * (surfaceSegs + 1));
@@ -2606,8 +2725,8 @@ static void buildDemoDocument()
       {
         acdb::AcDb3dPolyline isoU;
         acdb::AcDb3dPolyline isoV;
-        isoU.common.color = acgs::math::Vec4(0.05f, 0.10f, 0.25f, 0.85f);
-        isoU.common.lineWeight = 2.0;
+        isoU.color = acgs::math::Vec4(0.05f, 0.10f, 0.25f, 0.85f);
+        isoU.lineWeight = 2.0;
         isoV = isoU;
         const double g = double(k) / surfaceSegs;
         for (int i = 0; i <= surfaceSegs; ++i)
@@ -2624,9 +2743,9 @@ static void buildDemoDocument()
     for (int i = 0; i < 5; ++i)
     {
       acdb::AcDbPoint widthDot;
-      widthDot.common.color = acgs::math::Vec4(
+      widthDot.color = acgs::math::Vec4(
           0.2f + i * 0.15f, 0.9f - i * 0.1f, 0.5f + i * 0.05f, 1.0f);
-      widthDot.common.lineWeight = 12.0;
+      widthDot.lineWeight = 12.0;
       widthDot.location =
           demoAnchor + AcGeVector3d(i * 256.0, -768.0, 0.0);
       addDemo(widthDot, "WidthDot" + std::to_string(i));
@@ -2640,8 +2759,8 @@ static void buildDemoDocument()
       for (int i = 0; i < 4; ++i)
       {
         acdb::AcDbLine widthLine;
-        widthLine.common.color = colors[i];
-        widthLine.common.lineWeight = widths[i];
+        widthLine.color = colors[i];
+        widthLine.lineWeight = widths[i];
         widthLine.start =
             demoAnchor + AcGeVector3d(-1024.0, -384.0 + i * 192.0, -512.0);
         widthLine.end = widthLine.start + AcGeVector3d(1024.0, 0.0, 0.0);
@@ -2659,9 +2778,9 @@ static void buildDemoDocument()
       for (int i = 0; i < 6; ++i)
       {
         acdb::AcDbLine specimen;
-        specimen.common.color = lineColors[i];
-        specimen.common.lineType = lineTypes[i];
-        specimen.common.lineWeight = 24.0;
+        specimen.color = lineColors[i];
+        specimen.lineType = lineTypes[i];
+        specimen.lineWeight = 24.0;
         specimen.start =
             demoAnchor + AcGeVector3d(-1024.0, 1536.0 + i * 256.0, -3072.0);
         specimen.end = specimen.start + AcGeVector3d(2048.0, 0.0, 0.0);
@@ -2670,8 +2789,8 @@ static void buildDemoDocument()
     }
 
     acdb::AcDb3dPolyline demoPolyline;
-    demoPolyline.common.color = acgs::math::Vec4(0.60f, 0.20f, 1.00f, 1.0f);
-    demoPolyline.common.lineWeight = 4.0;
+    demoPolyline.color = acgs::math::Vec4(0.60f, 0.20f, 1.00f, 1.0f);
+    demoPolyline.lineWeight = 4.0;
     const AcGePoint3d polylineBase =
         demoAnchor + AcGeVector3d(-512.0, 0.0, -512.0);
     demoPolyline.vertices = {
@@ -2682,7 +2801,7 @@ static void buildDemoDocument()
     addDemo(demoPolyline, "DemoPolyline");
 
     acdb::AcDbHatch hexagon;
-    hexagon.common.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 1.0f);
+    hexagon.color = acgs::math::Vec4(0.30f, 0.80f, 0.50f, 1.0f);
     hexagon.outerLoop.reserve(6);
     for (int i = 0; i < 6; ++i)
     {
@@ -2695,7 +2814,7 @@ static void buildDemoDocument()
 
     {
       acdb::AcDbHatch circleFill;
-      circleFill.common.color = acgs::math::Vec4(0.20f, 0.60f, 0.90f, 1.0f);
+      circleFill.color = acgs::math::Vec4(0.20f, 0.60f, 0.90f, 1.0f);
       constexpr int circleSegments = 48;
       circleFill.outerLoop.reserve(circleSegments);
       for (int i = 0; i < circleSegments; ++i)
@@ -2710,7 +2829,7 @@ static void buildDemoDocument()
     }
 
     acdb::AcDbSolid rectangle;
-    rectangle.common.color = acgs::math::Vec4(0.50f, 0.50f, 0.90f, 1.0f);
+    rectangle.color = acgs::math::Vec4(0.50f, 0.50f, 0.90f, 1.0f);
     rectangle.firstCorner =
         demoAnchor + AcGeVector3d(-256.0, -128.0, 256.0);
     rectangle.secondCorner =
@@ -2722,8 +2841,8 @@ static void buildDemoDocument()
     addDemo(rectangle, "Rectangle");
 
     acdb::AcDbSpline bezier;
-    bezier.common.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
-    bezier.common.lineWeight = 6.0;
+    bezier.color = acgs::math::Vec4(0.90f, 0.70f, 0.20f, 1.0f);
+    bezier.lineWeight = 6.0;
     bezier.degree = 3;
     bezier.knots = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0};
     const AcGePoint3d bezierBase =
@@ -2777,6 +2896,121 @@ static void buildDemoDocument()
         blocks && *blocks && std::strcmp(blocks, "0") != 0)
       appendDemoBlocks();
 
+
+    // ---- rendered-object collection (ARX: the document is the single
+    // source of truth) ----
+    //
+    // The former main.cpp-side demo bodies — the prototype meshes and the
+    // GPU demo curves — are ordinary entities now: prototype soups bake
+    // into AcDbPolyFaceMesh geometry at authoring time, and the GPU curves
+    // are control-point AcDbSplines that the Gs replay converts back into
+    // curve batches.  What deliberately stays outside the document:
+    // camera-attached UI (the orbit center cube), the synthetic stress
+    // field (instanced batches, up to a million instances), the infinite
+    // grid (environment shader), per-frame diagnostics overlays, and the
+    // glTF models' static-mesh records (albedo texture / PBR live in the
+    // mesh pipeline; the entities themselves are the import payload).
+
+    // Prototype meshes as AcDbPolyFaceMesh entities: the procedural soup
+    // (pos.xyz normal.xyz uv, 8 floats per vertex) bakes into real mesh
+    // data with placement and scale applied once at authoring time.  Same
+    // GRID_DEMO_MESHES gate the main.cpp-side records used (default off,
+    // so the default scene stays unchanged).
+    if (demoMeshesEnabled())
+    {
+    const auto bakePrototype = [](rendering::MeshType type,
+                                  const char *name,
+                                  const AcGePoint3d &origin, double size,
+                                  const acgs::math::Vec4 &color) {
+      acdb::AcDbPolyFaceMesh mesh;
+      mesh.name = name;
+      mesh.setColor(color);
+      const std::vector<float> &soup =
+          rendering::proceduralMeshVertices(type);
+      const size_t vertexCount =
+          soup.size() / rendering::kProceduralMeshFloatStride;
+      mesh.geometry.positions.reserve(vertexCount);
+      mesh.geometry.normals.reserve(vertexCount);
+      mesh.geometry.uvs.reserve(vertexCount);
+      for (size_t index = 0; index < vertexCount; ++index)
+      {
+        const float *vertex = soup.data() + index * 8;
+        mesh.geometry.positions.push_back(
+            origin + AcGeVector3d(vertex[0] * size, vertex[1] * size,
+                                  vertex[2] * size));
+        mesh.geometry.normals.push_back(
+            glm::vec3(vertex[3], vertex[4], vertex[5]));
+        mesh.geometry.uvs.push_back(glm::vec2(vertex[6], vertex[7]));
+        mesh.geometry.indices.push_back(static_cast<std::uint32_t>(index));
+      }
+      addDemo(std::move(mesh), name);
+    };
+
+    bakePrototype(rendering::MeshType::Cube, "RedDebugCube", demoAnchor,
+                  200.0, acgs::math::Vec4(1.0f, 0.0f, 0.0f, 1.0f));
+    const AcGePoint3d solidBase =
+        demoAnchor + AcGeVector3d(0.0, 768.0, 512.0);
+    const rendering::MeshType demoMeshTypes[] = {
+        rendering::MeshType::Cube, rendering::MeshType::Sphere,
+        rendering::MeshType::Cone, rendering::MeshType::Torus};
+    const char *demoMeshNames[] = {
+        "DemoCube", "DemoSphere", "DemoCone", "DemoTorus"};
+    for (size_t index = 0; index < std::size(demoMeshTypes); ++index)
+    {
+      bakePrototype(demoMeshTypes[index], demoMeshNames[index],
+                    solidBase + AcGeVector3d((index % 2) * 512.0,
+                                             (index / 2) * 512.0, 0.0),
+                    192.0, acgs::math::Vec4(0.8f, 0.7f, 0.9f, 0.65f));
+    }
+    }
+
+    // GPU demo curves as control-point AcDbSplines; the Gs replay converts
+    // them back into curve batches (degree/weights/color ride the entity).
+    auto addCurveSpline = [](const char *name, const acgs::math::Vec4 &color,
+                             std::vector<AcGePoint3d> controlPoints,
+                             std::vector<double> weights = {}) {
+      acdb::AcDbSpline spline;
+      spline.name = name;
+      spline.setColor(color);
+      spline.degree = 3;
+      spline.controlPoints = std::move(controlPoints);
+      spline.weights = std::move(weights);
+      addDemo(std::move(spline), name);
+    };
+
+    const AcGePoint3d curveCenter = demoAnchor;
+    addCurveSpline("BezierCurve",
+                   acgs::math::Vec4(0.15f, 1.0f, 0.55f, 1.0f),
+                   {curveCenter + AcGeVector3d(-240.0, -120.0, 0.0),
+                    curveCenter + AcGeVector3d(-80.0, 220.0, 0.0),
+                    curveCenter + AcGeVector3d(80.0, -220.0, 0.0),
+                    curveCenter + AcGeVector3d(240.0, 120.0, 0.0)});
+    addCurveSpline("BSplineCurve",
+                   acgs::math::Vec4(0.20f, 0.62f, 1.00f, 1.0f),
+                   {curveCenter + AcGeVector3d(-320.0, -180.0, 0.0),
+                    curveCenter + AcGeVector3d(-140.0, 180.0, 0.0),
+                    curveCenter + AcGeVector3d(0.0, -140.0, 0.0),
+                    curveCenter + AcGeVector3d(140.0, 180.0, 0.0),
+                    curveCenter + AcGeVector3d(320.0, -180.0, 0.0)});
+    addCurveSpline("NurbsCurve",
+                   acgs::math::Vec4(0.95f, 0.82f, 0.25f, 1.0f),
+                   {curveCenter + AcGeVector3d(-280.0, 260.0, 0.0),
+                    curveCenter + AcGeVector3d(-110.0, -260.0, 0.0),
+                    curveCenter + AcGeVector3d(110.0, 260.0, 0.0),
+                    curveCenter + AcGeVector3d(280.0, -260.0, 0.0)},
+                   {1.0, 2.0, 2.0, 1.0});
+
+    // The former GPU arc demo: an ordinary AcDbArc entity (stroke channel).
+    acdb::AcDbArc curveArc;
+    curveArc.name = "CurveArc";
+    curveArc.setColor(acgs::math::Vec4(0.92f, 0.35f, 0.72f, 1.0f));
+    curveArc.center = curveCenter;
+    curveArc.normal = AcGeVector3d(0.0, 0.0, 1.0);
+    curveArc.radius = 360.0;
+    curveArc.startAngle = -0.35;
+    curveArc.endAngle = -0.35 + 1.60;
+    addDemo(std::move(curveArc), "CurveArc");
+
     return true;
   }();
   (void)authored;
@@ -2810,61 +3044,8 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   // The Gs replay: the document model space records into the
   // metafile (entities, SHX-styled text, block instances).
   acgs::AcGsDocumentReplayer replayer;
-  replayer.shxFontReady = gShxFontReady;
+  replayer.skipHandles = gGltfDocumentHandles;
   replayer.record(document, options, target);
-
-    auto addCurveDemo = [&target](rendering::CurveAlgorithm algorithm,
-                                   const char *name,
-                                   const acgs::math::Vec4 &color,
-                                   std::vector<acgs::math::DVec3> controlPoints,
-                                   int degree = 3,
-                                   std::vector<double> weights = {}) {
-      acgs::CurveBatchCommand &curve = target.curves.emplace_back();
-      curve.algorithm = algorithm;
-      curve.name = name;
-      curve.degree = degree;
-      curve.sampleCount = 192;
-      curve.controlPoints = std::move(controlPoints);
-      curve.weights = std::move(weights);
-      curve.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
-      curve.acgiMaterial.baseColor = color;
-    };
-
-    const AcGePoint3d curveCenter = demoAnchor;
-    addCurveDemo(rendering::CurveAlgorithm::Bezier, "BezierCurve",
-                 acgs::math::Vec4(0.15f, 1.0f, 0.55f, 1.0f),
-                 {curveCenter + AcGeVector3d(-240.0, -120.0, 0.0),
-                  curveCenter + AcGeVector3d(-80.0, 220.0, 0.0),
-                  curveCenter + AcGeVector3d(80.0, -220.0, 0.0),
-                  curveCenter + AcGeVector3d(240.0, 120.0, 0.0)});
-    addCurveDemo(rendering::CurveAlgorithm::BSpline, "BSplineCurve",
-                 acgs::math::Vec4(0.20f, 0.62f, 1.00f, 1.0f),
-                 {curveCenter + AcGeVector3d(-320.0, -180.0, 0.0),
-                  curveCenter + AcGeVector3d(-140.0, 180.0, 0.0),
-                  curveCenter + AcGeVector3d(0.0, -140.0, 0.0),
-                  curveCenter + AcGeVector3d(140.0, 180.0, 0.0),
-                  curveCenter + AcGeVector3d(320.0, -180.0, 0.0)});
-    addCurveDemo(rendering::CurveAlgorithm::NURBS, "NurbsCurve",
-                 acgs::math::Vec4(0.95f, 0.82f, 0.25f, 1.0f),
-                 {curveCenter + AcGeVector3d(-280.0, 260.0, 0.0),
-                  curveCenter + AcGeVector3d(-110.0, -260.0, 0.0),
-                  curveCenter + AcGeVector3d(110.0, 260.0, 0.0),
-                  curveCenter + AcGeVector3d(280.0, -260.0, 0.0)},
-                 3, {1.0, 2.0, 2.0, 1.0});
-
-    acgs::CurveBatchCommand &curveArc = target.curves.emplace_back();
-    curveArc.algorithm = rendering::CurveAlgorithm::Arc;
-    curveArc.name = "CurveArc";
-    curveArc.sampleCount = 192;
-    curveArc.center = curveCenter;
-    curveArc.axisU = AcGeVector3d(1.0, 0.0, 0.0);
-    curveArc.axisV = AcGeVector3d(0.0, 1.0, 0.0);
-    curveArc.radius = 360.0;
-    curveArc.startAngle = -0.35;
-    curveArc.sweep = 1.60;
-    curveArc.acgiMaterial.algorithm = acgs::AcGiShaderAlgorithm::Shaded;
-    curveArc.acgiMaterial.baseColor = acgs::math::Vec4(0.92f, 0.35f, 0.72f, 1.0f);
-
 
   // Imported glTF demo model (GRID_GLTF env / G key): one mesh record per
   // primitive, rendered with its PBR material and albedo texture.  Placed
@@ -2872,36 +3053,6 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
   // the legacy prototype-mesh opt-in.
   appendGltfDemoMeshes(target);
 
-  if (!demoMeshesEnabled())
-    return target;
-
-  {
-      MeshEntityRecord debugCube;
-      debugCube.entity.common.name = "RedDebugCube";
-      debugCube.entity.common.color = acgs::math::Vec4(1.0f, 0.0f, 0.0f, 1.0f);
-      debugCube.worldPosition = demoAnchor;
-      debugCube.size = 200.0f;
-      target.meshes.push_back(std::move(debugCube));
-
-      const AcGePoint3d solidBase =
-          demoAnchor + AcGeVector3d(0.0, 768.0, 512.0);
-      const rendering::MeshType meshTypes[] = {
-          rendering::MeshType::Cube, rendering::MeshType::Sphere,
-          rendering::MeshType::Cone, rendering::MeshType::Torus};
-      const char *meshNames[] = {
-          "DemoCube", "DemoSphere", "DemoCone", "DemoTorus"};
-      for (size_t index = 0; index < std::size(meshTypes); ++index)
-      {
-        MeshEntityRecord mesh;
-        mesh.entity.common.name = meshNames[index];
-        mesh.entity.common.color = acgs::math::Vec4(0.8f, 0.7f, 0.9f, 0.65f);
-        mesh.worldPosition = solidBase +
-            AcGeVector3d((index % 2) * 512.0, (index / 2) * 512.0, 0.0);
-        mesh.size = 192.0f;
-        mesh.mesh = meshTypes[index];
-        target.meshes.push_back(std::move(mesh));
-      }
-  }
   return target;
 }
 
@@ -3665,16 +3816,15 @@ static void drawVectorPrimitivesDemo(const acgs::math::Mat4 &view,
               ? acgs::math::Vec4(kSelectionHighlightRGB,
                           meshEntityColor(mesh).a)
               : meshEntityColor(mesh);
+      acgs::ViewportDraw wireDraw(meshDrawList.geometry());
+      AcGiWorldDraw wireGraphics(wireDraw);
+      acdb::AcDbEntity wireTraits;
+      wireTraits.name = mesh.entity.name;
+      wireGraphics.setFrom(wireTraits);
+      wireGraphics.setColor(wireColor);
       for (const std::vector<AcGePoint3d> &chain : gltfWireframeChains(mesh))
-      {
-        acdb::Stroke stroke;
-        stroke.common.name = mesh.entity.common.name;
-        stroke.common.color = wireColor;
-        stroke.points.reserve(chain.size());
-        for (const AcGePoint3d &point : chain)
-          stroke.points.emplace_back(acgs::math::DVec3(point));
-        meshDrawList.geometry().strokes.push_back(std::move(stroke));
-      }
+        wireGraphics.worldPolyline(chain.data(),
+                                   static_cast<int>(chain.size()), false);
     }
     else
     {
@@ -3927,7 +4077,7 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
           LARGE_COORDINATE_BASE_POINT +
           acgs::math::DVec3(col * kSpacing - centerOffset, kObjectSize * 0.5,
                      row * kSpacing - centerOffset - 4096.0);
-      object.entity.common.color = acgs::math::Vec4(kPalette[i % 6], 0.45f);
+      object.entity.color = acgs::math::Vec4(kPalette[i % 6], 0.45f);
       object.size = static_cast<float>(kObjectSize);
       object.mesh = kMeshCycle[i % 4];
       object.entity.style = realisticMeshEnabled() && (i % 2) != 0
@@ -3935,7 +4085,7 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
                                 : acdb::MeshStyle::Cad;
       object.entity.material.metallicFactor = 0.78f;
       object.entity.material.roughnessFactor = 0.28f;
-      object.entity.common.name =
+      object.entity.name =
           indexedDisplayName("StressMesh", size_t(i));
       result.push_back(object);
     }
@@ -4095,7 +4245,6 @@ static void fitCameraToImportedEntities(
 
   VectorPrimitivesTessellation imported;
   acgs::AcGsDocumentReplayer replayer;
-  replayer.shxFontReady = gShxFontReady;
   const std::size_t textRequestStart = acgi::textRequests().size();
   replayer.recordHandles(acdbDocument(), handles,
                          acdb::TesselationOptions{}, imported);
@@ -5427,7 +5576,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             rayIntersectsRenderedMesh(ray, *object, hitDepth, &faceIndex))
         {
             considerMeshHit(hitDepth, object->displayName(), faceIndex,
-                            object->entity.common.color.alpha() >= 0.999f);
+                            object->entity.color.alpha() >= 0.999f);
         }
     }
 
@@ -5444,7 +5593,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             hitDepth < nearestDepth)
         {
             considerMeshHit(hitDepth, centerCube.displayName(), faceIndex,
-                            centerCube.entity.common.color.alpha() >= 0.999f);
+                            centerCube.entity.color.alpha() >= 0.999f);
         }
     }
 
@@ -6587,7 +6736,7 @@ VisibilityCandidate makeCadRangeCandidate(
       }
       candidate.overlayColor = acgsView().contrastColor(
           stroke.common.color.renderColor());
-      candidate.overlayPointSize = float(std::max(stroke.lineWeight, 2.0));
+      candidate.overlayPointSize = float(std::max(stroke.common.lineWeight, 2.0));
     }
   }
   else if (kind == VisibilityKind::CadFill)

@@ -20,9 +20,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbMInsertBlock
+struct ACDB_PORT AcDbMInsertBlock : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
 
     std::string blockTableRecordName;
 

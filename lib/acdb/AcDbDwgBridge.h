@@ -313,7 +313,7 @@ void applyCommon(Payload &payload, const DwgImportContext &ctx,
                  const Dwg_Object &object, AcDbDatabase &database)
 {
     const Dwg_Object_Entity &ent = *object.tio.entity;
-    AcDbEntity &common = payload.common;
+    AcDbEntity &common = payload;
 
     if (const char *layer = layerNameOf(ctx, ent))
         common.layer = layer;

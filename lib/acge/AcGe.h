@@ -32,3 +32,7 @@
 #include "AcGePolyline.h"
 #include "AcGeOffset.h"
 #include "AcGeTriangle.h"
+#include "AcGeClipBoundary2d.h"
+#include "AcGeCompositeCurve.h"
+#include "AcGeOffsetCurve.h"
+#include "AcGeSweptSurface.h"

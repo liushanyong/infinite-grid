@@ -675,4 +675,97 @@ void worldDraw(const AcDbMInsertBlock &insert, acgs::ViewportDraw &draw,
     graphics.worldPoint(insert.position);
 }
 
+// ---- AcGiDrawable protocol glue (ARX IS-A: entities draw themselves) ----
+//
+// AcDbEntity defaults + one subWorldDraw override per concrete entity,
+// each funneling into the worldDraw overload set above so the drawable
+// protocol and the tessellation path emit identical geometry.
+
+Adesk::UInt32 AcDbEntity::subSetAttributes(AcGiDrawableTraits *traits)
+{
+    if (traits != nullptr)
+        traits->setFrom(*this);
+    return AcGiDrawable::kDrawableIsAnEntity;
+}
+
+Adesk::Boolean AcDbEntity::subWorldDraw(AcGiWorldDraw *wd)
+{
+    (void)wd;
+    return true;
+}
+
+void AcDbEntity::subViewportDraw(AcGiViewportDraw *vd)
+{
+    subWorldDraw(vd);
+}
+
+#define ACGI_ENTITY_WORLD_DRAW(EntityType)                                     \
+    Adesk::Boolean EntityType::subWorldDraw(AcGiWorldDraw *wd)                 \
+    {                                                                          \
+        if (wd == nullptr)                                                     \
+            return false;                                                      \
+        wd->subEntityTraits().setFrom(*this);                                  \
+        acdb::worldDraw(*this, wd->context());                                 \
+        return true;                                                           \
+    }
+
+#define ACGI_DIMENSION_WORLD_DRAW(EntityType)                                  \
+    Adesk::Boolean EntityType::subWorldDraw(AcGiWorldDraw *wd)                 \
+    {                                                                          \
+        if (wd == nullptr)                                                     \
+            return false;                                                      \
+        wd->subEntityTraits().setFrom(*this);                                  \
+        acdb::worldDraw(*this, wd->context());                                 \
+        return true;                                                           \
+    }                                                                          \
+    Adesk::UInt32 EntityType::subSetAttributes(AcGiDrawableTraits *traits)     \
+    {                                                                          \
+        AcDbEntity::subSetAttributes(traits);                                  \
+        return AcGiDrawable::kDrawableIsDimension;                             \
+    }
+
+ACGI_ENTITY_WORLD_DRAW(AcDb3dPolyline)
+// AcDb3dSolid: its own fillIs3DFace data selects the surface channel.
+Adesk::Boolean AcDb3dSolid::subWorldDraw(AcGiWorldDraw *wd)
+{
+    if (wd == nullptr)
+        return false;
+    wd->subEntityTraits().setFrom(*this);
+    acdb::worldDraw(*this, wd->context(), fillIs3DFace);
+    return true;
+}
+ACGI_ENTITY_WORLD_DRAW(AcDbArc)
+ACGI_ENTITY_WORLD_DRAW(AcDbAttribute)
+ACGI_ENTITY_WORLD_DRAW(AcDbAttributeDefinition)
+ACGI_ENTITY_WORLD_DRAW(AcDbBlockReference)
+ACGI_ENTITY_WORLD_DRAW(AcDbCircle)
+ACGI_ENTITY_WORLD_DRAW(AcDbEllipse)
+ACGI_ENTITY_WORLD_DRAW(AcDbFcf)
+ACGI_ENTITY_WORLD_DRAW(AcDbHatch)
+ACGI_ENTITY_WORLD_DRAW(AcDbLeader)
+ACGI_ENTITY_WORLD_DRAW(AcDbLight)
+ACGI_ENTITY_WORLD_DRAW(AcDbLine)
+ACGI_ENTITY_WORLD_DRAW(AcDbMInsertBlock)
+ACGI_ENTITY_WORLD_DRAW(AcDbMText)
+ACGI_ENTITY_WORLD_DRAW(AcDbMline)
+ACGI_ENTITY_WORLD_DRAW(AcDbPoint)
+ACGI_ENTITY_WORLD_DRAW(AcDbPolyFaceMesh)
+ACGI_ENTITY_WORLD_DRAW(AcDbPolyline)
+ACGI_ENTITY_WORLD_DRAW(AcDbRay)
+ACGI_ENTITY_WORLD_DRAW(AcDbShape)
+ACGI_ENTITY_WORLD_DRAW(AcDbSolid)
+ACGI_ENTITY_WORLD_DRAW(AcDbSpline)
+ACGI_ENTITY_WORLD_DRAW(AcDbText)
+ACGI_ENTITY_WORLD_DRAW(AcDbXline)
+ACGI_DIMENSION_WORLD_DRAW(AcDbRotatedDimension)
+ACGI_DIMENSION_WORLD_DRAW(AcDbAlignedDimension)
+ACGI_DIMENSION_WORLD_DRAW(AcDb2LineAngularDimension)
+ACGI_DIMENSION_WORLD_DRAW(AcDb3PointAngularDimension)
+ACGI_DIMENSION_WORLD_DRAW(AcDbRadialDimension)
+ACGI_DIMENSION_WORLD_DRAW(AcDbDiametricDimension)
+ACGI_DIMENSION_WORLD_DRAW(AcDbOrdinateDimension)
+
+#undef ACGI_ENTITY_WORLD_DRAW
+#undef ACGI_DIMENSION_WORLD_DRAW
+
 } // namespace acdb

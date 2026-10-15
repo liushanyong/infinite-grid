@@ -10,9 +10,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbLine
+struct ACDB_PORT AcDbLine : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     AcGePoint3d start{0.0, 0.0, 0.0};
     AcGePoint3d end{0.0, 0.0, 0.0};
     // DWG LINE carries an OCS extrusion and a wall thickness.

@@ -24,9 +24,11 @@ struct ACDB_PORT AcDbPolyFaceMeshGeometry
     std::vector<std::uint32_t> indices;
 };
 
-struct ACDB_PORT AcDbPolyFaceMesh
+struct ACDB_PORT AcDbPolyFaceMesh : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     AcDbPolyFaceMeshGeometry geometry;
     MeshStyle style = MeshStyle::Cad;
     AcDbMaterial material;

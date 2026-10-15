@@ -13,9 +13,11 @@
 namespace acdb
 {
 
-struct ACDB_PORT AcDbHatch
+struct ACDB_PORT AcDbHatch : AcDbEntity
 {
-    AcDbEntity common;
+    // AcGiDrawable protocol: the entity draws itself (ARX worldDraw
+    // contract); definitions live in AcDbEntityWorldDraw.cpp.
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override;
     std::vector<AcGePoint3d> outerLoop;
     std::vector<std::vector<AcGePoint3d>> innerLoops;
     bool solidFill = true;
