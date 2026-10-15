@@ -122,6 +122,13 @@ private:
     }
 
 public:
+    AcGeSweptCurve3d(const AcGeSweptCurve3d &) = default;
+    AcGeSweptCurve3d(AcGeSweptCurve3d &&) noexcept = default;
+    AcGeSweptCurve3d &operator=(AcGeSweptCurve3d other)
+    {
+        swap(other);
+        return *this;
+    }
     AcGeSweptCurve3d(PointFunction point, const AcGeInterval &domain,
                      DerivativeFunction derivative = {})
         : m_point(std::move(point)), m_derivative(std::move(derivative)),
@@ -147,6 +154,28 @@ public:
         {
             if (curve.isEmpty())
                 throw std::invalid_argument("Swept source curve is empty.");
+        }
+        if constexpr (requires {
+                          curve.degree;
+                          curve.knots.size();
+                          curve.controlPoints.size();
+                      })
+        {
+            // The built-in spline validator alone does not establish the
+            // index bounds required by its unchecked basis evaluator.
+            const auto count = curve.controlPoints.size();
+            const auto degree = curve.degree;
+            if (degree >= count || curve.knots.size() <= count ||
+                curve.knots.size() - count - 1 != degree)
+                throw std::invalid_argument("Swept source spline has invalid dimensions.");
+            for (double knot : curve.knots)
+                if (!std::isfinite(knot))
+                    throw std::invalid_argument("Swept source knots must be finite.");
+            if (!std::is_sorted(curve.knots.begin(), curve.knots.end()) ||
+                !(curve.knots[degree] < curve.knots[count]) ||
+                m_domain.lowerBound() < curve.knots[degree] ||
+                m_domain.upperBound() > curve.knots[count])
+                throw std::invalid_argument("Swept source has an invalid knot/parameter domain.");
         }
         if constexpr (requires { curve.validate(); })
             curve.validate();
@@ -195,6 +224,19 @@ class AcGeRuledSurface3d
     }
 
 public:
+    AcGeRuledSurface3d(const AcGeRuledSurface3d &) = default;
+    AcGeRuledSurface3d(AcGeRuledSurface3d &&) noexcept = default;
+    AcGeRuledSurface3d &operator=(AcGeRuledSurface3d other)
+    {
+        swap(other);
+        return *this;
+    }
+    void swap(AcGeRuledSurface3d &other) noexcept
+    {
+        m_first.swap(other.m_first);
+        m_second.swap(other.m_second);
+        std::swap(m_vDomain, other.m_vDomain);
+    }
     AcGeRuledSurface3d(AcGeSweptCurve3d first, AcGeSweptCurve3d second,
                        const AcGeInterval &vDomain)
         : m_first(std::move(first)), m_second(std::move(second)), m_vDomain(vDomain)
@@ -209,9 +251,7 @@ public:
                             const AcGeInterval &vDomain)
     {
         AcGeRuledSurface3d candidate(std::move(first), std::move(second), vDomain);
-        m_first.swap(candidate.m_first);
-        m_second.swap(candidate.m_second);
-        std::swap(m_vDomain, candidate.m_vDomain);
+        swap(candidate);
         return *this;
     }
     const AcGeSweptCurve3d &firstCurve() const { return m_first; }
@@ -259,6 +299,19 @@ class AcGeExtrudedSurface3d
     }
 
 public:
+    AcGeExtrudedSurface3d(const AcGeExtrudedSurface3d &) = default;
+    AcGeExtrudedSurface3d(AcGeExtrudedSurface3d &&) noexcept = default;
+    AcGeExtrudedSurface3d &operator=(AcGeExtrudedSurface3d other)
+    {
+        swap(other);
+        return *this;
+    }
+    void swap(AcGeExtrudedSurface3d &other) noexcept
+    {
+        m_curve.swap(other.m_curve);
+        std::swap(m_direction, other.m_direction);
+        std::swap(m_vDomain, other.m_vDomain);
+    }
     AcGeExtrudedSurface3d(AcGeSweptCurve3d curve, const AcGeVector3d &direction,
                           const AcGeInterval &vDomain)
         : m_curve(std::move(curve)), m_direction(direction), m_vDomain(vDomain)
@@ -271,9 +324,7 @@ public:
                                const AcGeInterval &vDomain)
     {
         AcGeExtrudedSurface3d candidate(std::move(curve), direction, vDomain);
-        m_curve.swap(candidate.m_curve);
-        std::swap(m_direction, candidate.m_direction);
-        std::swap(m_vDomain, candidate.m_vDomain);
+        swap(candidate);
         return *this;
     }
     const AcGeSweptCurve3d &sourceCurve() const { return m_curve; }
@@ -319,6 +370,20 @@ class AcGeRevolvedSurface3d
     }
 
 public:
+    AcGeRevolvedSurface3d(const AcGeRevolvedSurface3d &) = default;
+    AcGeRevolvedSurface3d(AcGeRevolvedSurface3d &&) noexcept = default;
+    AcGeRevolvedSurface3d &operator=(AcGeRevolvedSurface3d other)
+    {
+        swap(other);
+        return *this;
+    }
+    void swap(AcGeRevolvedSurface3d &other) noexcept
+    {
+        m_curve.swap(other.m_curve);
+        std::swap(m_origin, other.m_origin);
+        std::swap(m_axis, other.m_axis);
+        std::swap(m_vDomain, other.m_vDomain);
+    }
     AcGeRevolvedSurface3d(AcGeSweptCurve3d curve, const AcGePoint3d &origin,
                           const AcGeVector3d &axis, const AcGeInterval &vDomain)
         : m_curve(std::move(curve)), m_origin(origin), m_axis(axis),
@@ -334,10 +399,7 @@ public:
                                const AcGeVector3d &axis, const AcGeInterval &vDomain)
     {
         AcGeRevolvedSurface3d candidate(std::move(curve), origin, axis, vDomain);
-        m_curve.swap(candidate.m_curve);
-        std::swap(m_origin, candidate.m_origin);
-        std::swap(m_axis, candidate.m_axis);
-        std::swap(m_vDomain, candidate.m_vDomain);
+        swap(candidate);
         return *this;
     }
     const AcGeSweptCurve3d &sourceCurve() const { return m_curve; }

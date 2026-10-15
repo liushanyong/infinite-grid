@@ -306,9 +306,72 @@ void testInvalidAndEmpty()
     expectThrow<std::invalid_argument>([&] { (void)Segment(typename Types::Fit{}, AcGeInterval(0.0, 1.0)); });
     typename Types::Spline invalidSpline;
     invalidSpline.controlPoints = {Types::point(0.0, 0.0)};
-    expectThrow<std::runtime_error>([&] { (void)Segment(invalidSpline, AcGeInterval(0.0, 1.0)); });
+    expectThrow<std::invalid_argument>([&] { (void)Segment(invalidSpline, AcGeInterval(0.0, 1.0)); });
     composite.set({});
     assert(composite.isEmpty());
+}
+
+template <typename Types, typename Spline>
+void testMalformedSpline()
+{
+    using Composite = typename Types::Composite;
+    using Segment = typename Composite::Segment;
+    const AcGeInterval domain(0.0, 1.0);
+    typename Types::Line line(Types::point(0.0, 0.0), Types::point(1.0, 0.0));
+    Composite target(line, domain);
+    const auto reject = [&](const Spline &spline) {
+        expectThrow<std::invalid_argument>([&] { (void)Segment(spline, domain); });
+        expectThrow<std::invalid_argument>([&] { target.addSegment(spline, domain); });
+        expectThrow<std::invalid_argument>([&] { target.setSegment(0, spline, domain); });
+        assert(target.numSegments() == 1);
+        assertPoint(target.startPoint(), line.startPoint());
+        assertPoint(target.endPoint(), line.endPoint());
+    };
+
+    // This malformed state passes the existing spline validator, but its
+    // endpoint evaluation previously underflowed a basis-function knot index.
+    Spline spline;
+    spline.degree = 3;
+    spline.controlPoints.resize(1);
+    spline.knots = {0.0, 0.0, 0.0, 1.0, 1.0};
+    spline.validate();
+    reject(spline);
+    spline.degree = std::numeric_limits<std::size_t>::max();
+    reject(spline);
+
+    spline.degree = 1;
+    spline.controlPoints.resize(2);
+    spline.knots = {0.0, 0.0, 1.0};
+    reject(spline);
+    spline.knots = {0.0, 0.0};
+    reject(spline);
+    spline.knots.clear();
+    reject(spline);
+    spline.knots = {0.0, 0.0, 1.0, 1.0, 1.0};
+    reject(spline);
+    for (const std::vector<double> &knots : {
+             std::vector<double>{0.0, 1.0, 0.0, 1.0},
+             std::vector<double>{0.0, 0.0, 0.0, 0.0},
+             std::vector<double>{0.0, 0.0, std::numeric_limits<double>::quiet_NaN(), 1.0},
+             std::vector<double>{0.0, 0.0, 1.0, std::numeric_limits<double>::infinity()}})
+    {
+        spline.knots = knots;
+        reject(spline);
+    }
+    spline.degree = 2;
+    spline.controlPoints.resize(3);
+    spline.knots = {-1.0, -1.0, 0.0, 0.0, 1.0, 1.0};
+    reject(spline);
+
+    spline.knots = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+    const Segment valid(spline, AcGeInterval(0.25, 0.75));
+    assert(valid.domain().lowerBound() == 0.25);
+    expectThrow<std::invalid_argument>([&] {
+        (void)Segment(spline, AcGeInterval(-0.01, 1.0));
+    });
+    expectThrow<std::invalid_argument>([&] {
+        (void)Segment(spline, AcGeInterval(0.0, 1.01));
+    });
 }
 
 template <typename Types>
@@ -404,6 +467,8 @@ void runTests()
     testMixedAndOwnership<Types>();
     testConnectivity<Types>();
     testInvalidAndEmpty<Types>();
+    testMalformedSpline<Types, typename Types::Spline>();
+    testMalformedSpline<Types, typename Types::Nurbs>();
     testNumericalDomains<Types>();
     testExceptionSafety<Types>();
 }

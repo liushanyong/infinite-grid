@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <concepts>
 #include <cstddef>
@@ -101,6 +102,31 @@ public:
             {
                 if (curve.controlPoints.empty())
                     throw std::invalid_argument("Composite segment control points are empty.");
+            }
+            if constexpr (requires {
+                curve.degree;
+                curve.knots.size();
+                curve.controlPoints.size();
+            })
+            {
+                // Existing spline validate() does not check all dimensions
+                // required by its unchecked span/basis evaluator. Subtract
+                // only after ordering checks to avoid unsigned overflow.
+                const auto count = curve.controlPoints.size();
+                const auto degree = curve.degree;
+                const auto knotCount = curve.knots.size();
+                if (degree >= count || knotCount <= count ||
+                    knotCount - count - 1 != degree)
+                    throw std::invalid_argument("Composite spline has invalid dimensions.");
+                for (double knot : curve.knots)
+                    if (!std::isfinite(knot))
+                        throw std::invalid_argument("Composite spline knots must be finite.");
+                if (!std::is_sorted(curve.knots.begin(), curve.knots.end()) ||
+                    !(curve.knots[degree] < curve.knots[count]))
+                    throw std::invalid_argument("Composite spline has an invalid active domain.");
+                if (domain.lowerBound() < curve.knots[degree] ||
+                    domain.upperBound() > curve.knots[count])
+                    throw std::invalid_argument("Composite spline domain exceeds its active domain.");
             }
             if constexpr (requires { curve.validate(); })
                 curve.validate();

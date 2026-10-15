@@ -95,6 +95,23 @@ int main()
     assert(triangle.clipSegment({0.5, -1.0}, {0.5, 3.0}, a, b));
     near(a, 0.5, 0.0);
     near(b, 0.5, 1.5);
+    const auto diagonal = triangle.clipPolygon(
+        {{0.5, 0.5}, {1.5, 0.5}, {1.5, 1.5}, {0.5, 1.5}});
+    assert(diagonal.size() == 3);
+    double diagonalArea = 0.0;
+    for (size_t i = 0; i < diagonal.size(); ++i)
+    {
+        const auto &p = diagonal[i];
+        const auto &q = diagonal[(i + 1) % diagonal.size()];
+        assert(p.x + p.y <= 2.0 + 1.0e-12);
+        diagonalArea += p.x * q.y - p.y * q.x;
+    }
+    assert(std::abs(diagonalArea - 1.0) < 1.0e-10);
+    // Clipping a convex polygon down to an edge or a point is well-defined.
+    assert(box.clipPolygon({{2, 0}, {3, 0}, {3, 2}, {2, 2}}).size() == 2);
+    const auto corner = box.clipPolygon({{2, 2}, {3, 2}, {3, 3}, {2, 3}});
+    assert(corner.size() == 1);
+    near(corner.front(), 2.0, 2.0);
     AcGeTol tolerant;
     tolerant.setEqualPoint(0.1);
     AcGeClipBoundary2d expanded({0.0, 0.0}, {2.0, 2.0}, tolerant);

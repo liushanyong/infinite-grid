@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <memory>
 #include <numbers>
 #include <vector>
 
@@ -178,10 +179,102 @@ void invalidBuiltInSources()
     AcGeSweptCurve3d valid(spline, unitDomain);
     near(valid.pointAt(0.5), {1, 0, 0});
     spline.knots.clear();
-    throws<std::runtime_error>([&] { AcGeSweptCurve3d bad(spline, unitDomain); });
+    throws<std::invalid_argument>([&] { AcGeSweptCurve3d bad(spline, unitDomain); });
     ge::AcGeNurbsCurve3d nurbs({0, 0, 1, 1}, {{0, 0, 0, 1}, {2, 0, 0, 1}}, 1);
     nurbs.knots.clear();
-    throws<std::runtime_error>([&] { AcGeSweptCurve3d bad(nurbs, unitDomain); });
+    throws<std::invalid_argument>([&] { AcGeSweptCurve3d bad(nurbs, unitDomain); });
+
+    ge::AcGeBsplineCurve3d tooFew;
+    tooFew.degree = 3;
+    tooFew.controlPoints = {{0, 0, 0}};
+    tooFew.knots = {0, 0, 0, 1, 1};
+    tooFew.validate(); // The old built-in validator accepts this unsafe shape.
+    throws<std::invalid_argument>([&] { AcGeSweptCurve3d bad(tooFew, unitDomain); });
+    ge::AcGeNurbsCurve3d rationalTooFew;
+    rationalTooFew.degree = 3;
+    rationalTooFew.controlPoints = {{0, 0, 0, 1}};
+    rationalTooFew.knots = tooFew.knots;
+    rationalTooFew.validate();
+    throws<std::invalid_argument>([&] { AcGeSweptCurve3d bad(rationalTooFew, unitDomain); });
+
+    const auto validSpline = ge::AcGeBsplineCurve3d(
+        {0, 0, 1, 1}, {{0, 0, 0}, {2, 0, 0}}, 1);
+    for (const std::vector<double> &knots : {
+             std::vector<double>{0, 1, 0, 1}, std::vector<double>{0, 0, 0, 0},
+             std::vector<double>{0, 0, 1, std::numeric_limits<double>::infinity()},
+             std::vector<double>{0, 0, std::numeric_limits<double>::quiet_NaN(), 1}})
+    {
+        auto malformed = validSpline;
+        malformed.knots = knots;
+        throws<std::invalid_argument>([&] { AcGeSweptCurve3d bad(malformed, unitDomain); });
+    }
+    throws<std::invalid_argument>([&] {
+        AcGeSweptCurve3d bad(validSpline, {-0.5, 1.0});
+    });
+    throws<std::invalid_argument>([&] {
+        AcGeSweptCurve3d bad(validSpline, {0.0, 1.5});
+    });
+}
+
+struct ThrowingDerivative
+{
+    std::shared_ptr<bool> fail;
+    explicit ThrowingDerivative(std::shared_ptr<bool> flag) : fail(std::move(flag)) {}
+    ThrowingDerivative(const ThrowingDerivative &other) : fail(other.fail)
+    {
+        if (*fail)
+            throw std::runtime_error("Intentional derivative copy failure.");
+    }
+    AcGeVector3d operator()(double) const { return {3, 0, 0}; }
+};
+
+void transactionalAssignments()
+{
+    auto fail = std::make_shared<bool>(false);
+    AcGeSweptCurve3d source(
+        [](double u) { return AcGePoint3d{3 * u, 4, 5}; },
+        {0.0, 2.0}, ThrowingDerivative(fail));
+    auto original = line({1, 2, 3}, {2, 0, 0});
+    auto target = original;
+    AcGeExtrudedSurface3d extrusion(original, {0, 1, 0}, unitDomain);
+    AcGeExtrudedSurface3d extrusionSource(source, {0, 0, 7}, {-1.0, 2.0});
+    AcGeRevolvedSurface3d revolution(original, {}, {0, 0, 1}, unitDomain);
+    AcGeRevolvedSurface3d revolutionSource(source, {1, 2, 3}, {0, 1, 0}, angles);
+    AcGeRuledSurface3d ruled(original, line({1, 3, 3}, {2, 0, 0}), unitDomain);
+    AcGeRuledSurface3d ruledSource(
+        line({8, 9, 10}, {1, 0, 0}, {0.0, 2.0}), source, {0.2, 0.8});
+    *fail = true;
+    throws<std::runtime_error>([&] { target = source; });
+    throws<std::runtime_error>([&] { extrusion = extrusionSource; });
+    throws<std::runtime_error>([&] { revolution = revolutionSource; });
+    // The first ruled source copies successfully before its second throws.
+    throws<std::runtime_error>([&] { ruled = ruledSource; });
+    near(target.pointAt(0.5), {2, 2, 3});
+    near(target.derivativeAt(0.5), AcGeVector3d{2, 0, 0});
+    assert(target.domain().upperBound() == 1);
+    near(extrusion.pointAt(0.5, 0.5), {2, 2.5, 3});
+    near(extrusion.partialU(0.5, 0.5), AcGeVector3d{2, 0, 0});
+    near(extrusion.direction(), AcGeVector3d{0, 1, 0});
+    assert(extrusion.uDomain().upperBound() == 1 && extrusion.vDomain().lowerBound() == 0);
+    near(revolution.pointAt(0.5, 0), {2, 2, 3});
+    near(revolution.partialU(0.5, 0), AcGeVector3d{2, 0, 0});
+    near(revolution.axisOrigin(), AcGePoint3d{});
+    near(revolution.axisDirection(), AcGeVector3d{0, 0, 1});
+    assert(revolution.uDomain().upperBound() == 1 && revolution.vDomain().lowerBound() == 0);
+    near(ruled.pointAt(0.5, 0.5), {2, 2.5, 3});
+    near(ruled.partialU(0.5, 0.5), AcGeVector3d{2, 0, 0});
+    assert(ruled.uDomain().upperBound() == 1 && ruled.vDomain().lowerBound() == 0);
+    *fail = false;
+    target = source;
+    near(target.pointAt(1.5), source.pointAt(1.5));
+    near(target.derivativeAt(1.5), source.derivativeAt(1.5));
+    target = target;
+    extrusion = extrusionSource;
+    revolution = revolutionSource;
+    ruled = ruledSource;
+    near(extrusion.pointAt(1.5, 0.5), extrusionSource.pointAt(1.5, 0.5));
+    near(revolution.pointAt(1.5, 0.5), revolutionSource.pointAt(1.5, 0.5));
+    near(ruled.pointAt(1.5, 0.5), ruledSource.pointAt(1.5, 0.5));
 }
 
 void invalidAndSingular()
@@ -292,6 +385,7 @@ int main()
     geometry();
     ownershipAndCallbacks();
     invalidBuiltInSources();
+    transactionalAssignments();
     invalidAndSingular();
     std::cout << "AcGeSweptSurfaceTests: all assertions passed\n";
 }
