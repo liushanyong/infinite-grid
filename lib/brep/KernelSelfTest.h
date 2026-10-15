@@ -214,10 +214,17 @@ inline int runKernelSelfTest()
                   faceNeighbors == std::vector<std::size_t>{1} &&
                   openMesh.boundaryEdges().size() == 4 &&
                   openMesh.isEdgeManifold() &&
-                  !openMesh.isClosedEdgeManifold(),
-              "mesh vertex/face adjacency and boundary edge queries");
+                  !openMesh.isClosedEdgeManifold() &&
+                  std::abs(openMesh.surfaceArea() - 1.0) < 1.0e-12 &&
+                  openMesh.centroid().isEqualTo({0.5, 0.5, 0.0}),
+              "mesh topology, surface area, and degenerate-volume centroid");
         check(closedMesh.boundaryEdges().empty() &&
                   closedMesh.isClosedEdgeManifold() &&
+                  std::abs(closedMesh.volume() - 1.0 / 6.0) < 1.0e-12 &&
+                  closedMesh.centroid().isEqualTo(
+                      {0.25, 0.25, 0.25}) &&
+                  std::abs(closedMesh.surfaceArea() -
+                           (1.5 + std::sqrt(3.0) * 0.5)) < 1.0e-12 &&
                   nonManifoldMesh.nonManifoldEdges() ==
                       std::vector<AcGeMesh3d::Edge>{{0, 1}} &&
                   !nonManifoldMesh.isEdgeManifold(),

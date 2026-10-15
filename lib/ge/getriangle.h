@@ -286,6 +286,7 @@ private:
         for (std::size_t face = 0; face < m_triangles.size(); ++face)
         {
             const Triangle &triangle = m_triangles[face];
+            std::set<Edge> faceEdges;
             for (std::size_t edgeIndex = 0; edgeIndex < triangle.size();
                  ++edgeIndex)
             {
@@ -293,8 +294,11 @@ private:
                 std::uint32_t second = triangle[(edgeIndex + 1) % 3];
                 if (second < first)
                     std::swap(first, second);
-                incidence[{first, second}].push_back(face);
+                if (first != second)
+                    faceEdges.insert({first, second});
             }
+            for (const Edge &edge : faceEdges)
+                incidence[edge].push_back(face);
         }
         return incidence;
     }
@@ -379,6 +383,75 @@ public:
             result.push_back(triangleAt(i).normal());
         return result;
     }
+    double surfaceArea() const
+    {
+        double area = 0.0;
+        for (std::size_t i = 0; i < m_triangles.size(); ++i)
+            area += triangleAt(i).area();
+        return area;
+    }
+    double signedVolume() const
+    {
+        double volume = 0.0;
+        for (const Triangle &indices : m_triangles)
+        {
+            const AcGeVector3d a = m_vertices[indices[0]].asVector();
+            const AcGeVector3d b = m_vertices[indices[1]].asVector();
+            const AcGeVector3d c = m_vertices[indices[2]].asVector();
+            volume += a.dotProduct(b.crossProduct(c)) / 6.0;
+        }
+        return volume;
+    }
+    double volume() const { return std::abs(signedVolume()); }
+    AcGePoint3d centroid(const AcGeTol &tol = AcGeTol{}) const
+    {
+        if (m_vertices.empty())
+            return {};
+
+        double totalVolume = 0.0;
+        AcGeVector3d weightedCentroid;
+        for (const Triangle &indices : m_triangles)
+        {
+            const AcGePoint3d &a = m_vertices[indices[0]];
+            const AcGePoint3d &b = m_vertices[indices[1]];
+            const AcGePoint3d &c = m_vertices[indices[2]];
+            const double tetrahedronVolume =
+                a.asVector().dotProduct(
+                    b.asVector().crossProduct(c.asVector())) /
+                6.0;
+            totalVolume += tetrahedronVolume;
+            weightedCentroid +=
+                (a.asVector() + b.asVector() + c.asVector()) *
+                (tetrahedronVolume / 4.0);
+        }
+        const double pointTolerance = std::abs(tol.equalPoint());
+        if (std::abs(totalVolume) >
+            pointTolerance * pointTolerance * pointTolerance)
+            return {weightedCentroid.x / totalVolume,
+                    weightedCentroid.y / totalVolume,
+                    weightedCentroid.z / totalVolume};
+
+        double totalArea = 0.0;
+        AcGeVector3d surfaceCentroid;
+        for (std::size_t i = 0; i < m_triangles.size(); ++i)
+        {
+            const AcGeTriangle3d triangle = triangleAt(i);
+            const double area = triangle.area();
+            totalArea += area;
+            surfaceCentroid += triangle.centroid().asVector() * area;
+        }
+        if (totalArea > pointTolerance * pointTolerance)
+            return {surfaceCentroid.x / totalArea,
+                    surfaceCentroid.y / totalArea,
+                    surfaceCentroid.z / totalArea};
+
+        AcGeVector3d average;
+        for (const AcGePoint3d &vertex : m_vertices)
+            average += vertex.asVector();
+        return {average.x / static_cast<double>(m_vertices.size()),
+                average.y / static_cast<double>(m_vertices.size()),
+                average.z / static_cast<double>(m_vertices.size())};
+    }
     std::vector<AcGeVector3d> vertexNormals() const
     {
         std::vector<AcGeVector3d> result(m_vertices.size());
@@ -406,8 +479,12 @@ public:
             {
                 if (triangle[i] != vertex)
                     continue;
-                neighbors.insert(triangle[(i + 1) % 3]);
-                neighbors.insert(triangle[(i + 2) % 3]);
+                const std::uint32_t first = triangle[(i + 1) % 3];
+                const std::uint32_t second = triangle[(i + 2) % 3];
+                if (first != vertex)
+                    neighbors.insert(first);
+                if (second != vertex)
+                    neighbors.insert(second);
             }
         }
         return {neighbors.begin(), neighbors.end()};
@@ -422,6 +499,8 @@ public:
         {
             std::uint32_t first = triangle[edgeIndex];
             std::uint32_t second = triangle[(edgeIndex + 1) % 3];
+            if (first == second)
+                continue;
             if (second < first)
                 std::swap(first, second);
             for (std::size_t adjacent : incidence.at({first, second}))
