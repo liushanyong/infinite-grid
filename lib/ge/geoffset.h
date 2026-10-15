@@ -39,10 +39,13 @@ inline std::vector<AcGePoint2d> offsetPolylineVertices(
                 "AcGe offset polyline vertices must be finite.");
 
         const AcGeVector2d direction = end - start;
-        if (direction.length() <= vectorTolerance)
+        const double directionLength =
+            std::hypot(direction.x, direction.y);
+        if (!std::isfinite(directionLength) ||
+            directionLength <= vectorTolerance)
             throw std::invalid_argument(
                 "AcGe offset polyline cannot contain zero-length segments.");
-        directions.push_back(direction.normal());
+        directions.push_back(direction / directionLength);
     }
 
     std::vector<AcGePoint2d> result;
@@ -165,22 +168,23 @@ public:
             !std::isfinite(vectorTolerance) || !std::isfinite(distance))
             throw std::invalid_argument(
                 "AcGe offset distance and tolerances must be finite.");
-        if (!std::isfinite(normal.x) || !std::isfinite(normal.y) ||
-            !std::isfinite(normal.z) || normal.length() <= vectorTolerance)
+        const double normalLength =
+            std::hypot(normal.x, normal.y, normal.z);
+        if (!std::isfinite(normalLength) || normalLength <= vectorTolerance)
             throw std::invalid_argument(
                 "AcGe 3D offset polyline requires a nonzero plane normal.");
         if (polyline.isEmpty())
         {
             m_polyline.clear();
             m_distance = distance;
-            m_normal = normal.normal();
+            m_normal = normal / normalLength;
             return *this;
         }
         if (polyline.numVerts() < 2)
             throw std::invalid_argument(
                 "An offset polyline requires at least two vertices.");
 
-        const AcGeVector3d unitNormal = normal.normal();
+        const AcGeVector3d unitNormal = normal / normalLength;
         const AcGePoint3d origin = polyline.vertexAt(0);
         const AcGeVector3d u = unitNormal.perpVector().normal();
         const AcGeVector3d v = unitNormal.crossProduct(u);
