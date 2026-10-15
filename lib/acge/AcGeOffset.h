@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "ge/gepolyline.h"
+#include "AcGePolyline.h"
 
 namespace ge::detail
 {

@@ -2,9 +2,9 @@
 
 #include <glm/glm.hpp>
 
-#include "../ge/ge.h"
+#include "../acge/AcGe.h"
 #include "acdb/AcDbCore.h"
-#include "ge/PointDisplayStyle.h"
+#include "acge/AcGePointDisplayStyle.h"
 
 namespace acdb
 {

@@ -32,7 +32,7 @@
 #include "acdb/AcDbSpline.h"
 #include "acdb/AcDbText.h"
 #include "acdb/AcDbXline.h"
-#include "../ge/genspline.h"
+#include "../acge/AcGeNurbsSpline.h"
 
 namespace acdb
 {

@@ -16,8 +16,8 @@
 #include <string>
 
 #include "brep/Arena.h"
-#include "ge/gecurve3d.h"
-#include "ge/gepoint.h"
+#include "acge/AcGeCurve3d.h"
+#include "acge/AcGePoint.h"
 
 namespace brep
 {

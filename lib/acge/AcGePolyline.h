@@ -7,8 +7,8 @@
 #include <stdexcept>
 #include <vector>
 
-#include "gepredicates.h"
-#include "gepoint.h"
+#include "AcGePredicates.h"
+#include "AcGePoint.h"
 
 // Source-level AcGe polyline subset. Parameters are segment indices with a
 // fractional position along each segment; closed polylines wrap parameters.

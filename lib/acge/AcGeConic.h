@@ -3,7 +3,7 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "gepoint.h"
+#include "AcGePoint.h"
 
 namespace ge
 {

@@ -23,7 +23,7 @@
 #include <optional>
 #include <vector>
 
-#include "ge/gebvh.h"
+#include "AcGeBvh.h"
 
 namespace ge
 {

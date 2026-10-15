@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "arx/ArxTypes.h"
-#include "../ge/ge.h"
+#include "../acge/AcGe.h"
 #include "../acgs/model/DrawContext.h"
 #include "AcGiTextStyle.h"
 #include "AcGiTextQueue.h"

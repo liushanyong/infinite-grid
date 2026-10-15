@@ -11,9 +11,9 @@
 #include <stdexcept>
 #include <vector>
 
-#include "ge/gepoint.h"
-#include "ge/gepredicates.h"
-#include "ge/gelinear.h"
+#include "AcGePoint.h"
+#include "AcGePredicates.h"
+#include "AcGeLinear.h"
 
 #include <glm/glm.hpp>
 

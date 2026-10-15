@@ -4,8 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "geinterval.h"
-#include "gepoint.h"
+#include "AcGeInterval.h"
+#include "AcGePoint.h"
 
 // Source-level AcGeBoundedPlane subset with an orthonormal parameter frame.
 struct AcGeBoundedPlane

@@ -19,7 +19,7 @@
 
 #include <glm/glm.hpp>
 
-#include "ge/gepoint.h"
+#include "AcGePoint.h"
 
 extern "C" {
 void exactinit();
