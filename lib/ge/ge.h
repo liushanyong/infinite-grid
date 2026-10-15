@@ -15,6 +15,7 @@
 #include "gelinear.h"
 #include "gescale.h"
 #include "gecurve3d.h"
+#include "geintersect3d.h"
 #include "geutil.h"
 #include "genurbscore.h"
 #include "gebspline.h"

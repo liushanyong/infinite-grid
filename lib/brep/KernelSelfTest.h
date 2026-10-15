@@ -14,6 +14,7 @@
 #include "ge/ge2d.h"
 #include "ge/geboundedplane.h"
 #include "ge/geinterval.h"
+#include "ge/geintersect3d.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
 #include "ge/gequaternion.h"
@@ -76,6 +77,51 @@ inline int runKernelSelfTest()
                   zeroAxis.rotateVector(AcGeVector3d::kXAxis)
                       .isEqualTo(AcGeVector3d::kXAxis),
               "quaternion rotation, matrix conversion, interpolation, and inverse");
+    }
+
+    // ---------------- 3D line, ray, segment, plane, and sphere intersections
+    {
+        const AcGePlane plane{{0.0, 0.0, 0.0}, AcGeVector3d::kZAxis};
+        const AcGeSphere sphere{1.0, AcGePoint3d::kOrigin};
+        const AcGeLine3d line{{0.0, 0.0, -2.0}, AcGeVector3d::kZAxis};
+        const AcGeRay3d ray{{0.0, 0.0, -2.0}, AcGeVector3d::kZAxis};
+        const AcGeRay3d awayRay{{0.0, 0.0, 2.0}, AcGeVector3d::kZAxis};
+        const AcGeRay3d inwardRay{AcGePoint3d::kOrigin,
+                                  AcGeVector3d::kZAxis};
+        const AcGeLineSeg3d segment{AcGePoint3d{0.0, 0.0, -2.0},
+                                    AcGePoint3d{0.0, 0.0, 2.0}};
+        const AcGeLineSeg3d beforePlane{AcGePoint3d{0.0, 0.0, -2.0},
+                                        AcGePoint3d{0.0, 0.0, -1.0}};
+        const AcGeLineSeg3d tangent{AcGePoint3d{-2.0, 1.0, 0.0},
+                                    AcGePoint3d{2.0, 1.0, 0.0}};
+        const auto linePlane = ge::intersect(line, plane);
+        const auto rayPlane = ge::intersect(ray, plane);
+        const auto segmentPlane = ge::intersect(segment, plane);
+        const auto lineSphere = ge::intersect(line, sphere);
+        const auto raySphere = ge::intersect(ray, sphere);
+        const auto inwardSphere = ge::intersect(inwardRay, sphere);
+        const auto tangentSphere = ge::intersect(tangent, sphere);
+        const auto beforeSphere = ge::intersect(beforePlane, sphere);
+        check(linePlane.size() == 1 &&
+                  linePlane[0].isEqualTo({0.0, 0.0, 0.0}) &&
+                  rayPlane.size() == 1 &&
+                  rayPlane[0].isEqualTo({0.0, 0.0, 0.0}) &&
+                  segmentPlane.size() == 1 &&
+                  segmentPlane[0].isEqualTo({0.0, 0.0, 0.0}) &&
+                  ge::intersect(awayRay, plane).empty(),
+              "3D line, ray, and segment plane-domain intersections");
+        check(lineSphere.size() == 2 &&
+                  lineSphere[0].isEqualTo({0.0, 0.0, -1.0}) &&
+                  lineSphere[1].isEqualTo({0.0, 0.0, 1.0}) &&
+                  raySphere.size() == 2 &&
+                  raySphere[0].isEqualTo({0.0, 0.0, -1.0}) &&
+                  raySphere[1].isEqualTo({0.0, 0.0, 1.0}) &&
+                  inwardSphere.size() == 1 &&
+                  inwardSphere[0].isEqualTo({0.0, 0.0, 1.0}) &&
+                  tangentSphere.size() == 1 &&
+                  tangentSphere[0].isEqualTo({0.0, 1.0, 0.0}) &&
+                  beforeSphere.empty(),
+              "3D line, ray, and segment sphere crossing and tangency");
     }
 
     // ---------------- triangle and indexed mesh geometry ----------------
