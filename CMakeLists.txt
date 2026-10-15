@@ -16,6 +16,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 project(WINDOW VERSION 1.0.0 LANGUAGES C CXX)
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" WINDOW_SOURCE_DIR)
 
 # Options must be declared before the bundled targets are created.  bgfx
 # requires /Zc:__cplusplus on MSVC, and SDL3's non-ASCII headers need /utf-8.
@@ -231,6 +232,8 @@ set(WINDOW_SOURCES
 )
 
 add_executable(WINDOW ${WINDOW_SOURCES})
+target_compile_definitions(WINDOW PRIVATE
+    GRID_SOURCE_DIR="${WINDOW_SOURCE_DIR}")
 
 # Headers:
 #   * lib/SDL/include           -- so SDL3's own headers can do
@@ -333,6 +336,8 @@ target_link_libraries(acdb PRIVATE
 # generation write path (tools/fileio_repro.cpp).  Not part of WINDOW.
 # ---------------------------------------------------------------------------
 add_executable(fileio_repro tools/fileio_repro.cpp)
+target_compile_definitions(fileio_repro PRIVATE
+    GRID_SOURCE_DIR="${WINDOW_SOURCE_DIR}")
 target_include_directories(fileio_repro PRIVATE
     "${CMAKE_SOURCE_DIR}/lib"
     "${CMAKE_SOURCE_DIR}/lib/libredwg/src"
