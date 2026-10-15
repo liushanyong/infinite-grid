@@ -45,6 +45,10 @@ implemented.
 These are geometric subsets; they do not provide the full AcGe surface
 intersection and hierarchy APIs.
 
+`AcGeBoundedPlane` adds a finite rectangular planar domain with an orthonormal
+parameter frame, point evaluation, projection, containment, closest-point, and
+area queries. Its ranges must be finite and bounded.
+
 `AcGePlane` also supports construction from three points, spanning vectors,
 or equation coefficients, plus tolerance-aware line-plane and plane-plane
 intersection.
