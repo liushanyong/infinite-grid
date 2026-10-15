@@ -52,39 +52,7 @@ public:
     }
 
     // A full circle when the arc spans two pi, an open arc otherwise.
-    bool worldCircle(const AcGeCircArc3d &arc)
-    {
-        const double sweep = arc.endAngle - arc.startAngle;
-        if (!(arc.radius > 0.0) || !(sweep > 0.0))
-            return false;
-        const acdb::TesselationOptions options =
-            draw_.optionsFor(arc.radius);
-        const int segments = std::max(
-            8, static_cast<int>(std::ceil(sweep / options.angleStep)));
-        if (arc.isFullCircle())
-        {
-            acdb::Stroke &stroke = sink().addStroke(true);
-            stroke.points.reserve(static_cast<size_t>(segments));
-            for (int i = 0; i < segments; ++i)
-            {
-                const double t = sweep * static_cast<double>(i) / segments;
-                stroke.points.push_back(apply(arc.pointAt(arc.startAngle + t)));
-            }
-            applyTraits(stroke);
-        }
-        else
-        {
-            acdb::Stroke &stroke = sink().addStroke(false);
-            stroke.points.reserve(static_cast<size_t>(segments) + 1);
-            for (int i = 0; i <= segments; ++i)
-            {
-                const double t = sweep * static_cast<double>(i) / segments;
-                stroke.points.push_back(apply(arc.pointAt(arc.startAngle + t)));
-            }
-            applyTraits(stroke);
-        }
-        return true;
-    }
+    bool worldCircle(const AcGeCircArc3d &arc);
 
     bool worldPoint(
         const AcGePoint3d &position,
@@ -128,102 +96,15 @@ public:
     // changes when glyphs arrive.
     bool text(const AcGePoint3d &position, const AcGeVector3d &normal,
               const AcGeVector3d &direction, const char *message,
-              const AcGiTextStyle &style)
-    {
-        if (!message || !*message)
-            return false;
-        const double height = style.textSize;
-        if (!(height > 0.0) || !std::isfinite(height))
-            return false;
-
-        // Record the request for the host's glyph renderer (SDF/SHX).
-        acgi::TextRequest request;
-        request.position = glm::dvec3(apply(position));
-        request.normal = glm::dvec3(normal.normal());
-        request.direction = glm::dvec3(direction.normal());
-        request.message = message;
-        request.height = height;
-        request.xScale = style.xScale;
-        request.color = draw_.subEntityTraits().traits().color;
-        acgi::textRequests().push_back(std::move(request));
-
-        // Layout-frame fallback: without a glyph backend the entity stays
-        // visible as its bounding box.
-        if (!acgi::textFrameFallback())
-            return true;
-
-        size_t lineBreaks = 0;
-        size_t longest = 0;
-        size_t current = 0;
-        for (const char *character = message; *character; ++character)
-        {
-            if (*character == 10) // newline
-            {
-                ++lineBreaks;
-                longest = std::max(longest, current);
-                current = 0;
-            }
-            else
-            {
-                ++current;
-            }
-        }
-        longest = std::max(longest, current);
-        const size_t lineCount = lineBreaks + 1;
-        const double width = std::max(double(longest) * height * 0.6 *
-                                          style.xScale,
-                                      height);
-        const glm::dvec3 right = glm::dvec3(direction.normal());
-        const glm::dvec3 up =
-            glm::normalize(glm::cross(glm::dvec3(normal.normal()), right));
-        const glm::dvec3 frameHeight = up * (height * double(lineCount));
-
-        acdb::Stroke &frame = sink().addStroke(true);
-        frame.points.reserve(5);
-        frame.points.push_back(apply(position));
-        frame.points.push_back(apply(position + AcGeVector3d(right * width)));
-        frame.points.push_back(
-            apply(position + AcGeVector3d(right * width + frameHeight)));
-        frame.points.push_back(apply(position + AcGeVector3d(frameHeight)));
-        frame.points.push_back(apply(position));
-        applyTraits(frame);
-        worldPoint(position);
-        return true;
-    }
+              const AcGiTextStyle &style);
 
     bool text(const AcGePoint3d &position, const AcGeVector3d &normal,
               const AcGeVector3d &direction, const ACHAR *message,
-              const AcGiTextStyle &style)
-    {
-        if (!message)
-            return false;
-        const AcUtf8String utf8Message =
-            arxcompat::toUtf8(AcStringView(message));
-        return text(position, normal, direction, utf8Message.c_str(), style);
-    }
+              const AcGiTextStyle &style);
 
     // ObjectARX draws ellipses as worldPolyline; this convenience keeps the
     // same tessellation policy in one place.
-    bool worldEllipse(const AcGeEllip3d &ellipse)
-    {
-        double sweep = ellipse.endAngle - ellipse.startAngle;
-        if (!(sweep > 0.0))
-            return false;
-        const acdb::TesselationOptions options =
-            draw_.optionsFor(ellipse.majorRadius());
-        const int segments = std::max(
-            8, static_cast<int>(std::ceil(sweep / options.angleStep)));
-        const bool closed = sweep >= 6.2831853071795864769 - 1.0e-12;
-        const int emitted = closed ? segments : segments + 1;
-        std::vector<AcGePoint3d> points;
-        points.reserve(static_cast<size_t>(emitted));
-        for (int i = 0; i < emitted; ++i)
-        {
-            const double t = sweep * static_cast<double>(i) / segments;
-            points.push_back(apply(ellipse.pointAt(ellipse.startAngle + t)));
-        }
-        return worldPolyline(points.data(), emitted, closed);
-    }
+    bool worldEllipse(const AcGeEllip3d &ellipse);
 
     // Model transform stack: subsequent callbacks are expressed in the
     // pushed frame, like AcGiGeometry::pushModelTransform.

@@ -103,6 +103,7 @@ add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix2d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGePoint.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeQuaternion.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeTol.cpp"
 )
 target_include_directories(acge PUBLIC "${CMAKE_SOURCE_DIR}/lib")
@@ -112,6 +113,7 @@ if(MSVC)
 endif()
 
 add_library(acgi STATIC
+    "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiWorldDraw.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextEngine.cpp"
     "${CMAKE_SOURCE_DIR}/lib/text/text_font.cpp"
     "${CMAKE_SOURCE_DIR}/lib/text/shx_parser.cpp"
@@ -120,6 +122,7 @@ target_include_directories(acgi PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acgi PUBLIC acge)
 
 add_library(acgs STATIC
+    "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsOrbitCamera.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsView.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsManager.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsSelectionManager.cpp"
@@ -142,6 +145,8 @@ add_library(acdb STATIC
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbLibredwgFileCodec.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbGltf.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransaction.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbDwgBridge.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acdb/AcDbTransform.cpp"
 )
 target_include_directories(acdb PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acdb PUBLIC acge acgi)
