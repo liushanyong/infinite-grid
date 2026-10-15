@@ -55,9 +55,9 @@ inline int runKernelSelfTest()
         check(triangle.area() == 6.0 &&
                   triangle.centroid() == AcGePoint2d{4.0 / 3.0, 1.0} &&
                   triangle.barycentricCoordinates({1.0, 1.0}, u, v, w) &&
-                  std::abs(u - 0.25) < 1.0e-12 &&
+                  std::abs(u - 5.0 / 12.0) < 1.0e-12 &&
                   std::abs(v - 0.25) < 1.0e-12 &&
-                  std::abs(w - 0.5) < 1.0e-12 &&
+                  std::abs(w - 1.0 / 3.0) < 1.0e-12 &&
                   triangle.contains({1.0, 1.0}) &&
                   !triangle.contains({3.0, 2.0}) &&
                   triangle.closestPointTo({3.0, 2.0})
