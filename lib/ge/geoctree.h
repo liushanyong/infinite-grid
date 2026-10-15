@@ -22,53 +22,6 @@
 namespace ge
 {
 
-struct AcGeBoundBox2d
-{
-    AcGePoint2d min{0.0, 0.0};
-    AcGePoint2d max{0.0, 0.0};
-
-    AcGeBoundBox2d() = default;
-    AcGeBoundBox2d(const AcGePoint2d &first, const AcGePoint2d &second)
-    {
-        set(first, second);
-    }
-
-    AcGeBoundBox2d &set(const AcGePoint2d &first, const AcGePoint2d &second)
-    {
-        min = {std::min(first.x, second.x), std::min(first.y, second.y)};
-        max = {std::max(first.x, second.x), std::max(first.y, second.y)};
-        return *this;
-    }
-
-    AcGePoint2d center() const
-    {
-        return {(min.x + max.x) * 0.5, (min.y + max.y) * 0.5};
-    }
-
-    bool intersects(const AcGeBoundBox2d &other,
-                    double tolerance = 0.0) const
-    {
-        const double tol = std::abs(tolerance);
-        return min.x <= other.max.x + tol && max.x >= other.min.x - tol &&
-               min.y <= other.max.y + tol && max.y >= other.min.y - tol;
-    }
-
-    bool containsPoint(const AcGePoint2d &point,
-                       double tolerance = 0.0) const
-    {
-        const double tol = std::abs(tolerance);
-        return point.x >= min.x - tol && point.x <= max.x + tol &&
-               point.y >= min.y - tol && point.y <= max.y + tol;
-    }
-
-    static AcGeBoundBox2d aroundPoint(const AcGePoint2d &point, double extent)
-    {
-        const double radius = std::abs(extent);
-        return {{point.x - radius, point.y - radius},
-                {point.x + radius, point.y + radius}};
-    }
-};
-
 struct AcGeBoundBox3d
 {
     AcGePoint3d min{0.0, 0.0, 0.0};
