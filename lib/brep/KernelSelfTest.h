@@ -148,6 +148,43 @@ inline int runKernelSelfTest()
               "3D line, ray, and segment sphere crossing and tangency");
     }
 
+    // ---------------- plane, line, and triangle intersections -------------
+    {
+        const AcGePlane horizontal{{0.0, 0.0, 2.0},
+                                   AcGeVector3d::kZAxis};
+        const AcGePlane vertical{{1.0, 0.0, 0.0},
+                                 AcGeVector3d::kXAxis};
+        const AcGePlane parallel{{0.0, 0.0, 4.0},
+                                 AcGeVector3d::kZAxis};
+        const auto planeIntersection = ge::intersect(horizontal, vertical);
+        const auto lineIntersection = ge::intersect(
+            AcGeLine3d{{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}},
+            AcGeLine3d{{1.0, 0.0, 0.0}, {-1.0, 1.0, 0.0}});
+        const auto skewIntersection = ge::intersect(
+            AcGeLine3d{{0.0, 0.0, 0.0}, AcGeVector3d::kXAxis},
+            AcGeLine3d{{0.0, 1.0, 1.0}, AcGeVector3d::kYAxis});
+        const AcGeTriangle3d triangle{{0.0, 0.0, 0.0},
+                                      {2.0, 0.0, 0.0},
+                                      {0.0, 2.0, 0.0}};
+        const auto triangleHit = ge::intersect(
+            AcGeLineSeg3d{{0.5, 0.5, -1.0}, {0.5, 0.5, 1.0}}, triangle);
+        const auto triangleMiss = ge::intersect(
+            AcGeLineSeg3d{{2.0, 2.0, -1.0}, {2.0, 2.0, 1.0}}, triangle);
+        check(planeIntersection &&
+                  planeIntersection->basePoint.isEqualTo({1.0, 0.0, 2.0}) &&
+                  planeIntersection->direction.isParallelTo(
+                      AcGeVector3d::kYAxis) &&
+                  !ge::intersect(horizontal, parallel),
+              "plane-plane intersection and parallel rejection");
+        check(lineIntersection &&
+                  lineIntersection->isEqualTo({0.5, 0.5, 0.0}) &&
+                  !skewIntersection,
+              "3D line-line crossing and skew rejection");
+        check(triangleHit && triangleHit->isEqualTo({0.5, 0.5, 0.0}) &&
+                  !triangleMiss,
+              "finite segment-triangle intersection");
+    }
+
     // ---------------- 3D circles and ellipse aliases ----------------
     {
         const AcGeCircle3d circle{{1.0, 2.0, 3.0},
