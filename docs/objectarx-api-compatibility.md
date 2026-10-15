@@ -92,6 +92,11 @@ point-on-arc tests. Curve-curve intersection remains the existing focused
 endpoints, and point-on-ellipse-arc testing. Ellipse intersection and broader
 planar-entity APIs are not yet implemented.
 
+`AcGeOffsetPolyline2d` and `AcGeOffsetPolyline3d` provide miter-joined
+parallel offsets for directed polylines. The 3D variant requires coplanar
+vertices and an explicit plane normal; neither variant trims self-intersections
+or substitutes for the full parametric `AcGeOffsetCurve` API.
+
 `AcGeCircArc3d` and the newly exposed `AcGeEllipArc3d` name provide endpoint,
 plane, and point-on-curve helpers alongside parameter evaluation. The legacy
 `AcGeEllip3d` spelling remains an alias for the ellipse arc value type.
