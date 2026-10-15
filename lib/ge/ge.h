@@ -9,6 +9,7 @@
 #include "gematrix2d.h"
 #include "gematrix.h"
 #include "geinterval.h"
+#include "geboundedplane.h"
 #include "gesurface3d.h"
 #include "gelinear.h"
 #include "gescale.h"

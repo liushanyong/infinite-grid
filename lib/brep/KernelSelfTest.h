@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ge/ge2d.h"
+#include "ge/geboundedplane.h"
 #include "ge/geinterval.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
@@ -45,6 +46,25 @@ inline int runKernelSelfTest()
             std::printf("FAIL %s\n", what);
         }
     };
+
+    // ---------------- bounded planar surface ----------------
+    {
+        const AcGeBoundedPlane plane{
+            AcGePoint3d{1.0, 2.0, 3.0}, AcGeVector3d{0.0, 0.0, 2.0},
+            AcGeVector3d{2.0, 0.0, 0.0}, AcGeInterval{-1.0, 1.0},
+            AcGeInterval{0.0, 3.0}};
+        double u = 0.0;
+        double v = 0.0;
+        check(plane.pointAt(1.0, 2.0) == AcGePoint3d{2.0, 4.0, 3.0} &&
+                  plane.normalAt(0.0, 0.0) == AcGeVector3d{0.0, 0.0, 1.0} &&
+                  plane.area() == 6.0 &&
+                  plane.parametersOf({2.0, 4.0, 3.0}, u, v) && u == 1.0 &&
+                  v == 2.0 && plane.isInside({2.0, 4.0, 3.0}) &&
+                  !plane.isInside({2.0, 4.0, 3.1}) &&
+                  plane.closestPointTo({5.0, 4.0, 4.0}) ==
+                      AcGePoint3d{2.0, 4.0, 3.0},
+              "bounded plane evaluation, projection, containment, and area");
+    }
 
     // ---------------- geom2d (milestone 1 tail) ----------------
     {
