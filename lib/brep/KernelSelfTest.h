@@ -14,8 +14,10 @@
 #include "ge/ge2d.h"
 #include "ge/geboundedplane.h"
 #include "ge/geinterval.h"
+#include "ge/geintersect3d.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
+#include "ge/gequaternion.h"
 #include "ge/gescale.h"
 #include "ge/gesurface3d.h"
 #include "ge/geutil.h"
@@ -47,6 +49,101 @@ inline int runKernelSelfTest()
             std::printf("FAIL %s\n", what);
         }
     };
+
+    // ---------------- 3D rotation quaternion ----------------
+    {
+        constexpr double halfPi = 1.5707963267948966192;
+        const AcGeQuaternion3d quarterTurn{AcGeVector3d::kZAxis, halfPi};
+        const AcGeVector3d rotated =
+            quarterTurn.rotateVector(AcGeVector3d::kXAxis);
+        const AcGeVector3d matrixRotated = transformBy(
+            AcGeVector3d::kXAxis, quarterTurn.toMatrix());
+        const AcGeQuaternion3d halfway =
+            AcGeQuaternion3d::slerp(AcGeQuaternion3d::identity(),
+                                    quarterTurn, 0.5);
+        const AcGeVector3d halfwayRotated =
+            halfway.rotateVector(AcGeVector3d::kXAxis);
+        const AcGeQuaternion3d nonUnit{0.0, 0.0, 2.0, 2.0};
+        const AcGeVector3d restored =
+            (nonUnit * nonUnit.inverse()).rotateVector({1.0, 2.0, 3.0});
+        const AcGeQuaternion3d zeroAxis{AcGeVector3d{}, halfPi};
+        check(rotated.isEqualTo({0.0, 1.0, 0.0}) &&
+                  matrixRotated.isEqualTo(rotated) &&
+                  halfwayRotated.isEqualTo(
+                      {0.7071067811865476, 0.7071067811865476, 0.0}) &&
+                  std::abs(quarterTurn.angle() - halfPi) < 1.0e-12 &&
+                  quarterTurn.axis().isEqualTo(AcGeVector3d::kZAxis) &&
+                  restored.isEqualTo({1.0, 2.0, 3.0}) &&
+                  zeroAxis.rotateVector(AcGeVector3d::kXAxis)
+                      .isEqualTo(AcGeVector3d::kXAxis),
+              "quaternion rotation, matrix conversion, interpolation, and inverse");
+    }
+
+    // ---------------- plane projection, reflection, and relations --------
+    {
+        const AcGePlane horizontal{AcGePoint3d{0.0, 0.0, 2.0},
+                                   AcGeVector3d{0.0, 0.0, 4.0}};
+        const AcGePlane parallel{AcGePoint3d{1.0, 0.0, 3.0},
+                                 AcGeVector3d::kZAxis};
+        const AcGePlane coplanar{AcGePoint3d{0.0, 0.0, 2.0},
+                                 AcGeVector3d{0.0, 0.0, -1.0}};
+        const AcGePlane vertical{AcGePoint3d::kOrigin,
+                                 AcGeVector3d::kXAxis};
+        check(horizontal.projectVector({3.0, 4.0, 5.0})
+                      .isEqualTo({3.0, 4.0, 0.0}) &&
+                  horizontal.mirrorPoint({1.0, 2.0, 5.0})
+                      .isEqualTo({1.0, 2.0, -1.0}) &&
+                  horizontal.isParallelTo(parallel) &&
+                  !horizontal.isCoplanarTo(parallel) &&
+                  horizontal.isCoplanarTo(coplanar) &&
+                  horizontal.isPerpendicularTo(vertical),
+              "plane projection, reflection, and parallel/coplanar relations");
+    }
+
+    // ---------------- 3D line, ray, segment, plane, and sphere intersections
+    {
+        const AcGePlane plane{{0.0, 0.0, 0.0}, AcGeVector3d::kZAxis};
+        const AcGeSphere sphere{1.0, AcGePoint3d::kOrigin};
+        const AcGeLine3d line{{0.0, 0.0, -2.0}, AcGeVector3d::kZAxis};
+        const AcGeRay3d ray{{0.0, 0.0, -2.0}, AcGeVector3d::kZAxis};
+        const AcGeRay3d awayRay{{0.0, 0.0, 2.0}, AcGeVector3d::kZAxis};
+        const AcGeRay3d inwardRay{AcGePoint3d::kOrigin,
+                                  AcGeVector3d::kZAxis};
+        const AcGeLineSeg3d segment{AcGePoint3d{0.0, 0.0, -2.0},
+                                    AcGePoint3d{0.0, 0.0, 2.0}};
+        const AcGeLineSeg3d beforePlane{AcGePoint3d{0.0, 0.0, -2.0},
+                                        AcGePoint3d{0.0, 0.0, -1.0}};
+        const AcGeLineSeg3d tangent{AcGePoint3d{-2.0, 1.0, 0.0},
+                                    AcGePoint3d{2.0, 1.0, 0.0}};
+        const auto linePlane = ge::intersect(line, plane);
+        const auto rayPlane = ge::intersect(ray, plane);
+        const auto segmentPlane = ge::intersect(segment, plane);
+        const auto lineSphere = ge::intersect(line, sphere);
+        const auto raySphere = ge::intersect(ray, sphere);
+        const auto inwardSphere = ge::intersect(inwardRay, sphere);
+        const auto tangentSphere = ge::intersect(tangent, sphere);
+        const auto beforeSphere = ge::intersect(beforePlane, sphere);
+        check(linePlane.size() == 1 &&
+                  linePlane[0].isEqualTo({0.0, 0.0, 0.0}) &&
+                  rayPlane.size() == 1 &&
+                  rayPlane[0].isEqualTo({0.0, 0.0, 0.0}) &&
+                  segmentPlane.size() == 1 &&
+                  segmentPlane[0].isEqualTo({0.0, 0.0, 0.0}) &&
+                  ge::intersect(awayRay, plane).empty(),
+              "3D line, ray, and segment plane-domain intersections");
+        check(lineSphere.size() == 2 &&
+                  lineSphere[0].isEqualTo({0.0, 0.0, -1.0}) &&
+                  lineSphere[1].isEqualTo({0.0, 0.0, 1.0}) &&
+                  raySphere.size() == 2 &&
+                  raySphere[0].isEqualTo({0.0, 0.0, -1.0}) &&
+                  raySphere[1].isEqualTo({0.0, 0.0, 1.0}) &&
+                  inwardSphere.size() == 1 &&
+                  inwardSphere[0].isEqualTo({0.0, 0.0, 1.0}) &&
+                  tangentSphere.size() == 1 &&
+                  tangentSphere[0].isEqualTo({0.0, 1.0, 0.0}) &&
+                  beforeSphere.empty(),
+              "3D line, ray, and segment sphere crossing and tangency");
+    }
 
     // ---------------- triangle and indexed mesh geometry ----------------
     {
