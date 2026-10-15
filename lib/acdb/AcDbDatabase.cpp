@@ -4,9 +4,28 @@
 #include <unordered_set>
 
 #include "acgi/AcGiLineType.h"
+#include "acgi/AcGiTextEngine.h"
 
 namespace acdb
 {
+
+// ---- acdb font loading: text style records name the SHX files ----
+
+bool AcDbDatabase::loadTextStyleShxFonts(const std::string &styleName,
+                                         acgi::TextEngine &engine) const
+{
+    const AcDbTextStyleTableRecord *record = textStyleTable().get(styleName);
+    if (record == nullptr)
+        return false;
+    bool loaded = false;
+    if (!record->fileName.empty())
+        loaded = engine.loadShxRegularFont(record->fileName) || loaded;
+    if (!record->bigFontFileName.empty())
+        loaded = engine.loadShxBigFont(record->bigFontFileName) || loaded;
+    if (loaded)
+        engine.bindShxStyleFont(styleName);
+    return loaded;
+}
 
 // ---- common(payload) accessors ----
 

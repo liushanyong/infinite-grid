@@ -25,6 +25,13 @@
 #include "acdb/AcDbTransaction.h"
 #include "acdb/AcDbViewportTable.h"
 
+
+
+namespace acgi
+{
+class TextEngine;
+}
+
 namespace acdb
 {
 
@@ -252,6 +259,13 @@ public:
     // model-space membership.  Auto-captures the before-image inside an
     // active transaction, so undo restores both.
     bool removeEntity(AcDbHandle handle);
+
+    // acdb font loading (ObjectARX: the AcDbTextStyleTableRecord names
+    // the font files).  Loads the SHX files named by |styleName|'s record
+    // into the rendering text engine and binds the style to them; returns
+    // false when the record is absent or no font loaded.
+    bool loadTextStyleShxFonts(const std::string &styleName,
+                               acgi::TextEngine &engine) const;
 
     // ---- active draw settings (ObjectARX database defaults) ----
     const std::string &activeLayerName() const { return activeLayer_; }

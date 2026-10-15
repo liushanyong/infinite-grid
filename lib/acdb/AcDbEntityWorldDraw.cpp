@@ -111,6 +111,12 @@ void worldDraw(const AcDbText &text, acgs::ViewportDraw &draw,
     AcGiWorldDraw graphics(draw);
     AcGiTextStyle style;
     style.setTextSize(text.height);
+    // The entity's text style name selects the font: when the acdb system
+    // loaded SHX fonts for that style (document text-style record), the
+    // text callback routes to SHX vector glyphs; otherwise the SDF engine
+    // renders it.
+    if (!text.styleName.empty())
+        style.setFileName(text.styleName.c_str());
     const AcGeVector3d direction(std::cos(text.rotation),
                                  std::sin(text.rotation), 0.0);
     graphics.text(text.insertion, AcGeVector3d(0.0, 0.0, 1.0), direction,

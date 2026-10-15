@@ -524,6 +524,16 @@ std::vector<unsigned char> toBigfontBytes(const std::string &utf8)
 
 } // namespace
 
+void TextEngine::bindShxStyleFont(const std::string &styleName)
+{
+    shxStyleFonts_.insert(styleName);
+}
+
+bool TextEngine::shxStyleFontBound(const std::string &styleName) const
+{
+    return shxStyleFonts_.count(styleName) != 0;
+}
+
 std::vector<rendering::ShxGlyphStroke> TextEngine::shxStrokes(
     const std::string &message) const
 {

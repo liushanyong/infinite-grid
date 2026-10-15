@@ -1,5 +1,7 @@
 #include "acgi/AcGiWorldDraw.h"
 
+#include "acgi/AcGiTextEngine.h"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -223,6 +225,32 @@ bool AcGiWorldDraw::text(const AcGePoint3d &position,
     const double height = style.textSize;
     if (!(height > 0.0) || !std::isfinite(height))
         return true;
+
+    // SHX vector glyphs: when the style names a text style whose SHX fonts
+    // the acdb system loaded, each glyph stroke becomes an ordinary CAD
+    // stroke (cap line at the anchor, baseline one em down) — same output
+    // the stroke pipeline serves for any other SHX geometry.
+    if (style.fileName != nullptr && *style.fileName != '\0' &&
+        acgi::textEngine().shxStyleFontBound(style.fileName))
+    {
+        const AcUtf8String utf8Glyphs(message);
+        const AcGeVector3d right = direction.normal();
+        const AcGeVector3d up = normal.normal().crossProduct(right);
+        for (const rendering::ShxGlyphStroke &glyphStroke :
+             acgi::textEngine().shxStrokes(utf8Glyphs))
+        {
+            acdb::Stroke &stroke = sink().addStroke();
+            stroke.points = {
+                apply(position +
+                      AcGeVector3d(right * (glyphStroke.fromX * height) +
+                                   up * (glyphStroke.fromY * height))),
+                apply(position +
+                      AcGeVector3d(right * (glyphStroke.toX * height) +
+                                   up * (glyphStroke.toY * height)))};
+            applyTraits(stroke);
+        }
+        return false;
+    }
 
     acgi::TextRequest request;
     request.position = glm::dvec3(apply(position));

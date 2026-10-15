@@ -14,6 +14,7 @@
 //   acgi::textEngine().loadSdfFont(path);
 //   acgi::textEngine().drawText(backend, view, projection, basis, request);
 
+#include <set>
 #include <map>
 #include <string>
 #include <array>
@@ -118,10 +119,19 @@ public:
     // Total SHX advance width of a message in em units.
     double shxAdvance(const std::string &message) const;
 
+    // Style-name binding: the acdb font loader marks which logical text
+    // style (AcDbTextStyleTableRecord name) the currently loaded SHX fonts
+    // serve; the worldText callback routes a style to SHX strokes when its
+    // name is bound here.
+    void bindShxStyleFont(const std::string &styleName);
+    bool shxStyleFontBound(const std::string &styleName) const;
+
 private:
     const rendering::LoadedFont &shxFontFor(unsigned char character) const;
 
     rendering::LoadedFont sdfFont_;
+    std::set<std::string> shxStyleFonts_;
+
     rendering::LoadedFont shxRegularFont_;
     rendering::LoadedFont shxBigFont_;
     std::map<unsigned int, uint32_t> glyphTextureIds_;

@@ -529,29 +529,6 @@ bool init()
     // queue instead of their baked layout frames.
     acgi::textFrameFallback() = false;
   }
-  // AutoCAD bigfont pairing: txt.shx provides ASCII glyphs, gbcbig.shx
-  // provides the double-byte CJK glyphs (full GB2312 coverage; whgdtxt
-  // tops out at 0xC8FE and misses many common characters).
-  bool shxRegularReady = false;
-  if (util::resourceExists("fonts/txt.shx"))
-  {
-    shxRegularReady = acgi::textEngine().loadShxRegularFont(
-        util::resourcePath("fonts/txt.shx").string());
-    std::cout << "SHX regular font (txt): "
-              << (shxRegularReady ? "loaded" : "failed") << std::endl;
-  }
-  if (util::resourceExists("fonts/gbcbig.shx"))
-  {
-    const bool bigReady = acgi::textEngine().loadShxBigFont(
-        util::resourcePath("fonts/gbcbig.shx").string());
-    std::cout << "SHX big font (gbcbig): "
-              << (bigReady ? "loaded" : "failed") << std::endl;
-    gShxFontReady = shxRegularReady || bigReady;
-  }
-  else
-  {
-    gShxFontReady = shxRegularReady;
-  }
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
                "custom start axis=yellow)"
@@ -2362,9 +2339,9 @@ static void buildDemoDocument()
 
     // SHX-styled text: an ordinary AcDbText entity — like every text
     // entity it renders through its own subWorldDraw into the AcGi text
-    // engine, so picking/outlines/styles treat text like any other
-    // entity (the style name is entity data, not a render-path switch).
-    if (gShxFontReady)
+    // engine.  The style name is entity data: it selects the SHX vector
+    // fonts the acdb system loaded (stroke glyphs) when bound, and falls
+    // back to the SDF engine otherwise.
     {
       acdb::AcDbText shxText;
       shxText.color = acgs::math::Vec4(0.95f, 0.85f, 0.30f, 1.0f);
@@ -3000,6 +2977,23 @@ static void buildDemoDocument()
                     curveCenter + AcGeVector3d(280.0, -260.0, 0.0)},
                    {1.0, 2.0, 2.0, 1.0});
 
+    // Text styles: the "SHX" record names the AutoCAD font files (acdb
+    // font loading — the Gs build loads them through
+    // AcDbDatabase::loadTextStyleShxFonts).  Absolute resolved paths, so
+    // the loader needs no search logic.
+    const std::string shxRegularPath =
+        util::resourcePath("fonts/txt.shx").string();
+    const std::string shxBigPath =
+        util::resourcePath("fonts/gbcbig.shx").string();
+    if (util::resourceExists("fonts/txt.shx"))
+    {
+      acdb::AcDbTextStyleTableRecord &shxStyle =
+          document.textStyleTable().add("SHX",
+                                        document.allocateHandle());
+      shxStyle.fileName = shxRegularPath;
+      shxStyle.bigFontFileName = shxBigPath;
+    }
+
     // The former GPU arc demo: an ordinary AcDbArc entity (stroke channel).
     acdb::AcDbArc curveArc;
     curveArc.name = "CurveArc";
@@ -3029,6 +3023,16 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
   buildDemoDocument();
   acdb::AcDbDatabase &document = acdbDocument();
+  // SHX fonts load through the acdb system: the document's "SHX" text
+  // style record names the font files.
+  static const bool shxFontsLoaded = [] {
+    const bool loaded =
+        acdbDocument().loadTextStyleShxFonts("SHX", acgi::textEngine());
+    std::cout << "SHX fonts (acdb text-style loader): "
+              << (loaded ? "loaded" : "not loaded") << std::endl;
+    return loaded;
+  }();
+  gShxFontReady = shxFontsLoaded;
   // The rebuild invalidates every tessellation-stored pointer: pick
   // registry entries, text identities, pointer-keyed caches, and the live
   // selection. Clear them together BEFORE the replayer repopulates the
