@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 bool AcGiWorldDraw::worldCircle(const AcGeCircArc3d &arc)
 {
