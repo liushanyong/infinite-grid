@@ -79,6 +79,27 @@ inline int runKernelSelfTest()
               "quaternion rotation, matrix conversion, interpolation, and inverse");
     }
 
+    // ---------------- plane projection, reflection, and relations --------
+    {
+        const AcGePlane horizontal{AcGePoint3d{0.0, 0.0, 2.0},
+                                   AcGeVector3d{0.0, 0.0, 4.0}};
+        const AcGePlane parallel{AcGePoint3d{1.0, 0.0, 3.0},
+                                 AcGeVector3d::kZAxis};
+        const AcGePlane coplanar{AcGePoint3d{0.0, 0.0, 2.0},
+                                 AcGeVector3d{0.0, 0.0, -1.0}};
+        const AcGePlane vertical{AcGePoint3d::kOrigin,
+                                 AcGeVector3d::kXAxis};
+        check(horizontal.projectVector({3.0, 4.0, 5.0})
+                      .isEqualTo({3.0, 4.0, 0.0}) &&
+                  horizontal.mirrorPoint({1.0, 2.0, 5.0})
+                      .isEqualTo({1.0, 2.0, -1.0}) &&
+                  horizontal.isParallelTo(parallel) &&
+                  !horizontal.isCoplanarTo(parallel) &&
+                  horizontal.isCoplanarTo(coplanar) &&
+                  horizontal.isPerpendicularTo(vertical),
+              "plane projection, reflection, and parallel/coplanar relations");
+    }
+
     // ---------------- 3D line, ray, segment, plane, and sphere intersections
     {
         const AcGePlane plane{{0.0, 0.0, 0.0}, AcGeVector3d::kZAxis};

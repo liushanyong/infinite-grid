@@ -207,6 +207,50 @@ struct AcGePlane
                std::abs(signedDistanceTo(point)) <= tol.equalPoint();
     }
 
+    AcGeVector3d projectVector(const AcGeVector3d &vector) const
+    {
+        const double normalLength = normal.length();
+        if (normalLength == 0.0)
+            return vector;
+        const AcGeVector3d unitNormal = normal / normalLength;
+        return vector - unitNormal * vector.dotProduct(unitNormal);
+    }
+
+    AcGePoint3d mirrorPoint(const AcGePoint3d &point) const
+    {
+        const double normalLength = normal.length();
+        if (normalLength == 0.0)
+            return point;
+        const AcGeVector3d unitNormal = normal / normalLength;
+        return point - unitNormal * (2.0 * signedDistanceTo(point));
+    }
+
+    bool isParallelTo(const AcGePlane &other,
+                      const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double lengths = normal.length() * other.normal.length();
+        return lengths > 0.0 &&
+               normal.crossProduct(other.normal).length() <=
+                   std::abs(tol.equalVector()) * lengths;
+    }
+
+    bool isPerpendicularTo(const AcGePlane &other,
+                           const AcGeTol &tol = AcGeTol{}) const
+    {
+        const double lengths = normal.length() * other.normal.length();
+        return lengths > 0.0 &&
+               std::abs(normal.dotProduct(other.normal)) <=
+                   std::abs(tol.equalVector()) * lengths;
+    }
+
+    bool isCoplanarTo(const AcGePlane &other,
+                      const AcGeTol &tol = AcGeTol{}) const
+    {
+        return isParallelTo(other, tol) &&
+               std::abs(signedDistanceTo(other.origin)) <=
+                   std::abs(tol.equalPoint());
+    }
+
     bool project(const AcGePoint3d &point, const AcGeVector3d &direction,
                  AcGePoint3d &projected,
                  const AcGeTol &tol = AcGeTol{}) const
