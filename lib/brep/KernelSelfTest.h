@@ -16,6 +16,7 @@
 #include "ge/geinterval.h"
 #include "ge/geintersect3d.h"
 #include "ge/gecurve3d.h"
+#include "ge/geconic.h"
 #include "ge/gecurves2d.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
@@ -204,6 +205,33 @@ inline int runKernelSelfTest()
                   fitSpline.arcLength() > 2.0 &&
                   interpolated.pointAt(0.5).isEqualTo({1.0, 1.0}),
               "2D Bezier, B-spline, NURBS, and fit-spline evaluation");
+    }
+
+    // ---------------- planar parabola and hyperbola curves ----------------
+    {
+        const ge::AcGeParabola2d parabola2d{{1.0, 2.0}, {1.0, 0.0}, 2.0};
+        const ge::AcGeParabola3d parabola3d{
+            {1.0, 2.0, 3.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 2.0}, 2.0};
+        const ge::AcGeHyperbola2d hyperbola2d{
+            {0.0, 0.0}, {1.0, 0.0}, {0.0, 1.0}, 3.0, 2.0, -1};
+        const ge::AcGeHyperbola3d hyperbola3d{
+            {0.0, 0.0, 1.0}, {2.0, 0.0, 0.0}, {0.0, 0.0, 1.0},
+            3.0, 2.0};
+        const AcGePoint2d parabolaPoint = parabola2d.pointAt(4.0);
+        const AcGePoint3d parabolaPoint3d = parabola3d.pointAt(4.0);
+        const AcGePoint2d hyperbolaPoint = hyperbola2d.pointAt(0.5);
+        const AcGePoint3d hyperbolaPoint3d = hyperbola3d.pointAt(0.5);
+        check(parabola2d.focus().isEqualTo({3.0, 2.0}) &&
+                  parabolaPoint.isEqualTo({3.0, 6.0}) &&
+                  parabola2d.isOn(parabolaPoint) &&
+                  parabolaPoint3d.isEqualTo({3.0, 6.0, 3.0}) &&
+                  parabola3d.isOn(parabolaPoint3d) &&
+                  hyperbola2d.pointAt(0.0).isEqualTo({-3.0, 0.0}) &&
+                  hyperbola2d.isOn(hyperbolaPoint) &&
+                  std::abs(hyperbola2d.focalLength() - std::sqrt(13.0)) <
+                      1.0e-12 &&
+                  hyperbola3d.isOn(hyperbolaPoint3d),
+              "2D and 3D parabola and hyperbola evaluation and membership");
     }
 
     // ---------------- triangle and indexed mesh geometry ----------------
