@@ -49,6 +49,10 @@ intersection and hierarchy APIs.
 parameter frame, point evaluation, projection, containment, closest-point, and
 area queries. Its ranges must be finite and bounded.
 
+`AcGeConvexHull2d` builds a counter-clockwise hull from finite 2D points,
+removes near-duplicates using `AcGeTol`, and uses the exact orientation
+predicate for turn decisions. Collinear inputs reduce to their two endpoints.
+
 `AcGePlane` also supports construction from three points, spanning vectors,
 or equation coefficients, plus tolerance-aware line-plane and plane-plane
 intersection.
