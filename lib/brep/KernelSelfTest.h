@@ -16,6 +16,7 @@
 #include "ge/geinterval.h"
 #include "ge/geintersect3d.h"
 #include "ge/gecurve3d.h"
+#include "ge/gecurves2d.h"
 #include "ge/gelinear.h"
 #include "ge/gematrix2d.h"
 #include "ge/gequaternion.h"
@@ -170,6 +171,39 @@ inline int runKernelSelfTest()
                  ellipse2d.pointAt(0.0).isEqualTo({3.0, 0.0}) &&
                  ellipse3d.pointAt(0.0).isEqualTo({3.0, 0.0, 0.0}),
               "3D circle evaluation, membership, and ellipse naming aliases");
+    }
+
+    // ---------------- planar spline curve variants ----------------
+    {
+        const ge::AcGeBezierCurve2d bezier{
+            {{0.0, 0.0}, {2.0, 0.0}}};
+        const ge::AcGeBsplineCurve2d bspline{
+            {0.0, 0.0, 1.0, 1.0}, {{0.0, 0.0}, {2.0, 0.0}}, 1};
+        const ge::AcGeNurbsCurve2d nurbs{
+            {0.0, 0.0, 1.0, 1.0},
+            {{0.0, 0.0, 0.0, 1.0}, {2.0, 0.0, 0.0, 1.0}}, 1};
+        const auto fitSpline = ge::AcGeFitSpline2d::fromChordLength(
+            {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}});
+        const auto interpolated =
+            ge::AcGeBsplineCurve2d::interpolate(
+                {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}}, 2);
+        const auto derivatives = bspline.derivativesAt(0.5, 1);
+        check(bezier.pointAt(0.5).isEqualTo({1.0, 0.0}) &&
+                  bezier.derivativeAt(0.5).isEqualTo({2.0, 0.0}) &&
+                  bspline.pointAt(0.5).isEqualTo({1.0, 0.0}) &&
+                  derivatives.size() == 2 &&
+                  derivatives[1].isEqualTo({2.0, 0.0}) &&
+                  bspline.differentiated().pointAt(0.5)
+                      .isEqualTo({2.0, 0.0}) &&
+                  nurbs.pointAt(0.5).isEqualTo({1.0, 0.0}) &&
+                  std::abs(nurbs.curvatureAt(0.5)) < 1.0e-12 &&
+                  fitSpline.pointAt(fitSpline.minParameter())
+                      .isEqualTo({0.0, 0.0}) &&
+                  fitSpline.pointAt(fitSpline.maxParameter())
+                      .isEqualTo({2.0, 0.0}) &&
+                  fitSpline.arcLength() > 2.0 &&
+                  interpolated.pointAt(0.5).isEqualTo({1.0, 1.0}),
+              "2D Bezier, B-spline, NURBS, and fit-spline evaluation");
     }
 
     // ---------------- triangle and indexed mesh geometry ----------------

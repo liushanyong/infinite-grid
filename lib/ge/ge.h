@@ -19,6 +19,8 @@
 #include "geutil.h"
 #include "genurbscore.h"
 #include "gebspline.h"
+#include "genspline.h"
+#include "gecurves2d.h"
 #include "geintersect.h"
 #include "geproject.h"
 #include "geoctree.h"
