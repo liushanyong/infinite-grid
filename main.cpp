@@ -480,8 +480,8 @@ bool init()
     const int styleIndex = std::atoi(styleEnv);
     if (styleIndex > 0 && styleIndex < 6)
     {
-      acgsView().visualStyle().set(static_cast<rendering::RenderMode>(styleIndex));
-      gsManager->syncActiveRenderMode();
+      gsManager->setActiveVisualStyle(
+          static_cast<rendering::RenderMode>(styleIndex));
       std::cout << "Visual style: "
               << rendering::renderModeLabel(acgsView().visualStyle().mode())
               << std::endl;
@@ -1458,22 +1458,17 @@ static void initializeTextResources()
 {
   // The host coordinates document text styles with AcGi's font runtime;
   // AcDbDatabase owns the style records but not the renderer-facing engine.
-  if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
-  {
-    gSdfFontReady = acgi::textEngine().loadSdfFont(
-        util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string());
-    std::cout << "SDF font (WenQuanWeiMiHei-1): "
-              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
-  }
-  else
-  {
-    gSdfFontReady = acgi::textEngine().loadSdfFont(
-        util::resourcePath("fonts/NotoSansLatin.ttf").string());
-    std::cout << "SDF font (NotoSansLatin fallback): "
-              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
-  }
-  if (gSdfFontReady)
-    acgi::textFrameFallback() = false;
+  const std::string sdfFontPath =
+      acgi::textEngine().loadSdfFontWithFallback(
+          util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string(),
+          util::resourcePath("fonts/NotoSansLatin.ttf").string());
+  gSdfFontReady = !sdfFontPath.empty();
+  std::cout << "SDF font"
+            << (gSdfFontReady
+                    ? " (" + std::filesystem::path(sdfFontPath).filename().string() +
+                          "): loaded"
+                    : ": failed")
+            << std::endl;
 
   gShxFontReady =
       acdbDocument().loadTextStyleShxFonts("SHX", acgi::textEngine());

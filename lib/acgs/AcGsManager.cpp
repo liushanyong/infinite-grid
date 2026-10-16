@@ -192,6 +192,16 @@ void AcGsManager::syncActiveRenderMode()
         device_->setRenderMode(view->visualStyle().mode());
 }
 
+bool AcGsManager::setActiveVisualStyle(rendering::RenderMode mode)
+{
+    AcGsView *view = activeView();
+    if (view == nullptr)
+        return false;
+    view->visualStyle().set(mode);
+    syncActiveRenderMode();
+    return true;
+}
+
 rendering::RenderModeFlags AcGsManager::deviceRenderModeFlags() const
 {
     return device_ != nullptr ? device_->renderModeFlags()

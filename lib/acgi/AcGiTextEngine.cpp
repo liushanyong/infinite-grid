@@ -10,6 +10,7 @@
 // each glyph as its own textured quad.
 
 #include "AcGiTextEngine.h"
+#include "AcGiTextQueue.h"
 
 
 
@@ -86,6 +87,25 @@ bool TextEngine::loadSdfFont(const std::string &ttfPath, float pixelsPerEm)
     clearLayoutCache();
     glyphCoverageCache_.clear();
     return true;
+}
+
+std::string TextEngine::loadSdfFontWithFallback(
+    const std::string &preferredPath, const std::string &fallbackPath,
+    float pixelsPerEm)
+{
+    if (!preferredPath.empty() && loadSdfFont(preferredPath, pixelsPerEm))
+    {
+        textFrameFallback() = false;
+        return preferredPath;
+    }
+    if (!fallbackPath.empty() && fallbackPath != preferredPath &&
+        loadSdfFont(fallbackPath, pixelsPerEm))
+    {
+        textFrameFallback() = false;
+        return fallbackPath;
+    }
+    textFrameFallback() = true;
+    return {};
 }
 
 bool TextEngine::loadShxRegularFont(const std::string &shxPath)
