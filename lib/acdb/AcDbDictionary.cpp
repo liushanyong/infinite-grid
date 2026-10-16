@@ -169,4 +169,14 @@ bool AcDbXrecord::getValue(int id, Value &v) const
     return true;
 }
 
+int AcDbXrecord::numValues() const
+{
+    return int(values_.size());
+}
+
+void AcDbXrecord::removeValue(int id)
+{
+    values_.erase(id);
+}
+
 } // namespace acdb
