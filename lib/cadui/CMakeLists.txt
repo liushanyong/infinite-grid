@@ -7,6 +7,7 @@ add_library(cadui STATIC
     OverlayWidgets.cpp
     UcsIcon.cpp
     UcsIconOverlay.cpp
+    ViewportPanel.cpp
     ViewCube.cpp
     ViewCubeBgfx.cpp
     ViewCubeOverlay.cpp

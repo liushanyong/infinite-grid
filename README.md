@@ -34,7 +34,7 @@ A simple CAD viewport built using **SDL3** with pluggable **bgfx** and native **
                       coordinate, shaders, util
 /lib/rendering     -> Renderer backend interface, bgfx implementation, native WebGPU implementation
 /lib/shaders       -> bgfx .sc shader sources + generated embedded-bytecode headers
-/lib/cadui         -> View cube / UCS icon widgets (static lib, linked into WINDOW)
+/lib/cadui         -> Viewport panels and CAD UI overlays (static lib, linked into WINDOW)
 /lib/SDL, /lib/bgfx, /lib/bimg, /lib/bx, /lib/glm, /lib/imgui,
 /lib/libredwg, /lib/SQLiteCpp, /lib/entt, /lib/wgpu
                     -> Vendored third-party dependencies
