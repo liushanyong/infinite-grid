@@ -262,9 +262,9 @@ void applyGridPlane(GridPlaneType plane)
         gridPlaneStartAxisDirection = AcGeVector3d(1.0, 0.0, 0.0);
         break;
     }
-    if (window)
+    if (appPlatform.window())
         SDL_SetWindowTitle(
-            window,
+            appPlatform.window(),
             (std::string("grid plane - ") + gridPlaneName(plane) +
              "  [1]XY [2]XZ [3]YZ [4]CUSTOM")
                 .c_str());
@@ -505,18 +505,18 @@ void close()
 // the ImGui-enabled gate.
 bool isViewCubeScreenPoint(float x, float y)
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
     return false;
   int displayWidth = 0;
   int displayHeight = 0;
-  SDL_GetWindowSize(window, &displayWidth, &displayHeight);
+  SDL_GetWindowSize(appPlatform.window(), &displayWidth, &displayHeight);
   return viewCubeOverlay.capturesScreenPoint(x, y, (float)displayWidth,
                                              (float)displayHeight);
 }
 
 void drawViewCubeOverlay()
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
     return;
   if (viewCubeOverlay.render(orbitCam))
   {
@@ -529,11 +529,11 @@ void drawViewCubeOverlay()
 // the class must not know: SDL window queries and the ImGui-enabled gate.
 bool isUcsIconScreenPoint(float x, float y)
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
     return false;
   int displayWidth = 0;
   int displayHeight = 0;
-  SDL_GetWindowSize(window, &displayWidth, &displayHeight);
+  SDL_GetWindowSize(appPlatform.window(), &displayWidth, &displayHeight);
   return ucsIconOverlay.capturesScreenPoint(x, y, (float)displayHeight);
 }
 
@@ -542,7 +542,7 @@ int currentDrawableHeight();
 
 void drawUcsIconOverlay()
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
     return;
   if (ucsIconOverlay.render(orbitCam, acgs::kClearColor,
                             currentDrawableHeight()))
@@ -1547,7 +1547,7 @@ static void refreshDwgDialogEntries()
 
 static void drawDwgFileDialog()
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
   {
     g_dwgDialogRequested = false;
     return;
@@ -4204,7 +4204,7 @@ static double currentDrawableAspect()
 {
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
-  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+  SDL_GetWindowSizeInPixels(appPlatform.window(), &drawableWidth, &drawableHeight);
   drawableWidth = std::max(drawableWidth, 1);
   drawableHeight = std::max(drawableHeight, 1);
   return static_cast<double>(drawableWidth) /
@@ -4328,8 +4328,8 @@ int currentDrawableHeight()
 {
     int width = SCREEN_WIDTH;
     int height = SCREEN_HEIGHT;
-    if (window)
-        SDL_GetWindowSizeInPixels(window, &width, &height);
+    if (appPlatform.window())
+        SDL_GetWindowSizeInPixels(appPlatform.window(), &width, &height);
     return std::max(1, height);
 }
 
@@ -4380,7 +4380,7 @@ void switchProjectionMode()
   bool &isOrtho = useOrthoProjection();
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
-  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+  SDL_GetWindowSizeInPixels(appPlatform.window(), &drawableWidth, &drawableHeight);
   drawableWidth = std::max(drawableWidth, 1);
   drawableHeight = std::max(drawableHeight, 1);
   const double aspect = static_cast<double>(drawableWidth) /
@@ -4676,8 +4676,8 @@ int currentDrawableWidth()
 {
     int width = SCREEN_WIDTH;
     int height = SCREEN_HEIGHT;
-    if (window)
-        SDL_GetWindowSizeInPixels(window, &width, &height);
+    if (appPlatform.window())
+        SDL_GetWindowSizeInPixels(appPlatform.window(), &width, &height);
     return std::max(1, width);
 }
 
@@ -7259,7 +7259,7 @@ void render()
 
   int drawableWidth = SCREEN_WIDTH;
   int drawableHeight = SCREEN_HEIGHT;
-  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+  SDL_GetWindowSizeInPixels(appPlatform.window(), &drawableWidth, &drawableHeight);
   drawableWidth = std::max(drawableWidth, 1);
   drawableHeight = std::max(drawableHeight, 1);
   const float aspect = static_cast<float>(drawableWidth) /
@@ -8610,7 +8610,7 @@ void render()
         const acgs::math::DVec2 ndc(double(clip.x) / clip.w,
                              double(clip.y) / clip.w);
         int winW = 0, winH = 0;
-        SDL_GetWindowSize(window, &winW, &winH);
+        SDL_GetWindowSize(appPlatform.window(), &winW, &winH);
         acgs::math::DVec2 ndcMin(1e9), ndcMax(-1e9);
         double wMin = 1e9, wMax = -1e9;
         for (const rendering::FillVertex &v : textPickVertices)
@@ -8902,7 +8902,7 @@ void render()
     pipManager->compositePip();
   }
 
-    if (imguiOverlayEnabled)
+    if (appPlatform.imguiEnabled())
     {
       // Refresh the active panel's final every frame.  The blit view (22)
       // executes after the UI view (20), so the panels sample the previous
@@ -8938,7 +8938,7 @@ void render()
 // keeps viewport hover/pick routing untouched beneath it.
 static void drawFpsOverlay()
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
     return;
   const float fps = acgs::acgsGetManager()->fps();
   // ViewCube-overlay flag set plus NoInputs: the badge must never take
@@ -8964,7 +8964,7 @@ static void drawFpsOverlay()
 // middle-drag pan/orbit, left-click pick through the unified pipeline).
 static void drawScenePanels()
 {
-  if (!imguiOverlayEnabled)
+  if (!appPlatform.imguiEnabled())
     return;
   acgs::AcGsManager *manager = acgs::acgsGetManager();
   const int panelCount =
@@ -9182,7 +9182,7 @@ int main(int argc, char *argv[])
   }
   acgsView().resetDepthSlabs();
   SDL_SetWindowTitle(
-      window, "grid plane - large-coordinate stress field");
+      appPlatform.window(), "grid plane - large-coordinate stress field");
 
   SDL_Event evt;
   bool running = true;
@@ -9218,14 +9218,14 @@ int main(int argc, char *argv[])
       if (testAtValue && currentFrame >= std::atof(testAtValue))
       {
         int winW = 0, winH = 0;
-        SDL_GetWindowSize(window, &winW, &winH);
+        SDL_GetWindowSize(appPlatform.window(), &winW, &winH);
         const char *testX = std::getenv("GRID_CAMERA_TEST_DOUBLE_CLICK_X");
         const char *testY = std::getenv("GRID_CAMERA_TEST_DOUBLE_CLICK_Y");
         const int x = testX ? std::atoi(testX) : winW / 2;
         const int y = testY ? std::atoi(testY) : winH / 2;
         SDL_Event synthetic{};
         synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        synthetic.button.windowID = SDL_GetWindowID(window);
+        synthetic.button.windowID = SDL_GetWindowID(appPlatform.window());
         synthetic.button.timestamp = SDL_GetTicks();
         synthetic.button.clicks = 1;
         synthetic.button.button = SDL_BUTTON_LEFT;
@@ -9251,14 +9251,14 @@ int main(int argc, char *argv[])
       if (secondAt && currentFrame >= std::atof(secondAt))
       {
         int winW = 0, winH = 0;
-        SDL_GetWindowSize(window, &winW, &winH);
+        SDL_GetWindowSize(appPlatform.window(), &winW, &winH);
         const char *testX = std::getenv("GRID_CAMERA_TEST_SECOND_CLICK_X");
         const char *testY = std::getenv("GRID_CAMERA_TEST_SECOND_CLICK_Y");
         const int x = testX ? std::atoi(testX) : winW / 2;
         const int y = testY ? std::atoi(testY) : winH / 2;
         SDL_Event synthetic{};
         synthetic.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        synthetic.button.windowID = SDL_GetWindowID(window);
+        synthetic.button.windowID = SDL_GetWindowID(appPlatform.window());
         synthetic.button.timestamp = SDL_GetTicks();
         synthetic.button.clicks = 1;
         synthetic.button.button = SDL_BUTTON_LEFT;
@@ -9274,9 +9274,8 @@ int main(int argc, char *argv[])
 
     while (SDL_PollEvent(&evt))
     {
-        if (imguiPlatformInitialized)
-          ImGui_ImplSDL3_ProcessEvent(&evt);
-        bool mouseCaptured = imguiOverlayEnabled &&
+        appPlatform.processEvent(evt);
+        bool mouseCaptured = appPlatform.imguiEnabled() &&
                              ImGui::GetIO().WantCaptureMouse;
         if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
             evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
@@ -9302,7 +9301,8 @@ int main(int argc, char *argv[])
           running = false;
         }
         if (evt.type == SDL_EVENT_KEY_DOWN &&
-            (!imguiOverlayEnabled || !ImGui::GetIO().WantCaptureKeyboard))
+            (!appPlatform.imguiEnabled() ||
+             !ImGui::GetIO().WantCaptureKeyboard))
         {
         if (evt.key.key == SDLK_ESCAPE)
         {
@@ -9414,7 +9414,8 @@ int main(int argc, char *argv[])
             fitCameraToStressField();
             acgsView().resetDepthSlabs();
             SDL_SetWindowTitle(
-                window, "grid plane - large-coordinate stress field");
+                appPlatform.window(),
+                "grid plane - large-coordinate stress field");
           }
           else
           {
@@ -9422,7 +9423,7 @@ int main(int argc, char *argv[])
             orbitCam.clearDepthBounds();
             orbitCam.setOrbit(cubeWorldPosition, 15.0);
             acgsView().resetDepthSlabs();
-            SDL_SetWindowTitle(window, "grid plane");
+            SDL_SetWindowTitle(appPlatform.window(), "grid plane");
           }
           std::cout << "Camera: "
                     << (largeCoordinateCameraView ? "large-coordinate field"
@@ -9539,7 +9540,7 @@ int main(int argc, char *argv[])
           evt.button.clicks == 1 && !mouseCaptured)
       {
         int winW = 0, winH = 0;
-        SDL_GetWindowSize(window, &winW, &winH);
+        SDL_GetWindowSize(appPlatform.window(), &winW, &winH);
         if (pickDebugEnabled())
         {
           std::printf("[PICK_DEBUG] click x=%d y=%d gpu=%d",
@@ -9617,10 +9618,9 @@ int main(int argc, char *argv[])
       }
     }
 
-    if (imguiOverlayEnabled)
+    if (appPlatform.imguiEnabled())
     {
-      ImGui_ImplSDL3_NewFrame();
-      ImGui::NewFrame();
+      appPlatform.beginImGuiFrame();
       //fprintf(stderr, "[P] NewFrame ok\n");
       drawScenePanels();
       drawFpsOverlay();
