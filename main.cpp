@@ -385,6 +385,8 @@ void resetWorldUpAndPlaneFromCamera()
 
 } // namespace
 
+static void initializeTextResources();
+
 void close();
 
 bool init()
@@ -502,29 +504,7 @@ bool init()
               << " (index=" << gMeshTextureIndex << ")" << std::endl;
   }
 
-  // SDF + SHX font loaders.  WenQuanWeiMiHei-1 is the Chinese SDF source;
-  // whgdtxt is the AutoCAD SHX (vector big-font) companion.  Both fall back
-  // to the bundled NotoSansLatin if the requested files are missing.
-  if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
-  {
-    gSdfFontReady = acgi::textEngine().loadSdfFont(
-        util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string());
-    std::cout << "SDF font (WenQuanWeiMiHei-1): "
-              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
-  }
-  else
-  {
-    gSdfFontReady = acgi::textEngine().loadSdfFont(
-        util::resourcePath("fonts/NotoSansLatin.ttf").string());
-    std::cout << "SDF font (NotoSansLatin fallback): "
-              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
-  }
-  if (gSdfFontReady)
-  {
-    // Glyphs are available: Text/MText entities render through the SDF
-    // queue instead of their baked layout frames.
-    acgi::textFrameFallback() = false;
-  }
+  initializeTextResources();
   std::cout << "Grid plane: " << gridPlaneName(gridPlane)
             << " (1=XY, 2=XZ, 3=YZ, 4=CUSTOM; XYZ=red/green/blue, "
                "custom start axis=yellow)"
@@ -1472,6 +1452,33 @@ static acdb::AcDbDatabase &initWorkingDatabase()
 static acdb::AcDbDatabase &acdbDocument()
 {
   return initWorkingDatabase();
+}
+
+static void initializeTextResources()
+{
+  // The host coordinates document text styles with AcGi's font runtime;
+  // AcDbDatabase owns the style records but not the renderer-facing engine.
+  if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
+  {
+    gSdfFontReady = acgi::textEngine().loadSdfFont(
+        util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string());
+    std::cout << "SDF font (WenQuanWeiMiHei-1): "
+              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
+  }
+  else
+  {
+    gSdfFontReady = acgi::textEngine().loadSdfFont(
+        util::resourcePath("fonts/NotoSansLatin.ttf").string());
+    std::cout << "SDF font (NotoSansLatin fallback): "
+              << (gSdfFontReady ? "loaded" : "failed") << std::endl;
+  }
+  if (gSdfFontReady)
+    acgi::textFrameFallback() = false;
+
+  gShxFontReady =
+      acdbDocument().loadTextStyleShxFonts("SHX", acgi::textEngine());
+  std::cout << "SHX fonts (acdb text-style loader): "
+            << (gShxFontReady ? "loaded" : "not loaded") << std::endl;
 }
 
 // The in-memory ECS mirror of the demo document ("SQLite 管理 AcDbHandle
@@ -3040,16 +3047,6 @@ VectorPrimitivesTessellation buildVectorPrimitivesTessellation()
 
   buildDemoDocument();
   acdb::AcDbDatabase &document = acdbDocument();
-  // SHX fonts load through the acdb system: the document's "SHX" text
-  // style record names the font files.
-  static const bool shxFontsLoaded = [] {
-    const bool loaded =
-        acdbDocument().loadTextStyleShxFonts("SHX", acgi::textEngine());
-    std::cout << "SHX fonts (acdb text-style loader): "
-              << (loaded ? "loaded" : "not loaded") << std::endl;
-    return loaded;
-  }();
-  gShxFontReady = shxFontsLoaded;
   // The rebuild invalidates every tessellation-stored pointer: pick
   // registry entries, text identities, pointer-keyed caches, and the live
   // selection. Clear them together BEFORE the replayer repopulates the
