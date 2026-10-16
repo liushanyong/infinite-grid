@@ -1,7 +1,6 @@
 #include <SDL.h>
 
-#include <cadui/UcsIconOverlay.hpp>
-#include <cadui/ViewCubeOverlay.hpp>
+#include <cadui/OverlayWidgets.hpp>
 #include <cadui/GripOverlay.hpp>
 #include <imgui.h>
 #include <imgui_bgfx.h>
@@ -60,8 +59,7 @@ namespace
 constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
 
-cadui::ViewCubeOverlay viewCubeOverlay;
-cadui::UcsIconOverlay ucsIconOverlay;
+cadui::OverlayWidgets cadUiOverlays;
 application::Platform appPlatform;
 
 // ---- acgs ImGui panels: per-viewport presentation state ----
@@ -198,11 +196,7 @@ AcGeVector3d gridPlaneStartAxisDirection{1.0, 0.0, 0.0};
 
 bool ucsIconEnabled()
 {
-    static const bool enabled = [] {
-        const char *flag = std::getenv("GRID_UCSICON");
-        return !(flag && flag[0] != '\0' && std::strcmp(flag, "0") == 0);
-    }();
-    return enabled;
+    return cadui::UcsIconOverlay::enabled();
 }
 
 // Keep the CPU visibility test, slab construction, and grid shader discard
@@ -448,9 +442,7 @@ bool init()
             uiClearColor))
     {
       gsManager->setImGuiActive(true);
-      if (!viewCubeOverlay.create(imguiBgfxGetFontTexture()))
-        std::cerr << "ViewCube BGFX renderer unavailable; using ImGui fallback"
-                  << std::endl;
+      cadUiOverlays.create(imguiBgfxGetFontTexture());
     }
   }
 
@@ -502,49 +494,31 @@ bool init()
 
 void close()
 {
-  viewCubeOverlay.destroy();
+  cadUiOverlays.destroy();
   appPlatform.shutdownImGui();
   acgs::acgsGetManager()->shutdownDevice();
   appPlatform.shutdownSdl();
 }
 
-// The ViewCube overlay (window chrome, bgfx renderer, navigation actions and
-// their camera application) lives in cadui::ViewCubeOverlay; these two
-// wrappers only bridge what the class must not know: SDL window queries and
-// the ImGui-enabled gate.
-bool isViewCubeScreenPoint(float x, float y)
+bool isCadUiOverlayScreenPoint(float x, float y)
 {
   if (!appPlatform.imguiEnabled())
     return false;
   int displayWidth = 0;
   int displayHeight = 0;
   SDL_GetWindowSize(appPlatform.window(), &displayWidth, &displayHeight);
-  return viewCubeOverlay.capturesScreenPoint(x, y, (float)displayWidth,
-                                             (float)displayHeight);
-}
-
-bool isUcsIconScreenPoint(float x, float y)
-{
-  if (!appPlatform.imguiEnabled())
-    return false;
-  int displayWidth = 0;
-  int displayHeight = 0;
-  SDL_GetWindowSize(appPlatform.window(), &displayWidth, &displayHeight);
-  return ucsIconOverlay.capturesScreenPoint(x, y, (float)displayHeight);
+  return cadUiOverlays.capturesScreenPoint(
+      x, y, (float)displayWidth, (float)displayHeight);
 }
 
 int currentDrawableWidth();
 int currentDrawableHeight();
 
-void drawViewCubeOverlay()
+void drawCadUiOverlays()
 {
   if (!appPlatform.imguiEnabled())
     return;
   acgs::AcGsView &view = acgsView();
-  if (viewCubeOverlay.render(view))
-  {
-    view.resetDepthSlabs();
-  }
 
   AcGeVector3d tangentU;
   AcGeVector3d tangentV;
@@ -574,12 +548,9 @@ void drawViewCubeOverlay()
   const auto toUiAxis = [](const AcGeVector3d &axis) {
     return acgs::math::Vec3(static_cast<acgs::math::DVec3>(axis));
   };
-  if (ucsIconOverlay.render(view, acgs::kClearColor,
-                            currentDrawableHeight(), toUiAxis(axisX),
-                            toUiAxis(axisY), toUiAxis(axisZ)))
-  {
-    view.resetDepthSlabs();
-  }
+  cadUiOverlays.render(view, acgs::kClearColor,
+                       currentDrawableHeight(), toUiAxis(axisX),
+                       toUiAxis(axisY), toUiAxis(axisZ));
 }
 
 void logCameraTargetIfChanged(const AcGePoint3d &target)
@@ -8968,7 +8939,7 @@ void render()
       //fprintf(stderr, "[P] blit enter\n");
       acgs::acgsGetManager()->blitSceneToSlot(g_activeSceneSlot);
       //fprintf(stderr, "[P] blit ok\n");
-      drawViewCubeOverlay();
+      drawCadUiOverlays();
       ImGui::Render();
       {
         ImDrawData *dd = ImGui::GetDrawData();
@@ -9337,20 +9308,19 @@ int main(int argc, char *argv[])
         if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
             evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.button.x, evt.button.y) ||
-                          isUcsIconScreenPoint(evt.button.x, evt.button.y);
+                          isCadUiOverlayScreenPoint(evt.button.x,
+                                                    evt.button.y);
         else if (evt.type == SDL_EVENT_MOUSE_MOTION)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y) ||
-                          isUcsIconScreenPoint(evt.motion.x, evt.motion.y);
+                          isCadUiOverlayScreenPoint(evt.motion.x,
+                                                    evt.motion.y);
         else if (evt.type == SDL_EVENT_MOUSE_WHEEL)
         {
           float mouseX = 0.0f;
           float mouseY = 0.0f;
           SDL_GetMouseState(&mouseX, &mouseY);
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(mouseX, mouseY) ||
-                          isUcsIconScreenPoint(mouseX, mouseY);
+                          isCadUiOverlayScreenPoint(mouseX, mouseY);
         }
 
         if (evt.type == SDL_EVENT_QUIT)

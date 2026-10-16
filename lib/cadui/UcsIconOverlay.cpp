@@ -20,6 +20,11 @@ namespace cadui
         }();
     } // namespace
 
+    bool UcsIconOverlay::enabled()
+    {
+        return kEnabled;
+    }
+
     bool UcsIconOverlay::capturesScreenPoint(float x, float y,
                                              float displayHeight) const
     {
