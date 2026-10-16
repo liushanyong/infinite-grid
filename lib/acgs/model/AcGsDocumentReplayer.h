@@ -46,6 +46,10 @@ struct AcGsEntityRange
   std::size_t begin = 0;
   std::size_t count = 0;
   AcGsPickShape pickShape = AcGsPickShape::Primitives;
+  // Construction/diagnostic geometry: renders inside the depth slab (the
+  // depth shader discards outside it) but never contributes bounds to the
+  // slab fit — a huge-extent reference line must not re-frame the view.
+  bool excludeFromFit = false;
 };
 
 // The metafile a replay records into: tessellated geometry plus the
@@ -67,6 +71,7 @@ struct AcGsMetafile
 struct AcGsReplayHints
 {
   AcGsPickShape pickShape = AcGsPickShape::Primitives;
+  bool excludeFromFit = false;
 };
 
 inline std::map<std::string, AcGsReplayHints> &replayHints()
@@ -116,13 +121,15 @@ public:
                              const acdb::TesselationOptions &options,
                              MetafileT &target,
                              AcGsPickShape pickShape =
-                                 AcGsPickShape::Primitives)
+                                 AcGsPickShape::Primitives,
+                             bool excludeFromFit = false)
   {
-    auto addRange = [name, pickShape](
+    auto addRange = [name, pickShape, excludeFromFit](
                         std::vector<AcGsEntityRange> &ranges, std::size_t begin,
                         std::size_t end) {
       if (end != begin)
-        ranges.push_back({name, begin, end - begin, pickShape});
+        ranges.push_back({name, begin, end - begin, pickShape,
+                          excludeFromFit});
     };
     const std::size_t strokeBegin = target.geometry.strokes.size();
     const std::size_t fillBegin = target.geometry.fills.size();
@@ -143,7 +150,8 @@ public:
                                  const acdb::TesselationOptions &options,
                                  MetafileT &target,
                                  AcGsPickShape pickShape =
-                                     AcGsPickShape::Primitives)
+                                     AcGsPickShape::Primitives,
+                                 bool excludeFromFit = false)
   {
     if (const auto *compound =
             dynamic_cast<const AcGiCompoundDrawable *>(&drawable))
@@ -154,7 +162,8 @@ public:
                          target);
       return;
     }
-    appendDrawable(drawable, name, options, target, pickShape);
+    appendDrawable(drawable, name, options, target, pickShape,
+                   excludeFromFit);
   }
 
 private:
@@ -215,7 +224,7 @@ private:
       return;
 
     appendDrawableTree(*drawable, name.c_str(), options, target,
-                       hints.pickShape);
+                       hints.pickShape, hints.excludeFromFit);
     acgiDrawableEvent->sendModified(drawable);
   }
 };

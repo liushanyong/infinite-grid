@@ -1459,11 +1459,23 @@ struct VectorPrimitivesTessellation : acgs::AcGsMetafile
 
 
 // The drawing document backing the demo (AcDbDatabase); every authored
-// entity and every imported DWG entity is resident here.
+// entity and every imported DWG entity is resident here.  ObjectARX: the
+// host initializes the working database
+// (acdbHostApplicationServices()->setWorkingDatabase(new AcDbDatabase(true)))
+// before application code touches drawing data — main is the host here,
+// so initWorkingDatabase() constructs it explicitly at startup.  The
+// constructor runs createDefaults(), the ARX createDefault parity
+// (layer "0", the linetype family, the Standard text style, MODEL/PAPER
+// space blocks, the active viewport, the named-object dictionary).
+static acdb::AcDbDatabase &initWorkingDatabase()
+{
+  static acdb::AcDbDatabase workingDatabase;
+  return workingDatabase;
+}
+
 static acdb::AcDbDatabase &acdbDocument()
 {
-  static acdb::AcDbDatabase document;
-  return document;
+  return initWorkingDatabase();
 }
 
 // The in-memory ECS mirror of the demo document ("SQLite 管理 AcDbHandle
@@ -1751,13 +1763,15 @@ template <typename EntityType>
 static void addDemo(EntityType entity, const std::string &name,
                     bool fillIs3DFace = false,
                     acgs::AcGsPickShape pickShape =
-                        acgs::AcGsPickShape::Primitives)
+                        acgs::AcGsPickShape::Primitives,
+                    bool excludeFromFit = false)
 {
   entity.name = name;
   if constexpr (requires(EntityType &e) { e.fillIs3DFace; })
     entity.fillIs3DFace = fillIs3DFace;
   acgs::AcGsReplayHints hints;
   hints.pickShape = pickShape;
+  hints.excludeFromFit = excludeFromFit;
   acgs::replayHints()[name] = hints;
   acdbDocument().addEntity(std::move(entity));
 }
@@ -2882,11 +2896,19 @@ static void buildDemoDocument()
     // into AcDbPolyFaceMesh geometry at authoring time, and the GPU curves
     // are control-point AcDbSplines that the Gs replay converts back into
     // curve batches.  What deliberately stays outside the document:
-    // camera-attached UI (the orbit center cube), the synthetic stress
-    // field (instanced batches, up to a million instances), the infinite
-    // grid (environment shader), per-frame diagnostics overlays, and the
-    // glTF models' static-mesh records (albedo texture / PBR live in the
-    // mesh pipeline; the entities themselves are the import payload).
+    // the orbit center cube (a view gizmo: its position follows the orbit
+    // target, its visibility tracks the camera mode, and its fixed pick id
+    // carries the click-to-pivot UX — view state, not drawing data), the
+    // synthetic stress field (instanced batches, up to a million
+    // instances — materializing them as entities would explode memory and
+    // the replay), the infinite grid (environment shader), and the
+    // per-frame camera diagnostics (frustum wireframe, grid-visible quad,
+    // focus marker, orbit-target point — re-authored every frame from
+    // camera state).  The glTF models ARE document entities now (see
+    // loadGltfModelIntoDocument); only their static-mesh GPU cache lives
+    // rendering-side, because the albedo texture / PBR pipeline is not an
+    // entity-channel capability.  The world-origin reference line moved
+    // into the document below (see ReferenceLine).
 
     // Prototype meshes as AcDbPolyFaceMesh entities: the procedural soup
     // (pos.xyz normal.xyz uv, 8 floats per vertex) bakes into real mesh
@@ -2993,6 +3015,22 @@ static void buildDemoDocument()
       shxStyle.fileName = shxRegularPath;
       shxStyle.bigFontFileName = shxBigPath;
     }
+
+    // The world-origin reference line: the logical line from the literal
+    // world origin through the large-coordinate base point — formerly a
+    // per-frame frustum-clipped overlay, now an ordinary AcDbLine entity
+    // rendered by the replay like any other line.
+    acdb::AcDbLine referenceLine;
+    referenceLine.name = "ReferenceLine";
+    referenceLine.setColor(acgs::math::Vec4(0.15f, 1.0f, 0.25f, 0.9f));
+    referenceLine.start = AcGePoint3d(0.0, 0.0, 0.0);
+    referenceLine.end = LARGE_COORDINATE_BASE_POINT;
+    // excludeFromFit: the line spans origin -> 1e7, so it must never
+    // contribute bounds to the depth-slab fit (it would re-frame the
+    // startup view); it renders inside whatever slab the real content
+    // produces, with the depth shader discarding outside it.
+    addDemo(std::move(referenceLine), "ReferenceLine", false,
+            acgs::AcGsPickShape::Primitives, true);
 
     // The former GPU arc demo: an ordinary AcDbArc entity (stroke channel).
     acdb::AcDbArc curveArc;
@@ -4127,11 +4165,16 @@ void expandCadTessellationBounds(WorldAabb &bounds,
 {
   for (const acgs::AcGsEntityRange &range : tess.strokeRanges)
   {
+    // Infinite entities (Ray/XLine) carry only a tessellation proxy
+    // endpoint, and excludeFromFit ranges (construction/diagnostic
+    // geometry such as the reference line) render inside the depth slab
+    // by design — neither may inflate scene bounds: a huge-extent
+    // reference line would re-frame every camera fit and the slab.
+    if (range.excludeFromFit)
+      continue;
     for (size_t index = range.begin; index < range.begin + range.count; ++index)
     {
       const acdb::Stroke &stroke = tess.geometry.strokes[index];
-      // Infinite entities (Ray/XLine) carry only a tessellation proxy
-      // endpoint; their unbounded geometry must not inflate scene bounds.
       if (stroke.semiInfinite)
         continue;
       for (const acgs::math::DVec3 &point : stroke.points)
@@ -4206,7 +4249,11 @@ const WorldAabb &immutableSceneBounds()
   static const WorldAabb bounds = [] {
     WorldAabb result = immutableObjectBounds();
 
-    // The reference line is always drawn and may connect distant clusters.
+    // The reference line (excludeFromFit) still joins this conservative
+    // culling box via its endpoints: it connects the world origin to the
+    // large-coordinate base point and is always drawn.  Camera fits never
+    // see it (they read immutableObjectBounds / stressFieldBounds), so the
+    // huge span cannot re-frame the view.
     expandWorldAabb(result, acgs::math::DVec3(0.0), acgs::math::DVec3(0.0));
     expandWorldAabb(result, LARGE_COORDINATE_BASE_POINT, acgs::math::DVec3(0.0));
     return result;
@@ -7465,9 +7512,6 @@ void render()
   tinyCadDraws.reserve(visibilityCandidates.size());
   bool centerCubeInFrame = false;
   const AcGePoint3d worldLineEnd = LARGE_COORDINATE_BASE_POINT;
-  acgs::math::DVec3 referenceLineStart = acgs::math::DVec3(0.0);
-  acgs::math::DVec3 referenceLineEnd = worldLineEnd;
-  bool referenceLineVisible = false;
 
   const acgs::math::DVec3 cameraPos(orbitCam.Position);
   const acgs::math::DVec3 &frontVec = orbitCam.Front;
@@ -7626,11 +7670,19 @@ void render()
           }
         }
 
-        if (!semiInfiniteRange)
+        // Construction/diagnostic ranges (excludeFromFit) render inside
+        // the slab — the depth shader discards outside it, which is
+        // exactly the old overlay's per-frame clip — but contribute no
+        // bounds, so a huge-extent reference line can never re-frame the
+        // view.
+        const bool excludeFromFit =
+            candidate.cadRange != nullptr && candidate.cadRange->excludeFromFit;
+
+        if (!semiInfiniteRange && !excludeFromFit)
         {
           unionBounds(orthoVisibility.cameraAabb(candidate));
         }
-        else
+        else if (!excludeFromFit)
         {
           // A semi-infinite ray's stored endpoint is only a tessellation
           // proxy (rayLength ahead along the direction), so its candidate
@@ -8178,41 +8230,6 @@ void render()
 
   const acgs::math::DVec3 cameraRight(orbitCam.Right);
   const acgs::math::DVec3 cameraUp(orbitCam.Up);
-  if (useOrthoProjection())
-  {
-    referenceLineVisible = acgsView().clipSegmentToOrtho(
-        acgs::math::DVec3(0.0), worldLineEnd, activeNear, activeFar,
-        orbitCam.orthoSize() * (double)aspect, orbitCam.orthoSize(),
-        referenceLineStart, referenceLineEnd);
-  }
-  else
-  {
-    const double tanHalfVertical = std::tan(acgs::math::radians(45.0) * 0.5);
-    referenceLineVisible = acgsView().clipSegmentToPerspective(
-        acgs::math::DVec3(0.0), worldLineEnd, overlayNear, overlayFar,
-        tanHalfVertical, tanHalfVertical * (double)aspect,
-        referenceLineStart, referenceLineEnd);
-  }
-
-  if (cameraDebugEnabled())
-  {
-    static int lastLineState = -2;
-    const int lineState = (useOrthoProjection() ? 2 : 0) |
-                          (referenceLineVisible ? 1 : 0);
-    if (lineState != lastLineState)
-    {
-      lastLineState = lineState;
-    std::cout << std::scientific << std::setprecision(4)
-              << "[LINE] mode=" << (useOrthoProjection() ? "ortho" : "persp")
-              << " visible=" << referenceLineVisible
-              << " slab=[" << activeNear << ", " << activeFar << "]"
-              << " overlay=[" << overlayNear << ", " << overlayFar << "]"
-              << " seg=[(" << referenceLineStart.x << "," << referenceLineStart.y << "," << referenceLineStart.z
-              << ") -> (" << referenceLineEnd.x << "," << referenceLineEnd.y << "," << referenceLineEnd.z << ")]"
-              << std::endl;
-    }
-  }
-
   // LOD step with hysteresis (doc section 4.5).  In orthographic mode the
   // step is frozen below an OrthoSize of 1 so extreme close-up zoom keeps a
   // stable grid size instead of continuously introducing finer cells.
@@ -8626,14 +8643,6 @@ void render()
     queueGpuMeshEntity(centerCube, kGpuPickCenterCubeId);
   }
 
-  // The logical line still runs through the literal world origin.  Only its
-  // frustum-clipped portion is submitted, so both GPU endpoints remain small
-  // after rebase even when the full segment spans 1e7 world units.
-  if (referenceLineVisible)
-  {
-    appendSceneLine(sceneOverlay, referenceLineStart, referenceLineEnd,
-                    acgs::math::Vec3(0.15f, 1.0f, 0.25f), 0.9f);
-  }
   // Push the complete per-frame viewport context for every acgi
   // submission this frame (submit, text flush, outline primitives).
   {
@@ -9296,6 +9305,11 @@ static void drawScenePanels()
 int main(int argc, char *argv[])
 {
   SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
+
+  // ObjectARX host sequence: initialize the working database before any
+  // application code touches drawing data (createDefaults parity — see
+  // initWorkingDatabase).
+  initWorkingDatabase();
 
   // Hidden kernel self-test: GRID_SELFTEST=kernel runs the geom2d
   // + brep unit tests, writes kernel_selftest.log, exits nonzero
