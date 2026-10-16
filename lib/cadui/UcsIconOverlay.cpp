@@ -1,6 +1,6 @@
 #include "UcsIconOverlay.hpp"
 
-#include <acgs/AcGsOrbitCamera.h>
+#include <acgs/AcGsView.h>
 
 #include <imgui.h>
 #include <glm/gtc/quaternion.hpp>
@@ -35,7 +35,7 @@ namespace cadui
                y >= displayHeight - kOverlaySize && y <= displayHeight;
     }
 
-    bool UcsIconOverlay::render(AcGsOrbitCamera& camera,
+    bool UcsIconOverlay::render(acgs::AcGsView& view,
                                 const glm::vec4& clearColor,
                                 int drawableHeight,
                                 const glm::vec3& xAxis,
@@ -69,7 +69,7 @@ namespace cadui
         // world->eye basis — the conjugate of the turntable rotation, exactly
         // like the ViewCube (un-conjugated would tumble the tripod against
         // the camera).
-        state.viewRotation = glm::mat3_cast(glm::conjugate(camera.Rotation));
+        state.viewRotation = glm::mat3_cast(glm::conjugate(view.cameraRotation()));
         state.xAxis = xAxis;
         state.yAxis = yAxis;
         state.zAxis = zAxis;
@@ -87,13 +87,13 @@ namespace cadui
             const ImVec2 delta = io.MouseDelta;
             if (dragKind == UcsGripKind::Origin)
             {
-                camera.panScreen(delta.x, delta.y, (float)drawableHeight);
+                view.pan(delta.x, delta.y, (float)drawableHeight);
             }
             else
             {
                 const bool xAxis = dragKind == UcsGripKind::XAxis;
-                camera.orbitAroundPivot(xAxis ? -delta.x : 0.0f,
-                                        xAxis ? 0.0f : -delta.y, camera.Target);
+                view.orbit(xAxis ? -delta.x : 0.0f,
+                           xAxis ? 0.0f : -delta.y);
             }
             cameraMoved = true;
             if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))

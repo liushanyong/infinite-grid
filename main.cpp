@@ -574,7 +574,7 @@ void drawViewCubeOverlay()
   const auto toUiAxis = [](const AcGeVector3d &axis) {
     return acgs::math::Vec3(static_cast<acgs::math::DVec3>(axis));
   };
-  if (ucsIconOverlay.render(view.orbitCamera(), acgs::kClearColor,
+  if (ucsIconOverlay.render(view, acgs::kClearColor,
                             currentDrawableHeight(), toUiAxis(axisX),
                             toUiAxis(axisY), toUiAxis(axisZ)))
   {
