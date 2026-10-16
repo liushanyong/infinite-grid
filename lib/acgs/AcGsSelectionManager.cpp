@@ -69,6 +69,41 @@ bool AcGsSelectionManager::pickEnabled()
     return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
+void AcGsSelectionManager::requestPick(double ndcX, double ndcY)
+{
+    focus_.ndcX = ndcX;
+    focus_.ndcY = ndcY;
+    focus_.requestToken = 0;
+    focus_.pendingFrames = 0;
+    focus_.pendingNdc = true;
+    focus_.waitingResult = false;
+    focus_.camera.reset();
+}
+
+bool AcGsSelectionManager::beginPickReadback(std::uint32_t requestToken)
+{
+    if (requestToken == 0)
+        return false;
+
+    focus_.requestToken = requestToken;
+    focus_.pendingFrames = 0;
+    focus_.pendingNdc = false;
+    focus_.waitingResult = true;
+    return true;
+}
+
+void AcGsSelectionManager::finishPickReadback()
+{
+    focus_.waitingResult = false;
+    focus_.pendingFrames = 0;
+}
+
+void AcGsSelectionManager::finishPickSubmission()
+{
+    focus_.pendingNdc = false;
+    focus_.pendingFrames = 0;
+}
+
 void AcGsSelectionManager::queueSoupChunks(
     const std::vector<rendering::FillVertex> &vertices,
     const glm::mat4 &view, const glm::mat4 &pickProjection,
