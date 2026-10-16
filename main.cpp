@@ -5852,10 +5852,6 @@ std::optional<AutofocusResult> autofocusAtNdc(
 // The GPU pass only identifies an entity.  Refine against its CPU geometry so
 // every hit point still comes from the same exact primitive tests used by the
 // fallback picker.
-// Text pick frame: the oriented block rectangle of a text request, with
-// the same metrics the ortho viewport cull uses (longest line x line count
-// in the entity plane).  Shared by the GPU pick soup and the CPU
-// refinement so both sides address the identical rectangle.
 std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                                 double ndcX, double ndcY)
 {

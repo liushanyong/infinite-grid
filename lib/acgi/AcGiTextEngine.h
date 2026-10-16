@@ -33,6 +33,8 @@ namespace acgi
 class ACGI_PORT TextEngine
 {
 public:
+    // Approximate text block bounds used to refine a text pick against the
+    // same oriented rectangle shared by the GPU pick and CPU refinement.
     struct TextBlockFrame
     {
         glm::dvec3 right{1.0, 0.0, 0.0};
