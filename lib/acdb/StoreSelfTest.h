@@ -469,6 +469,25 @@ inline int runStoreSelfTest()
             AcDbRadialDimension{}, AcDbDiametricDimension{},
             AcDbOrdinateDimension{}, AcDbLeader{}, AcDbFcf{}, AcDbShape{},
             AcDbAttributeDefinition{}, AcDbAttribute{}, AcDbMInsertBlock{}};
+        AcDbPolyFaceMesh &mesh =
+            std::get<AcDbPolyFaceMesh>(remainingPayloads[9]);
+        mesh.material.baseColorFactor = {0.1f, 0.2f, 0.3f, 0.4f};
+        mesh.material.emissiveFactor = {0.2f, 0.3f, 0.4f, 1.0f};
+        mesh.material.diffuseFactor = {0.3f, 0.4f, 0.5f, 0.6f};
+        mesh.material.specularFactor = {0.4f, 0.5f, 0.6f, 0.7f};
+        mesh.material.metallicFactor = 0.25f;
+        mesh.material.roughnessFactor = 0.75f;
+        mesh.material.alphaMask = 0.8f;
+        mesh.material.alphaMaskCutoff = 0.35f;
+        mesh.material.diffuseTexture = "textures/material.png";
+        mesh.material.renderClass = RenderClass::Realistic;
+        AcDb3dSolid &solid =
+            std::get<AcDb3dSolid>(remainingPayloads[10]);
+        solid.vertices = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0},
+                          {7.0, 8.0, 9.0}};
+        solid.indices = {0, 1, 2};
+        solid.renderClass = RenderClass::Realistic;
+        solid.fillIs3DFace = true;
         for (AcDbEntityVariant &payload : remainingPayloads)
             std::visit(
                 [&](auto &typed) { document.addEntity(std::move(typed)); },
@@ -525,6 +544,38 @@ inline int runStoreSelfTest()
               entityTypeMix(loaded).size() ==
                   std::variant_size_v<AcDbEntityVariant>,
           "every concrete entity type round-trips through SQLite");
+    const AcDbPolyFaceMesh *loadedMesh = nullptr;
+    const AcDb3dSolid *loadedSolid = nullptr;
+    loaded.forEachEntity([&](AcDbHandle, const AcDbEntityVariant &payload) {
+        if (const auto *mesh = std::get_if<AcDbPolyFaceMesh>(&payload))
+            loadedMesh = mesh;
+        if (const auto *solid = std::get_if<AcDb3dSolid>(&payload))
+            loadedSolid = solid;
+    });
+    check(loadedMesh != nullptr &&
+              glm::length(loadedMesh->material.baseColorFactor -
+                          glm::vec4(0.1f, 0.2f, 0.3f, 0.4f)) < 1.0e-6f &&
+              glm::length(loadedMesh->material.emissiveFactor -
+                          glm::vec4(0.2f, 0.3f, 0.4f, 1.0f)) < 1.0e-6f &&
+              glm::length(loadedMesh->material.diffuseFactor -
+                          glm::vec4(0.3f, 0.4f, 0.5f, 0.6f)) < 1.0e-6f &&
+              glm::length(loadedMesh->material.specularFactor -
+                          glm::vec4(0.4f, 0.5f, 0.6f, 0.7f)) < 1.0e-6f &&
+              std::abs(loadedMesh->material.metallicFactor - 0.25f) <
+                  1.0e-6f &&
+              std::abs(loadedMesh->material.roughnessFactor - 0.75f) <
+                  1.0e-6f &&
+              std::abs(loadedMesh->material.alphaMask - 0.8f) < 1.0e-6f &&
+              std::abs(loadedMesh->material.alphaMaskCutoff - 0.35f) <
+                  1.0e-6f &&
+              loadedMesh->material.diffuseTexture == "textures/material.png" &&
+              loadedMesh->material.renderClass == RenderClass::Realistic,
+          "polyface material fully round-trips");
+    check(loadedSolid != nullptr && loadedSolid->fillIs3DFace &&
+              loadedSolid->renderClass == RenderClass::Realistic &&
+              loadedSolid->vertices.size() == 3 &&
+              loadedSolid->indices == std::vector<std::uint32_t>{0, 1, 2},
+          "3dSolid render properties and geometry round-trip");
     for (const AcDbHandle memberHandle :
          {blockMemberAHandle, blockMemberBHandle})
     {
