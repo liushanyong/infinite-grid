@@ -89,6 +89,16 @@ public:
         bool waitingResult = false;
     };
 
+    static constexpr std::uint32_t kReadbackTimeoutFrames = 16;
+    static constexpr std::uint32_t kRequestSubmitTimeoutFrames = 3;
+
+    void requestPick(double ndcX, double ndcY);
+    void setPickCamera(CameraBasis camera) { focus_.camera = std::move(camera); }
+    bool beginPickReadback(std::uint32_t requestToken);
+    std::uint32_t advancePickFrames() { return ++focus_.pendingFrames; }
+    void finishPickReadback();
+    void finishPickSubmission();
+
     // ---- entity id registry ----
 
     // Registers |entity| and returns a stable pick id (0 on exhaustion).

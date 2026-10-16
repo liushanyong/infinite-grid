@@ -7178,8 +7178,7 @@ void render()
         acgs::acgsGetManager()->gpuPickQueueStats();
     if (queueStats.capacityExceeded())
     {
-      gpuPickFocus.waitingResult = false;
-      gpuPickFocus.pendingFrames = 0;
+      gpuPickManager().finishPickReadback();
       std::cout << "GPU pick queue full meshes="
                 << queueStats.queuedMeshes << "/"
                 << queueStats.meshCapacity
@@ -7202,20 +7201,20 @@ void render()
     const rendering::GpuPickResult gpuResult = acgs::acgsGetManager()->pollGpuPick();
     const bool resultMatches = gpuResult.ready &&
         gpuResult.requestToken == gpuPickFocus.requestToken;
-    ++gpuPickFocus.pendingFrames;
+    const std::uint32_t pendingFrames = gpuPickManager().advancePickFrames();
     // Vulkan readbacks can take several frames to become CPU visible. Keep
     // a bounded retry window, then fall back to the CPU raycast.
-    if (resultMatches || gpuPickFocus.pendingFrames >= 16)
+    if (resultMatches ||
+        pendingFrames >= acgs::AcGsSelectionManager::kReadbackTimeoutFrames)
     {
       if (pickDebugEnabled() && !resultMatches)
       {
         std::printf("[PICK_DEBUG] timeout pendingFrames=%u last=(ready=%d id=%u token=%u)",
-                    gpuPickFocus.pendingFrames, gpuResult.ready ? 1 : 0,
+                    pendingFrames, gpuResult.ready ? 1 : 0,
                     gpuResult.objectId, gpuResult.requestToken);
         std::puts("");
       }
-      gpuPickFocus.waitingResult = false;
-      gpuPickFocus.pendingFrames = 0;
+      gpuPickManager().finishPickReadback();
       if (!resultMatches)
       {
         // Stop the renderer from re-submitting the stalled pick every frame;
@@ -7981,14 +7980,15 @@ void render()
   {
     // Freeze the pose the CPU fallback refines with; the GPU path samples
     // the always-on full-scene ID texture (no per-click re-render).
-    gpuPickFocus.camera = GpuPickCameraBasis{
+    GpuPickCameraBasis pickCamera{
         orbitCam.Position, orbitCam.Front, orbitCam.Right, orbitCam.Up,
         useOrthoProjection(), orbitCam.orthoSize()};
     const acgs::ViewFrameContext &pickFrame = acgsView().frame();
-    gpuPickFocus.camera->viewportWidth = pickFrame.viewportWidth;
-    gpuPickFocus.camera->viewportHeight = pickFrame.viewportHeight;
-    gpuPickFocus.camera->nearDepth = pickFrame.slabNear;
-    gpuPickFocus.camera->farDepth = pickFrame.slabFar;
+    pickCamera.viewportWidth = pickFrame.viewportWidth;
+    pickCamera.viewportHeight = pickFrame.viewportHeight;
+    pickCamera.nearDepth = pickFrame.slabNear;
+    pickCamera.farDepth = pickFrame.slabFar;
+    gpuPickManager().setPickCamera(pickCamera);
     const uint32_t requestToken =
         acgs::acgsGetManager()->requestGpuPickPixel(gpuPickFocus.ndcX,
                                                     gpuPickFocus.ndcY);
@@ -8002,15 +8002,12 @@ void render()
       }
       // No clearRegistry: the pixel read samples the standing
       // full-scene texture, whose ids live in the standing registry.
-      gpuPickFocus.requestToken = requestToken;
-      gpuPickFocus.pendingFrames = 0;
-      gpuPickFocus.pendingNdc = false;
-      gpuPickFocus.waitingResult = true;
+      gpuPickManager().beginPickReadback(requestToken);
     }
-    else if (++gpuPickFocus.pendingFrames >= 3)
+    else if (gpuPickManager().advancePickFrames() >=
+             acgs::AcGsSelectionManager::kRequestSubmitTimeoutFrames)
     {
-      gpuPickFocus.pendingNdc = false;
-      gpuPickFocus.pendingFrames = 0;
+      gpuPickManager().finishPickSubmission();
       reportGpuPickFallback(gpuPickFocus.ndcX, gpuPickFocus.ndcY);
     }
   }
@@ -9121,12 +9118,7 @@ static void drawScenePanels()
     {
       manager->setActiveView(slot);
       g_pickedSlot = slot;
-      gpuPickFocus.ndcX = ndcX;
-      gpuPickFocus.ndcY = ndcY;
-      gpuPickFocus.pendingNdc = true;
-      gpuPickFocus.pendingFrames = 0;
-      gpuPickFocus.waitingResult = false;
-      gpuPickFocus.camera.reset();
+      gpuPickManager().requestPick(ndcX, ndcY);
     }
     ImGui::End();
   }
@@ -9595,12 +9587,7 @@ int main(int argc, char *argv[])
         const double ndcY = cursorToNdcY(evt.button.y, winH);
         if (gpuPickEnabled())
         {
-          gpuPickFocus.ndcX = ndcX;
-          gpuPickFocus.ndcY = ndcY;
-          gpuPickFocus.pendingNdc = true;
-          gpuPickFocus.pendingFrames = 0;
-          gpuPickFocus.waitingResult = false;
-          gpuPickFocus.camera.reset();
+          gpuPickManager().requestPick(ndcX, ndcY);
         }
         else
         {
