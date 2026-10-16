@@ -1465,7 +1465,7 @@ struct VectorPrimitivesTessellation : acgs::AcGsMetafile
 // before application code touches drawing data — main is the host here,
 // so initWorkingDatabase() constructs it explicitly at startup.  The
 // constructor runs createDefaults(), the ARX createDefault parity
-// (layer "0", the linetype family, the Standard text style, MODEL/PAPER
+// (layer "0", the linetype family, the default text styles, MODEL/PAPER
 // space blocks, the active viewport, the named-object dictionary).
 static acdb::AcDbDatabase &initWorkingDatabase()
 {

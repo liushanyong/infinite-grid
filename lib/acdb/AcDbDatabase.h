@@ -145,7 +145,7 @@ class ACDB_PORT AcDbDatabase
 public:
     // ObjectARX: creates the standard tables and their default records
     // (layer "0", linetypes ByLayer/ByBlock/Continuous, Standard text
-    // style, model + paper space block records).
+    // style, the optional bundled SHX style, model + paper space blocks).
     AcDbDatabase();
 
     // ---- identity ----
