@@ -17,12 +17,10 @@
 #include "brep/KernelSelfTest.h"
 #include "acdb/StoreSelfTest.h"
 #include "acdb/FileIoSelfTest.h"
-#include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsMath.h"
 #include "acgs/AcGsSelectionManager.h"
 #include "acgs/DocumentSceneBridge.h"
-#include "acgi/AcGiTextEngine.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
 #include "acgs/model/DrawContext.h"
@@ -54,8 +52,6 @@
 #include <chrono>
 #include <functional>
 #include <numbers>
-
-#include "text/text_font.h"
 
 namespace
 {
@@ -1465,7 +1461,7 @@ struct VectorPrimitivesTessellation : acgs::AcGsMetafile
 // before application code touches drawing data — main is the host here,
 // so initWorkingDatabase() constructs it explicitly at startup.  The
 // constructor runs createDefaults(), the ARX createDefault parity
-// (layer "0", the linetype family, the Standard text style, MODEL/PAPER
+// (layer "0", the linetype family, the default text styles, MODEL/PAPER
 // space blocks, the active viewport, the named-object dictionary).
 static acdb::AcDbDatabase &initWorkingDatabase()
 {
@@ -2998,23 +2994,6 @@ static void buildDemoDocument()
                     curveCenter + AcGeVector3d(110.0, 260.0, 0.0),
                     curveCenter + AcGeVector3d(280.0, -260.0, 0.0)},
                    {1.0, 2.0, 2.0, 1.0});
-
-    // Text styles: the "SHX" record names the AutoCAD font files (acdb
-    // font loading — the Gs build loads them through
-    // AcDbDatabase::loadTextStyleShxFonts).  Absolute resolved paths, so
-    // the loader needs no search logic.
-    const std::string shxRegularPath =
-        util::resourcePath("fonts/txt.shx").string();
-    const std::string shxBigPath =
-        util::resourcePath("fonts/gbcbig.shx").string();
-    if (util::resourceExists("fonts/txt.shx"))
-    {
-      acdb::AcDbTextStyleTableRecord &shxStyle =
-          document.textStyleTable().add("SHX",
-                                        document.allocateHandle());
-      shxStyle.fileName = shxRegularPath;
-      shxStyle.bigFontFileName = shxBigPath;
-    }
 
     // The world-origin reference line: the logical line from the literal
     // world origin through the large-coordinate base point — formerly a
