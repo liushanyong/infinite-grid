@@ -38,15 +38,15 @@ public:
                                       double radius) const;
 
 private:
+    static constexpr std::uint32_t kNoNode = ~std::uint32_t{0};
+
     struct Node
     {
         std::uint32_t pointIndex = 0;
-        std::uint32_t left = UINT32_MAX;
-        std::uint32_t right = UINT32_MAX;
+        std::uint32_t left = kNoNode;
+        std::uint32_t right = kNoNode;
         std::uint8_t axis = 0;
     };
-
-    static constexpr std::uint32_t kNoNode = UINT32_MAX;
 
     std::vector<AcGePoint3d> points_;
     std::vector<Node> nodes_;
