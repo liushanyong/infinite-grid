@@ -1,6 +1,6 @@
 #include "ViewCubeOverlay.hpp"
 
-#include <acgs/AcGsOrbitCamera.h>
+#include <acgs/AcGsView.h>
 
 #include <imgui.h>
 #include <glm/gtc/quaternion.hpp>
@@ -34,7 +34,7 @@ namespace cadui
                y >= 0.0f && y <= 200.0f;
     }
 
-    void ViewCubeOverlay::applyAction(AcGsOrbitCamera& camera,
+    void ViewCubeOverlay::applyAction(acgs::AcGsView& view,
                                       const ViewCubeAction& action)
     {
         if (action.kind == ViewCubeActionKind::None)
@@ -42,8 +42,7 @@ namespace cadui
             return;
         }
 
-        const glm::dvec3 eyeDirection =
-            glm::normalize(camera.Rotation * glm::dvec3(0.0, 0.0, 1.0));
+        const glm::dvec3 eyeDirection = view.eyeDirection();
 
         // Re-gaze at a direction, re-levelling the roll with world +Z — the
         // turntable stores the eye direction, so the gaze negates here.
@@ -53,8 +52,8 @@ namespace cadui
             {
                 return;
             }
-            camera.setViewDirection(-glm::normalize(direction));
-            camera.setWorldUp(glm::dvec3(0.0, 0.0, 1.0));
+            view.setViewDirection(-glm::normalize(direction));
+            view.setWorldUp(glm::dvec3(0.0, 0.0, 1.0));
         };
 
         constexpr double quarterTurn = 1.57079632679489661923;
@@ -89,8 +88,8 @@ namespace cadui
                 action.kind == ViewCubeActionKind::RollLeft ? -quarterTurn
                                                             : quarterTurn;
             const glm::dvec3 rolledUp =
-                glm::angleAxis(angle, eyeDirection) * camera.Up;
-            camera.setWorldUp(rolledUp);
+                glm::angleAxis(angle, eyeDirection) * view.upDirection();
+            view.setWorldUp(rolledUp);
             break;
         }
         case ViewCubeActionKind::NudgeUp:
@@ -104,7 +103,8 @@ namespace cadui
             const bool positive =
                 action.kind == ViewCubeActionKind::NudgeDown ||
                 action.kind == ViewCubeActionKind::NudgeRight;
-            const glm::dvec3 axis = horizontal ? camera.Up : camera.Right;
+            const glm::dvec3 axis =
+                horizontal ? view.upDirection() : view.rightDirection();
             const double angle = positive ? quarterTurn : -quarterTurn;
             setEyeDirection(glm::angleAxis(angle, glm::normalize(axis)) *
                             eyeDirection);
@@ -115,7 +115,7 @@ namespace cadui
         }
     }
 
-    bool ViewCubeOverlay::render(AcGsOrbitCamera& camera)
+    bool ViewCubeOverlay::render(acgs::AcGsView& view)
     {
         ImGuiIO& io = ImGui::GetIO();
         constexpr float overlayWidth = 174.0f;
@@ -150,12 +150,12 @@ namespace cadui
         // resolve to the wrong regions and corner clicks snap to the wrong
         // directions.
         const glm::mat3 cameraRotation(
-            glm::mat3_cast(glm::conjugate(camera.Rotation)));
+            glm::mat3_cast(glm::conjugate(view.cameraRotation())));
         const ViewCubeResult result = widget.render(
             "UcsViewCube", ImVec2(160.0f, 160.0f), cameraRotation,
             glm::mat3(1.0f), options);
         const bool cameraMoved = result.action.kind != ViewCubeActionKind::None;
-        applyAction(camera, result.action);
+        applyAction(view, result.action);
         ImGui::End();
         return cameraMoved;
     }

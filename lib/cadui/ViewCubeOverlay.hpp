@@ -5,7 +5,10 @@
 
 #include <glm/glm.hpp>
 
-class AcGsOrbitCamera;
+namespace acgs
+{
+    class AcGsView;
+}
 
 namespace cadui
 {
@@ -32,10 +35,10 @@ namespace cadui
         // One UI frame: draws the cube and applies navigation actions to the
         // camera (region/cardinal/home snaps, roll, nudge).  Returns true
         // when the camera moved, so the caller can refresh its depth slabs.
-        bool render(AcGsOrbitCamera& camera);
+        bool render(acgs::AcGsView& view);
 
     private:
-        void applyAction(AcGsOrbitCamera& camera, const ViewCubeAction& action);
+        void applyAction(acgs::AcGsView& view, const ViewCubeAction& action);
 
         ViewCubeWidget widget;
         ViewCubeBgfxRenderer renderer;
