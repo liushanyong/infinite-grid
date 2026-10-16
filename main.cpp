@@ -138,7 +138,6 @@ static uint32_t gMeshTextureIndex = 0;
 
 // Loaded font subsystem (SDF TTF + AutoCAD SHX), consolidated behind the
 // AcGi text engine (see AcGiTextEngine.h).  Populated at startup.
-static bool gSdfFontReady = false;
 
 static float meshHeadlight()
 {
@@ -1461,9 +1460,9 @@ static void initializeTextResources()
       acgi::textEngine().loadSdfFontWithFallback(
           util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string(),
           util::resourcePath("fonts/NotoSansLatin.ttf").string());
-  gSdfFontReady = !sdfFontPath.empty();
+  const bool sdfFontReady = !sdfFontPath.empty();
   std::cout << "SDF font"
-            << (gSdfFontReady
+            << (sdfFontReady
                     ? " (" + std::filesystem::path(sdfFontPath).filename().string() +
                           "): loaded"
                     : ": failed")
@@ -5857,53 +5856,6 @@ std::optional<AutofocusResult> autofocusAtNdc(
 // the same metrics the ortho viewport cull uses (longest line x line count
 // in the entity plane).  Shared by the GPU pick soup and the CPU
 // refinement so both sides address the identical rectangle.
-struct TextBlockFrame
-{
-  AcGeVector3d right{1.0, 0.0, 0.0};
-  AcGeVector3d up{0.0, 1.0, 0.0};
-  AcGeVector3d normal{0.0, 0.0, 1.0};
-  double width = 1.0;
-  double minV = 0.0;
-  double maxV = 1.0;
-};
-
-static TextBlockFrame textBlockFrame(const acgi::TextRequest &request)
-{
-  TextBlockFrame frame;
-  frame.right = AcGeVector3d(request.direction);
-  if (frame.right.lengthSq() < 1.0e-18)
-    frame.right = AcGeVector3d(1.0, 0.0, 0.0);
-  frame.right.normalize();
-  frame.normal = AcGeVector3d(request.normal).normal();
-  frame.up = frame.normal.crossProduct(frame.right);
-  if (frame.up.lengthSq() < 1.0e-18)
-    frame.up = AcGeVector3d(0.0, 0.0, 1.0);
-  frame.up.normalize();
-
-  size_t lineCount = 1;
-  double longest = 0.0;
-  size_t current = 0;
-  for (char character : request.message)
-  {
-    if (character == 10) // newline
-    {
-      ++lineCount;
-      longest = std::max(longest, double(current));
-      current = 0;
-    }
-    else
-    {
-      ++current;
-    }
-  }
-  longest = std::max(longest, double(current));
-  frame.width = std::max(longest * request.height * request.xScale,
-                         request.height);
-  frame.minV = -request.height * 1.35 * double(lineCount - 1);
-  frame.maxV = request.height;
-  return frame;
-}
-
 std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                                 double ndcX, double ndcY)
 {
@@ -5990,22 +5942,26 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
       // Glyphs pick as one block: refine the GPU hit against the text's
       // plane and block rectangle (the same frame the ID quads used).
       const acgi::TextRequest &request = *pickEntity->text;
-      const TextBlockFrame frame = textBlockFrame(request);
-      const double denom = ray.direction.dotProduct(frame.normal);
+      const acgi::TextEngine::TextBlockFrame frame =
+          acgi::textEngine().textBlockFrame(request);
+      const AcGeVector3d frameRight(frame.right);
+      const AcGeVector3d frameUp(frame.up);
+      const AcGeVector3d frameNormal(frame.normal);
+      const double denom = ray.direction.dotProduct(frameNormal);
       double hitDepth = 0.0;
       bool hit = false;
       if (std::abs(denom) > 1.0e-12)
       {
         const double t =
             (AcGePoint3d(request.position) - ray.origin)
-                    .dotProduct(frame.normal) /
+                    .dotProduct(frameNormal) /
                 denom;
         if (t > 0.0)
         {
           const AcGeVector3d local =
               ray.origin + ray.direction * t - AcGePoint3d(request.position);
-          const double u = local.dotProduct(frame.right);
-          const double v = local.dotProduct(frame.up);
+          const double u = local.dotProduct(frameRight);
+          const double v = local.dotProduct(frameUp);
           const double margin = request.height * 0.25;
           if (-margin <= u && u <= frame.width + margin &&
               frame.minV - margin <= v && v <= frame.maxV + margin)
