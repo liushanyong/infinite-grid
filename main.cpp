@@ -7,6 +7,8 @@
 #include <imgui_bgfx.h>
 
 #include "application/ApplicationPlatform.hpp"
+#include "application/DemoSceneTypes.hpp"
+#include "application/DemoSceneVisibility.hpp"
 #include "coordinate/WorldRebase.h"
 #include "arx/ArxTypes.h"
 #include "acdb/AcDbTessellate.h"
@@ -53,6 +55,27 @@
 #include <chrono>
 #include <functional>
 #include <numbers>
+
+using application::demo::AutofocusResult;
+using application::demo::CameraSpaceAabb;
+using application::demo::CadPairedBandPoints;
+using application::demo::GltfDemoModelAsset;
+using application::demo::GltfStaticMesh;
+using application::demo::GpuPickEntity;
+using application::demo::LargeCoordinateObject;
+using application::demo::MeshEntityRecord;
+using application::demo::MeshInstanceCacheEntry;
+using application::demo::PickDebugTrace;
+using application::demo::PickRay;
+using application::demo::PickResult;
+using application::demo::VectorPrimitivesTessellation;
+using application::demo::UnifiedVisibilityQuery;
+using application::demo::VisibilityCandidate;
+using application::demo::VisibilityKind;
+using application::demo::VisibilityState;
+using application::demo::WorldAabb;
+using application::demo::aabbIntersectsOrthoViewport;
+using application::demo::cameraAabbBounds;
 
 namespace
 {
@@ -712,73 +735,6 @@ int currentDrawableHeight();
 // by tessellation-stored pointers) and its shared_ptrs are owned by the
 // records themselves, so rebuilds cannot dangle it -- it deliberately sits
 // outside invalidateTessellationKeyedCaches().
-struct GltfStaticMesh
-{
-  rendering::StaticMeshVertices cpu;
-  std::uint32_t gpuId = 0;
-};
-
-struct MeshEntityRecord
-{
-  acdb::AcDbPolyFaceMesh entity;
-  AcGePoint3d worldPosition;
-  float size;
-  rendering::MeshType mesh = rendering::MeshType::Cube;
-  // Non-null: draw/pick upload and rasterize this static geometry instead
-  // of the procedural prototype selected by |mesh|.
-  std::shared_ptr<GltfStaticMesh> staticMesh;
-  // Per-record albedo texture slot (0 = scene default texture).
-  std::uint32_t diffuseTextureIndex = 0;
-  // Instance scale for records whose geometry is authored at final world
-  // size (imported models bake their normalization in).  Prototype records
-  // keep 0 and scale by |size|, whose vertex radius is 0.5.
-  float renderScale = 0.0f;
-
-  float instanceScale() const { return renderScale > 0.0f ? renderScale : size; }
-
-  bool realistic() const
-  {
-    return entity.style == acdb::MeshStyle::Realistic;
-  }
-
-  const std::string &displayName() const
-  {
-    return entity.name;
-  }
-};
-
-using LargeCoordinateObject = MeshEntityRecord;
-
-enum class VisibilityKind
-{
-  MeshObject,
-  CenterCube,
-  CadMesh,
-  CadStroke,
-  CadFill,
-  CadPoint,
-  CadCurve,
-  CadText
-};
-
-
-struct GpuPickEntity
-{
-  VisibilityKind kind = VisibilityKind::MeshObject;
-  const MeshEntityRecord *mesh = nullptr;
-  const acgs::AcGsEntityRange *cadRange = nullptr;
-  const acgs::CurveBatchCommand *curve = nullptr;
-  const acgi::TextRequest *text = nullptr;
-
-  bool operator==(const GpuPickEntity &other) const
-  {
-    return kind == other.kind && mesh == other.mesh &&
-           cadRange == other.cadRange &&
-           curve == other.curve &&
-           text == other.text;
-  }
-};
-
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
   return acgsView().selectionManager();
@@ -892,15 +848,6 @@ bool meshEntityVisible(const MeshEntityRecord &entity)
 // this color IN their own passes (unified depth buffer — same geometry,
 // same depth, same blending; only the color changes).
 static constexpr acgs::math::Vec3 kSelectionHighlightRGB(0.35f, 0.65f, 1.0f);
-
-struct MeshInstanceCacheEntry
-{
-  rendering::MeshInstance instance;
-  AcGePoint3d position;
-  float size = 0.0f;
-  acgs::math::Vec4 color;
-  acgs::math::Vec4 material;
-};
 
 // Keyed on tessellation-stored record pointers; cleared wholesale by
 // invalidateTessellationKeyedCaches() when the tessellation rebuilds.
@@ -1364,42 +1311,8 @@ static bool paramSurfaceIsolinesEnabled()
 
 
 
-enum class VisibilityState
-{
-  Offscreen,
-  Tiny,
-  Visible
-};
-
-// One CPU-side visibility candidate can describe either a mesh instance or a
-// tessellated CAD entity range.  Both projection modes classify these records;
-// only the query parameters differ.
-struct VisibilityCandidate
-{
-  VisibilityKind kind = VisibilityKind::MeshObject;
-  size_t entityIndex = 0;
-  const acgs::AcGsEntityRange *cadRange = nullptr;
-  size_t rangeBegin = 0;
-  size_t rangeCount = 0;
-  const MeshEntityRecord *mesh = nullptr;
-  const acgs::CurveBatchCommand *curve = nullptr;
-  acgs::math::DVec3 min{0.0};
-  acgs::math::DVec3 max{0.0};
-  acgs::math::DVec3 center{0.0};
-  double lodSize = 0.0;
-  acgs::math::Vec4 overlayColor{1.0f};
-  float overlayPointSize = 2.0f;
-};
-
 // The scene metafile cache: acgs replays the document into an
 // AcGsMetafile; the mesh-instance demo records ride alongside.
-struct VectorPrimitivesTessellation : acgs::AcGsMetafile
-{
-  std::vector<MeshEntityRecord> meshes;
-};
-
-
-
 // The drawing document backing the demo (AcDbDatabase); every authored
 // entity and every imported DWG entity is resident here.  ObjectARX: the
 // host initializes the working database
@@ -1815,15 +1728,6 @@ static std::vector<std::filesystem::path> listGltfDemoModels()
             });
   return models;
 }
-
-struct GltfDemoModelAsset
-{
-  acdb::AcDbGltfImport import;
-  std::vector<std::shared_ptr<GltfStaticMesh>> meshes; // per import.meshes
-  std::string name;                                    // file stem
-  double scale = 1.0; // instance scale: target radius / model radius
-  bool valid = false;
-};
 
 // Parses once per model file (path-keyed); rebuilds copy records out of it.
 static const GltfDemoModelAsset &gltfDemoAsset(
@@ -3060,13 +2964,6 @@ const VectorPrimitivesTessellation &getVectorPrimitivesTessellation()
 int currentDrawableHeight();
 
 
-struct CadPairedBandPoints
-{
-    const acdb::Stroke *left = nullptr;
-    const acdb::Stroke *right = nullptr;
-    size_t segmentCount = 0;
-};
-
 bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
                          const acdb::TessellatedEntity &tess,
                          CadPairedBandPoints &band);
@@ -4073,13 +3970,6 @@ const std::vector<LargeCoordinateObject> &getStressObjects()
   return objects;
 }
 
-struct WorldAabb
-{
-  acgs::math::DVec3 min;
-  acgs::math::DVec3 max;
-  bool valid = false;
-};
-
 void expandWorldAabb(WorldAabb &bounds, const acgs::math::DVec3 &center,
                      const acgs::math::DVec3 &halfExtent)
 {
@@ -4460,218 +4350,39 @@ acgs::math::Vec3 anchoredNdcLine(const AcGeVector3d &line)
                    float(-(line.x * anchor.x + line.y * anchor.y)));
 }
 
-struct CameraSpaceAabb
-{
-  double minX;
-  double maxX;
-  double minY;
-  double maxY;
-  double minDepth;
-  double maxDepth;
-};
-
-// The exact camera-space bounds of an axis-aligned box.  The support radius
-// along each camera basis vector is dot(abs(basis), halfExtent); summing all
-// three world-axis contributions is required for a rotated camera basis.
-CameraSpaceAabb cameraAabbBounds(const acgs::math::DVec3 &worldCenter,
-                                 const acgs::math::DVec3 &halfExtent,
-                                 const acgs::math::DVec3 &cameraPosition,
-                                 const acgs::math::DVec3 &cameraRight,
-                                 const acgs::math::DVec3 &cameraUp,
-                                 const acgs::math::DVec3 &cameraFront)
-{
-  const acgs::math::DVec3 delta = worldCenter - cameraPosition;
-  const double rightRadius = acgs::math::dot(acgs::math::abs(cameraRight), halfExtent);
-  const double upRadius = acgs::math::dot(acgs::math::abs(cameraUp), halfExtent);
-  const double frontRadius = acgs::math::dot(acgs::math::abs(cameraFront), halfExtent);
-  const double centerX = acgs::math::dot(delta, cameraRight);
-  const double centerY = acgs::math::dot(delta, cameraUp);
-  const double centerDepth = acgs::math::dot(delta, cameraFront);
-
-  return {centerX - rightRadius, centerX + rightRadius,
-          centerY - upRadius,      centerY + upRadius,
-          centerDepth - frontRadius, centerDepth + frontRadius};
-}
-
-bool aabbIntersectsOrthoViewport(const CameraSpaceAabb &bounds,
-                                 double halfWidth,
-                                 double halfHeight)
-{
-  return bounds.maxX >= -halfWidth && bounds.minX <= halfWidth &&
-         bounds.maxY >= -halfHeight && bounds.minY <= halfHeight;
-}
-
 // WorldAabb without the valid flag: BVH node bounds are always set.
 using WorldAabb2 = WorldAabb;
 
-CameraSpaceAabb cameraAabbBounds(const WorldAabb2 &worldBounds,
-                                 const acgs::math::DVec3 &cameraPosition,
-                                 const acgs::math::DVec3 &cameraRight,
-                                 const acgs::math::DVec3 &cameraUp,
-                                 const acgs::math::DVec3 &cameraFront)
+const auto &getSceneObjectBvh()
 {
-    const acgs::math::DVec3 center = (worldBounds.min + worldBounds.max) * 0.5;
-    const acgs::math::DVec3 halfExtent = (worldBounds.max - worldBounds.min) * 0.5;
-    return cameraAabbBounds(center, halfExtent, cameraPosition, cameraRight,
-                            cameraUp, cameraFront);
-}
-
-// Generic median-split BVH over immutable scene objects.  Subclasses provide
-// objectBounds()/objectCentroid() so the mesh scene and CAD range picking
-// share one build/traverse implementation.
-template <typename ObjectT>
-class MedianSplitBvh
-{
-public:
-    struct Node
+    struct SceneObjectIndex
     {
-        WorldAabb2 bounds{};
-        uint32_t leftChild = 0;
-        uint32_t rightChild = 0;
-        uint32_t begin = 0;
-        uint32_t end = 0;
-        bool leaf = false;
+        std::vector<const LargeCoordinateObject *> objects;
+        ge::AcGeBoundBvh bvh;
     };
-
-    void build(std::vector<const ObjectT *> sceneObjects)
-    {
-        objects = std::move(sceneObjects);
-        nodes.clear();
-        bvh_ = ge::AcGeBoundBvh{};
-        if (objects.empty())
-            return;
-
-        // Binned-SAH construction (ge::AcGeBoundBvh, Embree-style): the
-        // BVH instance is retained for ordered ray traversal; the node
-        // copies keep the legacy collect() path working.
-        std::vector<ge::AcGeBoundBox3d> bounds;
-        bounds.reserve(objects.size());
-        for (const ObjectT *object : objects)
-        {
-            const WorldAabb2 b = objectBounds(*object);
-            bounds.push_back({AcGePoint3d(b.min.x, b.min.y, b.min.z),
-                              AcGePoint3d(b.max.x, b.max.y, b.max.z)});
-        }
-        bvh_.build(std::move(bounds));
-
-        std::vector<const ObjectT *> ordered;
-        ordered.reserve(objects.size());
-        for (std::uint32_t index : bvh_.order())
-            ordered.push_back(objects[index]);
-        objects = std::move(ordered);
-
-        nodes.reserve(bvh_.nodes().size());
-        for (const ge::AcGeBvhNode &node : bvh_.nodes())
-        {
-            nodes.push_back({WorldAabb2{acgs::math::DVec3(node.bounds.min.x,
-                                                    node.bounds.min.y,
-                                                    node.bounds.min.z),
-                                        acgs::math::DVec3(node.bounds.max.x,
-                                                   node.bounds.max.y,
-                                                   node.bounds.max.z)},
-                             node.leftChild, node.rightChild, node.begin,
-                             node.end, node.leaf});
-        }
-    }
-
-    // Near-ordered ray traversal over the primitive boxes; the callback
-    // receives (object index, box entry depth) and returns false to stop
-    // the walk.  Used by CPU picking so exact tests run nearest-first and
-    // prune with the current best depth.
-    template <typename Callback>
-    void rayTraverse(const AcGePoint3d &origin, const AcGeVector3d &direction,
-                     double tMin, double tMax, Callback &&callback) const
-    {
-        bvh_.rayTraverse(origin, direction, tMin, tMax, callback);
-    }
-
-    const ObjectT *object(std::uint32_t index) const
-    {
-        return objects[index];
-    }
-
-    template <typename Visitor>
-    void collect(Visitor &&nodeIsVisible,
-                 std::vector<const ObjectT *> &output) const
-    {
-        output.clear();
-        if (nodes.empty())
-            return;
-
-        std::array<uint32_t, 128> stack{};
-        int stackTop = 0;
-        stack[stackTop++] = 0;
-        while (stackTop > 0)
-        {
-            const Node &node = nodes[stack[--stackTop]];
-            if (!nodeIsVisible(node.bounds))
-                continue;
-            if (node.leaf)
-            {
-                for (uint32_t i = node.begin; i < node.end; ++i)
-                    output.push_back(objects[i]);
-            }
-            else
-            {
-                stack[stackTop++] = node.rightChild;
-                stack[stackTop++] = node.leftChild;
-            }
-        }
-    }
-
-protected:
-    virtual WorldAabb2 objectBounds(const ObjectT &object) const = 0;
-    virtual acgs::math::DVec3 objectCentroid(const ObjectT &object) const = 0;
-
-private:
-    static WorldAabb2 mergeBounds(const WorldAabb2 &a, const WorldAabb2 &b)
-    {
-        return {acgs::math::min(a.min, b.min), acgs::math::max(a.max, b.max)};
-    }
-
-
-
-    std::vector<const ObjectT *> objects;
-    std::vector<Node> nodes;
-    ge::AcGeBoundBvh bvh_; // retained for ordered ray traversal
-};
-
-// Static median-split BVH over the immutable startup scene.  World positions
-// remain double precision; the camera-space conversion happens only for a
-// visited node.  This removes the per-frame O(objects) broad-phase transform
-// pass while preserving exact leaf-side slab/LOD decisions.
-class SceneObjectBvh final : public MedianSplitBvh<LargeCoordinateObject>
-{
-protected:
-    WorldAabb2 objectBounds(const LargeCoordinateObject &object) const override
-    {
-        const acgs::math::DVec3 halfExtent(object.size * 0.5);
-        return {object.worldPosition - halfExtent,
-                object.worldPosition + halfExtent};
-    }
-
-    acgs::math::DVec3 objectCentroid(const LargeCoordinateObject &object) const override
-    {
-        return object.worldPosition;
-    }
-};
-
-const SceneObjectBvh &getSceneObjectBvh()
-{
-    static const SceneObjectBvh bvh = [] {
-        std::vector<const LargeCoordinateObject *> all;
-        all.reserve(getLargeCoordinateObjects().size() +
-                    getStressObjects().size());
+    static const SceneObjectIndex index = [] {
+        SceneObjectIndex result;
+        result.objects.reserve(getLargeCoordinateObjects().size() +
+                               getStressObjects().size());
         for (const LargeCoordinateObject &object : getLargeCoordinateObjects())
-            all.push_back(&object);
+            result.objects.push_back(&object);
         for (const LargeCoordinateObject &object : getStressObjects())
-            all.push_back(&object);
+            result.objects.push_back(&object);
 
-        SceneObjectBvh result;
-        result.build(std::move(all));
+        std::vector<ge::AcGeBoundBox3d> bounds;
+        bounds.reserve(result.objects.size());
+        for (const LargeCoordinateObject *object : result.objects)
+        {
+            const acgs::math::DVec3 halfExtent(object->size * 0.5);
+            const acgs::math::DVec3 minimum = object->worldPosition - halfExtent;
+            const acgs::math::DVec3 maximum = object->worldPosition + halfExtent;
+            bounds.push_back({AcGePoint3d(minimum.x, minimum.y, minimum.z),
+                              AcGePoint3d(maximum.x, maximum.y, maximum.z)});
+        }
+        result.bvh.build(std::move(bounds));
         return result;
     }();
-    return bvh;
+    return index;
 }
 
 // World-per-pixel must follow the actual drawable size.
@@ -4689,13 +4400,6 @@ static double g_pickDepthFar = std::numeric_limits<double>::infinity();
 
 // VSG "double all the way": all ray construction and intersection math
 // uses double precision.  The direction is normalized in double.
-struct PickRay
-{
-    AcGePoint3d origin;
-    AcGeVector3d direction;
-    acgs::AcGsPickView view;
-};
-
 // Construct a picking ray from cursor NDC coordinates.
 // Perspective: origin = eye, direction = normalize(front + right*ndcX*tanH + up*ndcY*tanV).
 // Ortho:       origin shifts on the image plane, direction = front.
@@ -4776,6 +4480,16 @@ bool rayIntersectsAabb(const PickRay &ray,
         std::numeric_limits<double>::infinity(), hitDepth);
 }
 
+bool rayIntersectsAabb(const PickRay &ray,
+                       const ge::AcGeBoundBox3d &bounds,
+                       double &hitDepth)
+{
+    return acgs::rayIntersectsAabb(
+        {ray.origin, ray.direction}, bounds.min, bounds.max,
+        ray.view.orthographic ? ray.view.nearDepth : 0.0,
+        std::numeric_limits<double>::infinity(), hitDepth);
+}
+
 
 VisibilityCandidate makeCurveCandidate(const acgs::CurveBatchCommand &curve)
 {
@@ -4807,44 +4521,39 @@ VisibilityCandidate makeCurveCandidate(const acgs::CurveBatchCommand &curve)
 const std::vector<VisibilityCandidate> &cadRangeVisibilityCandidates();
 
 // CAD entities are immutable after tessellation, so their world-space bounds
-// can back a static BVH. Exact primitive tests remain outside this class: the
-// BVH answers which ranges the ray can reach, not which surface wins overlaps.
-class CadRangeBvh final : public MedianSplitBvh<VisibilityCandidate>
+// can back a static BVH. Exact primitive tests remain outside the index.
+const auto &getCadRangeBvh()
 {
-protected:
-    WorldAabb2 objectBounds(const VisibilityCandidate &candidate) const override
+    struct CadRangeIndex
     {
-        return {candidate.min, candidate.max};
-    }
-
-    acgs::math::DVec3 objectCentroid(const VisibilityCandidate &candidate) const override
-    {
-        return candidate.center;
-    }
-};
-
-const CadRangeBvh &getCadRangeBvh()
-{
-    static std::uint64_t cachedRevision =
-        std::numeric_limits<std::uint64_t>::max();
-    static CadRangeBvh bvh;
+        std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
+        std::vector<const VisibilityCandidate *> candidates;
+        ge::AcGeBoundBvh bvh;
+    };
+    static CadRangeIndex index;
     const std::uint64_t revision = demoSceneStore().revision();
-    if (cachedRevision != revision)
+    if (index.revision != revision)
     {
         const std::vector<VisibilityCandidate> &candidates =
             cadRangeVisibilityCandidates();
-        std::vector<const VisibilityCandidate *> ranges;
-        ranges.reserve(candidates.size());
+        index.candidates.clear();
+        std::vector<ge::AcGeBoundBox3d> bounds;
+        index.candidates.reserve(candidates.size());
+        bounds.reserve(candidates.size());
         for (const VisibilityCandidate &candidate : candidates)
         {
             if (candidate.lodSize > 0.0)
-                ranges.push_back(&candidate);
+            {
+                index.candidates.push_back(&candidate);
+                bounds.push_back({
+                    AcGePoint3d(candidate.min.x, candidate.min.y, candidate.min.z),
+                    AcGePoint3d(candidate.max.x, candidate.max.y, candidate.max.z)});
+            }
         }
-
-        bvh.build(std::move(ranges));
-        cachedRevision = revision;
+        index.bvh.build(std::move(bounds));
+        index.revision = revision;
     }
-    return bvh;
+    return index;
 }
 
 double cadPickTolerance(const PickRay &ray, const AcGePoint3d &worldPoint);
@@ -5154,98 +4863,6 @@ bool pickDebugEnabled()
     return enabled;
 }
 
-bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
-                                      double nearPlane, double farPlane,
-                                      double tanHalfVertical,
-                                      double tanHalfHorizontal);
-
-struct UnifiedVisibilityQuery
-{
-  bool isOrtho = false;
-  acgs::math::DVec3 cameraPos{0.0};
-  acgs::math::DVec3 right{1.0, 0.0, 0.0};
-  acgs::math::DVec3 up{0.0, 1.0, 0.0};
-  acgs::math::DVec3 front{0.0, 0.0, -1.0};
-  double halfWidth = 1.0;
-  double halfHeight = 1.0;
-  double nearDepth = 0.05;
-  double farDepth = 1.0e9;
-  double tanHalfVertical = 0.4142;
-  double tanHalfHorizontal = 0.4142;
-  double drawableHeight = 1.0;
-  double minPixelExtent = 0.1;
-
-  static UnifiedVisibilityQuery makeOrtho(
-      const acgs::math::DVec3 &cameraPosition, const acgs::math::DVec3 &cameraRight,
-      const acgs::math::DVec3 &cameraUp, const acgs::math::DVec3 &cameraFront,
-      double halfWidthValue, double halfHeightValue, double pixelsHigh)
-  {
-    return UnifiedVisibilityQuery{
-        true, cameraPosition, cameraRight, cameraUp, cameraFront,
-        halfWidthValue, halfHeightValue, 0.0, 0.0, 0.0, 0.0,
-        pixelsHigh, 0.1};
-  }
-
-  static UnifiedVisibilityQuery makePerspective(
-      const acgs::math::DVec3 &cameraPosition, const acgs::math::DVec3 &cameraRight,
-      const acgs::math::DVec3 &cameraUp, const acgs::math::DVec3 &cameraFront,
-      double tanHalfV, double tanHalfH, double pixelsHigh,
-      double nearPlane, double farPlane)
-  {
-    return UnifiedVisibilityQuery{
-        false, cameraPosition, cameraRight, cameraUp, cameraFront,
-        0.0, 0.0, nearPlane, farPlane, tanHalfV, tanHalfH,
-        pixelsHigh, 0.1};
-  }
-
-  CameraSpaceAabb cameraAabb(const VisibilityCandidate &candidate) const
-  {
-    const acgs::math::DVec3 center = (candidate.min + candidate.max) * 0.5;
-    const acgs::math::DVec3 halfExtent =
-        acgs::math::max((candidate.max - candidate.min) * 0.5,
-                 acgs::math::DVec3(0.5e-3));
-    return cameraAabbBounds(center, halfExtent, cameraPos, right, up, front);
-  }
-
-  bool intersects(const VisibilityCandidate &candidate) const
-  {
-    const CameraSpaceAabb bounds = cameraAabb(candidate);
-    if (isOrtho)
-      return aabbIntersectsOrthoViewport(bounds, halfWidth, halfHeight);
-
-    return aabbIntersectsPerspectiveFrustum(
-        bounds, nearDepth, farDepth, tanHalfVertical, tanHalfHorizontal);
-  }
-
-  double screenExtent(const VisibilityCandidate &candidate) const
-  {
-    const CameraSpaceAabb bounds = cameraAabb(candidate);
-    const double worldSize = candidate.lodSize > 0.0
-                                 ? candidate.lodSize
-                                 : acgs::math::length(candidate.max - candidate.min);
-    if (isOrtho)
-      return worldSize * drawableHeight / (2.0 * halfHeight);
-
-    const double nearestDepth =
-        std::max(nearDepth, std::max(0.0, bounds.minDepth));
-    return worldSize * drawableHeight /
-           (2.0 * nearestDepth * tanHalfVertical);
-  }
-
-  VisibilityState classify(const VisibilityCandidate &candidate) const
-  {
-    if (!intersects(candidate))
-      return VisibilityState::Offscreen;
-
-    // Orthographic CAD work traditionally presents every in-frame object at a
-    // predictable world scale.  Keep that behavior while perspective uses the
-    // existing point-impostor threshold.
-    if (!isOrtho && screenExtent(candidate) < minPixelExtent)
-      return VisibilityState::Tiny;
-    return VisibilityState::Visible;
-  }
-};
-
 void buildVisibilityCandidates(std::vector<VisibilityCandidate> &candidates);
 
 VisibilityCandidate makeMeshCandidate(const MeshEntityRecord &mesh,
@@ -5301,45 +4918,10 @@ int cadOverlayPriority(VisibilityKind kind)
     }
 }
 
-struct PickDebugTrace
-{
-    std::string meshName;
-    double meshDepth = 0.0;
-    bool meshHit = false;
-    std::string cadName;
-    double cadDepth = 0.0;
-    bool cadHit = false;
-    std::string cadOverlayName;
-    VisibilityKind cadOverlayKind = VisibilityKind::CadStroke;
-    double cadOverlayDepth = 0.0;
-    bool cadOverlayHit = false;
-    size_t cadStrokeCount = 0;
-    size_t cadFillCount = 0;
-    size_t cadPointCount = 0;
-};
-
 // BVH-accelerated ray pick with distance-based pruning.
 // The collect() predicate returns false for subtrees the ray misses or
 // that cannot improve the current best, reducing traversal from O(n)
 // to O(log n) for typical spatially coherent scenes.
-struct PickResult
-{
-    AcGePoint3d pivot;
-    double hitDepth = 0.0;
-    bool hit = false;
-    std::string objectName = "Scene";
-    // Zero-based index into the selected procedural mesh's triangle list.
-    std::optional<size_t> faceIndex;
-};
-
-struct AutofocusResult
-{
-    std::string entityName;
-    AcGePoint3d hitPivot;
-    double viewDepth = 0.0;
-    std::optional<size_t> faceIndex;
-};
-
 PickResult pickObjectAlongRay(const PickRay &ray,
                               PickDebugTrace *debugTrace = nullptr)
 {
@@ -5426,9 +5008,10 @@ PickResult pickObjectAlongRay(const PickRay &ray,
         considerCadHit(hitDepth, name);
     };
 
-    std::vector<const LargeCoordinateObject *> candidates;
-    getSceneObjectBvh().collect(
-        [&](const WorldAabb2 &bounds) {
+    const auto &sceneIndex = getSceneObjectBvh();
+    std::vector<std::uint32_t> candidateIndices;
+    sceneIndex.bvh.collect(
+        [&](const ge::AcGeBoundBox3d &bounds) {
             double hitDepth = 0.0;
             if (!rayIntersectsAabb(ray, bounds, hitDepth))
                 return false; // ray misses this subtree entirely
@@ -5436,11 +5019,13 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                 return false; // subtree entry is already behind the best hit
             return true;      // traverse deeper / collect leaf objects
         },
-        candidates);
+        candidateIndices);
 
     // Refine with exact per-object AABBs (leaf bounds may be merged).
-    for (const LargeCoordinateObject *object : candidates)
+    for (std::uint32_t candidateIndex : candidateIndices)
     {
+        const LargeCoordinateObject *object =
+            sceneIndex.objects[candidateIndex];
         if (!meshEntityVisible(*object))
             continue;
         const acgs::math::DVec3 halfExtent(object->size * 0.5);
@@ -5497,7 +5082,8 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.cadFillCount = cad.geometry.fills.size();
             trace.cadPointCount = cad.geometry.points.size();
         }
-        getCadRangeBvh().rayTraverse(
+        const auto &cadIndex = getCadRangeBvh();
+        cadIndex.bvh.rayTraverse(
             ray.origin, ray.direction,
             ray.view.orthographic ? ray.view.nearDepth : 0.0,
             ray.view.farDepth,
@@ -5505,7 +5091,7 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                 if (entryDepth > nearestDepth)
                     return false; // nothing later can beat the best hit
                 const VisibilityCandidate &candidate =
-                    *getCadRangeBvh().object(objectIndex);
+                    *cadIndex.candidates[objectIndex];
                 const acgs::AcGsEntityRange &range = *candidate.cadRange;
                 switch (candidate.kind)
                 {
@@ -6469,33 +6055,6 @@ double cursorToNdcY(double windowY, int windowHeight)
 // origin/eye and image do not move; only the focus depth changes.  Do not
 // reset slab hysteresis here: preserving the eye preserves camera-space
 // content depths, so the stabilizer should still be allowed to shrink.
-bool aabbIntersectsPerspectiveFrustum(const CameraSpaceAabb &bounds,
-                                      double nearPlane, double farPlane,
-                                      double tanHalfVertical,
-                                      double tanHalfHorizontal)
-{
-  // Test the six frustum half-spaces directly.  For each plane, the largest
-  // signed distance being negative is the only possible AABB rejection.
-  const auto outside = [&](double x, double y, double z, double offset) {
-    const double minimum =
-        (x < 0.0 ? bounds.maxX : bounds.minX) * x +
-        (y < 0.0 ? bounds.maxY : bounds.minY) * y +
-        (z < 0.0 ? bounds.maxDepth : bounds.minDepth) * z + offset;
-    const double maximum =
-        (x < 0.0 ? bounds.minX : bounds.maxX) * x +
-        (y < 0.0 ? bounds.minY : bounds.maxY) * y +
-        (z < 0.0 ? bounds.minDepth : bounds.maxDepth) * z + offset;
-    return maximum < 0.0;
-  };
-
-  return !outside( 0.0,  0.0,  1.0, -nearPlane) &&       // z >= near
-         !outside( 0.0,  0.0, -1.0,  farPlane) &&        // z <= far
-         !outside( 1.0,  0.0,  tanHalfHorizontal, 0.0) && // left
-         !outside(-1.0,  0.0,  tanHalfHorizontal, 0.0) && // right
-         !outside( 0.0,  1.0,  tanHalfVertical,   0.0) && // bottom
-         !outside( 0.0, -1.0,  tanHalfVertical,   0.0);   // top
-}
-
 void expandWorldAabb(acgs::math::DVec3 &minimum, acgs::math::DVec3 &maximum,
                      const acgs::math::DVec3 &point)
 {
