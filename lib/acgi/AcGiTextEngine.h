@@ -37,6 +37,11 @@ public:
     // AutoCAD bigfont pairing: ASCII glyphs come from the regular font,
     // double-byte (CJK) glyphs from the big font.
     bool loadSdfFont(const std::string &ttfPath, float pixelsPerEm = 96.0f);
+    // Tries the preferred font, then the fallback; returns the loaded path
+    // or an empty string and enables the layout-frame fallback on failure.
+    std::string loadSdfFontWithFallback(
+        const std::string &preferredPath, const std::string &fallbackPath,
+        float pixelsPerEm = 96.0f);
     bool loadShxRegularFont(const std::string &shxPath);
     bool loadShxBigFont(const std::string &shxPath);
     bool sdfReady() const { return sdfFont_.isLoaded() && sdfFont_.hasSdf(); }
