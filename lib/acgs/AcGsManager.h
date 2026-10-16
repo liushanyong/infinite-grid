@@ -92,6 +92,7 @@ public:
     // Pushes the active view's visual style to the device (call after
     // visualStyle().set / cycle).
     void syncActiveRenderMode();
+    // Sets the active view's style and synchronizes the device.
     bool setActiveVisualStyle(rendering::RenderMode mode);
     rendering::RenderModeFlags deviceRenderModeFlags() const;
     void setSelectionOutlineId(std::uint32_t objectId);
