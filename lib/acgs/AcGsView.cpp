@@ -26,6 +26,11 @@
 namespace acgs
 {
 
+AcGsSelectionManager &AcGsView::selectionManager()
+{
+    return acgsGetManager()->selectionManager();
+}
+
 // The device lives in the manager (Route-B encapsulation): views fetch it per call.
 static rendering::RendererBackend *viewDevice()
 {

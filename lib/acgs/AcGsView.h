@@ -41,6 +41,9 @@ struct DoubleSingleVec3;
 namespace acgs
 {
 
+class AcGsManager;
+class AcGsSelectionManager;
+
 // Background the demo composites against; beginFrame and every contrast
 // decision start from it.
 constexpr glm::vec4 kClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -161,6 +164,10 @@ public:
     {
         orbitCamera_.setTargetDepth(depth, orthoMode_);
     }
+    // The active view is the host interaction facade; the manager-owned
+    // selection service remains shared because the GPU ID target is device-wide.
+    AcGsSelectionManager &selectionManager();
+
     // Projection toggle; exposed as a mutable reference so the demo's
     // useOrthoProjection() wrapper keeps its existing call sites.
     bool &orthoMode() { return orthoMode_; }
