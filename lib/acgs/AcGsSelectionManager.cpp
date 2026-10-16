@@ -20,12 +20,6 @@ glm::vec4 encodeGpuPickId(std::uint32_t id)
         float((id >> 24) & 0xff) / 255.0f};
 }
 
-AcGsSelectionManager &AcGsSelectionManager::instance()
-{
-    static AcGsSelectionManager manager;
-    return manager;
-}
-
 std::uint32_t AcGsSelectionManager::registerEntity(
     const AcGsPickEntity &entity)
 {

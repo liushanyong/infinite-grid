@@ -815,7 +815,7 @@ struct GpuPickEntity
 
 static acgs::AcGsSelectionManager &gpuPickManager()
 {
-  return acgs::AcGsSelectionManager::instance();
+  return acgs::acgsGetManager()->selectionManager();
 }
 
 // The demo entity type bridges to the type-erased pick record: the

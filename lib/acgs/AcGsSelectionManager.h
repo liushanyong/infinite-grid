@@ -58,8 +58,6 @@ struct ACGS_PORT AcGsPickEntityHash
 class ACGS_PORT AcGsSelectionManager
 {
 public:
-    static AcGsSelectionManager &instance();
-
     // Camera basis captured when a pick request is issued, so the CPU
     // fallback raycast can reuse the exact frustum of the request.
     struct CameraBasis
