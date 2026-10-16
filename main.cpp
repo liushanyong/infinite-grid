@@ -8960,32 +8960,6 @@ void render()
     acgs::acgsGetManager()->compositeFrame();
 }
 
-// FPS badge pinned over the viewport image: the device counts presented
-// frames (endFrame cadence, 500 ms smoothing) and this overlay draws the
-// value in the UI layer so it sits above the AcGsView output.  NoInputs
-// keeps viewport hover/pick routing untouched beneath it.
-static void drawFpsOverlay()
-{
-  if (!appPlatform.imguiEnabled())
-    return;
-  const float fps = acgs::acgsGetManager()->fps();
-  // ViewCube-overlay flag set plus NoInputs: the badge must never take
-  // focus or eat viewport hover/pick routing beneath it.  (Adding
-  // AlwaysAutoResize or NoBringToFrontOnFocus here renders the window
-  // nearly invisible over the panel image -- root cause not chased; the
-  // window auto-fits content anyway since NoInputs blocks manual resize.)
-  ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.45f);
-  const ImGuiWindowFlags flags =
-      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
-      ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
-  if (ImGui::Begin("FpsOverlay", nullptr, flags))
-    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f), "FPS %.1f", fps);
-  ImGui::End();
-}
-
 // acgs ImGui panels: fullscreen-anchored windows presenting each
 // viewport's persistent final texture, with per-panel input routing
 // through the AcGsView interaction facade (wheel zoom at cursor,
@@ -9077,9 +9051,8 @@ static void drawScenePanels()
         return acgs::math::Vec2((ndc.x * 0.5f + 0.5f) * avail.x,
                          (0.5f - ndc.y * 0.5f) * avail.y);
       };
-      const std::vector<cadui::GripMarker> markers =
-          cadui::projectGripMarkers(grips, project);
-      cadui::drawGripOverlay(ImGui::GetWindowDrawList(), cursor, avail, markers);
+      cadui::drawProjectedGripOverlay(ImGui::GetWindowDrawList(), cursor,
+                                      avail, grips, project);
     }
     if (!ImGui::IsWindowHovered())
     {
@@ -9650,7 +9623,7 @@ int main(int argc, char *argv[])
       appPlatform.beginImGuiFrame();
       //fprintf(stderr, "[P] NewFrame ok\n");
       drawScenePanels();
-      drawFpsOverlay();
+      cadUiOverlays.renderFps(acgs::acgsGetManager()->fps());
       drawDwgFileDialog();
       //fprintf(stderr, "[P] panels ok\n");
     }
