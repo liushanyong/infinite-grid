@@ -2,6 +2,7 @@
 
 #include <cadui/OverlayWidgets.hpp>
 #include <cadui/GripOverlay.hpp>
+#include <cadui/ViewportPanel.hpp>
 #include <imgui.h>
 #include <imgui_bgfx.h>
 
@@ -8982,92 +8983,85 @@ static void drawScenePanels()
   {
     const char *title = slot == 0 ? "Model (viewport 1)"
                                   : "Top (viewport 2)";
-    ImGui::SetNextWindowPos(
-        ImVec2(float(slot) *
-                   (panelWidth + (panelCount > 1 ? 6.0f : 0.0f)),
-               0.0f),
-        ImGuiCond_Always);
-    ImGui::SetNextWindowSize(panelSize, ImGuiCond_Always);
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (!ImGui::Begin(title, nullptr, flags))
-    {
-      ImGui::End();
-      continue;
-    }
-    const ImVec2 cursor = ImGui::GetCursorScreenPos();
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 panelPosition(
+        float(slot) * (panelWidth + (panelCount > 1 ? 6.0f : 0.0f)), 0.0f);
     const std::uint32_t textureId = manager->sceneTexture(slot);
-    if (textureId != 0)
-      ImGui::Image(reinterpret_cast<ImTextureID>(
-                       static_cast<uintptr_t>(textureId)),
-                   avail);
-    else
-      ImGui::TextUnformatted("scene unavailable");
-
-    // Per-panel input routing (the panel owns its viewport's camera).
+    // The panel owns this viewport's camera; app-specific input stays here,
+    // while cadui draws the image and any viewport-relative overlays.
     acgs::AcGsView &panelView = *manager->views()[std::size_t(slot)];
-    if (outlineEntity && outlineEntity->kind == VisibilityKind::CadStroke &&
-        outlineEntity->cadRange)
-    {
-      const auto &strokes = getVectorPrimitivesTessellation().geometry.strokes;
-      const acgs::AcGsEntityRange &range = *outlineEntity->cadRange;
-      const std::size_t first = std::min(range.begin, strokes.size());
-      const std::size_t last =
-          std::min(range.begin + range.count, strokes.size());
-      std::vector<cadui::GripPoint> grips;
-      for (std::size_t strokeIndex = first; strokeIndex < last; ++strokeIndex)
-      {
-        const acdb::Stroke &stroke = strokes[strokeIndex];
-        if (!stroke.common.visible || stroke.points.empty() || stroke.closed)
-          continue;
-        const std::size_t pointCount =
-            stroke.semiInfinite ? 1 : stroke.points.size();
-        for (std::size_t pointIndex = 0; pointIndex < pointCount; ++pointIndex)
-        {
-          grips.push_back({grips.size(), stroke.points[pointIndex],
-                           cadui::GripShape::Square, 0, false, std::nullopt});
-          if (!stroke.semiInfinite && pointIndex + 1 < stroke.points.size())
+    const cadui::ViewportPanelFrame panel = cadui::drawViewportPanel(
+        title, panelPosition, panelSize, textureId,
+        [&](ImDrawList *drawList, const ImVec2 &cursor, const ImVec2 &avail) {
+          if (outlineEntity &&
+              outlineEntity->kind == VisibilityKind::CadStroke &&
+              outlineEntity->cadRange)
           {
-            grips.push_back({
-                grips.size(),
-                0.5 * (stroke.points[pointIndex] + stroke.points[pointIndex + 1]),
-                cadui::GripShape::Triangle, 0, true, std::nullopt});
+            const auto &strokes =
+                getVectorPrimitivesTessellation().geometry.strokes;
+            const acgs::AcGsEntityRange &range = *outlineEntity->cadRange;
+            const std::size_t first = std::min(range.begin, strokes.size());
+            const std::size_t last =
+                std::min(range.begin + range.count, strokes.size());
+            std::vector<cadui::GripPoint> grips;
+            for (std::size_t strokeIndex = first; strokeIndex < last;
+                 ++strokeIndex)
+            {
+              const acdb::Stroke &stroke = strokes[strokeIndex];
+              if (!stroke.common.visible || stroke.points.empty() ||
+                  stroke.closed)
+                continue;
+              const std::size_t pointCount =
+                  stroke.semiInfinite ? 1 : stroke.points.size();
+              for (std::size_t pointIndex = 0; pointIndex < pointCount;
+                   ++pointIndex)
+              {
+                grips.push_back(
+                    {grips.size(), stroke.points[pointIndex],
+                     cadui::GripShape::Square, 0, false, std::nullopt});
+                if (!stroke.semiInfinite &&
+                    pointIndex + 1 < stroke.points.size())
+                {
+                  grips.push_back(
+                      {grips.size(),
+                       0.5 * (stroke.points[pointIndex] +
+                              stroke.points[pointIndex + 1]),
+                       cadui::GripShape::Triangle, 0, true, std::nullopt});
+                }
+              }
+            }
+            const acgs::ViewFrameContext &frame = panelView.frame();
+            const cadui::GripProjector project =
+                [&](const acgs::math::DVec3 &world)
+                    -> std::optional<acgs::math::Vec2> {
+              const acgs::math::Vec4 clip =
+                  frame.overlayProjection * frame.view *
+                  acgs::math::Vec4(
+                      acgs::math::Vec3(world - frame.cameraPos), 1.0f);
+              if (!(clip.w > 0.0f))
+                return std::nullopt;
+              const acgs::math::Vec2 ndc =
+                  acgs::math::Vec2(clip) / clip.w;
+              return acgs::math::Vec2((ndc.x * 0.5f + 0.5f) * avail.x,
+                                      (0.5f - ndc.y * 0.5f) * avail.y);
+            };
+            cadui::drawProjectedGripOverlay(
+                drawList, cursor, avail, grips, project);
           }
-        }
-      }
-      const acgs::ViewFrameContext &frame = panelView.frame();
-      const cadui::GripProjector project =
-          [&](const acgs::math::DVec3 &world) -> std::optional<acgs::math::Vec2> {
-        const acgs::math::Vec4 clip =
-            frame.overlayProjection * frame.view *
-            acgs::math::Vec4(acgs::math::Vec3(world - frame.cameraPos), 1.0f);
-        if (!(clip.w > 0.0f))
-          return std::nullopt;
-        const acgs::math::Vec2 ndc = acgs::math::Vec2(clip) / clip.w;
-        return acgs::math::Vec2((ndc.x * 0.5f + 0.5f) * avail.x,
-                         (0.5f - ndc.y * 0.5f) * avail.y);
-      };
-      cadui::drawProjectedGripOverlay(ImGui::GetWindowDrawList(), cursor,
-                                      avail, grips, project);
-    }
-    if (!ImGui::IsWindowHovered())
-    {
-      ImGui::End();
+        });
+    if (!panel.hovered)
       continue;
-    }
     g_imguiHoveredPanel = slot;
-    const double aspect = double(avail.x) / std::max(1.0, double(avail.y));
+    const double aspect =
+        double(panel.size.x) / std::max(1.0, double(panel.size.y));
     const double ndcX =
-        (double(io.MousePos.x - cursor.x) /
-         std::max(1.0, double(avail.x))) *
+        (double(io.MousePos.x - panel.origin.x) /
+         std::max(1.0, double(panel.size.x))) *
             2.0 -
         1.0;
-    const double ndcY = 1.0 - (double(io.MousePos.y - cursor.y) /
-                               std::max(1.0, double(avail.y))) * 2.0;
+    const double ndcY =
+        1.0 - (double(io.MousePos.y - panel.origin.y) /
+               std::max(1.0, double(panel.size.y))) *
+                  2.0;
     if (io.MouseWheel != 0.0f)
       panelView.zoomAtCursor(io.MouseWheel * 0.5f, ndcX, ndcY, aspect);
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
@@ -9075,7 +9069,7 @@ static void drawScenePanels()
       if (io.KeyShift)
         panelView.orbit(io.MouseDelta.x, -io.MouseDelta.y);
       else
-        panelView.pan(io.MouseDelta.x, io.MouseDelta.y, avail.y);
+        panelView.pan(io.MouseDelta.x, io.MouseDelta.y, panel.size.y);
     }
     // Left click: pick through THIS panel's frustum via the unified
     // pixel read (pin the round-robin to this slot while it resolves).
@@ -9085,7 +9079,6 @@ static void drawScenePanels()
       g_pickedSlot = slot;
       gpuPickManager().requestPick(ndcX, ndcY);
     }
-    ImGui::End();
   }
 }
 
