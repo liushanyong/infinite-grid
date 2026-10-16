@@ -4,7 +4,10 @@
 
 #include <glm/glm.hpp>
 
-class AcGsOrbitCamera;
+namespace acgs
+{
+    class AcGsView;
+}
 
 namespace cadui
 {
@@ -31,7 +34,7 @@ namespace cadui
         // turntable orbit speed, with the horizontal sign negated because the
         // orbit itself is camera-follows-cursor).  Returns true when the
         // camera moved, so the caller can refresh its depth slabs.
-        bool render(AcGsOrbitCamera& camera,
+        bool render(acgs::AcGsView& view,
                     const glm::vec4& clearColor,
                     int drawableHeight,
                     const glm::vec3& xAxis,
