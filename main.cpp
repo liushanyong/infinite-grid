@@ -1,6 +1,6 @@
 #include <SDL.h>
 
-//#include <cadui/OverlayWidgets.hpp>
+#include <cadui/OverlayWidgets.hpp>
 #include <cadui/GripOverlay.hpp>
 #include <imgui.h>
 #include <imgui_bgfx.h>
