@@ -4,9 +4,9 @@
 #include <cadui/UcsIconOverlay.hpp>
 #include <cadui/GripOverlay.hpp>
 #include <imgui.h>
-#include <imgui_impl_sdl3.h>
 #include <imgui_bgfx.h>
 
+#include "application/ApplicationPlatform.hpp"
 #include "coordinate/WorldRebase.h"
 #include "arx/ArxTypes.h"
 #include "acdb/AcDbTessellate.h"
@@ -62,9 +62,7 @@ constexpr int SCREEN_HEIGHT = 768;
 
 cadui::ViewCubeOverlay viewCubeOverlay;
 cadui::UcsIconOverlay ucsIconOverlay;
-bool imguiContextCreated = false;
-bool imguiPlatformInitialized = false;
-bool imguiOverlayEnabled = false;
+application::Platform appPlatform;
 
 // ---- acgs ImGui panels: per-viewport presentation state ----
 // GRID_MULTI_VIEW=1 enables the two-panel round-robin (each panel owns
@@ -170,8 +168,6 @@ static rendering::MeshInstance makeMeshInstance(
   instance.positionLow = acgs::math::Vec4(position.low, material.r);
   return instance;
 }
-SDL_Window *window = nullptr;
-
 // Every demo path funnels renderer submissions through this helper.  The
 // protocol keeps instancing compact; only the submitter knows backend details.
 // All world-space object positions stay double precision on the CPU.
@@ -390,11 +386,8 @@ void close();
 
 bool init()
 {
-  if (!SDL_Init(SDL_INIT_VIDEO))
-  {
-    SDL_Log("Couldn't initialize SDL: %s", SDL_GetError());
+  if (!appPlatform.initializeSdl())
     return false;
-  }
 
   acgs::AcGsManager *gsManager = acgs::acgsGetManager();
   std::string deviceError;
@@ -405,11 +398,11 @@ bool init()
     return false;
   }
 
-  window = SDL_CreateWindow("grid plane", SCREEN_WIDTH, SCREEN_HEIGHT,
-                            gsManager->deviceWindowFlags());
+  SDL_Window *window = appPlatform.createWindow(
+      "grid plane", SCREEN_WIDTH, SCREEN_HEIGHT,
+      gsManager->deviceWindowFlags());
   if (!window)
   {
-    std::cerr << "SDL_CreateWindow Error: " << SDL_GetError() << std::endl;
     close();
     return false;
   }
@@ -425,46 +418,30 @@ bool init()
 
   if (std::strncmp(gsManager->deviceName(), "bgfx", 4) == 0)
   {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    imguiContextCreated = true;
-    ImGuiIO &io = ImGui::GetIO();
-    // No NavEnableKeyboard: with it set, ImGui claims WantCaptureKeyboard
-    // as soon as any window is focused and the SDL key handlers below
-    // (V/D/O/U/...) never fire -- the overlay UI here is mouse-only.
-    io.IniFilename = nullptr;
-
-    if (ImGui_ImplSDL3_InitForOther(window))
+    std::string cjkFontPath;
+    if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
+      cjkFontPath =
+          util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
+    // The panels own the window: the device skips the full-window
+    // present resolve (compositeFrame blits the viewport finals and
+    // kicks), and the UI view clears the swapchain so any pixel the
+    // panels do not paint is a deterministic color.  Text/outline live
+    // in the scene target now, so nothing needs a backbuffer underlay.
+    const acgs::math::Vec4 &uiClear = acgs::kClearColor;
+    const std::uint32_t uiClearColor =
+        (std::uint32_t(uiClear.r * 255.0f) << 24) |
+        (std::uint32_t(uiClear.g * 255.0f) << 16) |
+        (std::uint32_t(uiClear.b * 255.0f) << 8) |
+        std::uint32_t(uiClear.a * 255.0f);
+    if (appPlatform.initializeImGui(
+            window, 18.0f,
+            cjkFontPath.empty() ? nullptr : cjkFontPath.c_str(),
+            uiClearColor))
     {
-      imguiPlatformInitialized = true;
-      std::string cjkFontPath;
-      if (util::resourceExists("fonts/WenQuanWeiMiHei-1.ttf"))
-        cjkFontPath =
-            util::resourcePath("fonts/WenQuanWeiMiHei-1.ttf").string();
-      imguiBgfxCreate(18.0f, cjkFontPath.empty() ? nullptr : cjkFontPath.c_str());
-      // The panels own the window: the device skips the full-window
-      // present resolve (compositeFrame blits the viewport finals and
-      // kicks), and the UI view clears the swapchain so any pixel the
-      // panels do not paint is a deterministic color.  Text/outline live
-      // in the scene target now, so nothing needs a backbuffer underlay.
-      const acgs::math::Vec4 &uiClear = acgs::kClearColor;
-      imguiBgfxSetViewClear(
-          (std::uint32_t(uiClear.r * 255.0f) << 24) |
-          (std::uint32_t(uiClear.g * 255.0f) << 16) |
-          (std::uint32_t(uiClear.b * 255.0f) << 8) |
-          std::uint32_t(uiClear.a * 255.0f));
-      acgs::acgsGetManager()->setImGuiActive(true);
-      imguiOverlayEnabled = true;
+      gsManager->setImGuiActive(true);
       if (!viewCubeOverlay.create(imguiBgfxGetFontTexture()))
         std::cerr << "ViewCube BGFX renderer unavailable; using ImGui fallback"
                   << std::endl;
-    }
-    else
-    {
-      std::cerr << "ImGui SDL3 backend unavailable; ViewCube disabled"
-                << std::endl;
-      ImGui::DestroyContext();
-      imguiContextCreated = false;
     }
   }
 
@@ -516,23 +493,10 @@ bool init()
 
 void close()
 {
-  if (imguiContextCreated)
-  {
-    viewCubeOverlay.destroy();
-    if (imguiOverlayEnabled)
-      imguiBgfxDestroy();
-    if (imguiPlatformInitialized)
-      ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-    imguiContextCreated = false;
-    imguiPlatformInitialized = false;
-    imguiOverlayEnabled = false;
-  }
+  viewCubeOverlay.destroy();
+  appPlatform.shutdownImGui();
   acgs::acgsGetManager()->shutdownDevice();
-  if (window)
-    SDL_DestroyWindow(window);
-  window = nullptr;
-  SDL_Quit();
+  appPlatform.shutdownSdl();
 }
 
 // The ViewCube overlay (window chrome, bgfx renderer, navigation actions and
