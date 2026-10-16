@@ -90,4 +90,11 @@ namespace cadui
         const GripOverlayStyle &style = {},
         std::span<const glm::vec2> controlPolygon = {},
         bool polygonClosed = false);
+
+    void drawProjectedGripOverlay(
+        ImDrawList *drawList, const ImVec2 &viewportMin,
+        const ImVec2 &viewportSize, std::span<const GripPoint> grips,
+        const GripProjector &project, const GripOverlayStyle &style = {},
+        std::span<const glm::vec2> controlPolygon = {},
+        bool polygonClosed = false);
 } // namespace cadui

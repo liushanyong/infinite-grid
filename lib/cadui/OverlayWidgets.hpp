@@ -14,6 +14,8 @@ namespace cadui
         bool capturesScreenPoint(float x, float y,
                                  float displayWidth, float displayHeight) const;
 
+        void renderFps(float fps) const;
+
         void render(acgs::AcGsView& view,
                     const glm::vec4& clearColor,
                     int drawableHeight,
