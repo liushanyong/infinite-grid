@@ -192,6 +192,11 @@ ParametricLine3d asParametricRay(const AcGeRay3d &ray)
             std::numeric_limits<double>::infinity()};
 }
 
+ParametricLine3d asParametricSegment(const AcGeLineSeg3d &segment)
+{
+    return {segment.startPoint(), segment.direction(), 0.0, 1.0};
+}
+
 } // namespace
 
 std::vector<AcGePoint3d> intersect(const AcGeLine3d &line,
@@ -377,56 +382,40 @@ AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &first,
                                   const AcGeLineSeg3d &second,
                                   const AcGeTol &tol)
 {
-    const AcGePoint3d startA = first.startPoint();
-    const AcGePoint3d startB = second.startPoint();
-    const AcGeVector3d directionA = first.direction();
-    const AcGeVector3d directionB = second.direction();
-    const AcGeVector3d offset = startA - startB;
-    const double a = directionA.dotProduct(directionA);
-    const double b = directionA.dotProduct(directionB);
-    const double c = directionB.dotProduct(directionB);
-    const double d = directionA.dotProduct(offset);
-    const double e = directionB.dotProduct(offset);
-    const double denominator = a * c - b * b;
-    const double parallelTolerance =
-        std::abs(tol.equalVector()) * std::sqrt(a * c);
+    return closestPointsParametric(asParametricSegment(first),
+                                   asParametricSegment(second), tol);
+}
 
-    double parameterA = 0.0;
-    double parameterB = 0.0;
-    const double vectorToleranceSquared =
-        std::pow(std::abs(tol.equalVector()), 2.0);
-    if (a <= vectorToleranceSquared)
-    {
-        parameterB = c <= vectorToleranceSquared
-                         ? 0.0
-                         : std::clamp(e / c, 0.0, 1.0);
-    }
-    else if (c <= vectorToleranceSquared)
-    {
-        parameterA = std::clamp(-d / a, 0.0, 1.0);
-    }
-    else
-    {
-        if (denominator > parallelTolerance * parallelTolerance)
-            parameterA =
-                std::clamp((b * e - c * d) / denominator, 0.0, 1.0);
+AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &segment,
+                                  const AcGeLine3d &line,
+                                  const AcGeTol &tol)
+{
+    return closestPointsParametric(asParametricSegment(segment),
+                                   asParametricLine(line), tol);
+}
 
-        parameterB = (b * parameterA + e) / c;
-        if (parameterB < 0.0)
-        {
-            parameterB = 0.0;
-            parameterA = std::clamp(-d / a, 0.0, 1.0);
-        }
-        else if (parameterB > 1.0)
-        {
-            parameterB = 1.0;
-            parameterA = std::clamp((b - d) / a, 0.0, 1.0);
-        }
-    }
+AcGeClosestPoints3d closestPoints(const AcGeLine3d &line,
+                                  const AcGeLineSeg3d &segment,
+                                  const AcGeTol &tol)
+{
+    return closestPointsParametric(asParametricLine(line),
+                                   asParametricSegment(segment), tol);
+}
 
-    const AcGePoint3d pointA = first.pointAt(parameterA);
-    const AcGePoint3d pointB = second.pointAt(parameterB);
-    return {parameterA, parameterB, pointA, pointB, pointA.distanceTo(pointB)};
+AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &segment,
+                                  const AcGeRay3d &ray,
+                                  const AcGeTol &tol)
+{
+    return closestPointsParametric(asParametricSegment(segment),
+                                   asParametricRay(ray), tol);
+}
+
+AcGeClosestPoints3d closestPoints(const AcGeRay3d &ray,
+                                  const AcGeLineSeg3d &segment,
+                                  const AcGeTol &tol)
+{
+    return closestPointsParametric(asParametricRay(ray),
+                                   asParametricSegment(segment), tol);
 }
 
 AcGeClosestPoints3d closestPoints(const AcGeLine3d &first,

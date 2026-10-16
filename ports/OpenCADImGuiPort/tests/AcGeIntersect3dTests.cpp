@@ -110,6 +110,35 @@ void testSegmentCompatibilityAlias()
     assert(std::abs(closest.distance - std::sqrt(2.0)) < 1.0e-12);
 }
 
+void testSegmentLineAndRayPairs()
+{
+    const AcGeLineSeg3d segment{AcGePoint3d{0.0, 0.0, 0.0},
+                                AcGePoint3d{1.0, 0.0, 0.0}};
+    const AcGeLine3d line{AcGePoint3d{2.0, 1.0, 0.0},
+                          AcGeVector3d{0.0, 1.0, 0.0}};
+    const auto segmentLine = ge::closestPoints(segment, line);
+    assert(std::abs(segmentLine.parameterA - 1.0) < 1.0e-12);
+    assert(std::abs(segmentLine.parameterB + 1.0) < 1.0e-12);
+    assert(std::abs(segmentLine.distance - 1.0) < 1.0e-12);
+
+    const auto lineSegment = ge::closestPoints(line, segment);
+    assert(std::abs(lineSegment.distance - segmentLine.distance) < 1.0e-12);
+    assert(lineSegment.pointA.isEqualTo(segmentLine.pointB));
+    assert(lineSegment.pointB.isEqualTo(segmentLine.pointA));
+
+    const AcGeRay3d ray{AcGePoint3d{2.0, 1.0, 0.0},
+                        AcGeVector3d{0.0, -2.0, 0.0}};
+    const auto segmentRay = ge::closestPoints(segment, ray);
+    assert(std::abs(segmentRay.parameterA - 1.0) < 1.0e-12);
+    assert(std::abs(segmentRay.parameterB - 0.5) < 1.0e-12);
+    assert(std::abs(segmentRay.distance - 1.0) < 1.0e-12);
+
+    const auto raySegment = ge::closestPoints(ray, segment);
+    assert(std::abs(raySegment.distance - segmentRay.distance) < 1.0e-12);
+    assert(raySegment.pointA.isEqualTo(segmentRay.pointB));
+    assert(raySegment.pointB.isEqualTo(segmentRay.pointA));
+}
+
 } // namespace
 
 int main()
@@ -118,4 +147,5 @@ int main()
     testRayDomainsAndMixedPairs();
     testDegenerateDirections();
     testSegmentCompatibilityAlias();
+    testSegmentLineAndRayPairs();
 }

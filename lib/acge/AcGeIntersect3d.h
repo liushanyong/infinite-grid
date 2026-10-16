@@ -93,6 +93,18 @@ using AcGeSegmentClosestPoints3d = AcGeClosestPoints3d;
 AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &first,
                                   const AcGeLineSeg3d &second,
                                   const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &segment,
+                                  const AcGeLine3d &line,
+                                  const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeLine3d &line,
+                                  const AcGeLineSeg3d &segment,
+                                  const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &segment,
+                                  const AcGeRay3d &ray,
+                                  const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeRay3d &ray,
+                                  const AcGeLineSeg3d &segment,
+                                  const AcGeTol &tol = AcGeTol{});
 
 // Parameters are measured using each entity's supplied direction vector;
 // line parameters are unbounded and ray parameters are nonnegative.
