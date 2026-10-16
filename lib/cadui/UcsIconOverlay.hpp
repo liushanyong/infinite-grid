@@ -33,7 +33,10 @@ namespace cadui
         // camera moved, so the caller can refresh its depth slabs.
         bool render(AcGsOrbitCamera& camera,
                     const glm::vec4& clearColor,
-                    int drawableHeight);
+                    int drawableHeight,
+                    const glm::vec3& xAxis,
+                    const glm::vec3& yAxis,
+                    const glm::vec3& zAxis);
 
     private:
         static constexpr float kOverlaySize = 110.0f;
