@@ -16,14 +16,30 @@ double orientation(const std::vector<AcGePoint2d> &points,
                         points[triangle[2]]);
 }
 
+void assertEmptyCircumcircles(
+    const std::vector<AcGePoint2d> &points,
+    const std::vector<std::array<std::uint32_t, 3>> &triangles)
+{
+    for (const auto &triangle : triangles)
+    {
+        assert(orientation(points, triangle) > 0.0);
+        for (std::uint32_t i = 0; i < points.size(); ++i)
+        {
+            if (i == triangle[0] || i == triangle[1] || i == triangle[2])
+                continue;
+            assert(ge::incircle(points[triangle[0]], points[triangle[1]],
+                                points[triangle[2]], points[i]) <= 0.0);
+        }
+    }
+}
+
 void testSquare()
 {
     const std::vector<AcGePoint2d> points{
         {0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}};
     const auto triangles = ge::delaunayTriangulate2d(points);
     assert(triangles.size() == 2);
-    for (const auto &triangle : triangles)
-        assert(orientation(points, triangle) > 0.0);
+    assertEmptyCircumcircles(points, triangles);
 
     const double diagonal02 =
         points[0].distanceTo(points[2]);
@@ -39,11 +55,25 @@ void testInteriorPointAndDuplicates()
         {1.0, 1.0}, {1.0, 1.0}};
     const auto triangles = ge::delaunayTriangulate2d(points);
     assert(triangles.size() == 4);
+    assertEmptyCircumcircles(points, triangles);
     for (const auto &triangle : triangles)
     {
-        assert(orientation(points, triangle) > 0.0);
         assert(triangle[0] != 5 && triangle[1] != 5 && triangle[2] != 5);
     }
+}
+
+void testBoundaryCollinearPointAndHullFlips()
+{
+    const std::vector<AcGePoint2d> points{
+        {0.0, 0.0}, {4.0, 0.0}, {3.0, 2.0}, {0.0, 3.0}, {2.0, 0.0}};
+    const auto triangles = ge::delaunayTriangulate2d(points);
+    assert(triangles.size() == 3);
+    assertEmptyCircumcircles(points, triangles);
+
+    double area = 0.0;
+    for (const auto &triangle : triangles)
+        area += std::abs(orientation(points, triangle)) * 0.5;
+    assert(std::abs(area - 8.5) < 1.0e-12);
 }
 
 void testDegenerateAndInvalidInputs()
@@ -74,5 +104,6 @@ int main()
 {
     testSquare();
     testInteriorPointAndDuplicates();
+    testBoundaryCollinearPointAndHullFlips();
     testDegenerateAndInvalidInputs();
 }

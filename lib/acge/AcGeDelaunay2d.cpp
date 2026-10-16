@@ -98,6 +98,70 @@ bool isConvexQuadrilateral(std::uint32_t a, std::uint32_t b,
            ((sideA < 0.0) != (sideB < 0.0));
 }
 
+void legalize(std::vector<Triangle> &triangles,
+              const std::vector<Vertex> &vertices)
+{
+    while (true)
+    {
+        std::map<Edge, std::vector<std::size_t>> incidence;
+        for (std::size_t i = 0; i < triangles.size(); ++i)
+        {
+            const Triangle &triangle = triangles[i];
+            for (int edge = 0; edge < 3; ++edge)
+                incidence[orderedEdge(triangle[edge],
+                                      triangle[(edge + 1) % 3])]
+                    .push_back(i);
+        }
+
+        bool flipped = false;
+        for (const auto &[edge, adjacent] : incidence)
+        {
+            if (adjacent.size() != 2)
+                continue;
+            const Triangle &first = triangles[adjacent[0]];
+            const Triangle &second = triangles[adjacent[1]];
+            std::uint32_t oppositeFirst = first[0];
+            std::uint32_t oppositeSecond = second[0];
+            for (std::uint32_t vertex : first)
+                if (vertex != edge.first && vertex != edge.second)
+                    oppositeFirst = vertex;
+            for (std::uint32_t vertex : second)
+                if (vertex != edge.first && vertex != edge.second)
+                    oppositeSecond = vertex;
+
+            if (!isConvexQuadrilateral(edge.first, edge.second,
+                                       oppositeFirst, oppositeSecond, vertices))
+                continue;
+
+            const double orientation =
+                orient2d(vertices[edge.first].point,
+                         vertices[edge.second].point,
+                         vertices[oppositeFirst].point);
+            const double circleSide =
+                orientation > 0.0
+                    ? incircle(vertices[edge.first].point,
+                               vertices[edge.second].point,
+                               vertices[oppositeFirst].point,
+                               vertices[oppositeSecond].point)
+                    : incircle(vertices[edge.second].point,
+                               vertices[edge.first].point,
+                               vertices[oppositeFirst].point,
+                               vertices[oppositeSecond].point);
+            if (circleSide <= 0.0)
+                continue;
+
+            triangles[adjacent[0]] = counterClockwise(
+                oppositeFirst, oppositeSecond, edge.first, vertices);
+            triangles[adjacent[1]] = counterClockwise(
+                oppositeSecond, oppositeFirst, edge.second, vertices);
+            flipped = true;
+            break;
+        }
+        if (!flipped)
+            break;
+    }
+}
+
 } // namespace
 
 std::vector<std::array<std::uint32_t, 3>> delaunayTriangulate2d(
@@ -148,6 +212,7 @@ std::vector<std::array<std::uint32_t, 3>> delaunayTriangulate2d(
     std::vector<bool> onHull(vertices.size(), false);
     for (std::uint32_t vertex : hull)
         onHull[vertex] = true;
+    legalize(triangles, vertices);
 
     for (std::uint32_t pointIndex = 0; pointIndex < vertices.size();
          ++pointIndex)
@@ -233,66 +298,7 @@ std::vector<std::array<std::uint32_t, 3>> delaunayTriangulate2d(
                 counterClockwise(old[2], old[0], pointIndex, vertices));
         }
 
-        while (true)
-        {
-            std::map<Edge, std::vector<std::size_t>> incidence;
-            for (std::size_t i = 0; i < triangles.size(); ++i)
-            {
-                const Triangle &triangle = triangles[i];
-                for (int edge = 0; edge < 3; ++edge)
-                    incidence[orderedEdge(triangle[edge],
-                                           triangle[(edge + 1) % 3])]
-                        .push_back(i);
-            }
-
-            bool flipped = false;
-            for (const auto &[edge, adjacent] : incidence)
-            {
-                if (adjacent.size() != 2)
-                    continue;
-                const Triangle &first = triangles[adjacent[0]];
-                const Triangle &second = triangles[adjacent[1]];
-                std::uint32_t oppositeFirst = first[0];
-                std::uint32_t oppositeSecond = second[0];
-                for (std::uint32_t vertex : first)
-                    if (vertex != edge.first && vertex != edge.second)
-                        oppositeFirst = vertex;
-                for (std::uint32_t vertex : second)
-                    if (vertex != edge.first && vertex != edge.second)
-                        oppositeSecond = vertex;
-
-                if (!isConvexQuadrilateral(edge.first, edge.second,
-                                           oppositeFirst, oppositeSecond,
-                                           vertices))
-                    continue;
-
-                const double orientation =
-                    orient2d(vertices[edge.first].point,
-                             vertices[edge.second].point,
-                             vertices[oppositeFirst].point);
-                const double circleSide =
-                    orientation > 0.0
-                        ? incircle(vertices[edge.first].point,
-                                   vertices[edge.second].point,
-                                   vertices[oppositeFirst].point,
-                                   vertices[oppositeSecond].point)
-                        : incircle(vertices[edge.second].point,
-                                   vertices[edge.first].point,
-                                   vertices[oppositeFirst].point,
-                                   vertices[oppositeSecond].point);
-                if (circleSide <= 0.0)
-                    continue;
-
-                triangles[adjacent[0]] = counterClockwise(
-                    oppositeFirst, oppositeSecond, edge.first, vertices);
-                triangles[adjacent[1]] = counterClockwise(
-                    oppositeSecond, oppositeFirst, edge.second, vertices);
-                flipped = true;
-                break;
-            }
-            if (!flipped)
-                break;
-        }
+        legalize(triangles, vertices);
     }
 
     std::vector<Triangle> result;
