@@ -16,6 +16,7 @@
 
 #include "acdb/AcDbCore.h"
 #include "acdb/AcDbTessellate.h"
+#include "acgs/AcGsPort.h"
 
 namespace acgs
 {

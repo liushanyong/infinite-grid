@@ -1,4 +1,5 @@
 #include "acgi/AcGiEntityDrawable.h"
+#include "acgi/AcGiWorldDraw.h"
 
 namespace acgi
 {

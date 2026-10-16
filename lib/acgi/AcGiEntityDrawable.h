@@ -167,7 +167,7 @@ namespace acgi
 // copy (a nested INSERT-like payload draws as its own leaf form — the
 // replay never re-expands inside a member walk).
 ACGI_PORT std::unique_ptr<AcGiDrawable>
-makeLeafDrawable(const acdb::AcDbEntityVariant &payload, std::string name)
+makeLeafDrawable(const acdb::AcDbEntityVariant &payload, std::string name);
 
 // The Gs replay factory: INSERT/MINSERT become compound drawables (their
 // expansion needs the document).  Everything else — text entities

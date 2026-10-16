@@ -161,6 +161,7 @@ endif()
 
 add_library(acgi STATIC
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiDrawable.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiEntityDrawable.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiWorldDraw.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextEngine.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiLineType.cpp"
