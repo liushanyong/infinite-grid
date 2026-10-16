@@ -2999,23 +2999,6 @@ static void buildDemoDocument()
                     curveCenter + AcGeVector3d(280.0, -260.0, 0.0)},
                    {1.0, 2.0, 2.0, 1.0});
 
-    // Text styles: the "SHX" record names the AutoCAD font files (acdb
-    // font loading — the Gs build loads them through
-    // AcDbDatabase::loadTextStyleShxFonts).  Absolute resolved paths, so
-    // the loader needs no search logic.
-    const std::string shxRegularPath =
-        util::resourcePath("fonts/txt.shx").string();
-    const std::string shxBigPath =
-        util::resourcePath("fonts/gbcbig.shx").string();
-    if (util::resourceExists("fonts/txt.shx"))
-    {
-      acdb::AcDbTextStyleTableRecord &shxStyle =
-          document.textStyleTable().add("SHX",
-                                        document.allocateHandle());
-      shxStyle.fileName = shxRegularPath;
-      shxStyle.bigFontFileName = shxBigPath;
-    }
-
     // The world-origin reference line: the logical line from the literal
     // world origin through the large-coordinate base point — formerly a
     // per-frame frustum-clipped overlay, now an ordinary AcDbLine entity

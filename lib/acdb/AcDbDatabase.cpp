@@ -5,6 +5,7 @@
 
 #include "acgi/AcGiLineType.h"
 #include "acgi/AcGiTextEngine.h"
+#include "util/resource_path.h"
 
 namespace acdb
 {
@@ -224,6 +225,14 @@ void AcDbDatabase::createDefaults()
         linetypeTable_.add(preset.name, allocateHandle());
 
     textStyleTable_.add("Standard", allocateHandle());
+    if (util::resourceExists("fonts/txt.shx"))
+    {
+        AcDbTextStyleTableRecord &shxStyle =
+            textStyleTable_.add("SHX", allocateHandle());
+        shxStyle.fileName = util::resourcePath("fonts/txt.shx").string();
+        shxStyle.bigFontFileName =
+            util::resourcePath("fonts/gbcbig.shx").string();
+    }
 
     blockTable_.add(kModelSpaceName, allocateHandle());
     blockTable_.add(kPaperSpaceName, allocateHandle());
