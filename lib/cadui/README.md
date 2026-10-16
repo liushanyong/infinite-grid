@@ -9,6 +9,7 @@ Current widgets:
 - `cadui::ViewCubeWidget` - navigation cube with 26 selectable regions.
 - `cadui::ViewCubeBgfxRenderer` - optional offscreen BGFX renderer for the ViewCube body.
 - `cadui::OverlayWidgets` - shared lifecycle, hit routing, and frame rendering for the ViewCube and UCS icon overlays.
+- `cadui::drawViewportPanel` - viewport image panel composition with optional overlay drawing; returns its screen bounds and hover state for host input routing.
 
 The library is reusable from any SDL3/BGFX/ImGui application. Build the `examples/UcsViewCubeImGui` target for a complete example.
 
