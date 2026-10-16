@@ -513,9 +513,10 @@ inline int runStoreSelfTest()
           "loaded entity count matches");
     auto entityTypeMix = [](const AcDbDatabase &database) {
         std::map<std::size_t, int> types;
-        database.forEachEntity([&](AcDbHandle, const AcDbEntityVariant &payload) {
-            ++types[payload.index()];
-        });
+        database.forEachEntity(
+            [&](AcDbHandle, const AcDbEntityVariant &payload) {
+                ++types[payload.index()];
+            });
         return types;
     };
     check(entityTypeMix(document) == entityTypeMix(loaded) &&
