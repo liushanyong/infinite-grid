@@ -28,6 +28,8 @@ struct FillVertex;
 namespace acgs
 {
 
+class AcGsManager;
+
 // Type-erased entity reference.  |kind| is an application-defined
 // discriminator; the three pointers carry whatever the application needs to
 // resolve the entity later (mesh record, tessellation range, curve command
@@ -58,8 +60,6 @@ struct ACGS_PORT AcGsPickEntityHash
 class ACGS_PORT AcGsSelectionManager
 {
 public:
-    static AcGsSelectionManager &instance();
-
     // Camera basis captured when a pick request is issued, so the CPU
     // fallback raycast can reuse the exact frustum of the request.
     struct CameraBasis
@@ -132,6 +132,7 @@ public:
                                         std::size_t size);
 
 private:
+    friend class AcGsManager;
     AcGsSelectionManager() = default;
 
     std::unordered_map<std::uint32_t, AcGsPickEntity> registry_;

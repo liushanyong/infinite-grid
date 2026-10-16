@@ -40,6 +40,7 @@
 
 #include "rendering/RenderTypes.h"
 #include "rendering/RenderMode.h"
+#include "acgs/AcGsSelectionManager.h"
 
 namespace rendering
 {
@@ -131,6 +132,11 @@ public:
     void setGpuPickDebugSize(std::uint32_t width, std::uint32_t height);
     void setActiveSceneSlot(int slot);
     void blitSceneToSlot(int slot);
+    AcGsSelectionManager &selectionManager() { return selectionManager_; }
+    const AcGsSelectionManager &selectionManager() const
+    {
+        return selectionManager_;
+    }
     // Unified picking: sample the full-scene ID texture (see RendererBackend).
     std::uint32_t requestGpuPickPixel(float ndcX, float ndcY);
     void cancelGpuPick();
@@ -179,6 +185,7 @@ public:
 private:
     rendering::RendererBackend *device_ = nullptr;
     std::vector<std::unique_ptr<AcGsView>> views_;
+    AcGsSelectionManager selectionManager_;
     int active_ = 0;
     bool frameClaimed_ = false;
 };
