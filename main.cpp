@@ -533,6 +533,9 @@ bool isUcsIconScreenPoint(float x, float y)
   return ucsIconOverlay.capturesScreenPoint(x, y, (float)displayHeight);
 }
 
+int currentDrawableWidth();
+int currentDrawableHeight();
+
 void drawViewCubeOverlay()
 {
   if (!appPlatform.imguiEnabled())
@@ -578,9 +581,6 @@ void drawViewCubeOverlay()
     view.resetDepthSlabs();
   }
 }
-
-int currentDrawableWidth();
-int currentDrawableHeight();
 
 void logCameraTargetIfChanged(const AcGePoint3d &target)
 {
