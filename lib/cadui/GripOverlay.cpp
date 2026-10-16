@@ -506,4 +506,15 @@ namespace cadui
         }
         drawList->PopClipRect();
     }
+
+    void drawProjectedGripOverlay(
+        ImDrawList *drawList, const ImVec2 &viewportMin,
+        const ImVec2 &viewportSize, std::span<const GripPoint> grips,
+        const GripProjector &project, const GripOverlayStyle &style,
+        std::span<const glm::vec2> controlPolygon, bool polygonClosed)
+    {
+        const std::vector<GripMarker> markers = projectGripMarkers(grips, project);
+        drawGripOverlay(drawList, viewportMin, viewportSize, markers, style,
+                        controlPolygon, polygonClosed);
+    }
 } // namespace cadui
