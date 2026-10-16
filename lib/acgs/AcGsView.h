@@ -128,6 +128,26 @@ public:
     // The demo keeps calling it through the orbitCamera() alias.
     AcGsOrbitCamera &orbitCamera() { return orbitCamera_; }
 
+    // Camera state and setters used by viewport navigation controls.  UI
+    // components can operate on this view without owning or reaching through
+    // its camera object.
+    glm::dquat cameraRotation() const { return orbitCamera_.Rotation; }
+    glm::dvec3 eyeDirection() const
+    {
+        return glm::normalize(orbitCamera_.Rotation *
+                              glm::dvec3(0.0, 0.0, 1.0));
+    }
+    glm::dvec3 upDirection() const { return orbitCamera_.Up; }
+    glm::dvec3 rightDirection() const { return orbitCamera_.Right; }
+    void setViewDirection(const glm::dvec3 &direction)
+    {
+        orbitCamera_.setViewDirection(direction);
+    }
+    void setWorldUp(const glm::dvec3 &direction)
+    {
+        orbitCamera_.setWorldUp(direction);
+    }
+
     // ---- host interaction facade (BlockView GsPreviewCtrl pattern) ----
     // The host control speaks view operations; it never reaches into the
     // camera.  Each call acts on THIS view's camera, so interaction always

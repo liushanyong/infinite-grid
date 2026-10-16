@@ -1,7 +1,6 @@
 #include <SDL.h>
 
 #include <cadui/ViewCubeOverlay.hpp>
-#include <cadui/UcsIconOverlay.hpp>
 #include <cadui/GripOverlay.hpp>
 #include <imgui.h>
 #include <imgui_bgfx.h>
@@ -61,7 +60,6 @@ constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
 
 cadui::ViewCubeOverlay viewCubeOverlay;
-cadui::UcsIconOverlay ucsIconOverlay;
 application::Platform appPlatform;
 
 // ---- acgs ImGui panels: per-viewport presentation state ----
@@ -518,38 +516,15 @@ void drawViewCubeOverlay()
 {
   if (!appPlatform.imguiEnabled())
     return;
-  if (viewCubeOverlay.render(orbitCam))
+  acgs::AcGsView &view = acgsView();
+  if (viewCubeOverlay.render(view))
   {
-    acgsView().resetDepthSlabs();
+    view.resetDepthSlabs();
   }
-}
-
-// The UCS icon overlay (window chrome, tripod widget, grip-drag state, camera
-// chase) lives in cadui::UcsIconOverlay; these two wrappers only bridge what
-// the class must not know: SDL window queries and the ImGui-enabled gate.
-bool isUcsIconScreenPoint(float x, float y)
-{
-  if (!appPlatform.imguiEnabled())
-    return false;
-  int displayWidth = 0;
-  int displayHeight = 0;
-  SDL_GetWindowSize(appPlatform.window(), &displayWidth, &displayHeight);
-  return ucsIconOverlay.capturesScreenPoint(x, y, (float)displayHeight);
 }
 
 int currentDrawableWidth();
 int currentDrawableHeight();
-
-void drawUcsIconOverlay()
-{
-  if (!appPlatform.imguiEnabled())
-    return;
-  if (ucsIconOverlay.render(orbitCam, acgs::kClearColor,
-                            currentDrawableHeight()))
-  {
-    acgsView().resetDepthSlabs();
-  }
-}
 
 void logCameraTargetIfChanged(const AcGePoint3d &target)
 {
@@ -8911,7 +8886,6 @@ void render()
       acgs::acgsGetManager()->blitSceneToSlot(g_activeSceneSlot);
       //fprintf(stderr, "[P] blit ok\n");
       drawViewCubeOverlay();
-      drawUcsIconOverlay();
       ImGui::Render();
       {
         ImDrawData *dd = ImGui::GetDrawData();
@@ -9280,20 +9254,17 @@ int main(int argc, char *argv[])
         if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
             evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.button.x, evt.button.y) ||
-                          isUcsIconScreenPoint(evt.button.x, evt.button.y);
+                          isViewCubeScreenPoint(evt.button.x, evt.button.y);
         else if (evt.type == SDL_EVENT_MOUSE_MOTION)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y) ||
-                          isUcsIconScreenPoint(evt.motion.x, evt.motion.y);
+                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y);
         else if (evt.type == SDL_EVENT_MOUSE_WHEEL)
         {
           float mouseX = 0.0f;
           float mouseY = 0.0f;
           SDL_GetMouseState(&mouseX, &mouseY);
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(mouseX, mouseY) ||
-                          isUcsIconScreenPoint(mouseX, mouseY);
+                          isViewCubeScreenPoint(mouseX, mouseY);
         }
 
         if (evt.type == SDL_EVENT_QUIT)
