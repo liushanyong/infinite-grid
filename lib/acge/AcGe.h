@@ -33,6 +33,7 @@
 #include "AcGeOffset.h"
 #include "AcGeTriangle.h"
 #include "AcGeDelaunay2d.h"
+#include "AcGeKdTree.h"
 #include "AcGeClipBoundary2d.h"
 #include "AcGeCompositeCurve.h"
 #include "AcGeOffsetCurve.h"

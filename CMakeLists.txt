@@ -114,6 +114,7 @@ add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeIntersect.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeIntersect3d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeInterval.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeKdTree.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeLinear.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeMatrix2d.cpp"
@@ -148,6 +149,7 @@ if(ACGE_BUILD_TESTS)
         AcGeOffsetCurveTests
         AcGeSweptSurfaceTests
         AcGeDelaunay2dTests
+        AcGeKdTreeTests
     )
         add_executable(${test_name}
             "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/${test_name}.cpp")
