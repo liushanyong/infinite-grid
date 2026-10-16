@@ -139,7 +139,6 @@ static uint32_t gMeshTextureIndex = 0;
 // Loaded font subsystem (SDF TTF + AutoCAD SHX), consolidated behind the
 // AcGi text engine (see AcGiTextEngine.h).  Populated at startup.
 static bool gSdfFontReady = false;
-static bool gShxFontReady = false;
 
 static float meshHeadlight()
 {
@@ -1470,10 +1469,10 @@ static void initializeTextResources()
                     : ": failed")
             << std::endl;
 
-  gShxFontReady =
+  const bool shxFontLoaded =
       acdbDocument().loadTextStyleShxFonts("SHX", acgi::textEngine());
   std::cout << "SHX fonts (acdb text-style loader): "
-            << (gShxFontReady ? "loaded" : "not loaded") << std::endl;
+            << (shxFontLoaded ? "loaded" : "not loaded") << std::endl;
 }
 
 // The in-memory ECS mirror of the demo document ("SQLite 管理 AcDbHandle
