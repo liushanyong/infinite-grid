@@ -470,7 +470,9 @@ inline int runStoreSelfTest()
             AcDbOrdinateDimension{}, AcDbLeader{}, AcDbFcf{}, AcDbShape{},
             AcDbAttributeDefinition{}, AcDbAttribute{}, AcDbMInsertBlock{}};
         for (AcDbEntityVariant &payload : remainingPayloads)
-            document.addEntity(std::move(payload));
+            std::visit(
+                [&](auto &typed) { document.addEntity(std::move(typed)); },
+                payload);
 
         document.setActiveLayerName("Walls");
         document.setActiveColor(glm::vec4(0.9f, 0.5f, 0.1f, 1.0f));
