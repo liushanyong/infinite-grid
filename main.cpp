@@ -194,6 +194,15 @@ AcGeVector3d gridPlaneNormal{0.0, 0.0, 1.0};
 AcGePoint3d gridPlaneStartAxisOrigin;
 AcGeVector3d gridPlaneStartAxisDirection{1.0, 0.0, 0.0};
 
+bool ucsIconEnabled()
+{
+    static const bool enabled = [] {
+        const char *flag = std::getenv("GRID_UCSICON");
+        return !(flag && flag[0] != '\0' && std::strcmp(flag, "0") == 0);
+    }();
+    return enabled;
+}
+
 // Keep the CPU visibility test, slab construction, and grid shader discard
 // aligned.  A plane within five degrees of the view direction is hidden.
 constexpr double kMinGridPlaneCos = 0.087155743; // sin(5 degrees)
@@ -8093,21 +8102,34 @@ void render()
       orthoPlaneCenter = acgs::math::Vec3(static_cast<acgs::math::DVec3>(
           planeCenter - originWorld));
 
-      // World axes are projected as exact NDC lines while their plane
-      // mapping is still in CPU doubles.  For an arbitrary plane, a point
-      // on the ortho image is planeCenter + groundRight*x + groundUp*y;
-      // therefore the line coefficients are its tangent-space projections.
+      const double viewportWidth = currentDrawableWidth();
+      const double viewportHeight = currentDrawableHeight();
+      const double cornerMargin =
+          std::min(50.0, 0.5 * std::min(viewportWidth, viewportHeight));
+      const double cornerNdcX = -1.0 + 2.0 * cornerMargin / viewportWidth;
+      const double cornerNdcY = -1.0 + 2.0 * cornerMargin / viewportHeight;
+      const AcGePoint3d ucsOriginOnPlane =
+          planeCenter + groundRight * cornerNdcX + groundUp * cornerNdcY;
+      const AcGeVector3d originToUcs = ucsOriginOnPlane - originWorld;
+      axisOriginGridRelative = acgs::math::Vec2(
+          static_cast<float>(originToUcs.dotProduct(tangentUGe)),
+          static_cast<float>(originToUcs.dotProduct(tangentVGe)));
+
+      // Project the grid axes through the inset lower-left viewport point
+      // while their plane mapping is still in CPU doubles.
       normalizedAxisLineX = normalizedNdcLine(
           AcGeVector3d(groundRight.dotProduct(tangentUGe),
                        groundUp.dotProduct(tangentUGe),
-                       planeCenter.asVector().dotProduct(tangentUGe)));
+                       (planeCenter - ucsOriginOnPlane)
+                           .dotProduct(tangentUGe)));
       normalizedAxisLineZ = normalizedNdcLine(
           AcGeVector3d(groundRight.dotProduct(tangentVGe),
                        groundUp.dotProduct(tangentVGe),
-                       planeCenter.asVector().dotProduct(tangentVGe)));
+                       (planeCenter - ucsOriginOnPlane)
+                           .dotProduct(tangentVGe)));
       axisLineX = anchoredNdcLine(normalizedAxisLineX);
       axisLineZ = anchoredNdcLine(normalizedAxisLineZ);
-      axisVisible = isSpecialGridPlane(gridPlane)
+      axisVisible = ucsIconEnabled() && isSpecialGridPlane(gridPlane)
           ? acgs::math::Vec2(
                 lineIntersectsNdcSquare(normalizedAxisLineX) ? 1.0f : 0.0f,
                 lineIntersectsNdcSquare(normalizedAxisLineZ) ? 1.0f : 0.0f)
@@ -8116,14 +8138,41 @@ void render()
   }
   else
   {
-    // Mirror the ortho path: snap the grid anchor to the camera's gaze hit
-    // on the active plane.  Otherwise orbiting the camera makes the grid
-    // slide across the world even when the scene is anchored to (0, 0, 0) --
-    // the cube then no longer lines up with the major grid lines and axes.
-    //
-    // Reuse the hoisted planeCenter computed once at the top of render().
-    axisVisible = isSpecialGridPlane(gridPlane) ? acgs::math::Vec2(1.0f)
-                                                : acgs::math::Vec2(0.0f);
+    const double viewportWidth = currentDrawableWidth();
+    const double viewportHeight = currentDrawableHeight();
+    const double cornerMargin =
+        std::min(50.0, 0.5 * std::min(viewportWidth, viewportHeight));
+    const double cornerNdcX = -1.0 + 2.0 * cornerMargin / viewportWidth;
+    const double cornerNdcY = -1.0 + 2.0 * cornerMargin / viewportHeight;
+    const double tanHalfFov =
+        std::tan(glm::radians(static_cast<double>(orbitCam.Zoom)) * 0.5);
+    AcGeVector3d lowerLeftRay(
+        cameraFrontGe +
+        cameraRightGe * (cornerNdcX * tanHalfFov * aspect) +
+        cameraUpGe * (cornerNdcY * tanHalfFov));
+    if (lowerLeftRay.length() > 1e-12)
+    {
+      lowerLeftRay.normalize();
+      const double rayPlaneCos = lowerLeftRay.dotProduct(planeNormal);
+      if (std::abs(rayPlaneCos) > kMinGridPlaneCos)
+      {
+        const double rayDistance =
+            (gridPlaneOrigin - AcGePoint3d(cameraPos))
+                .dotProduct(planeNormal) /
+            rayPlaneCos;
+        if (rayDistance > 0.0 && std::isfinite(rayDistance))
+        {
+          const AcGePoint3d ucsOriginOnPlane =
+              AcGePoint3d(cameraPos) + lowerLeftRay * rayDistance;
+          const AcGeVector3d originToUcs = ucsOriginOnPlane - originWorld;
+          axisOriginGridRelative = acgs::math::Vec2(
+              static_cast<float>(originToUcs.dotProduct(tangentUGe)),
+              static_cast<float>(originToUcs.dotProduct(tangentVGe)));
+          if (ucsIconEnabled() && isSpecialGridPlane(gridPlane))
+            axisVisible = acgs::math::Vec2(1.0f);
+        }
+      }
+    }
   }
 
   // Rebase-relative grid anchor (was originWorld - cameraPos).
@@ -8132,22 +8181,9 @@ void render()
   // step/2.
   planeOriginRelative = acgs::math::Vec3(static_cast<acgs::math::DVec3>(
       originWorld - AcGePoint3d(rebase)));
-  // The shader's p is already relative to the snapped grid anchor, so this
-  // value intentionally stays grid-relative.  Resolving it against the frame
-  // rebase would shift the world axes by one rebase chunk.
-  // A world axis is a single line, not a repeating pattern, so its anchored
-  // constant must stay exact: reducing it modulo any period would repaint
-  // the axis on the nearest period-multiple grid anchor instead of at the
-  // true world origin.  Float32 is still safe here because the active LOD
-  // keeps one pixel worth of plane space at or above ULP(|constant|).
-  {
-    const AcGeVector3d gridPlaneToAnchor = gridPlaneOrigin - originWorld;
-    const double axisU = gridPlaneToAnchor.dotProduct(tangentUGe);
-    const double axisV = gridPlaneToAnchor.dotProduct(tangentVGe);
-    axisOriginGridRelative = acgs::math::Vec2(
-        static_cast<float>(axisU),
-        static_cast<float>(axisV));
-  }
+  // The shader's p is already relative to the snapped grid anchor, so the
+  // UCS origin is likewise represented relative to that anchor.  Keep the
+  // grid anchor itself unchanged to preserve world-space grid stability.
 
   planeTangentU = acgs::math::Vec3(static_cast<acgs::math::DVec3>(tangentUGe));
   planeTangentV = acgs::math::Vec3(static_cast<acgs::math::DVec3>(tangentVGe));
