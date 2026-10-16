@@ -152,6 +152,18 @@ bool rayIntersectsSegment(const AcGsPickRay &ray,
                           bool semiInfiniteRay, bool orthographic,
                           double &hitDepth)
 {
+    return rayIntersectsSegmentWithTolerance(
+        ray, start, end, [tolerance](double) { return tolerance; },
+        hitDepth, depthNear, depthFar, semiInfiniteRay, orthographic);
+}
+
+bool rayIntersectsSegmentWithTolerance(
+    const AcGsPickRay &ray, const AcGePoint3d &start,
+    const AcGePoint3d &end,
+    const std::function<double(double rayDepth)> &toleranceAtDepth,
+    double &hitDepth, double depthNear, double depthFar,
+    bool semiInfiniteRay, bool orthographic)
+{
     double segmentParameter = 0.0;
     const double rayParameter = raySegmentClosestRayParameter(
         ray, start, end, segmentParameter, depthNear, depthFar,
@@ -162,8 +174,9 @@ bool rayIntersectsSegment(const AcGsPickRay &ray,
     const AcGePoint3d rayPoint = ray.origin + ray.direction * rayParameter;
     const AcGePoint3d segmentPoint =
         start + (end - start) * segmentParameter;
-    if (rayPoint.distanceTo(segmentPoint) > tolerance)
+    if (rayPoint.distanceTo(segmentPoint) > toleranceAtDepth(rayParameter))
         return false;
+
     hitDepth = rayParameter;
     return true;
 }

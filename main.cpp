@@ -20,6 +20,7 @@
 #include "acgs/AcGsView.h"
 #include "acgs/AcGsMath.h"
 #include "acgs/AcGsSelectionManager.h"
+#include "acgs/AcGsPicking.h"
 #include "acgs/DocumentSceneBridge.h"
 #include "util/resource_path.h"
 #include "acgi/AcGiLineType.h"
@@ -4716,12 +4717,16 @@ int currentDrawableWidth()
     return std::max(1, width);
 }
 
+static double g_pickDepthNear = 0.0;
+static double g_pickDepthFar = std::numeric_limits<double>::infinity();
+
 // VSG "double all the way": all ray construction and intersection math
 // uses double precision.  The direction is normalized in double.
 struct PickRay
 {
     AcGePoint3d origin;
     AcGeVector3d direction;
+    acgs::AcGsPickView view;
 };
 
 // Construct a picking ray from cursor NDC coordinates.
@@ -4731,73 +4736,66 @@ PickRay pickRayFromNdc(double ndcX, double ndcY,
                        const GpuPickCameraBasis &basis)
 {
     PickRay ray;
-    ray.origin = AcGePoint3d(basis.position);
-    const AcGeVector3d front(basis.front);
-
-    if (basis.ortho)
-    {
-        const double halfH = basis.orthoHalfHeight > 0.0
-                                ? basis.orthoHalfHeight
-                                : orbitCam.orthoSize();
-        const double aspect = (double)currentDrawableWidth() /
-                               (double)currentDrawableHeight();
-        const double halfW = halfH * aspect;
-        ray.origin += AcGeVector3d(basis.right) * (ndcX * halfW) +
-                      AcGeVector3d(basis.up) * (ndcY * halfH);
-        ray.direction = front.normal();
-    }
-    else
-    {
-        // Object rendering intentionally keeps a fixed 45 degree perspective
-        // FOV; OrbitCamera::Zoom controls only orthographic framing.
-        const double tanHalfV = std::tan(std::numbers::pi_v<double> / 8.0);
-        const double aspect = (double)currentDrawableWidth() /
-                               (double)currentDrawableHeight();
-        const double tanHalfH = tanHalfV * aspect;
-        ray.direction = (front + AcGeVector3d(basis.right) * (ndcX * tanHalfH) +
-                         AcGeVector3d(basis.up) * (ndcY * tanHalfV))
-                            .normal();
-    }
+    ray.view.position = AcGePoint3d(basis.position);
+    ray.view.front = AcGeVector3d(basis.front);
+    ray.view.right = AcGeVector3d(basis.right);
+    ray.view.up = AcGeVector3d(basis.up);
+    ray.view.orthographic = basis.ortho;
+    ray.view.orthoHalfHeight = basis.orthoHalfHeight;
+    ray.view.viewportWidth = basis.viewportWidth;
+    ray.view.viewportHeight = basis.viewportHeight;
+    ray.view.verticalFovRadians = basis.verticalFovRadians;
+    ray.view.nearDepth = basis.nearDepth;
+    ray.view.farDepth = basis.farDepth;
+    const acgs::AcGsPickRay geometryRay =
+        acgs::makePickRay(ndcX, ndcY, ray.view);
+    ray.origin = geometryRay.origin;
+    ray.direction = geometryRay.direction;
     return ray;
 }
 
-PickRay pickRayFromNdc(double ndcX, double ndcY)
+acgs::AcGsPickView currentPickView()
 {
     const GpuPickCameraBasis liveCamera{
         orbitCam.Position, orbitCam.Front, orbitCam.Right, orbitCam.Up,
         useOrthoProjection(), orbitCam.orthoSize()};
-    return pickRayFromNdc(ndcX, ndcY, liveCamera);
+    GpuPickCameraBasis snapshot = liveCamera;
+    snapshot.viewportWidth = currentDrawableWidth();
+    snapshot.viewportHeight = currentDrawableHeight();
+    snapshot.nearDepth = g_pickDepthNear;
+    snapshot.farDepth = g_pickDepthFar;
+    const auto &frame = acgsView().frame();
+    if (frame.viewportWidth > 1 && frame.viewportHeight > 1)
+    {
+        snapshot.viewportWidth = frame.viewportWidth;
+        snapshot.viewportHeight = frame.viewportHeight;
+        snapshot.nearDepth = frame.slabNear;
+        snapshot.farDepth = frame.slabFar;
+    }
+    acgs::AcGsPickView view;
+    view.position = AcGePoint3d(snapshot.position);
+    view.front = AcGeVector3d(snapshot.front);
+    view.right = AcGeVector3d(snapshot.right);
+    view.up = AcGeVector3d(snapshot.up);
+    view.orthographic = snapshot.ortho;
+    view.orthoHalfHeight = snapshot.orthoHalfHeight;
+    view.viewportWidth = snapshot.viewportWidth;
+    view.viewportHeight = snapshot.viewportHeight;
+    view.verticalFovRadians = snapshot.verticalFovRadians;
+    view.nearDepth = snapshot.nearDepth;
+    view.farDepth = snapshot.farDepth;
+    return view;
 }
 
-// Ortho slabs intentionally straddle the camera plane (near can be negative);
-// visible and GPU ID passes rasterize that content, so CPU picking must use
-// the same slab.  Perspective keeps the classic ray parameter > 0 rule for
-// the near side, but the far side is clamped to the rendered slab: hardware
-// clips at that far plane, so geometry beyond it cannot be under the cursor.
-static double g_pickDepthNear = 0.0;
-static double g_pickDepthFar = std::numeric_limits<double>::infinity();
-
-static bool pickIsOrthoProjection()
+PickRay pickRayFromNdc(double ndcX, double ndcY)
 {
-    return useOrthoProjection();
-}
-
-static double pickMinDepth()
-{
-    return pickIsOrthoProjection() ? g_pickDepthNear : 0.0;
-}
-
-static double pickMaxDepth()
-{
-    // Without the far clamp the 1e6-unit Ray stroke stays pickable far
-    // outside the rendered slab, and autofocus would then blow up the
-    // depth range for the whole scene.
-    return g_pickDepthFar;
-}
-
-static bool pickDepthInRange(double depth)
-{
-    return depth >= pickMinDepth() && depth <= pickMaxDepth();
+    const acgs::AcGsPickView view = currentPickView();
+    const acgs::AcGsPickRay geometryRay = acgs::makePickRay(ndcX, ndcY, view);
+    PickRay ray;
+    ray.origin = geometryRay.origin;
+    ray.direction = geometryRay.direction;
+    ray.view = view;
+    return ray;
 }
 
 // Ray-AABB slab test in double precision.
@@ -4805,33 +4803,10 @@ bool rayIntersectsAabb(const PickRay &ray,
                        const WorldAabb2 &bounds,
                        double &hitDepth)
 {
-    const double origin[] = {ray.origin.x, ray.origin.y, ray.origin.z};
-    const double direction[] = {ray.direction.x, ray.direction.y,
-                                ray.direction.z};
-    const double minimum[] = {bounds.min.x, bounds.min.y, bounds.min.z};
-    const double maximum[] = {bounds.max.x, bounds.max.y, bounds.max.z};
-    double enter = -std::numeric_limits<double>::infinity();
-    double exit = std::numeric_limits<double>::infinity();
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        if (std::abs(direction[axis]) < 1.0e-20)
-        {
-            if (origin[axis] < minimum[axis] || origin[axis] > maximum[axis])
-                return false;
-            continue;
-        }
-        const double inverse = 1.0 / direction[axis];
-        const double first = (minimum[axis] - origin[axis]) * inverse;
-        const double second = (maximum[axis] - origin[axis]) * inverse;
-        enter = std::max(enter, std::min(first, second));
-        exit = std::min(exit, std::max(first, second));
-    }
-    const double minDepth = pickMinDepth();
-    if (exit < std::max(enter, minDepth))
-        return false;
-
-    hitDepth = std::max(enter, minDepth);
-    return true;
+    return acgs::rayIntersectsAabb(
+        {ray.origin, ray.direction}, bounds.min, bounds.max,
+        ray.view.orthographic ? ray.view.nearDepth : 0.0,
+        std::numeric_limits<double>::infinity(), hitDepth);
 }
 
 
@@ -4914,57 +4889,6 @@ double cadPickTolerance(const PickRay &ray, const AcGePoint3d &worldPoint);
 // window.  Returns the clamped ray parameter (NaN for degenerate segments)
 // and reports the matching segment parameter so callers can measure the
 // true miss distance.
-static double raySegmentClosestRayParameter(
-    const PickRay &ray,
-    const AcGePoint3d &start,
-    const AcGePoint3d &end,
-    double &segmentParameter,
-    double depthNear,
-    double depthFar,
-    bool semiInfiniteRay)
-{
-    const AcGeVector3d segment = end - start;
-    const double segmentLength2 = segment.lengthSq();
-    if (segmentLength2 < 1.0e-24)
-    {
-        segmentParameter = 0.0;
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    const AcGeVector3d originToStart = ray.origin - start;
-    const double uu = ray.direction.lengthSq();
-    const double uv = ray.direction.dotProduct(segment);
-    const double vv = segmentLength2;
-    const double wd = originToStart.dotProduct(ray.direction);
-    const double we = originToStart.dotProduct(segment);
-    const double denominator = uu * vv - uv * uv;
-
-    auto clampSegmentParameter = [&](double value) {
-        return semiInfiniteRay ? std::max(0.0, value)
-                               : std::clamp(value, 0.0, 1.0);
-    };
-
-    double segmentParameterValue;
-    if (denominator > std::max(1.0e-24, vv * 1.0e-14))
-        segmentParameterValue = (uu * we - uv * wd) / denominator;
-    else
-        segmentParameterValue = we / vv;
-    segmentParameterValue = clampSegmentParameter(segmentParameterValue);
-
-    double rayParameter = (uv * segmentParameterValue - wd) / uu;
-    // A flattened ortho overlay ray is visible even where its true 3D point is
-    // outside the object slab.  Do not let the slab reject that screen-space
-    // entity; autofocus still ignores infinite entities.
-    if (!semiInfiniteRay || !pickIsOrthoProjection())
-        rayParameter = std::clamp(rayParameter, depthNear, depthFar);
-    // The closest point on the segment must follow the clamped ray parameter.
-    segmentParameterValue = denominator > std::max(1.0e-24, vv * 1.0e-14)
-        ? clampSegmentParameter((uv * rayParameter + we) / vv)
-        : clampSegmentParameter(we / vv);
-    segmentParameter = segmentParameterValue;
-    return rayParameter;
-}
-
 // The cursor tolerance must be measured where the pick ray actually
 // approaches the geometry.  Evaluating it at a fixed reference point (for
 // example a long stroke midpoint, which sits 5e5 units away for the
@@ -4976,25 +4900,17 @@ bool rayIntersectsSegmentWithTolerance(
     const AcGePoint3d &end,
     const std::function<double(double rayDepth)> &toleranceAtDepth,
     double &hitDepth,
-    double depthNear = pickMinDepth(),
-    double depthFar = pickMaxDepth(),
+    double depthNear = std::numeric_limits<double>::quiet_NaN(),
+    double depthFar = std::numeric_limits<double>::quiet_NaN(),
     bool semiInfiniteRay = false)
 {
-    double segmentParameter = 0.0;
-    const double rayParameter = raySegmentClosestRayParameter(
-        ray, start, end, segmentParameter, depthNear, depthFar,
-        semiInfiniteRay);
-    if (!std::isfinite(rayParameter))
-        return false;
-
-    const AcGePoint3d rayPoint = ray.origin + ray.direction * rayParameter;
-    const AcGePoint3d segmentPoint = start + (end - start) * segmentParameter;
-    if (rayPoint.distanceTo(segmentPoint) >
-        toleranceAtDepth(rayParameter))
-        return false;
-
-    hitDepth = rayParameter;
-    return true;
+    if (std::isnan(depthNear))
+        depthNear = ray.view.orthographic ? ray.view.nearDepth : 0.0;
+    if (std::isnan(depthFar))
+        depthFar = ray.view.farDepth;
+    return acgs::rayIntersectsSegmentWithTolerance(
+        {ray.origin, ray.direction}, start, end, toleranceAtDepth, hitDepth,
+        depthNear, depthFar, semiInfiniteRay, ray.view.orthographic);
 }
 
 bool rayIntersectsSegment(const PickRay &ray,
@@ -5002,9 +4918,13 @@ bool rayIntersectsSegment(const PickRay &ray,
                           const AcGePoint3d &end,
                           double tolerance,
                           double &hitDepth,
-                          double depthNear = pickMinDepth(),
-                          double depthFar = pickMaxDepth())
+                          double depthNear = std::numeric_limits<double>::quiet_NaN(),
+                          double depthFar = std::numeric_limits<double>::quiet_NaN())
 {
+    if (std::isnan(depthNear))
+        depthNear = ray.view.orthographic ? ray.view.nearDepth : 0.0;
+    if (std::isnan(depthFar))
+        depthFar = ray.view.farDepth;
     return rayIntersectsSegmentWithTolerance(
         ray, start, end,
         [tolerance](double) { return tolerance; },
@@ -5016,33 +4936,15 @@ bool rayIntersectsTriangle(const PickRay &ray,
                            const AcGePoint3d &b,
                            const AcGePoint3d &c,
                            double &hitDepth,
-                           double depthNear = pickMinDepth(),
-                           double depthFar = pickMaxDepth())
+                           double depthNear = std::numeric_limits<double>::quiet_NaN(),
+                           double depthFar = std::numeric_limits<double>::quiet_NaN())
 {
-    const AcGeVector3d edge1 = b - a;
-    const AcGeVector3d edge2 = c - a;
-    const AcGeVector3d pvec = ray.direction.crossProduct(edge2);
-    const double determinant = edge1.dotProduct(pvec);
-    if (std::abs(determinant) < 1.0e-24)
-        return false;
-
-    const double inverseDeterminant = 1.0 / determinant;
-    const AcGeVector3d tvec = ray.origin - a;
-    const double u = tvec.dotProduct(pvec) * inverseDeterminant;
-    if (u < 0.0 || u > 1.0)
-        return false;
-
-    const AcGeVector3d qvec = tvec.crossProduct(edge1);
-    const double v = ray.direction.dotProduct(qvec) * inverseDeterminant;
-    if (v < 0.0 || u + v > 1.0)
-        return false;
-
-    const double depth = edge2.dotProduct(qvec) * inverseDeterminant;
-    if (depth < depthNear || depth > depthFar)
-        return false;
-
-    hitDepth = depth;
-    return true;
+    if (std::isnan(depthNear))
+        depthNear = ray.view.orthographic ? ray.view.nearDepth : 0.0;
+    if (std::isnan(depthFar))
+        depthFar = ray.view.farDepth;
+    return acgs::rayIntersectsTriangle(
+        {ray.origin, ray.direction}, a, b, c, depthNear, depthFar, hitDepth);
 }
 
 bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
@@ -5111,15 +5013,10 @@ bool rayIntersectsPoint(const PickRay &ray,
                         double tolerance,
                         double &hitDepth)
 {
-    const double depth = (location - ray.origin).dotProduct(ray.direction);
-    if (!pickDepthInRange(depth))
-        return false;
-    const AcGePoint3d rayPoint = ray.origin + ray.direction * depth;
-    if (rayPoint.distanceTo(location) > tolerance)
-        return false;
-
-    hitDepth = depth;
-    return true;
+    return acgs::rayIntersectsPoint(
+        {ray.origin, ray.direction}, location, tolerance,
+        ray.view.orthographic ? ray.view.nearDepth : 0.0,
+        ray.view.farDepth, hitDepth);
 }
 
 bool rayIntersectsMeshFeatureEdges(const PickRay &ray,
@@ -5175,18 +5072,18 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
     if (directionLength < 1.0e-20)
         return false;
 
-    const bool ortho = pickIsOrthoProjection();
+    const bool ortho = ray.view.orthographic;
     const double localDepthNear = ortho
-        ? g_pickDepthNear * directionLength / scale : 0.0;
+    ? ray.view.nearDepth * directionLength / scale : 0.0;
     const double localDepthFar = ortho
-        ? g_pickDepthFar * directionLength / scale
+    ? ray.view.farDepth * directionLength / scale
         : std::numeric_limits<double>::infinity();
     const AcGeVector3d origin =
         (ray.origin - object.worldPosition) / scale;
     const AcGeVector3d direction = ray.direction / directionLength;
     double best = std::numeric_limits<double>::infinity();
     const PickRay localRay{AcGePoint3d(origin.x, origin.y, origin.z),
-                           direction};
+                           direction, ray.view};
 
     const rendering::RenderModeFlags renderFlags = acgs::acgsGetManager()->deviceReady()
         ? acgs::acgsGetManager()->deviceRenderModeFlags()
@@ -5251,14 +5148,8 @@ bool rayIntersectsRenderedMesh(const PickRay &ray,
 // large-coordinate demo is zoomed out.
 double cadPickTolerance(const PickRay &ray, const AcGePoint3d &worldPoint)
 {
-    const double worldPerPixel = useOrthoProjection()
-        ? 2.0 * orbitCam.orthoSize() / currentDrawableHeight()
-        : 2.0 * std::max(0.0,
-              (worldPoint - ray.origin)
-                  .dotProduct(AcGeVector3d(orbitCam.Front))) *
-          std::tan(std::numbers::pi_v<double> / 8.0) /
-          currentDrawableHeight();
-    return worldPerPixel * 5.0;
+    return acgs::pickCursorTolerance(
+        {ray.origin, ray.direction}, worldPoint, ray.view, 5.0);
 }
 
 double cadCurvePickTolerance(const PickRay &ray,
@@ -5640,7 +5531,9 @@ PickResult pickObjectAlongRay(const PickRay &ray,
             trace.cadPointCount = cad.geometry.points.size();
         }
         getCadRangeBvh().rayTraverse(
-            ray.origin, ray.direction, pickMinDepth(), pickMaxDepth(),
+            ray.origin, ray.direction,
+            ray.view.orthographic ? ray.view.nearDepth : 0.0,
+            ray.view.farDepth,
             [&](std::uint32_t objectIndex, double entryDepth) {
                 if (entryDepth > nearestDepth)
                     return false; // nothing later can beat the best hit
@@ -5685,8 +5578,12 @@ PickResult pickObjectAlongRay(const PickRay &ray,
                                             ray.origin +
                                                 ray.direction * depth);
                                     },
-                                    hitDepth, pickMinDepth(),
-                                    pickMaxDepth(), stroke.semiInfinite))
+                                    hitDepth,
+                                    ray.view.orthographic
+                                        ? ray.view.nearDepth
+                                        : 0.0,
+                                    ray.view.farDepth,
+                                    stroke.semiInfinite))
                             {
                                 considerCadOverlayHit(
                                     hitDepth, range.name.c_str(),
@@ -6037,7 +5934,9 @@ std::optional<AutofocusResult> autofocusGpuPick(uint32_t objectId,
                                     ray.origin +
                                     ray.direction * depthAtHit);
                             },
-                            depth, pickMinDepth(), pickMaxDepth(),
+                            depth,
+                            ray.view.orthographic ? ray.view.nearDepth : 0.0,
+                            ray.view.farDepth,
                             stroke.semiInfinite))
                     {
                         considerPrimitive(depth, strokeIndex);
@@ -6461,7 +6360,8 @@ bool runCadPickAudit()
         results[AuditKey{sample.kind, sample.name}];
     const PickRay ray{
         AcGePoint3d(orbitCam.Position),
-        AcGeVector3d(sample.location - orbitCam.Position).normal()};
+        AcGeVector3d(sample.location - orbitCam.Position).normal(),
+        currentPickView()};
     bool directHit = false;
     if (sample.kind == VisibilityKind::CadStroke)
     {
@@ -6532,17 +6432,20 @@ bool runCadPickAudit()
         setAuditCamera(sample.location, viewDirection, distance);
         const PickRay ray{
             AcGePoint3d(orbitCam.Position),
-            AcGeVector3d(sample.location - orbitCam.Position).normal()};
+            AcGeVector3d(sample.location - orbitCam.Position).normal(),
+            currentPickView()};
         recordSample(sample, pickObjectAlongRay(ray));
       }
     }
 
     setAuditCamera(sample.location, acgs::math::DVec3(0.0, 0.0, -1.0), distance);
     recordSample(sample, pickObjectAlongRay(
-        {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, -1.0)}));
+        {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, -1.0),
+         currentPickView()}));
     setAuditCamera(sample.location, acgs::math::DVec3(0.0, 0.0, 1.0), distance);
     recordSample(sample, pickObjectAlongRay(
-        {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, 1.0)}));
+        {AcGePoint3d(orbitCam.Position), AcGeVector3d(0.0, 0.0, 1.0),
+         currentPickView()}));
 
   }
 
@@ -8081,6 +7984,11 @@ void render()
     gpuPickFocus.camera = GpuPickCameraBasis{
         orbitCam.Position, orbitCam.Front, orbitCam.Right, orbitCam.Up,
         useOrthoProjection(), orbitCam.orthoSize()};
+    const acgs::ViewFrameContext &pickFrame = acgsView().frame();
+    gpuPickFocus.camera->viewportWidth = pickFrame.viewportWidth;
+    gpuPickFocus.camera->viewportHeight = pickFrame.viewportHeight;
+    gpuPickFocus.camera->nearDepth = pickFrame.slabNear;
+    gpuPickFocus.camera->farDepth = pickFrame.slabFar;
     const uint32_t requestToken =
         acgs::acgsGetManager()->requestGpuPickPixel(gpuPickFocus.ndcX,
                                                     gpuPickFocus.ndcY);

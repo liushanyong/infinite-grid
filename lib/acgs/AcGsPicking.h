@@ -2,6 +2,7 @@
 
 #include "AcGsPort.h"
 
+#include <functional>
 #include <limits>
 
 #include "acge/AcGePoint.h"
@@ -40,6 +41,12 @@ ACGS_PORT double pickCursorTolerance(const AcGsPickRay &ray,
                                      const AcGePoint3d &worldPoint,
                                      const AcGsPickView &view,
                                      double pixelRadius);
+ACGS_PORT bool rayIntersectsSegmentWithTolerance(
+    const AcGsPickRay &ray, const AcGePoint3d &start,
+    const AcGePoint3d &end,
+    const std::function<double(double rayDepth)> &toleranceAtDepth,
+    double &hitDepth, double depthNear, double depthFar,
+    bool semiInfiniteRay, bool orthographic);
 ACGS_PORT bool rayIntersectsAabb(const AcGsPickRay &ray,
                                  const AcGePoint3d &minimum,
                                  const AcGePoint3d &maximum,
