@@ -460,10 +460,25 @@ inline int runStoreSelfTest()
         blockRefHandle = document.addBlockReference(
             "Bolt", {5.0, 5.0, 0.0}, 0.5, {2.0, 2.0, 2.0});
 
+        AcDbEntityVariant remainingPayloads[] = {
+            AcDbEllipse{}, AcDbRay{}, AcDbXline{}, AcDbSolid{}, AcDbHatch{},
+            AcDb3dPolyline{}, AcDbPolyline{}, AcDbMText{}, AcDbMline{},
+            AcDbPolyFaceMesh{}, AcDb3dSolid{}, AcDbLight{},
+            AcDbRotatedDimension{}, AcDbAlignedDimension{},
+            AcDb2LineAngularDimension{}, AcDb3PointAngularDimension{},
+            AcDbRadialDimension{}, AcDbDiametricDimension{},
+            AcDbOrdinateDimension{}, AcDbLeader{}, AcDbFcf{}, AcDbShape{},
+            AcDbAttributeDefinition{}, AcDbAttribute{}, AcDbMInsertBlock{}};
+        for (AcDbEntityVariant &payload : remainingPayloads)
+            document.addEntity(std::move(payload));
+
         document.setActiveLayerName("Walls");
         document.setActiveColor(glm::vec4(0.9f, 0.5f, 0.1f, 1.0f));
     }
-    check(document.entityCount() == 7, "document holds 7 entities");
+    constexpr std::size_t expectedEntityCount =
+        std::variant_size_v<AcDbEntityVariant>;
+    check(document.entityCount() == expectedEntityCount,
+          "document holds one instance of every entity payload");
     check(blockRefHandle.isValid(), "block reference inserted");
 
     // A configured second viewport rides the save (ObjectARX VPORT).
@@ -480,7 +495,8 @@ inline int runStoreSelfTest()
     const StoreResult saved = saveDatabase(document,
                                            "store_selftest.db");
     check(saved.ok, "saveDatabase succeeds");
-    check(saved.entities == 7, "save wrote 7 entity rows");
+    check(saved.entities == expectedEntityCount,
+          "save wrote every entity payload");
     if (!saved.ok)
         std::fprintf(report, "  save error: %s\n",
                      saved.error.c_str());
@@ -491,9 +507,21 @@ inline int runStoreSelfTest()
     if (!load.ok)
         std::fprintf(report, "  load error: %s\n",
                      load.error.c_str());
-    check(load.entities == 7, "load read 7 entity rows");
+    check(load.entities == expectedEntityCount,
+          "load read every entity payload");
     check(loaded.entityCount() == document.entityCount(),
           "loaded entity count matches");
+    auto entityTypeMix = [](const AcDbDatabase &database) {
+        std::map<std::size_t, int> types;
+        database.forEachEntity([&](AcDbHandle, const AcDbEntityVariant &payload) {
+            ++types[payload.index()];
+        });
+        return types;
+    };
+    check(entityTypeMix(document) == entityTypeMix(loaded) &&
+              entityTypeMix(loaded).size() ==
+                  std::variant_size_v<AcDbEntityVariant>,
+          "every concrete entity type round-trips through SQLite");
     for (const AcDbHandle memberHandle :
          {blockMemberAHandle, blockMemberBHandle})
     {
