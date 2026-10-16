@@ -8,6 +8,7 @@
 #include "acdb/AcDbEntities.h"
 #include "acdb/AcDbGltf.h"
 #include "acdb/AcDbTessellate.h"
+#include "acgi/AcGiWorldDraw.h"
 #include "acgi/AcGiTextQueue.h"
 #include "acgs/AcGsMath.h"
 #include "acgs/AcGsPicking.h"
