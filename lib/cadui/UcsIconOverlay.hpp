@@ -19,6 +19,8 @@ namespace cadui
     class UcsIconOverlay
     {
     public:
+        static bool enabled();
+
         // True when a window-client point must be routed to the overlay
         // instead of the viewport: it sits on the icon, or a grip drag is in
         // flight (mid-drag motion outside the icon must never leak into the

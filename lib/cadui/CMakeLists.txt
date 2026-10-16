@@ -4,6 +4,7 @@ set(CADUI_LIB_ROOT "${CADUI_REPO_ROOT}/lib")
 
 add_library(cadui STATIC
     GripOverlay.cpp
+    OverlayWidgets.cpp
     UcsIcon.cpp
     UcsIconOverlay.cpp
     ViewCube.cpp
