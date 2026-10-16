@@ -1,5 +1,6 @@
 #include <SDL.h>
 
+#include <cadui/UcsIconOverlay.hpp>
 #include <cadui/ViewCubeOverlay.hpp>
 #include <cadui/GripOverlay.hpp>
 #include <imgui.h>
@@ -60,6 +61,7 @@ constexpr int SCREEN_WIDTH = 1200;
 constexpr int SCREEN_HEIGHT = 768;
 
 cadui::ViewCubeOverlay viewCubeOverlay;
+cadui::UcsIconOverlay ucsIconOverlay;
 application::Platform appPlatform;
 
 // ---- acgs ImGui panels: per-viewport presentation state ----
@@ -521,12 +523,57 @@ bool isViewCubeScreenPoint(float x, float y)
                                              (float)displayHeight);
 }
 
+bool isUcsIconScreenPoint(float x, float y)
+{
+  if (!appPlatform.imguiEnabled())
+    return false;
+  int displayWidth = 0;
+  int displayHeight = 0;
+  SDL_GetWindowSize(appPlatform.window(), &displayWidth, &displayHeight);
+  return ucsIconOverlay.capturesScreenPoint(x, y, (float)displayHeight);
+}
+
 void drawViewCubeOverlay()
 {
   if (!appPlatform.imguiEnabled())
     return;
   acgs::AcGsView &view = acgsView();
   if (viewCubeOverlay.render(view))
+  {
+    view.resetDepthSlabs();
+  }
+
+  AcGeVector3d tangentU;
+  AcGeVector3d tangentV;
+  activePlaneTangents(tangentU, tangentV);
+  const AcGeVector3d planeNormal = gridPlaneNormal.normal();
+  AcGeVector3d axisX;
+  AcGeVector3d axisY;
+  AcGeVector3d axisZ;
+  if (gridPlane == GridPlaneType::XZ)
+  {
+    axisX = tangentU;
+    axisY = planeNormal;
+    axisZ = tangentV;
+  }
+  else if (gridPlane == GridPlaneType::YZ)
+  {
+    axisX = planeNormal;
+    axisY = tangentU;
+    axisZ = tangentV;
+  }
+  else
+  {
+    axisX = tangentU;
+    axisY = tangentV;
+    axisZ = planeNormal;
+  }
+  const auto toUiAxis = [](const AcGeVector3d &axis) {
+    return acgs::math::Vec3(static_cast<acgs::math::DVec3>(axis));
+  };
+  if (ucsIconOverlay.render(view.orbitCamera(), acgs::kClearColor,
+                            currentDrawableHeight(), toUiAxis(axisX),
+                            toUiAxis(axisY), toUiAxis(axisZ)))
   {
     view.resetDepthSlabs();
   }
@@ -9290,17 +9337,20 @@ int main(int argc, char *argv[])
         if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
             evt.type == SDL_EVENT_MOUSE_BUTTON_UP)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.button.x, evt.button.y);
+                          isViewCubeScreenPoint(evt.button.x, evt.button.y) ||
+                          isUcsIconScreenPoint(evt.button.x, evt.button.y);
         else if (evt.type == SDL_EVENT_MOUSE_MOTION)
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y);
+                          isViewCubeScreenPoint(evt.motion.x, evt.motion.y) ||
+                          isUcsIconScreenPoint(evt.motion.x, evt.motion.y);
         else if (evt.type == SDL_EVENT_MOUSE_WHEEL)
         {
           float mouseX = 0.0f;
           float mouseY = 0.0f;
           SDL_GetMouseState(&mouseX, &mouseY);
           mouseCaptured = mouseCaptured ||
-                          isViewCubeScreenPoint(mouseX, mouseY);
+                          isViewCubeScreenPoint(mouseX, mouseY) ||
+                          isUcsIconScreenPoint(mouseX, mouseY);
         }
 
         if (evt.type == SDL_EVENT_QUIT)

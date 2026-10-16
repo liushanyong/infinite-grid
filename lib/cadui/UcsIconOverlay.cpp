@@ -37,7 +37,10 @@ namespace cadui
 
     bool UcsIconOverlay::render(AcGsOrbitCamera& camera,
                                 const glm::vec4& clearColor,
-                                int drawableHeight)
+                                int drawableHeight,
+                                const glm::vec3& xAxis,
+                                const glm::vec3& yAxis,
+                                const glm::vec3& zAxis)
     {
         if (!kEnabled)
         {
@@ -67,6 +70,9 @@ namespace cadui
         // like the ViewCube (un-conjugated would tumble the tripod against
         // the camera).
         state.viewRotation = glm::mat3_cast(glm::conjugate(camera.Rotation));
+        state.xAxis = xAxis;
+        state.yAxis = yAxis;
+        state.zAxis = zAxis;
         state.selected = selected;
         state.backgroundLuminance = 0.299f * clearColor.r +
                                     0.587f * clearColor.g +
