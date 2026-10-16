@@ -149,6 +149,7 @@ if(ACGE_BUILD_TESTS)
         AcGeOffsetCurveTests
         AcGeSweptSurfaceTests
         AcGeDelaunay2dTests
+        AcGeIntersect3dTests
         AcGeKdTreeTests
     )
         add_executable(${test_name}

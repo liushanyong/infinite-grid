@@ -79,7 +79,7 @@ std::vector<AcGePoint3d> intersect(const AcGeLineSeg3d &segment,
                                    const AcGeSphere &sphere,
                                    const AcGeTol &tol = AcGeTol{});
 
-struct ACGE_PORT AcGeSegmentClosestPoints3d
+struct ACGE_PORT AcGeClosestPoints3d
 {
     double parameterA = 0.0;
     double parameterB = 0.0;
@@ -88,8 +88,25 @@ struct ACGE_PORT AcGeSegmentClosestPoints3d
     double distance = 0.0;
 };
 
-AcGeSegmentClosestPoints3d closestPoints(const AcGeLineSeg3d &first,
-                                         const AcGeLineSeg3d &second,
-                                         const AcGeTol &tol = AcGeTol{});
+using AcGeSegmentClosestPoints3d = AcGeClosestPoints3d;
+
+AcGeClosestPoints3d closestPoints(const AcGeLineSeg3d &first,
+                                  const AcGeLineSeg3d &second,
+                                  const AcGeTol &tol = AcGeTol{});
+
+// Parameters are measured using each entity's supplied direction vector;
+// line parameters are unbounded and ray parameters are nonnegative.
+AcGeClosestPoints3d closestPoints(const AcGeLine3d &first,
+                                  const AcGeLine3d &second,
+                                  const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeRay3d &first,
+                                  const AcGeRay3d &second,
+                                  const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeLine3d &line,
+                                  const AcGeRay3d &ray,
+                                  const AcGeTol &tol = AcGeTol{});
+AcGeClosestPoints3d closestPoints(const AcGeRay3d &ray,
+                                  const AcGeLine3d &line,
+                                  const AcGeTol &tol = AcGeTol{});
 
 } // namespace ge
