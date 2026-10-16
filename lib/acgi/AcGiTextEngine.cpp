@@ -108,6 +108,47 @@ std::string TextEngine::loadSdfFontWithFallback(
     return {};
 }
 
+TextEngine::TextBlockFrame TextEngine::textBlockFrame(
+    const TextRequest &request) const
+{
+    TextBlockFrame frame;
+    frame.right = request.direction;
+    if (glm::dot(frame.right, frame.right) < 1.0e-18)
+        frame.right = glm::dvec3(1.0, 0.0, 0.0);
+    frame.right = glm::normalize(frame.right);
+    frame.normal = request.normal;
+    const double normalLength = glm::length(frame.normal);
+    if (normalLength > 0.0)
+        frame.normal /= normalLength;
+    frame.up = glm::cross(frame.normal, frame.right);
+    if (glm::dot(frame.up, frame.up) < 1.0e-18)
+        frame.up = glm::dvec3(0.0, 0.0, 1.0);
+    frame.up = glm::normalize(frame.up);
+
+    std::size_t lineCount = 1;
+    double longest = 0.0;
+    std::size_t current = 0;
+    for (char character : request.message)
+    {
+        if (character == '\n')
+        {
+            ++lineCount;
+            longest = std::max(longest, double(current));
+            current = 0;
+        }
+        else
+        {
+            ++current;
+        }
+    }
+    longest = std::max(longest, double(current));
+    frame.width = std::max(longest * request.height * request.xScale,
+                           request.height);
+    frame.minV = -request.height * 1.35 * double(lineCount - 1);
+    frame.maxV = request.height;
+    return frame;
+}
+
 bool TextEngine::loadShxRegularFont(const std::string &shxPath)
 {
     rendering::ShxFontConfig config;

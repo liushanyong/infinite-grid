@@ -33,6 +33,18 @@ namespace acgi
 class ACGI_PORT TextEngine
 {
 public:
+    // Approximate text block bounds used to refine a text pick against the
+    // same oriented rectangle shared by the GPU pick and CPU refinement.
+    struct TextBlockFrame
+    {
+        glm::dvec3 right{1.0, 0.0, 0.0};
+        glm::dvec3 up{0.0, 1.0, 0.0};
+        glm::dvec3 normal{0.0, 0.0, 1.0};
+        double width = 1.0;
+        double minV = 0.0;
+        double maxV = 1.0;
+    };
+
     // ---- font management (AcGiTextStyle::setFont analogue) ----
     // AutoCAD bigfont pairing: ASCII glyphs come from the regular font,
     // double-byte (CJK) glyphs from the big font.
@@ -49,6 +61,7 @@ public:
     {
         return shxRegularFont_.isLoaded() || shxBigFont_.isLoaded();
     }
+    TextBlockFrame textBlockFrame(const TextRequest &request) const;
     rendering::LoadedFont &sdfFont() { return sdfFont_; }
     rendering::LoadedFont &shxRegularFont() { return shxRegularFont_; }
     rendering::LoadedFont &shxBigFont() { return shxBigFont_; }

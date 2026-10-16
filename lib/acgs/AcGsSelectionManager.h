@@ -70,6 +70,11 @@ public:
         glm::dvec3 up{0.0, 1.0, 0.0};
         bool ortho = false;
         double orthoHalfHeight = 0.0;
+        int viewportWidth = 1;
+        int viewportHeight = 1;
+        double verticalFovRadians = 0.7853981633974483;
+        double nearDepth = 0.0;
+        double farDepth = 1.0e9;
     };
 
     // 1x1-pick request lifecycle state.
