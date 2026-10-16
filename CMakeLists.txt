@@ -259,6 +259,7 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/lib/cadui"
 set(WINDOW_SOURCES
     main.cpp
     lib/application/ApplicationPlatform.cpp
+    lib/application/DemoSceneVisibility.cpp
     lib/rendering/RendererBackend.cpp
     lib/rendering/BgfxRenderer.cpp
     lib/rendering/ImGuiBgfxPass.cpp
