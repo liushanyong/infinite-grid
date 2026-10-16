@@ -110,6 +110,7 @@ add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeConic.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCurve3d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCurves2d.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeDelaunay2d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeIntersect.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeIntersect3d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeInterval.cpp"
@@ -146,6 +147,7 @@ if(ACGE_BUILD_TESTS)
         AcGeCompositeCurveTests
         AcGeOffsetCurveTests
         AcGeSweptSurfaceTests
+        AcGeDelaunay2dTests
     )
         add_executable(${test_name}
             "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/${test_name}.cpp")
