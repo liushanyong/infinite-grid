@@ -50,21 +50,14 @@ class ACDB_PORT AcDbDictionary : public AcDbObject
 {
 public:
     // AcDbDictionary::numEntries
-    int numEntries() const { return int(entries_.size()); }
+    int numEntries() const;
 
     // AcDbDictionary::has
-    bool has(const std::string &name) const
-    {
-        return entries_.count(name) != 0;
-    }
+    bool has(const std::string &name) const;
 
     // AcDbDictionary::getAt — the referenced object's handle, or
     // kNullHandle when absent.
-    AcDbHandle getAt(const std::string &name) const
-    {
-        const auto found = entries_.find(name);
-        return found != entries_.end() ? found->second : kNullHandle;
-    }
+    AcDbHandle getAt(const std::string &name) const;
 
     // AcDbDictionary::setAt — inserts or repoints |name| at
     // |objectHandle|.  Returns false when the handle is invalid.
@@ -75,10 +68,7 @@ public:
     bool setName(const std::string &oldName, const std::string &newName);
 
     // AcDbDictionary::remove
-    bool remove(const std::string &name)
-    {
-        return entries_.erase(name) != 0;
-    }
+    bool remove(const std::string &name);
 
     template <typename Fn> void forEach(Fn &&fn) const
     {
@@ -104,70 +94,34 @@ public:
                                std::vector<AcGePoint3d>>;
 
     // CoreDB-style typed writers.
-    void setValue(int id, bool v) { values_[id] = Value(v); }
-    void setValue(int id, int v) { values_[id] = Value(std::int32_t(v)); }
-    void setValue(int id, double v) { values_[id] = Value(v); }
-    void setValue(int id, const std::string &v)
-    {
-        values_[id] = Value(v);
-    }
-    void setValue(int id, const AcGePoint3d &v) { values_[id] = Value(v); }
-    void setValue(int id, const AcGeVector3d &v)
-    {
-        values_[id] = Value(v);
-    }
-    void setValue(int id, const std::vector<double> &v)
-    {
-        values_[id] = Value(v);
-    }
+    void setValue(int id, bool v);
+    void setValue(int id, int v);
+    void setValue(int id, double v);
+    void setValue(int id, const std::string &v);
+    void setValue(int id, const AcGePoint3d &v);
+    void setValue(int id, const AcGeVector3d &v);
+    void setValue(int id, const std::vector<double> &v);
     void setValue(int id, const std::vector<int> &v);
-    void setValue(int id, const std::vector<std::uint8_t> &v)
-    {
-        values_[id] = Value(v);
-    }
-    void setValue(int id, const std::vector<AcGePoint3d> &v)
-    {
-        values_[id] = Value(v);
-    }
-    void setValue(int id, const Value &v) { values_[id] = v; }
+    void setValue(int id, const std::vector<std::uint8_t> &v);
+    void setValue(int id, const std::vector<AcGePoint3d> &v);
+    void setValue(int id, const Value &v);
 
     // CoreDB-style typed readers: true when the slot exists and holds
     // the requested type.
-    bool getValue(int id, bool &v) const
-    {
-        return readValue(id, v);
-    }
+    bool getValue(int id, bool &v) const;
     bool getValue(int id, int &v) const;
-    bool getValue(int id, double &v) const { return readValue(id, v); }
-    bool getValue(int id, std::string &v) const
-    {
-        return readValue(id, v);
-    }
-    bool getValue(int id, AcGePoint3d &v) const
-    {
-        return readValue(id, v);
-    }
-    bool getValue(int id, AcGeVector3d &v) const
-    {
-        return readValue(id, v);
-    }
-    bool getValue(int id, std::vector<double> &v) const
-    {
-        return readValue(id, v);
-    }
+    bool getValue(int id, double &v) const;
+    bool getValue(int id, std::string &v) const;
+    bool getValue(int id, AcGePoint3d &v) const;
+    bool getValue(int id, AcGeVector3d &v) const;
+    bool getValue(int id, std::vector<double> &v) const;
     bool getValue(int id, std::vector<int> &v) const;
-    bool getValue(int id, std::vector<std::uint8_t> &v) const
-    {
-        return readValue(id, v);
-    }
-    bool getValue(int id, std::vector<AcGePoint3d> &v) const
-    {
-        return readValue(id, v);
-    }
+    bool getValue(int id, std::vector<std::uint8_t> &v) const;
+    bool getValue(int id, std::vector<AcGePoint3d> &v) const;
     bool getValue(int id, Value &v) const;
 
-    int numValues() const { return int(values_.size()); }
-    void removeValue(int id) { values_.erase(id); }
+    int numValues() const;
+    void removeValue(int id);
 
     template <typename Fn> void forEachValue(Fn &&fn) const
     {

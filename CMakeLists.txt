@@ -106,6 +106,7 @@ add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeBoundedPlane.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeBspline.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeBvh.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeClipBoundary2d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeConic.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCurve3d.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCurves2d.cpp"
@@ -160,6 +161,7 @@ endif()
 
 add_library(acgi STATIC
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiDrawable.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiEntityDrawable.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiWorldDraw.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiTextEngine.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgi/AcGiLineType.cpp"
@@ -178,6 +180,7 @@ add_library(acgs STATIC
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsSelectionManager.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/DocumentSceneBridge.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/EcsScene.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acgs/model/DrawContext.cpp"
 )
 target_include_directories(acgs
     PUBLIC "${CMAKE_SOURCE_DIR}/lib"
