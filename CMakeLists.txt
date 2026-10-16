@@ -171,6 +171,7 @@ target_include_directories(acgi PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acgi PUBLIC acge)
 
 add_library(acgs STATIC
+    "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsPicking.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsOrbitCamera.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsView.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acgs/AcGsManager.cpp"
