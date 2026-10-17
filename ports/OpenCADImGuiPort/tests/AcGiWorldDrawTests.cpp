@@ -43,6 +43,52 @@ int main()
     assert(std::abs(geometry.strokes.back().points.back().x - 1.0) < 1.0e-9);
     draw.popClipBoundary();
 
+    acdb::TessellatedEntity transformedClipGeometry;
+    acgs::ViewportDraw transformedClipContext(transformedClipGeometry);
+    AcGiWorldDraw transformedClipDraw(transformedClipContext);
+    AcGiClipBoundary transformedClip;
+    transformedClip.m_aptPoints = {{0.0, -1.0}, {1.0, 1.0}};
+    transformedClip.m_xToClipSpace =
+        AcGeMatrix3d::setToTranslation({-6.0, 0.0, 0.0});
+    transformedClip.m_xInverseBlockRefXForm =
+        AcGeMatrix3d::setToTranslation({-4.0, 0.0, 0.0});
+    assert(transformedClipDraw.pushClipBoundary(&transformedClip));
+    assert(!transformedClipDraw.worldLine({9.0, 0.0, 0.0},
+                                          {11.0, 0.0, 0.0}));
+    assert(transformedClipGeometry.strokes.size() == 1);
+    assert(std::abs(transformedClipGeometry.strokes[0].points.front().x -
+                    10.0) < 1.0e-9);
+    assert(std::abs(transformedClipGeometry.strokes[0].points.back().x -
+                    11.0) < 1.0e-9);
+    transformedClipDraw.popClipBoundary();
+
+    acdb::TessellatedEntity depthClipGeometry;
+    acgs::ViewportDraw depthClipContext(depthClipGeometry);
+    AcGiWorldDraw depthClipDraw(depthClipContext);
+    AcGiClipBoundary depthClip;
+    depthClip.m_aptPoints = {{-2.0, -2.0}, {2.0, 2.0}};
+    depthClip.m_bClippingFront = true;
+    depthClip.m_bClippingBack = true;
+    depthClip.m_dFrontClipZ = 1.0;
+    depthClip.m_dBackClipZ = -1.0;
+    assert(depthClipDraw.pushClipBoundary(&depthClip));
+    assert(!depthClipDraw.worldLine({0.0, 0.0, -2.0},
+                                    {0.0, 0.0, 2.0}));
+    assert(depthClipGeometry.strokes.size() == 1);
+    assert(std::abs(depthClipGeometry.strokes[0].points.front().z + 1.0) <
+           1.0e-9);
+    assert(std::abs(depthClipGeometry.strokes[0].points.back().z - 1.0) <
+           1.0e-9);
+    assert(!depthClipDraw.worldTriangle({-1.0, -1.0, -2.0},
+                                        {1.0, -1.0, 2.0},
+                                        {0.0, 1.0, 0.0}));
+    assert(!depthClipGeometry.fills.empty());
+    for (const acdb::Triangle &triangle : depthClipGeometry.fills)
+        for (const AcGePoint3d point : {triangle.a, triangle.b, triangle.c})
+            assert(point.z >= -1.0 - 1.0e-9 &&
+                   point.z <= 1.0 + 1.0e-9);
+    depthClipDraw.popClipBoundary();
+
     const Adesk::UInt32 instances[] = {2};
     const Adesk::UInt32 vertexCounts[] = {4};
     const AcGePoint3d positions[] = {{0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}};

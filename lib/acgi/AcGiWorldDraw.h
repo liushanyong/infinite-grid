@@ -738,10 +738,20 @@ private:
     struct ClipFrame
     {
         std::vector<AcGePoint2d> boundary;
-        AcGePoint3d origin;
-        AcGeVector3d u;
-        AcGeVector3d v;
+        AcGeMatrix3d toClipSpace;
+        bool clippingFront = false;
+        bool clippingBack = false;
+        double frontClipZ = 0.0;
+        double backClipZ = 0.0;
         double winding = 1.0;
+
+        bool coordinates(const AcGePoint3d &world,
+                         AcGePoint3d &clip) const
+        {
+            clip = transformBy(world, toClipSpace);
+            return std::isfinite(clip.x) && std::isfinite(clip.y) &&
+                   std::isfinite(clip.z);
+        }
     };
 
     bool pushClipBoundaryImpl(const AcGiClipBoundary *boundary);

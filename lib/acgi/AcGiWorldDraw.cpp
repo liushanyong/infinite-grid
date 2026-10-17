@@ -632,7 +632,6 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
     const double normalLengthSq = normal.lengthSq();
     if (!(normalLengthSq > 1.0e-24) || !std::isfinite(normalLengthSq))
         return false;
-    normal = normal.normal();
 
     AcGeClipBoundary2d validated;
     try
@@ -656,9 +655,15 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
 
     ClipFrame frame;
     frame.boundary = validated.vertices();
-    frame.origin = boundary->m_ptPoint;
-    frame.u = AcGeCircArc3d(frame.origin, normal, 1.0).referenceAxis();
-    frame.v = normal.crossProduct(frame.u);
+    frame.toClipSpace =
+        boundary->m_xToClipSpace * boundary->m_xInverseBlockRefXForm;
+    frame.clippingFront = boundary->m_bClippingFront;
+    frame.clippingBack = boundary->m_bClippingBack;
+    frame.frontClipZ = boundary->m_dFrontClipZ;
+    frame.backClipZ = boundary->m_dBackClipZ;
+    if ((frame.clippingFront && !std::isfinite(frame.frontClipZ)) ||
+        (frame.clippingBack && !std::isfinite(frame.backClipZ)))
+        return false;
     long double areaTwice = 0.0L;
     for (size_t index = 0; index < frame.boundary.size(); ++index)
     {
@@ -685,9 +690,15 @@ bool AcGiWorldDraw::clipPoint(AcGePoint3d &point) const
 {
     for (const ClipFrame &frame : clipStack_)
     {
-        const AcGeVector3d relative = point - frame.origin;
-        const AcGePoint2d projected(relative.dotProduct(frame.u),
-                                    relative.dotProduct(frame.v));
+        AcGePoint3d clipPoint;
+        if (!frame.coordinates(point, clipPoint))
+            return false;
+        if ((frame.clippingFront &&
+             clipPoint.z > frame.frontClipZ + 1.0e-10) ||
+            (frame.clippingBack &&
+             clipPoint.z < frame.backClipZ - 1.0e-10))
+            return false;
+        const AcGePoint2d projected(clipPoint.x, clipPoint.y);
         for (size_t index = 0; index < frame.boundary.size(); ++index)
         {
             const AcGePoint2d &a = frame.boundary[index];
@@ -704,12 +715,13 @@ bool AcGiWorldDraw::clipSegment(AcGePoint3d &start, AcGePoint3d &end) const
 {
     for (const ClipFrame &frame : clipStack_)
     {
-        const AcGeVector3d startRelative = start - frame.origin;
-        const AcGeVector3d endRelative = end - frame.origin;
-        const AcGePoint2d a0(startRelative.dotProduct(frame.u),
-                             startRelative.dotProduct(frame.v));
-        const AcGePoint2d a1(endRelative.dotProduct(frame.u),
-                             endRelative.dotProduct(frame.v));
+        AcGePoint3d clipStart;
+        AcGePoint3d clipEnd;
+        if (!frame.coordinates(start, clipStart) ||
+            !frame.coordinates(end, clipEnd))
+            return false;
+        const AcGePoint2d a0(clipStart.x, clipStart.y);
+        const AcGePoint2d a1(clipEnd.x, clipEnd.y);
         double first = 0.0;
         double last = 1.0;
         for (size_t index = 0; index < frame.boundary.size(); ++index)
@@ -735,6 +747,28 @@ bool AcGiWorldDraw::clipSegment(AcGePoint3d &start, AcGePoint3d &end) const
                     last = std::min(last, t);
             }
         }
+        const auto clipDepth = [&](double planeZ, bool keepBelow) {
+            const double z0 = keepBelow ? clipStart.z : -clipStart.z;
+            const double z1 = keepBelow ? clipEnd.z : -clipEnd.z;
+            const double boundaryZ = keepBelow ? planeZ : -planeZ;
+            const double d0 = boundaryZ - z0;
+            const double d1 = boundaryZ - z1;
+            if (d0 < -1.0e-10 && d1 < -1.0e-10)
+                return false;
+            if ((d0 < -1.0e-10) != (d1 < -1.0e-10))
+            {
+                const double t = std::clamp(d0 / (d0 - d1), 0.0, 1.0);
+                if (d0 < -1.0e-10)
+                    first = std::max(first, t);
+                else
+                    last = std::min(last, t);
+            }
+            return first <= last;
+        };
+        if ((frame.clippingFront &&
+             !clipDepth(frame.frontClipZ, true)) ||
+            (frame.clippingBack && !clipDepth(frame.backClipZ, false)))
+            return false;
         if (first > last)
             return false;
         const AcGePoint3d originalStart = start;
@@ -758,9 +792,10 @@ AcGiWorldDraw::clipPolygon(std::vector<AcGePoint3d> polygon) const
             const AcGePoint2d &edgeEnd =
                 frame.boundary[(edgeIndex + 1) % frame.boundary.size()];
             const auto side = [&](const AcGePoint3d &point) {
-                const AcGeVector3d relative = point - frame.origin;
-                const AcGePoint2d projected(relative.dotProduct(frame.u),
-                                            relative.dotProduct(frame.v));
+                AcGePoint3d clipPoint;
+                if (!frame.coordinates(point, clipPoint))
+                    return std::numeric_limits<long double>::quiet_NaN();
+                const AcGePoint2d projected(clipPoint.x, clipPoint.y);
                 return signedDistance(edgeStart, edgeEnd, projected,
                                       frame.winding);
             };
@@ -791,6 +826,52 @@ AcGiWorldDraw::clipPolygon(std::vector<AcGePoint3d> polygon) const
             }
             polygon = std::move(output);
         }
+        const auto clipDepth = [&](double planeZ, bool keepBelow) {
+            if (polygon.empty())
+                return;
+            std::vector<AcGePoint3d> output;
+            output.reserve(polygon.size() + 1);
+            AcGePoint3d previous = polygon.back();
+            AcGePoint3d previousClip;
+            if (!frame.coordinates(previous, previousClip))
+            {
+                polygon.clear();
+                return;
+            }
+            long double previousSide =
+                keepBelow ? planeZ - previousClip.z
+                          : previousClip.z - planeZ;
+            for (const AcGePoint3d &current : polygon)
+            {
+                AcGePoint3d currentClip;
+                if (!frame.coordinates(current, currentClip))
+                {
+                    polygon.clear();
+                    return;
+                }
+                const long double currentSide =
+                    keepBelow ? planeZ - currentClip.z
+                              : currentClip.z - planeZ;
+                const bool previousInside = previousSide >= -1.0e-10L;
+                const bool currentInside = currentSide >= -1.0e-10L;
+                if (previousInside != currentInside)
+                {
+                    const double t = static_cast<double>(std::clamp(
+                        previousSide / (previousSide - currentSide),
+                        0.0L, 1.0L));
+                    output.push_back(previous + (current - previous) * t);
+                }
+                if (currentInside)
+                    output.push_back(current);
+                previous = current;
+                previousSide = currentSide;
+            }
+            polygon = std::move(output);
+        };
+        if (frame.clippingFront)
+            clipDepth(frame.frontClipZ, true);
+        if (frame.clippingBack)
+            clipDepth(frame.backClipZ, false);
     }
     return polygon;
 }
