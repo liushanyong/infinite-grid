@@ -34,6 +34,15 @@ int main()
     assert(geometry.strokes.size() == 2);
     assert(std::abs(geometry.strokes.back().points.front().x + 1.0) < 1.0e-9);
 
+    AcGiClipBoundary rectangularClip;
+    rectangularClip.m_aptPoints = {{-1.0, -1.0}, {1.0, 1.0}};
+    assert(draw.pushClipBoundary(&rectangularClip));
+    assert(!draw.worldLine({-2.0, 0.0, 0.0}, {2.0, 0.0, 0.0}));
+    assert(geometry.strokes.size() == 3);
+    assert(std::abs(geometry.strokes.back().points.front().x + 1.0) < 1.0e-9);
+    assert(std::abs(geometry.strokes.back().points.back().x - 1.0) < 1.0e-9);
+    draw.popClipBoundary();
+
     const Adesk::UInt32 instances[] = {2};
     const Adesk::UInt32 vertexCounts[] = {4};
     const AcGePoint3d positions[] = {{0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}};

@@ -175,9 +175,10 @@ interface requires a different encoding.
 
 `AcGiWorldDraw` records world-space primitives into the existing stroke,
 triangle, and point sink. Its `pushClipBoundary`/`popClipBoundary` stack clips
-world lines, polylines, points, and triangles against strictly convex planar
-boundaries in either winding. Clip-space matrices and front/back depth limits
-are retained in the port structure but are not interpreted.
+world lines, polylines, points, and triangles against two-corner rectangular or
+strictly convex planar boundaries in either winding. Clip-space matrices and
+front/back depth limits are retained in the port structure but are not
+interpreted.
 
 `polyPolygon` expands the documented grouped shape counts and insertion
 positions, ear-clips simple planar concave outlines, and carries fill/outline

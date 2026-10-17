@@ -623,9 +623,9 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
 {
     if (boundary == nullptr)
         return false;
-    const std::vector<AcGePoint2d> &points =
+    const std::vector<AcGePoint2d> &inputPoints =
         boundary->m_aptPoints.empty() ? boundary->points : boundary->m_aptPoints;
-    if (points.size() < 3)
+    if (inputPoints.size() < 2)
         return false;
 
     AcGeVector3d normal = boundary->m_vNormal;
@@ -637,6 +637,16 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
     AcGeClipBoundary2d validated;
     try
     {
+        std::vector<AcGePoint2d> points = inputPoints;
+        if (points.size() == 2)
+        {
+            const double minX = std::min(points[0].x, points[1].x);
+            const double minY = std::min(points[0].y, points[1].y);
+            const double maxX = std::max(points[0].x, points[1].x);
+            const double maxY = std::max(points[0].y, points[1].y);
+            points = {{minX, minY}, {maxX, minY},
+                      {maxX, maxY}, {minX, maxY}};
+        }
         validated.set(points);
     }
     catch (const std::exception &)
