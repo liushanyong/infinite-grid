@@ -464,7 +464,7 @@ bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
             const AcGiPixelBGRA32 &pixel = pixels[row * width + column];
             float alpha = 1.0f;
             if (transparencyMode == kTransparency1Bit)
-                alpha = pixel.a == 0 ? 0.0f : 1.0f;
+                alpha = pixel.a == 255 ? 1.0f : 0.0f;
             else if (transparencyMode == kTransparency8Bit)
                 alpha = static_cast<float>(pixel.a) / 255.0f;
             if (alpha == 0.0f)

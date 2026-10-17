@@ -155,6 +155,31 @@ int main()
     assert(std::abs(imageGeometry.fills.front().common.color.alpha() -
                     128.0f / 255.0f) < 1.0e-5f);
 
+    acdb::TessellatedEntity binaryAlphaGeometry;
+    acgs::ViewportDraw binaryAlphaContext(binaryAlphaGeometry);
+    AcGiWorldDraw binaryAlphaDraw(binaryAlphaContext);
+    const AcGiPixelBGRA32 binaryAlphaPixels[] = {
+        {0, 0, 255, 0}, {0, 255, 0, 254}, {255, 0, 0, 255}};
+    const AcGiImageBGRA32 binaryAlphaImage(3, 1, binaryAlphaPixels);
+    assert(!binaryAlphaDraw.image(
+        binaryAlphaImage, {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, AcGiGeometry::kTransparency1Bit));
+    assert(binaryAlphaGeometry.fills.size() == 2);
+    assert(binaryAlphaGeometry.fills.front().common.color.renderColor().b >
+           0.99f);
+    assert(binaryAlphaGeometry.fills.front().common.color.renderColor().r <
+           0.01f);
+
+    acdb::TessellatedEntity opaqueModeGeometry;
+    acgs::ViewportDraw opaqueModeContext(opaqueModeGeometry);
+    AcGiWorldDraw opaqueModeDraw(opaqueModeContext);
+    assert(!opaqueModeDraw.image(
+        binaryAlphaImage, {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, AcGiGeometry::kTransparencyOff));
+    assert(opaqueModeGeometry.fills.size() == 6);
+    assert(std::abs(opaqueModeGeometry.fills.front().common.color.alpha() -
+                    1.0f) < 1.0e-5f);
+
     acdb::TessellatedEntity edgeGeometry;
     acgs::ViewportDraw edgeContext(edgeGeometry);
     AcGiWorldDraw edgeDraw(edgeContext);
