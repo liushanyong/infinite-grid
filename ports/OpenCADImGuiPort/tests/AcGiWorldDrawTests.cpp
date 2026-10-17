@@ -44,6 +44,49 @@ int main()
     assert(std::abs(geometry.strokes.back().points.back().x - 1.0) < 1.0e-9);
     draw.popClipBoundary();
 
+    acdb::TessellatedEntity concaveClipGeometry;
+    acgs::ViewportDraw concaveClipContext(concaveClipGeometry);
+    AcGiWorldDraw concaveClipDraw(concaveClipContext);
+    AcGiClipBoundary concaveClip;
+    concaveClip.m_aptPoints = {
+        {0.0, 0.0}, {4.0, 0.0}, {4.0, 4.0}, {3.0, 4.0},
+        {3.0, 1.0}, {1.0, 1.0}, {1.0, 4.0}, {0.0, 4.0}};
+    assert(concaveClipDraw.pushClipBoundary(&concaveClip));
+    assert(!concaveClipDraw.worldLine({-1.0, 2.0, 0.0},
+                                      {5.0, 2.0, 0.0}));
+    assert(concaveClipGeometry.strokes.size() == 2);
+    assert(std::abs(concaveClipGeometry.strokes[0].points.front().x) < 1.0e-9);
+    assert(std::abs(concaveClipGeometry.strokes[0].points.back().x - 1.0) <
+           1.0e-9);
+    assert(std::abs(concaveClipGeometry.strokes[1].points.front().x - 3.0) <
+           1.0e-9);
+    assert(std::abs(concaveClipGeometry.strokes[1].points.back().x - 4.0) <
+           1.0e-9);
+    assert(!concaveClipDraw.worldPoint({2.0, 2.0, 0.0}));
+    assert(!concaveClipDraw.worldPoint({0.5, 2.0, 0.0}));
+    assert(concaveClipGeometry.points.size() == 1);
+    assert(!concaveClipDraw.worldTriangle({-5.0, -2.0, 0.0},
+                                          {9.0, -2.0, 0.0},
+                                          {2.0, 8.0, 0.0}));
+    double concaveFillArea = 0.0;
+    for (const acdb::Triangle &triangle : concaveClipGeometry.fills)
+    {
+        const double area =
+            std::abs((triangle.b.x - triangle.a.x) *
+                         (triangle.c.y - triangle.a.y) -
+                     (triangle.b.y - triangle.a.y) *
+                         (triangle.c.x - triangle.a.x)) *
+            0.5;
+        concaveFillArea += area;
+        const double centroidX =
+            (triangle.a.x + triangle.b.x + triangle.c.x) / 3.0;
+        const double centroidY =
+            (triangle.a.y + triangle.b.y + triangle.c.y) / 3.0;
+        assert(!(centroidX > 1.0 && centroidX < 3.0 && centroidY > 1.0));
+    }
+    assert(std::abs(concaveFillArea - 10.0) < 1.0e-8);
+    concaveClipDraw.popClipBoundary();
+
     acdb::TessellatedEntity boundaryDisplayGeometry;
     acgs::ViewportDraw boundaryDisplayContext(boundaryDisplayGeometry);
     AcGiWorldDraw boundaryDisplayDraw(boundaryDisplayContext);
