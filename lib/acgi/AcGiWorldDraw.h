@@ -27,9 +27,9 @@
 // worldPolyline with a closed flag, worldTriangle, worldInfiniteLine for
 // Ray/XLine overlay semantics); viewport/screen transform behaviors and the
 // behaviors-only APIs collapse to their world-space form; clip boundaries
-// support convex polygons, clip-space transforms, depth limits, and optional
-// outlines; mesh/shell consume supported color, linetype, visibility, and
-// normal arrays; image is rasterized as a bounded per-pixel triangle
+// support simple concave polygons, clip-space transforms, depth limits, and
+// optional outlines; mesh/shell consume supported color, linetype, visibility,
+// and normal arrays; image is rasterized as a bounded per-pixel triangle
 // approximation; polypoint emits real point primitives instead of ARX's
 // degenerate two-point strokes.
 // edge() accepts a value-semantic subset of planar curves rather than native
