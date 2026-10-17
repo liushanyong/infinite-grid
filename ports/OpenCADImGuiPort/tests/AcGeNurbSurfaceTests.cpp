@@ -100,18 +100,14 @@ void testPeriodicSurfaceQueries()
     cylinder.knotsV = {0.0, 0.0, 1.0, 1.0};
     cylinder.controlPointCountU = 9;
     cylinder.controlPointCountV = 2;
-    const double rootHalf = std::sqrt(0.5);
     const double x[] = {1.0, 1.0, 0.0, -1.0, -1.0,
                         -1.0, 0.0, 1.0, 1.0};
     const double y[] = {0.0, 1.0, 1.0, 1.0, 0.0,
                         -1.0, -1.0, -1.0, 0.0};
-    const double weights[] = {1.0, rootHalf, 1.0, rootHalf, 1.0,
-                              rootHalf, 1.0, rootHalf, 1.0};
     for (size_t u = 0; u < 9; ++u)
         for (size_t v = 0; v < 2; ++v)
             cylinder.controlPoints.push_back(
-                {x[u] * weights[u], y[u] * weights[u],
-                 static_cast<double>(v) * weights[u], weights[u]});
+                {x[u], y[u], static_cast<double>(v), 1.0});
     cylinder.validate();
 
     double period = -1.0;

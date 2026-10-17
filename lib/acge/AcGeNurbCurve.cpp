@@ -92,15 +92,16 @@ bool collectDiscontinuities(const std::vector<double> &knots, int degree,
             const size_t next = after;
             if (first > 0 && next < knots.size())
             {
-                const double delta =
-                    std::min(knot - knots[first - 1],
-                             knots[next] - knot) * 1.0e-6;
+                const double leftParam =
+                    std::nextafter(knot, knots[first - 1]);
+                const double rightParam =
+                    std::nextafter(knot, knots[next]);
                 const auto leftDerivative =
-                    derivativesAt(knot - delta, 1).at(1);
+                    derivativesAt(leftParam, 1).at(1);
                 const auto rightDerivative =
-                    derivativesAt(knot + delta, 1).at(1);
+                    derivativesAt(rightParam, 1).at(1);
                 const bool positionsMatch =
-                    pointAt(knot - delta).distanceTo(pointAt(knot + delta)) <=
+                    pointAt(leftParam).distanceTo(pointAt(rightParam)) <=
                     tol.equalPoint();
                 const bool continuous =
                     positionsMatch &&

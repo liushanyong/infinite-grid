@@ -844,7 +844,7 @@ bool nurbsSurfaceIsPeriodic(const AcGeNurbsSurface3d &surface, bool inU,
         const auto end = surface.derivativesAt(u1, v1, 1, 1);
         const AcGeVector3d &tangentStart = inU ? start[1][0] : start[0][1];
         const AcGeVector3d &tangentEnd = inU ? end[1][0] : end[0][1];
-        if (start[0][0].distanceTo(end[0][0]) > tol.equalPoint() ||
+        if ((start[0][0] - end[0][0]).length() > tol.equalPoint() ||
             !tangentStart.isEqualTo(tangentEnd, tol))
             return false;
     }
