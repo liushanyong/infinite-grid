@@ -107,6 +107,11 @@ void testSurfaceEvaluation()
     const AcGeVector3d virtualNormal = surface.normalAt(0.5, 0.5);
     near((virtualNormal - normal).length(), 0.0);
     near(surface.evalPoint({0.5, 0.5}).z, point.z);
+    const AcGePoint3d pointOnly =
+        surface.evalPoint({0.5, 0.5}, 0, derivatives, normal);
+    near(pointOnly.z, point.z);
+    assert(derivatives.empty());
+    near(normal.length(), 1.0);
 
     const UnboundedPatch unbounded;
     const AcGePoint3d unboundedPoint =

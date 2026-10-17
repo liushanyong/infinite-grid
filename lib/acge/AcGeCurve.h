@@ -147,6 +147,12 @@ public:
     AcGePoint3d evalPoint(const AcGePoint2d &param, int derivativeOrder,
                           AcGeVector3dArray &derivatives) const
     {
+        if (derivativeOrder < 0 || derivativeOrder > 2)
+            throw std::invalid_argument(
+                "AcGeSurface evalPoint supports derivative orders 0 through 2.");
+        derivatives.clear();
+        if (derivativeOrder == 0)
+            return pointAt(param.x, param.y);
         AcGeVector3d ignoredNormal;
         return evalPoint(param, derivativeOrder, derivatives, ignoredNormal);
     }
@@ -160,8 +166,6 @@ public:
                 "AcGeSurface evalPoint supports derivative orders 0 through 2.");
         derivatives.clear();
         const AcGePoint3d point = pointAt(param.x, param.y);
-        if (derivativeOrder == 0)
-            return point;
 
         const double uSpan = maxParameterU() - minParameterU();
         const double vSpan = maxParameterV() - minParameterV();
@@ -230,13 +234,16 @@ public:
 
         const AcGeVector3d du = d1u(param.x, param.y);
         const AcGeVector3d dv = d1v(param.x, param.y);
-        derivatives = {du, dv};
+        if (derivativeOrder > 0)
+            derivatives = {du, dv};
         const AcGeVector3d cross = du.crossProduct(dv);
         const double normalLength = cross.length();
         if (normalLength <= 64.0 * std::numeric_limits<double>::epsilon() *
                                 du.length() * dv.length())
             throw std::domain_error("AcGeSurface normal is singular.");
         normal = cross / normalLength;
+        if (derivativeOrder == 0)
+            return point;
         if (derivativeOrder == 2)
         {
             AcGeVector3d duv;
