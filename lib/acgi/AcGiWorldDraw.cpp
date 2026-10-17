@@ -429,6 +429,160 @@ bool triangulatePolygonWithHoles(
     return !triangles.empty();
 }
 
+long double cross2d(const AcGePoint2d &a, const AcGePoint2d &b,
+                    const AcGePoint2d &c)
+{
+    return (static_cast<long double>(b.x) - a.x) *
+               (static_cast<long double>(c.y) - a.y) -
+           (static_cast<long double>(b.y) - a.y) *
+               (static_cast<long double>(c.x) - a.x);
+}
+
+long double polygonAreaTwice(const std::vector<AcGePoint2d> &polygon)
+{
+    long double area = 0.0L;
+    for (size_t index = 0; index < polygon.size(); ++index)
+    {
+        const AcGePoint2d &a = polygon[index];
+        const AcGePoint2d &b = polygon[(index + 1) % polygon.size()];
+        area += static_cast<long double>(a.x) * b.y -
+                static_cast<long double>(a.y) * b.x;
+    }
+    return area;
+}
+
+bool pointOnSegment2d(const AcGePoint2d &a, const AcGePoint2d &b,
+                       const AcGePoint2d &point, double tolerance)
+{
+    const long double edgeLength = std::hypot(b.x - a.x, b.y - a.y);
+    return std::abs(cross2d(a, b, point)) <= tolerance * edgeLength &&
+           point.x >= std::min(a.x, b.x) - tolerance &&
+           point.x <= std::max(a.x, b.x) + tolerance &&
+           point.y >= std::min(a.y, b.y) - tolerance &&
+           point.y <= std::max(a.y, b.y) + tolerance;
+}
+
+bool segmentsIntersect2d(const AcGePoint2d &a, const AcGePoint2d &b,
+                         const AcGePoint2d &c, const AcGePoint2d &d,
+                         double tolerance)
+{
+    const long double abTolerance =
+        tolerance * std::hypot(b.x - a.x, b.y - a.y);
+    const long double cdTolerance =
+        tolerance * std::hypot(d.x - c.x, d.y - c.y);
+    const long double o1 = cross2d(a, b, c);
+    const long double o2 = cross2d(a, b, d);
+    const long double o3 = cross2d(c, d, a);
+    const long double o4 = cross2d(c, d, b);
+    if (((o1 > abTolerance && o2 < -abTolerance) ||
+         (o1 < -abTolerance && o2 > abTolerance)) &&
+        ((o3 > cdTolerance && o4 < -cdTolerance) ||
+         (o3 < -cdTolerance && o4 > cdTolerance)))
+        return true;
+    return pointOnSegment2d(a, b, c, tolerance) ||
+           pointOnSegment2d(a, b, d, tolerance) ||
+           pointOnSegment2d(c, d, a, tolerance) ||
+           pointOnSegment2d(c, d, b, tolerance);
+}
+
+bool normalizeClipPolygon(std::vector<AcGePoint2d> &polygon)
+{
+    if (polygon.size() < 3)
+        return false;
+    for (const AcGePoint2d &point : polygon)
+        if (!std::isfinite(point.x) || !std::isfinite(point.y))
+            return false;
+    if (polygon.front().distanceTo(polygon.back()) <= 1.0e-10)
+        polygon.pop_back();
+    if (polygon.size() < 3)
+        return false;
+    for (size_t index = 0; index < polygon.size();)
+    {
+        const size_t next = (index + 1) % polygon.size();
+        if (polygon[index].distanceTo(polygon[next]) <= 1.0e-10)
+        {
+            polygon.erase(polygon.begin() +
+                          static_cast<std::ptrdiff_t>(next));
+            if (polygon.size() < 3)
+                return false;
+            if (next == 0)
+                index = 0;
+        }
+        else
+        {
+            ++index;
+        }
+    }
+    bool changed = true;
+    while (changed && polygon.size() > 3)
+    {
+        changed = false;
+        for (size_t index = 0; index < polygon.size(); ++index)
+        {
+            const AcGePoint2d &previous =
+                polygon[(index + polygon.size() - 1) % polygon.size()];
+            const AcGePoint2d &current = polygon[index];
+            const AcGePoint2d &next = polygon[(index + 1) % polygon.size()];
+            const double scale =
+                std::hypot(current.x - previous.x, current.y - previous.y) +
+                std::hypot(next.x - current.x, next.y - current.y);
+            if (std::abs(cross2d(previous, current, next)) <=
+                    1.0e-10 * scale &&
+                (current.x - previous.x) * (current.x - next.x) +
+                        (current.y - previous.y) * (current.y - next.y) <=
+                    1.0e-10)
+            {
+                polygon.erase(polygon.begin() +
+                              static_cast<std::ptrdiff_t>(index));
+                changed = true;
+                break;
+            }
+        }
+    }
+    if (polygon.size() < 3 || std::abs(polygonAreaTwice(polygon)) <= 1.0e-20L)
+        return false;
+
+    const double tolerance = 1.0e-10;
+    for (size_t first = 0; first < polygon.size(); ++first)
+    {
+        const size_t firstNext = (first + 1) % polygon.size();
+        for (size_t second = first + 1; second < polygon.size(); ++second)
+        {
+            const size_t secondNext = (second + 1) % polygon.size();
+            if (first == second || firstNext == second ||
+                secondNext == first)
+                continue;
+            if (segmentsIntersect2d(polygon[first], polygon[firstNext],
+                                    polygon[second], polygon[secondNext],
+                                    tolerance))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool pointInSimplePolygon(const std::vector<AcGePoint2d> &polygon,
+                          const AcGePoint2d &point)
+{
+    bool inside = false;
+    for (size_t index = 0, previous = polygon.size() - 1;
+         index < polygon.size(); previous = index++)
+    {
+        const AcGePoint2d &a = polygon[previous];
+        const AcGePoint2d &b = polygon[index];
+        if (pointOnSegment2d(a, b, point, 1.0e-10))
+            return true;
+        if ((a.y > point.y) != (b.y > point.y))
+        {
+            const double intersectionX =
+                a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
+            if (point.x < intersectionX)
+                inside = !inside;
+        }
+    }
+    return inside;
+}
+
 double ccwNormalized(double angle)
 {
     const double wrapped = std::fmod(angle, kTwoPi);
@@ -614,11 +768,12 @@ bool AcGiWorldDraw::worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
 {
     AcGePoint3d start = apply(from);
     AcGePoint3d end = apply(to);
-    if (!clipSegment(start, end))
-        return false;
-    acdb::Stroke &stroke = sink().addStroke();
-    stroke.points = {start, end};
-    applyTraits(stroke);
+    for (const auto &[clippedStart, clippedEnd] : clipSegment(start, end))
+    {
+        acdb::Stroke &stroke = sink().addStroke();
+        stroke.points = {clippedStart, clippedEnd};
+        applyTraits(stroke);
+    }
     return false;
 }
 
@@ -856,13 +1011,16 @@ bool AcGiWorldDraw::edge(const std::vector<AcGiEdge2d> &edges)
 bool AcGiWorldDraw::worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                   const AcGePoint3d &c, bool fillIs3DFace)
 {
-    std::vector<AcGePoint3d> clipped = clipPolygon({apply(a), apply(b), apply(c)});
-    for (size_t index = 2; index < clipped.size(); ++index)
+    for (const std::vector<AcGePoint3d> &clipped :
+         clipPolygon({apply(a), apply(b), apply(c)}))
     {
-        acdb::Triangle triangle{{}, clipped[0], clipped[index - 1],
-                                clipped[index]};
-        applyTraits(triangle, fillIs3DFace);
-        sink().appendTriangle(triangle);
+        for (size_t index = 2; index < clipped.size(); ++index)
+        {
+            acdb::Triangle triangle{{}, clipped[0], clipped[index - 1],
+                                    clipped[index]};
+            applyTraits(triangle, fillIs3DFace);
+            sink().appendTriangle(triangle);
+        }
     }
     return false;
 }
@@ -915,28 +1073,21 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
     if (!(normalLengthSq > 1.0e-24) || !std::isfinite(normalLengthSq))
         return false;
 
-    AcGeClipBoundary2d validated;
-    try
+    std::vector<AcGePoint2d> points = inputPoints;
+    if (points.size() == 2)
     {
-        std::vector<AcGePoint2d> points = inputPoints;
-        if (points.size() == 2)
-        {
-            const double minX = std::min(points[0].x, points[1].x);
-            const double minY = std::min(points[0].y, points[1].y);
-            const double maxX = std::max(points[0].x, points[1].x);
-            const double maxY = std::max(points[0].y, points[1].y);
-            points = {{minX, minY}, {maxX, minY},
-                      {maxX, maxY}, {minX, maxY}};
-        }
-        validated.set(points);
+        const double minX = std::min(points[0].x, points[1].x);
+        const double minY = std::min(points[0].y, points[1].y);
+        const double maxX = std::max(points[0].x, points[1].x);
+        const double maxY = std::max(points[0].y, points[1].y);
+        points = {{minX, minY}, {maxX, minY},
+                  {maxX, maxY}, {minX, maxY}};
     }
-    catch (const std::exception &)
-    {
+    if (!normalizeClipPolygon(points))
         return false;
-    }
 
     ClipFrame frame;
-    frame.boundary = validated.vertices();
+    frame.boundary = std::move(points);
     frame.toClipSpace =
         boundary->m_xToClipSpace * boundary->m_xInverseBlockRefXForm;
     frame.clippingFront = boundary->m_bClippingFront;
@@ -946,18 +1097,34 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
     if ((frame.clippingFront && !std::isfinite(frame.frontClipZ)) ||
         (frame.clippingBack && !std::isfinite(frame.backClipZ)))
         return false;
-    long double areaTwice = 0.0L;
-    for (size_t index = 0; index < frame.boundary.size(); ++index)
-    {
-        const AcGePoint2d &current = frame.boundary[index];
-        const AcGePoint2d &next =
-            frame.boundary[(index + 1) % frame.boundary.size()];
-        areaTwice += static_cast<long double>(current.x) * next.y -
-                     static_cast<long double>(current.y) * next.x;
-    }
+    const long double areaTwice = polygonAreaTwice(frame.boundary);
     if (!std::isfinite(areaTwice) || areaTwice == 0.0L)
         return false;
     frame.winding = areaTwice > 0.0L ? 1.0 : -1.0;
+    int turnSign = 0;
+    for (size_t index = 0; index < frame.boundary.size(); ++index)
+    {
+        const AcGePoint2d &previous =
+            frame.boundary[(index + frame.boundary.size() - 1) %
+                           frame.boundary.size()];
+        const AcGePoint2d &current = frame.boundary[index];
+        const AcGePoint2d &next =
+            frame.boundary[(index + 1) % frame.boundary.size()];
+        const long double turn = cross2d(previous, current, next);
+        if (std::abs(turn) <= 1.0e-10L)
+            continue;
+        const int currentSign = turn > 0.0L ? 1 : -1;
+        if (turnSign != 0 && currentSign != turnSign)
+            frame.convex = false;
+        turnSign = currentSign;
+    }
+    std::vector<AcGePoint3d> boundary3d;
+    boundary3d.reserve(frame.boundary.size());
+    for (const AcGePoint2d &point : frame.boundary)
+        boundary3d.emplace_back(point.x, point.y, 0.0);
+    frame.triangles = triangulatePolygon(boundary3d);
+    if (frame.triangles.empty())
+        return false;
     std::vector<AcGePoint3d> displayBoundary;
     if (boundary->m_bDrawBoundary)
     {
@@ -1007,181 +1174,292 @@ bool AcGiWorldDraw::clipPoint(AcGePoint3d &point) const
              clipPoint.z < frame.backClipZ - 1.0e-10))
             return false;
         const AcGePoint2d projected(clipPoint.x, clipPoint.y);
-        for (size_t index = 0; index < frame.boundary.size(); ++index)
-        {
-            const AcGePoint2d &a = frame.boundary[index];
-            const AcGePoint2d &b =
-                frame.boundary[(index + 1) % frame.boundary.size()];
-            if (signedDistance(a, b, projected, frame.winding) < -1.0e-10L)
-                return false;
-        }
+        if (!pointInSimplePolygon(frame.boundary, projected))
+            return false;
     }
     return true;
 }
 
-bool AcGiWorldDraw::clipSegment(AcGePoint3d &start, AcGePoint3d &end) const
+std::vector<std::pair<AcGePoint3d, AcGePoint3d>>
+AcGiWorldDraw::clipSegment(const AcGePoint3d &start,
+                           const AcGePoint3d &end) const
 {
+    const AcGeVector3d direction = end - start;
+    std::vector<std::pair<double, double>> ranges{{0.0, 1.0}};
     for (const ClipFrame &frame : clipStack_)
     {
-        AcGePoint3d clipStart;
-        AcGePoint3d clipEnd;
-        if (!frame.coordinates(start, clipStart) ||
-            !frame.coordinates(end, clipEnd))
-            return false;
-        const AcGePoint2d a0(clipStart.x, clipStart.y);
-        const AcGePoint2d a1(clipEnd.x, clipEnd.y);
-        double first = 0.0;
-        double last = 1.0;
-        for (size_t index = 0; index < frame.boundary.size(); ++index)
+        std::vector<std::pair<double, double>> clippedRanges;
+        for (const auto &[rangeStart, rangeEnd] : ranges)
         {
-            const AcGePoint2d &edgeStart = frame.boundary[index];
-            const AcGePoint2d &edgeEnd =
-                frame.boundary[(index + 1) % frame.boundary.size()];
-            const long double d0 =
-                signedDistance(edgeStart, edgeEnd, a0, frame.winding);
-            const long double d1 =
-                signedDistance(edgeStart, edgeEnd, a1, frame.winding);
-            if (!std::isfinite(d0) || !std::isfinite(d1))
-                return false;
-            if (d0 < -1.0e-10L && d1 < -1.0e-10L)
-                return false;
-            if ((d0 < -1.0e-10L) != (d1 < -1.0e-10L))
+            const AcGePoint3d worldStart = start + direction * rangeStart;
+            const AcGePoint3d worldEnd = start + direction * rangeEnd;
+            AcGePoint3d clipStart;
+            AcGePoint3d clipEnd;
+            if (!frame.coordinates(worldStart, clipStart) ||
+                !frame.coordinates(worldEnd, clipEnd))
+                continue;
+            const AcGeVector2d segmentDirection(clipEnd.x - clipStart.x,
+                                                clipEnd.y - clipStart.y);
+            std::vector<double> breaks{0.0, 1.0};
+            for (size_t index = 0; index < frame.boundary.size(); ++index)
             {
-                const double t = static_cast<double>(
-                    std::clamp(d0 / (d0 - d1), 0.0L, 1.0L));
-                if (d0 < -1.0e-10L)
-                    first = std::max(first, t);
-                else
-                    last = std::min(last, t);
+                const AcGePoint2d &edgeStart = frame.boundary[index];
+                const AcGePoint2d &edgeEnd =
+                    frame.boundary[(index + 1) % frame.boundary.size()];
+                const AcGeVector2d edgeDirection =
+                    edgeEnd - edgeStart;
+                const AcGeVector2d offset =
+                    edgeStart - AcGePoint2d(clipStart.x, clipStart.y);
+                const double denominator =
+                    segmentDirection.x * edgeDirection.y -
+                    segmentDirection.y * edgeDirection.x;
+                if (std::abs(denominator) > 1.0e-14)
+                {
+                    const double t =
+                        (offset.x * edgeDirection.y -
+                         offset.y * edgeDirection.x) /
+                        denominator;
+                    const double u =
+                        (offset.x * segmentDirection.y -
+                         offset.y * segmentDirection.x) /
+                        denominator;
+                    if (t > 1.0e-12 && t < 1.0 - 1.0e-12 &&
+                        u >= -1.0e-12 && u <= 1.0 + 1.0e-12)
+                        breaks.push_back(t);
+                }
+                else if (std::abs(offset.x * segmentDirection.y -
+                                  offset.y * segmentDirection.x) <= 1.0e-12)
+                {
+                    const double lengthSq = segmentDirection.lengthSq();
+                    if (lengthSq > 1.0e-24)
+                    {
+                        const AcGePoint2d origin(clipStart.x, clipStart.y);
+                        for (const AcGePoint2d &point : {edgeStart, edgeEnd})
+                        {
+                            const double t =
+                                (point - origin).dotProduct(segmentDirection) /
+                                lengthSq;
+                            if (t > 1.0e-12 && t < 1.0 - 1.0e-12)
+                                breaks.push_back(t);
+                        }
+                    }
+                }
+            }
+            const double deltaZ = clipEnd.z - clipStart.z;
+            if (std::abs(deltaZ) > 1.0e-14)
+            {
+                if (frame.clippingFront)
+                {
+                    const double t =
+                        (frame.frontClipZ - clipStart.z) / deltaZ;
+                    if (t > 1.0e-12 && t < 1.0 - 1.0e-12)
+                        breaks.push_back(t);
+                }
+                if (frame.clippingBack)
+                {
+                    const double t =
+                        (frame.backClipZ - clipStart.z) / deltaZ;
+                    if (t > 1.0e-12 && t < 1.0 - 1.0e-12)
+                        breaks.push_back(t);
+                }
+            }
+            std::sort(breaks.begin(), breaks.end());
+            breaks.erase(std::unique(breaks.begin(), breaks.end(),
+                                     [](double a, double b) {
+                                         return std::abs(a - b) <= 1.0e-12;
+                                     }),
+                         breaks.end());
+            const auto inside = [&](double t) {
+                const AcGePoint3d point =
+                    worldStart + (worldEnd - worldStart) * t;
+                AcGePoint3d clip;
+                if (!frame.coordinates(point, clip) ||
+                    (frame.clippingFront &&
+                     clip.z > frame.frontClipZ + 1.0e-10) ||
+                    (frame.clippingBack &&
+                     clip.z < frame.backClipZ - 1.0e-10))
+                    return false;
+                return pointInSimplePolygon(
+                    frame.boundary, AcGePoint2d(clip.x, clip.y));
+            };
+            for (size_t index = 1; index < breaks.size(); ++index)
+            {
+                const double localStart = breaks[index - 1];
+                const double localEnd = breaks[index];
+                if (localEnd - localStart <= 1.0e-12 ||
+                    !inside((localStart + localEnd) * 0.5))
+                    continue;
+                clippedRanges.emplace_back(
+                    rangeStart + (rangeEnd - rangeStart) * localStart,
+                    rangeStart + (rangeEnd - rangeStart) * localEnd);
             }
         }
-        const auto clipDepth = [&](double planeZ, bool keepBelow) {
-            const double z0 = keepBelow ? clipStart.z : -clipStart.z;
-            const double z1 = keepBelow ? clipEnd.z : -clipEnd.z;
-            const double boundaryZ = keepBelow ? planeZ : -planeZ;
-            const double d0 = boundaryZ - z0;
-            const double d1 = boundaryZ - z1;
-            if (d0 < -1.0e-10 && d1 < -1.0e-10)
-                return false;
-            if ((d0 < -1.0e-10) != (d1 < -1.0e-10))
-            {
-                const double t = std::clamp(d0 / (d0 - d1), 0.0, 1.0);
-                if (d0 < -1.0e-10)
-                    first = std::max(first, t);
-                else
-                    last = std::min(last, t);
-            }
-            return first <= last;
-        };
-        if ((frame.clippingFront &&
-             !clipDepth(frame.frontClipZ, true)) ||
-            (frame.clippingBack && !clipDepth(frame.backClipZ, false)))
-            return false;
-        if (first > last)
-            return false;
-        const AcGePoint3d originalStart = start;
-        const AcGeVector3d direction = end - start;
-        start = originalStart + direction * first;
-        end = originalStart + direction * last;
+        std::sort(clippedRanges.begin(), clippedRanges.end());
+        ranges.clear();
+        for (const auto &range : clippedRanges)
+        {
+            if (!ranges.empty() &&
+                range.first <= ranges.back().second + 1.0e-12)
+                ranges.back().second =
+                    std::max(ranges.back().second, range.second);
+            else
+                ranges.push_back(range);
+        }
+        if (ranges.empty())
+            break;
     }
-    return true;
+    std::vector<std::pair<AcGePoint3d, AcGePoint3d>> result;
+    result.reserve(ranges.size());
+    for (const auto &[first, last] : ranges)
+        result.emplace_back(start + direction * first,
+                            start + direction * last);
+    return result;
 }
 
-std::vector<AcGePoint3d>
+std::vector<std::vector<AcGePoint3d>>
 AcGiWorldDraw::clipPolygon(std::vector<AcGePoint3d> polygon) const
 {
+    std::vector<std::vector<AcGePoint3d>> components;
+    if (polygon.size() < 3)
+        return components;
+    components.push_back(std::move(polygon));
     for (const ClipFrame &frame : clipStack_)
     {
-        for (size_t edgeIndex = 0;
-             edgeIndex < frame.boundary.size() && !polygon.empty();
-             ++edgeIndex)
-        {
-            const AcGePoint2d &edgeStart = frame.boundary[edgeIndex];
-            const AcGePoint2d &edgeEnd =
-                frame.boundary[(edgeIndex + 1) % frame.boundary.size()];
-            const auto side = [&](const AcGePoint3d &point) {
-                AcGePoint3d clipPoint;
-                if (!frame.coordinates(point, clipPoint))
-                    return std::numeric_limits<long double>::quiet_NaN();
-                const AcGePoint2d projected(clipPoint.x, clipPoint.y);
-                return signedDistance(edgeStart, edgeEnd, projected,
-                                      frame.winding);
-            };
-            std::vector<AcGePoint3d> output;
-            output.reserve(polygon.size() + 1);
-            AcGePoint3d previous = polygon.back();
-            long double previousSide = side(previous);
-            if (!std::isfinite(previousSide))
-                return {};
-            for (const AcGePoint3d &current : polygon)
+        const auto clipConvex = [&](std::vector<AcGePoint3d> subject,
+                                    const std::vector<AcGePoint2d> &clipRing,
+                                    double winding) {
+            for (size_t edgeIndex = 0;
+                 edgeIndex < clipRing.size() && !subject.empty();
+                 ++edgeIndex)
             {
-                const long double currentSide = side(current);
-                if (!std::isfinite(currentSide))
-                    return {};
-                const bool previousInside = previousSide >= -1.0e-10L;
-                const bool currentInside = currentSide >= -1.0e-10L;
-                if (previousInside != currentInside)
+                const AcGePoint2d &edgeStart = clipRing[edgeIndex];
+                const AcGePoint2d &edgeEnd =
+                    clipRing[(edgeIndex + 1) % clipRing.size()];
+                const auto side = [&](const AcGePoint3d &point) {
+                    AcGePoint3d clipPoint;
+                    if (!frame.coordinates(point, clipPoint))
+                        return std::numeric_limits<long double>::quiet_NaN();
+                    return signedDistance(
+                        edgeStart, edgeEnd,
+                        AcGePoint2d(clipPoint.x, clipPoint.y), winding);
+                };
+                std::vector<AcGePoint3d> output;
+                output.reserve(subject.size() + 1);
+                AcGePoint3d previous = subject.back();
+                long double previousSide = side(previous);
+                if (!std::isfinite(previousSide))
+                    return std::vector<AcGePoint3d>{};
+                for (const AcGePoint3d &current : subject)
                 {
-                    const double t = static_cast<double>(std::clamp(
-                        previousSide / (previousSide - currentSide),
-                        0.0L, 1.0L));
-                    output.push_back(previous + (current - previous) * t);
+                    const long double currentSide = side(current);
+                    if (!std::isfinite(currentSide))
+                        return std::vector<AcGePoint3d>{};
+                    const bool previousInside = previousSide >= -1.0e-10L;
+                    const bool currentInside = currentSide >= -1.0e-10L;
+                    if (previousInside != currentInside)
+                    {
+                        const double t = static_cast<double>(std::clamp(
+                            previousSide / (previousSide - currentSide),
+                            0.0L, 1.0L));
+                        output.push_back(previous + (current - previous) * t);
+                    }
+                    if (currentInside)
+                        output.push_back(current);
+                    previous = current;
+                    previousSide = currentSide;
                 }
-                if (currentInside)
-                    output.push_back(current);
-                previous = current;
-                previousSide = currentSide;
+                subject = std::move(output);
             }
-            polygon = std::move(output);
-        }
-        const auto clipDepth = [&](double planeZ, bool keepBelow) {
-            if (polygon.empty())
-                return;
-            std::vector<AcGePoint3d> output;
-            output.reserve(polygon.size() + 1);
-            AcGePoint3d previous = polygon.back();
-            AcGePoint3d previousClip;
-            if (!frame.coordinates(previous, previousClip))
+            return subject;
+        };
+
+        std::vector<std::vector<AcGePoint3d>> clippedComponents;
+        for (const auto &component : components)
+        {
+            if (frame.convex)
             {
-                polygon.clear();
-                return;
+                std::vector<AcGePoint3d> clipped =
+                    clipConvex(component, frame.boundary, frame.winding);
+                if (clipped.size() >= 3)
+                    clippedComponents.push_back(std::move(clipped));
             }
-            long double previousSide =
-                keepBelow ? planeZ - previousClip.z
-                          : previousClip.z - planeZ;
-            for (const AcGePoint3d &current : polygon)
+            else
             {
-                AcGePoint3d currentClip;
-                if (!frame.coordinates(current, currentClip))
+                for (const auto &indices : frame.triangles)
                 {
-                    polygon.clear();
+                    const std::vector<AcGePoint2d> triangle{
+                        frame.boundary[indices[0]], frame.boundary[indices[1]],
+                        frame.boundary[indices[2]]};
+                    const double winding =
+                        cross2d(triangle[0], triangle[1], triangle[2]) > 0.0L
+                            ? 1.0
+                            : -1.0;
+                    std::vector<AcGePoint3d> clipped =
+                        clipConvex(component, triangle, winding);
+                    if (clipped.size() >= 3)
+                        clippedComponents.push_back(std::move(clipped));
+                }
+            }
+        }
+        components = std::move(clippedComponents);
+        for (std::vector<AcGePoint3d> &component : components)
+        {
+            const auto clipDepth = [&](double planeZ, bool keepBelow) {
+                if (component.empty())
+                    return;
+                std::vector<AcGePoint3d> output;
+                output.reserve(component.size() + 1);
+                AcGePoint3d previous = component.back();
+                AcGePoint3d previousClip;
+                if (!frame.coordinates(previous, previousClip))
+                {
+                    component.clear();
                     return;
                 }
-                const long double currentSide =
-                    keepBelow ? planeZ - currentClip.z
-                              : currentClip.z - planeZ;
-                const bool previousInside = previousSide >= -1.0e-10L;
-                const bool currentInside = currentSide >= -1.0e-10L;
-                if (previousInside != currentInside)
+                long double previousSide =
+                    keepBelow ? planeZ - previousClip.z
+                              : previousClip.z - planeZ;
+                for (const AcGePoint3d &current : component)
                 {
-                    const double t = static_cast<double>(std::clamp(
-                        previousSide / (previousSide - currentSide),
-                        0.0L, 1.0L));
-                    output.push_back(previous + (current - previous) * t);
+                    AcGePoint3d currentClip;
+                    if (!frame.coordinates(current, currentClip))
+                    {
+                        component.clear();
+                        return;
+                    }
+                    const long double currentSide =
+                        keepBelow ? planeZ - currentClip.z
+                                  : currentClip.z - planeZ;
+                    const bool previousInside =
+                        previousSide >= -1.0e-10L;
+                    const bool currentInside = currentSide >= -1.0e-10L;
+                    if (previousInside != currentInside)
+                    {
+                        const double t = static_cast<double>(std::clamp(
+                            previousSide / (previousSide - currentSide),
+                            0.0L, 1.0L));
+                        output.push_back(previous + (current - previous) * t);
+                    }
+                    if (currentInside)
+                        output.push_back(current);
+                    previous = current;
+                    previousSide = currentSide;
                 }
-                if (currentInside)
-                    output.push_back(current);
-                previous = current;
-                previousSide = currentSide;
-            }
-            polygon = std::move(output);
-        };
-        if (frame.clippingFront)
-            clipDepth(frame.frontClipZ, true);
-        if (frame.clippingBack)
-            clipDepth(frame.backClipZ, false);
+                component = std::move(output);
+            };
+            if (frame.clippingFront)
+                clipDepth(frame.frontClipZ, true);
+            if (frame.clippingBack)
+                clipDepth(frame.backClipZ, false);
+        }
+        components.erase(
+            std::remove_if(components.begin(), components.end(),
+                           [](const auto &component) {
+                               return component.size() < 3;
+                           }),
+            components.end());
     }
-    return polygon;
+    return components;
 }
 
 void AcGiWorldDraw::applyTraits(acdb::Stroke &stroke) const

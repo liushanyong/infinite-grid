@@ -38,6 +38,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -755,12 +756,14 @@ private:
     struct ClipFrame
     {
         std::vector<AcGePoint2d> boundary;
+        std::vector<std::array<size_t, 3>> triangles;
         AcGeMatrix3d toClipSpace;
         bool clippingFront = false;
         bool clippingBack = false;
         double frontClipZ = 0.0;
         double backClipZ = 0.0;
         double winding = 1.0;
+        bool convex = true;
 
         bool coordinates(const AcGePoint3d &world,
                          AcGePoint3d &clip) const
@@ -774,8 +777,9 @@ private:
     bool pushClipBoundaryImpl(const AcGiClipBoundary *boundary);
     void popClipBoundaryImpl();
     bool clipPoint(AcGePoint3d &point) const;
-    bool clipSegment(AcGePoint3d &start, AcGePoint3d &end) const;
-    std::vector<AcGePoint3d> clipPolygon(
+    std::vector<std::pair<AcGePoint3d, AcGePoint3d>>
+    clipSegment(const AcGePoint3d &start, const AcGePoint3d &end) const;
+    std::vector<std::vector<AcGePoint3d>> clipPolygon(
         std::vector<AcGePoint3d> polygon) const;
 
     AcGeMatrix3d currentTransform() const
