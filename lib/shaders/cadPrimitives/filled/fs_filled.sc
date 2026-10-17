@@ -1,4 +1,4 @@
-$input v_color, v_depth
+$input v_color, v_uv, v_depth
 
 #include <bgfx_shader.sh>
 #include <cadCore/depth.sh>
@@ -6,6 +6,7 @@ $input v_color, v_depth
 uniform vec4 uPrimParams;
 uniform vec4 u_material;
 uniform vec4 uDepthDisplay;
+uniform sampler2D s_albedo;
 
 void main()
 {
@@ -29,5 +30,8 @@ void main()
         gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
         return;
     }
-    gl_FragColor = vec4(v_color.rgb * u_material.rgb, v_color.a);
+    vec4 color = v_color;
+    if (uPrimParams.z > 0.5)
+        color *= texture2D(s_albedo, v_uv);
+    gl_FragColor = vec4(color.rgb * u_material.rgb, color.a);
 }

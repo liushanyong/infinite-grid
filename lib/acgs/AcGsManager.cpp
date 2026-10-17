@@ -237,6 +237,16 @@ int AcGsManager::loadMeshTextureFromMemory(const std::string &key,
                : 0;
 }
 
+std::uint32_t AcGsManager::uploadImageBGRA(const std::string &key,
+                                           std::uint32_t width,
+                                           std::uint32_t height,
+                                           const std::uint8_t *pixels)
+{
+    return device_ != nullptr
+               ? device_->uploadImageBGRA(key, width, height, pixels)
+               : 0;
+}
+
 std::uint32_t AcGsManager::createStaticMesh(
     const rendering::StaticMeshVertices &vertices)
 {

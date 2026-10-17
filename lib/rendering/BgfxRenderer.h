@@ -104,6 +104,9 @@ public:
     uint32_t loadMeshTextureFromMemory(const std::string &key,
                                        const void *data,
                                        std::size_t size) override;
+    uint32_t uploadImageBGRA(const std::string &key, uint32_t width,
+                             uint32_t height,
+                             const std::uint8_t *pixels) override;
     uint32_t createStaticMesh(const StaticMeshVertices &vertices) override;
     void destroyStaticMesh(uint32_t staticMeshId) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;

@@ -53,7 +53,53 @@
 #include "AcGiTextQueue.h"
 
 class AcGiDrawable;
-class AcGiMapper;
+
+class AcGiMapper
+{
+public:
+    enum Projection
+    {
+        kInheritProjection = 0,
+        kPlanar,
+        kBox,
+        kCylinder,
+        kSphere
+    };
+    enum Tiling
+    {
+        kInheritTiling = 0,
+        kTile,
+        kCrop,
+        kClamp,
+        kMirror
+    };
+    enum AutoTransform
+    {
+        kInheritAutoTransform = 0,
+        kNone = 0x1,
+        kObject = 0x2,
+        kModel = 0x4
+    };
+
+    void set(const AcGiMapper &mapper) { *this = mapper; }
+    void setProjection(Projection value) { projection_ = value; }
+    void setAutoTransform(AutoTransform value) { autoTransform_ = value; }
+    void setTransform(const AcGeMatrix3d &value) { transform_ = value; }
+    void setUTiling(Tiling value) { uTiling_ = value; }
+    void setVTiling(Tiling value) { vTiling_ = value; }
+    Projection projection() const { return projection_; }
+    AutoTransform autoTransform() const { return autoTransform_; }
+    const AcGeMatrix3d &transform() const { return transform_; }
+    Tiling uTiling() const { return uTiling_; }
+    Tiling vTiling() const { return vTiling_; }
+
+private:
+    Projection projection_ = kInheritProjection;
+    AutoTransform autoTransform_ = kInheritAutoTransform;
+    AcGeMatrix3d transform_;
+    Tiling uTiling_ = kInheritTiling;
+    Tiling vTiling_ = kInheritTiling;
+};
 
 // The abstract curve base is not ported yet (acge ships concrete value
 // types); the generic-curve callback binds to the future class through the
