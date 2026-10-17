@@ -68,6 +68,10 @@ public:
         return !intersectWith(other, ignored);
     }
     void getMerge(const AcGeInterval &other, AcGeInterval &result) const;
+    int subtract(const AcGeInterval &other, AcGeInterval &left,
+                 AcGeInterval &right) const;
+    bool isOverlapAtUpper(const AcGeInterval &other,
+                          AcGeInterval &overlap) const;
 
     double lowerBound() const { return m_lower; }
     double upperBound() const { return m_upper; }

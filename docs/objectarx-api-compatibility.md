@@ -70,8 +70,9 @@ interval, and parametric point/normal evaluation. Cone/surface intersections
 and advanced domain semantics remain outside this subset.
 
 `AcGeInterval` provides finite and one-sided/unbounded parameter domains,
-tolerance-aware containment, intersection, merge, and extent queries.
-Advanced periodicity and interval subtraction APIs remain unimplemented.
+tolerance-aware containment, intersection, merge, extent queries, subtraction
+into up to two remainder intervals, and upper-bound overlap queries.
+Periodic parameter normalization remains unimplemented.
 
 The existing 2D segment implementation is also exported as global
 `AcGeLineSeg2d` and now includes the documented endpoint, midpoint, blend,
