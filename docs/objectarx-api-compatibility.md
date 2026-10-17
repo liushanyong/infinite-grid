@@ -255,10 +255,11 @@ seam position and first parameter derivative); NURBS curves expose C1/G1
 discontinuity parameter queries at internal knot breaks.
 The NURBS surface exposes ObjectARX-style degree, control-grid, and knot-count
 queries; control-point, weight, and knot extraction; definition-data
-round-tripping; and validated `set` overloads. Its per-direction properties
-report open/closed/periodic and rational flags, with pole classification based
-on boundary samples. Fit-point management, periodic topology editing, and
-complete NURBS curve/surface construction overloads remain outside this subset.
+round-tripping; validated `set` overloads; and the documented raw-array
+definition constructor. Its per-direction properties report
+open/closed/periodic and rational flags, with pole classification based on
+boundary samples. Fit-point management, periodic topology editing, and other
+NURBS curve/surface construction overloads remain outside this subset.
 The common `AcGeCurve2d/3d` bases provide `evalPoint` overloads with first- and
 second-derivative output, and `AcGeSurface` provides point/partial-derivative/
 normal evaluation with derivative order 0 through 2. These base evaluators use

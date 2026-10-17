@@ -217,6 +217,14 @@ public:
 class ACGE_PORT AcGeNurbsSurface3d : public AcGeSurface
 {
 public:
+    AcGeNurbsSurface3d() = default;
+    AcGeNurbsSurface3d(
+        int degreeInU, int degreeInV, int propertiesInU, int propertiesInV,
+        int numControlPointsInU, int numControlPointsInV,
+        const AcGePoint3d controlPoints[], const double weights[],
+        const AcGeKnotVector &knotsInU, const AcGeKnotVector &knotsInV,
+        const AcGeTol &tol = AcGeTol{});
+
     size_t degreeU = 3;
     size_t degreeV = 3;
     std::vector<double> knotsU;

@@ -119,6 +119,13 @@ void testNurbsSurfaceQueries()
     near(roundTrip.pointAt(2.0, 0.5).x, surface.pointAt(2.0, 0.5).x);
     near(roundTrip.pointAt(2.0, 0.5).y, surface.pointAt(2.0, 0.5).y);
     near(roundTrip.pointAt(2.0, 0.5).z, surface.pointAt(2.0, 0.5).z);
+    const ge::AcGeNurbsSurface3d constructed(
+        definitionDegreeU, definitionDegreeV, propertiesU, propertiesV,
+        definitionCountU, definitionCountV, definitionPoints.data(),
+        definitionWeights.data(), definitionKnotsU, definitionKnotsV);
+    near(constructed.pointAt(2.0, 0.5).x, surface.pointAt(2.0, 0.5).x);
+    near(constructed.pointAt(2.0, 0.5).y, surface.pointAt(2.0, 0.5).y);
+    near(constructed.pointAt(2.0, 0.5).z, surface.pointAt(2.0, 0.5).z);
 
     AcGePoint3dArray roundTripPoints;
     AcGeDoubleArray roundTripWeights;
