@@ -2,10 +2,12 @@
 
 #include "AcGePort.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
 #include <stdexcept>
+#include <utility>
 
 #include "AcGePoint.h"
 
@@ -127,10 +129,11 @@ public:
     AcGeVector3d firstDeriv(double parameter) const
     {
         requireDefined();
-        if (!m_derivative)
-            throw std::logic_error(
-                "ExternalCurve3d has no analytic derivative.");
-        return m_derivative(parameter);
+        if (m_derivative)
+            return m_derivative(parameter);
+        const double h = 1.0e-6 * std::max(1.0, std::abs(parameter));
+        return (m_evaluator(parameter + h) - m_evaluator(parameter - h)) *
+               (0.5 / h);
     }
     bool isOwnerOfCurve() const { return m_owner; }
     AcGeExternalCurve3d &setToOwnCurve()

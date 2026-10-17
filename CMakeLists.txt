@@ -168,6 +168,7 @@ if(ACGE_BUILD_TESTS)
         AcGeCurveBoundBlockTests
         AcGeOffsetSurfaceTests
         AcGeCurveSurfIntTests
+        AcGeSurfSurfIntTests
     )
         add_executable(${test_name}
             "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/${test_name}.cpp")
