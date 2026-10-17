@@ -99,4 +99,28 @@ int main()
     assert(imageGeometry.fills.size() == 2);
     assert(std::abs(imageGeometry.fills.front().common.color.alpha() -
                     128.0f / 255.0f) < 1.0e-5f);
+
+    acdb::TessellatedEntity edgeGeometry;
+    acgs::ViewportDraw edgeContext(edgeGeometry);
+    AcGiWorldDraw edgeDraw(edgeContext);
+    const std::vector<AcGiEdge2d> edgeLoop{
+        {AcGeLineSeg2d(AcGePoint2d(0.0, 0.0), AcGePoint2d(1.0, 0.0))},
+        {AcGeLineSeg2d(AcGePoint2d(1.0, 0.0), AcGePoint2d(0.5, 1.0))},
+        {AcGeLineSeg2d(AcGePoint2d(0.5, 1.0), AcGePoint2d(0.0, 0.0))}};
+    assert(!edgeDraw.edge(edgeLoop));
+    assert(edgeGeometry.fills.empty());
+    assert(edgeGeometry.strokes.size() == edgeLoop.size());
+
+    acdb::TessellatedEntity curvedEdgeGeometry;
+    acgs::ViewportDraw curvedEdgeContext(curvedEdgeGeometry);
+    AcGiWorldDraw curvedEdgeDraw(curvedEdgeContext);
+    const std::vector<AcGiEdge2d> curvedEdges{
+        {AcGeCircArc2d(AcGePoint2d(0.0, 0.0), 1.0, 0.0, 1.5707963267948966)},
+        {AcGeEllipArc2d(AcGePoint2d(2.0, 0.0), AcGeVector2d::kXAxis,
+                        AcGeVector2d::kYAxis, 2.0, 1.0, 0.0,
+                        1.5707963267948966)}};
+    assert(!curvedEdgeDraw.edge(curvedEdges));
+    assert(curvedEdgeGeometry.fills.empty());
+    assert(curvedEdgeGeometry.strokes.size() == curvedEdges.size());
+    assert(curvedEdgeGeometry.strokes.front().points.size() > 2);
 }

@@ -8,6 +8,7 @@
 #include <climits>
 #include <limits>
 #include <map>
+#include <type_traits>
 #include <utility>
 
 // Return convention (ObjectARX contract): the primitive emitters return
@@ -486,6 +487,87 @@ bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
         }
     }
     draw_.subEntityTraits().setFrom(originalTraits);
+    return false;
+}
+
+bool AcGiWorldDraw::edge(const std::vector<AcGiEdge2d> &edges)
+{
+    if (edges.empty())
+        return true;
+
+    for (const AcGiEdge2d &edge : edges)
+    {
+        std::vector<AcGePoint3d> points;
+        std::visit(
+            [&](const auto &curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                if constexpr (std::is_same_v<Curve, AcGeLineSeg2d>)
+                {
+                    points.emplace_back(curve.startPoint().x,
+                                        curve.startPoint().y, 0.0);
+                    points.emplace_back(curve.endPoint().x,
+                                        curve.endPoint().y, 0.0);
+                }
+                else
+                {
+                    double sweep = 0.0;
+                    double radius = 0.0;
+                    if constexpr (std::is_same_v<Curve, AcGeCircArc2d>)
+                    {
+                        sweep = curve.sweep() *
+                                (curve.isClockWise() ? -1.0 : 1.0);
+                        radius = curve.radius();
+                    }
+                    else
+                    {
+                        sweep = curve.endAng() - curve.startAng();
+                        radius = curve.majorRadius();
+                    }
+                    const acdb::TesselationOptions options =
+                        context().optionsFor(radius);
+                    if (!(options.angleStep > 0.0) ||
+                        !std::isfinite(options.angleStep) ||
+                        !std::isfinite(sweep) || sweep == 0.0)
+                        return;
+                    const int maxSegments =
+                        std::clamp(options.maxSegments, 1, 65536);
+                    const int minSegments =
+                        std::clamp(options.minSegments, 1, maxSegments);
+                    const double desiredSegments =
+                        std::ceil(std::abs(sweep) / options.angleStep);
+                    const int segments =
+                        desiredSegments >= maxSegments
+                            ? maxSegments
+                            : std::max(minSegments,
+                                       static_cast<int>(desiredSegments));
+                    points.reserve(static_cast<size_t>(segments) + 1);
+                    for (int index = 0; index <= segments; ++index)
+                    {
+                        const double t =
+                            static_cast<double>(index) / segments;
+                        AcGePoint2d point;
+                        if constexpr (std::is_same_v<Curve, AcGeCircArc2d>)
+                        {
+                            const double angle =
+                                curve.startAng() + sweep * t;
+                            point = curve.pointAtAngle(angle);
+                        }
+                        else
+                        {
+                            const double angle =
+                                curve.startAng() + sweep * t;
+                            point = curve.pointAt(angle);
+                        }
+                        points.emplace_back(point.x, point.y, 0.0);
+                    }
+                }
+            },
+            edge.curve);
+        if (points.size() < 2)
+            return true;
+        if (worldPolyline(points.data(), static_cast<int>(points.size()), false))
+            return true;
+    }
     return false;
 }
 

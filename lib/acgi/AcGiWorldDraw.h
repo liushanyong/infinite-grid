@@ -32,11 +32,12 @@
 // mesh/shell consume supported color, visibility, and normal arrays; image is
 // rasterized as a bounded per-pixel triangle approximation; polypoint emits
 // real point primitives instead of ARX's degenerate two-point strokes.
-// Generic AcGeCurve2d edge loops and native GDI owner-draw uploads are not
-// implemented. AcDbPolyline already draws through acdb::worldDraw.
+// edge() accepts a value-semantic subset of planar curves rather than native
+// AcGeCurve2d pointers; native GDI owner-draw uploads are not implemented.
 
 #include <cmath>
 #include <limits>
+#include <variant>
 #include <vector>
 
 #include "arx/ArxTypes.h"
@@ -62,6 +63,13 @@ enum AcGiArcType
     kAcGiArcSimple = 0, // just the arc (not fillable)
     kAcGiArcSector,     // area bounded by the arc and its center of curvature
     kAcGiArcChord       // area bounded by the arc and its end points
+};
+
+// Value-segment subset used by the port's edge() callback; ObjectARX exposes
+// an AcGeCurve2d pointer hierarchy, which this value-semantic AcGe layer lacks.
+struct AcGiEdge2d
+{
+    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
 };
 
 enum AcGiPositionTransformBehavior
@@ -421,6 +429,8 @@ public:
         const AcGeVector3d &u, const AcGeVector3d &v,
         TransparencyMode transparencyMode = kTransparency8Bit) = 0;
 
+    virtual Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) = 0;
+
     virtual Adesk::Boolean polypoint(
         const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList,
         const AcGeVector3d * /*normal*/ = nullptr,
@@ -620,6 +630,7 @@ public:
         const AcGiImageBGRA32 &imageSource, const AcGePoint3d &position,
         const AcGeVector3d &u, const AcGeVector3d &v,
         TransparencyMode transparencyMode = kTransparency8Bit) override;
+    Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) override;
     Adesk::Boolean worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                  const AcGePoint3d &c,
                                  bool fillIs3DFace = false) override;

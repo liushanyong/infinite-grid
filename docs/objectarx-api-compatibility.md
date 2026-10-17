@@ -187,7 +187,10 @@ triangles, and emit explicitly visible edge strokes; face transparency remains
 ignored as the reference currently specifies. `image` copies BGRA pixels and
 approximates them with two colored triangles per pixel, limited to 65,536
 pixels per call. This is a CPU geometry fallback, not filtered GPU texture
-upload. Generic `AcGeCurve2d` edge loops and native GDI owner-draw uploads are
-not implemented; the latter remains a no-op, matching ObjectARX's default
-implementation. `AcDbPolyline` already has an entity-level AcGi callback path,
-so `pline` is not a missing renderer algorithm.
+upload. `edge` emits line-segment, circular-arc, and elliptical-arc edge values
+as strokes (curve tessellation is capped at 65,536 segments per edge); it does
+not accept native `AcGeCurve2d*` arrays because this port's AcGe curves are
+value types rather than a polymorphic curve hierarchy. Native GDI owner-draw
+uploads are not implemented; the callback remains a no-op, matching ObjectARX's
+default implementation. `AcDbPolyline` already has an entity-level AcGi
+callback path, so `pline` is not a missing renderer algorithm.
