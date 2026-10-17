@@ -967,6 +967,31 @@ class ACGI_PORT AcGiSubEntityTraits
 public:
     virtual ~AcGiSubEntityTraits() = default;
 
+    // ObjectARX flag sets (arxref.chm AcGiSubEntityTraits).  The traits
+    // carry the numeric values; the acgs sink stores them per primitive.
+    enum DrawFlags
+    {
+        kNoDrawFlags        =  0,
+        kDrawBackfaces      =  1,
+        kDrawHatchGroup     =  2,
+        kDrawFrontfacesOnly =  4,
+        kDrawGradientFill   =  8,
+        kDrawSolidFill      = 16,
+        kDrawNoLineWeight   = 32
+    };
+    enum ShadowFlags
+    {
+        kShadowsCastAndReceive = 0x00,
+        kShadowsDoesNotCast    = 0x01,
+        kShadowsDoesNotReceive = 0x02,
+        kShadowsIgnore = kShadowsDoesNotCast | kShadowsDoesNotReceive
+    };
+    enum SelectionFlags
+    {
+        kNoSelectionFlags = 0x00,
+        kSelectionIgnore  = 0x01
+    };
+
     virtual void setColor(const glm::vec4 &color) = 0;
     virtual void setLayer(std::string layer) = 0;
     virtual void setLineType(std::string lineType) = 0;
@@ -976,6 +1001,25 @@ public:
     virtual AcGiFillType fillType() const = 0;
     virtual void setMaterial(const acdb::AcDbObjectId &materialId) = 0;
     virtual const acdb::AcDbObjectId &materialId() const = 0;
+
+    // ---- ObjectARX AcGiSubEntityTraits gap fill (numeric contract; the
+    // sink carries the values per primitive) ----
+    virtual void setSelectionMarker(Adesk::LongPtr marker) = 0;
+    virtual void setLineTypeScale(double scale) = 0;
+    virtual void setThickness(double thickness) = 0;
+    virtual void setDrawFlags(std::uint32_t flags) { (void)flags; }
+    virtual void setShadowFlags(std::uint32_t flags) { (void)flags; }
+    virtual void setSelectionFlags(std::uint32_t flags) { (void)flags; }
+    [[nodiscard]] virtual double lineTypeScale() const { return 1.0; }
+    [[nodiscard]] virtual double thickness() const { return 0.0; }
+
+    // Pipeline-absent ARX setters mirror the ARX no-op defaults
+    // (setMapper/setFill/setPlotStyleName/setVisualStyle/setSectionable/
+    // setSelectionGeom/setTransparency are the same class of deferred
+    // protocols; transparency already rides the color alpha).
+    virtual void setMapper(const AcGiMapper * /*mapper*/) {}
+    virtual void setSectionable(bool /*sectionable*/) {}
+    virtual void setSelectionGeom(bool /*selectionFlag*/) {}
 
     // Port extension: applies the entity-common attribute set in one call.
     virtual void setFrom(const acdb::AcDbEntity &common) = 0;
@@ -1099,6 +1143,38 @@ public:
     const acdb::AcDbObjectId &materialId() const override
     {
         return gsSubEntityTraits().materialId();
+    }
+    void setSelectionMarker(Adesk::LongPtr marker) override
+    {
+        gsSubEntityTraits().setSelectionMarker(marker);
+    }
+    void setLineTypeScale(double scale) override
+    {
+        gsSubEntityTraits().setLineTypeScale(scale);
+    }
+    void setThickness(double thickness) override
+    {
+        gsSubEntityTraits().setThickness(thickness);
+    }
+    void setDrawFlags(std::uint32_t flags) override
+    {
+        gsSubEntityTraits().setDrawFlags(flags);
+    }
+    void setShadowFlags(std::uint32_t flags) override
+    {
+        gsSubEntityTraits().setShadowFlags(flags);
+    }
+    void setSelectionFlags(std::uint32_t flags) override
+    {
+        gsSubEntityTraits().setSelectionFlags(flags);
+    }
+    double lineTypeScale() const override
+    {
+        return gsSubEntityTraits().traits().lineTypeScale;
+    }
+    double thickness() const override
+    {
+        return gsSubEntityTraits().traits().thickness;
     }
     void setFrom(const acdb::AcDbEntity &common) override
     {

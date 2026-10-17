@@ -82,6 +82,14 @@ acgi ── 协议层: AcGiDrawable(regen 协议根,**AcDbEntity 继承它 — A
   AcGiTextStyle::fileName,text() 检测绑定即路由到 shxStrokes(描边字
   形=普通 stroke,非 TextRequest——消息子串选中对 SHX 无效,用范围名);
   未绑定样式回退 SDF(TTF)。构建尾部加载一次,gShxFontReady=结果。
+- **AcGiSubEntityTraits 全集补齐**(2026-10-16,缺口审计):新增
+  DrawFlags/ShadowFlags/SelectionFlags 枚举(ARX 值)与
+  setSelectionMarker/setLineTypeScale/setThickness(纯虚,值贯通
+  AcDbEntity→DrawTraits→soup primitives)+ setDrawFlags/setShadowFlags/
+  setSelectionFlags(虚默认)+ lineTypeScale()/thickness() getter +
+  setMapper/setSectionable/setSelectionGeom(ARX 同款 no-op 默认,真
+  AcGiMapper 管线直接成为覆盖)。管线缺失项按 ARX 惯例留 no-op 默认而非
+  假实现;setTransparency 不建模(透明度走颜色 alpha)。
 - **acgi raster/owner-draw 边界修订**(2026-10-16):ARX raw-pointer 形
   式 rasterImageDcUsingRawPointer 落为显式文档化 no-op 槽位
   (AcGiViewportGeometry/Draw,kTrue)——待端口 AcDbRasterImage 实体类+

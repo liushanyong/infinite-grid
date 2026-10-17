@@ -41,6 +41,12 @@ struct ACGS_PORT DrawTraits
     bool visible = true;
     bool fillEnabled = true;
     acdb::AcDbObjectId materialId;
+    double lineTypeScale = 1.0;
+    double thickness = 0.0;
+    Adesk::LongPtr selectionMarker = -1;
+    std::uint32_t shadowFlags = 0;
+    std::uint32_t selectionFlags = 0;
+    std::uint32_t drawFlags = 0;
 
     [[nodiscard]] acdb::AcDbEntity toEntityCommon() const;
     static DrawTraits from(const acdb::AcDbEntity &common);
@@ -116,6 +122,18 @@ public:
     void setVisibility(bool visible) { traits_.visible = visible; }
     void setFillEnabled(bool enabled) { traits_.fillEnabled = enabled; }
     void setMaterial(const acdb::AcDbObjectId &id) { traits_.materialId = id; }
+    void setLineTypeScale(double scale) { traits_.lineTypeScale = scale; }
+    void setThickness(double thickness) { traits_.thickness = thickness; }
+    void setSelectionMarker(Adesk::LongPtr marker)
+    {
+        traits_.selectionMarker = marker;
+    }
+    void setShadowFlags(std::uint32_t flags) { traits_.shadowFlags = flags; }
+    void setSelectionFlags(std::uint32_t flags)
+    {
+        traits_.selectionFlags = flags;
+    }
+    void setDrawFlags(std::uint32_t flags) { traits_.drawFlags = flags; }
 
     [[nodiscard]] const acdb::AcDbObjectId &materialId() const
     {

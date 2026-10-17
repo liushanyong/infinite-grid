@@ -20,6 +20,12 @@ acdb::AcDbEntity DrawTraits::toEntityCommon() const
     entity.lineWeight = lineWeight;
     entity.visible = visible;
     entity.materialId = materialId;
+    entity.lineTypeScale = lineTypeScale;
+    entity.thickness = thickness;
+    entity.selectionMarker = selectionMarker;
+    entity.shadowFlags = shadowFlags;
+    entity.selectionFlags = selectionFlags;
+    entity.drawFlags = drawFlags;
     return entity;
 }
 
@@ -34,6 +40,12 @@ DrawTraits DrawTraits::from(const acdb::AcDbEntity &common)
     traits.lineWeight = common.lineWeight;
     traits.visible = common.visible;
     traits.materialId = common.materialId;
+    traits.lineTypeScale = common.lineTypeScale;
+    traits.thickness = common.thickness;
+    traits.selectionMarker = common.selectionMarker;
+    traits.shadowFlags = common.shadowFlags;
+    traits.selectionFlags = common.selectionFlags;
+    traits.drawFlags = common.drawFlags;
     return traits;
 }
 

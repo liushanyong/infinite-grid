@@ -130,6 +130,16 @@ public:
     bool visible = true;
     AcDbObjectId materialId;
 
+    // Runtime sub-entity traits carried per primitive (ObjectARX:
+    // AcGiSubEntityTraits sets them per draw call; the value port stores
+    // them on the record so soup primitives keep per-primitive values).
+    double lineTypeScale = 1.0;
+    double thickness = 0.0;                 // DXF group 39
+    Adesk::LongPtr selectionMarker = -1;    // sub-entity pick marker
+    std::uint32_t shadowFlags = 0;          // AcGiShadowFlags bit set
+    std::uint32_t selectionFlags = 0;       // bit 0x01 = ignore in selection
+    std::uint32_t drawFlags = 0;            // AcGiDrawFlags bit set
+
 protected:
     // Protocol hooks.  The base defaults: attributes stamp the entity
     // common (kDrawableIsAnEntity), worldDraw emits nothing (concrete
