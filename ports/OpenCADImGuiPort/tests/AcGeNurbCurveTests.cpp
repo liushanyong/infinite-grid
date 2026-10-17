@@ -190,6 +190,20 @@ void testPeriodicClosedCurve()
         const AcGeVector2d d = loop.firstDeriv(u);
         assert(d.length() > kEps);
     }
+
+    AcGeNurbCurve2d clamped = loop;
+    AcGePoint2d before[17];
+    for (int i = 0; i <= 16; ++i)
+        before[i] = clamped.pointAt(i * 0.25);
+    clamped.makeNonPeriodic();
+    assert(!clamped.isPeriodic());
+    assert(clamped.numControlPoints() > loop.numControlPoints());
+    for (int i = 0; i <= 16; ++i)
+    {
+        const AcGePoint2d after = clamped.pointAt(i * 0.25);
+        assert(near(after.x, before[i].x, 1.0e-7));
+        assert(near(after.y, before[i].y, 1.0e-7));
+    }
 }
 
 void testPeriodicFormat2Normalization()
@@ -768,6 +782,59 @@ void testStructuralOps3d()
         assert(near(p.x * p.x + p.z * p.z, 1.0, 1.0e-9));
         assert(near(p.y, 0.0, 1.0e-9));
     }
+
+}
+
+void testFitPointManagement()
+{
+    AcGeNurbCurve2d curve;
+    AcGePoint2d fitPoint;
+    assert(curve.numFitPoints() == 0);
+    assert(!curve.getFitPointAt(0, fitPoint));
+    assert(!curve.buildFitData());
+    assert(!curve.purgeFitData());
+
+    const AcGePoint2dArray points{{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+    curve.setFitData(2, points);
+    assert(curve.numFitPoints() == 3);
+    assert(curve.getFitPointAt(1, fitPoint));
+    assert(near(fitPoint.x, 1.0) && near(fitPoint.y, 1.0));
+    assert(near(curve.pointAt(0.5).x, 1.0));
+    assert(near(curve.pointAt(0.5).y, 1.0));
+    assert(curve.setFitPointAt(1, {1.0, 2.0}));
+    assert(near(curve.pointAt(0.5).y, 2.0));
+    assert(curve.addFitPointAt(2, {1.5, 1.0}));
+    assert(curve.numFitPoints() == 4);
+    assert(curve.deleteFitPointAt(2));
+    assert(curve.numFitPoints() == 3);
+    assert(curve.buildFitData());
+    AcGeTol tolerance;
+    tolerance.setEqualPoint(1.0e-6);
+    assert(curve.setFitTolerance(tolerance));
+    AcGeTol retrievedTolerance;
+    assert(curve.getFitTolerance(retrievedTolerance));
+    near(retrievedTolerance.equalPoint(), 1.0e-6);
+    assert(curve.purgeFitData());
+    assert(curve.numFitPoints() == 0);
+    assert(!curve.getFitPointAt(0, fitPoint));
+    assert(near(curve.pointAt(0.5).y, 2.0));
+
+    AcGeNurbCurve3d curve3d;
+    const AcGePoint3dArray points3d{
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 1.0}, {2.0, 0.0, 0.0}};
+    curve3d.setFitData(2, points3d);
+    assert(curve3d.numFitPoints() == 3);
+    assert(near(curve3d.pointAt(0.5).z, 1.0));
+    AcGePoint3d fitPoint3d;
+    assert(curve3d.getFitPointAt(1, fitPoint3d));
+    assert(near(fitPoint3d.z, 1.0));
+    assert(curve3d.setFitPointAt(1, {1.0, 0.0, 2.0}));
+    assert(near(curve3d.pointAt(0.5).z, 2.0));
+    assert(curve3d.addFitPointAt(1, {0.5, 0.0, 1.0}));
+    assert(curve3d.deleteFitPointAt(1));
+    assert(curve3d.purgeFitData());
+    assert(curve3d.numFitPoints() == 0);
+    assert(near(curve3d.pointAt(0.5).z, 2.0));
 }
 } // namespace
 
@@ -794,5 +861,6 @@ int main()
     testJoinWith();
     testJoinWithRationalPromotion();
     testStructuralOps3d();
+    testFitPointManagement();
     return 0;
 }

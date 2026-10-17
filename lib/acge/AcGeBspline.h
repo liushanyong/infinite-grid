@@ -22,6 +22,21 @@
 #include "AcGeNurbsCore.h"
 #include "AcGeKnotVector.h"
 
+namespace AcGe
+{
+enum NurbSurfaceProperties
+{
+    kOpen = 0x01,
+    kClosed = 0x02,
+    kPeriodic = 0x04,
+    kRational = 0x08,
+    kNoPoles = 0x10,
+    kPoleAtMin = 0x20,
+    kPoleAtMax = 0x40,
+    kPoleAtBoth = 0x80
+};
+} // namespace AcGe
+
 namespace ge
 {
 
@@ -210,6 +225,13 @@ public:
     size_t controlPointCountU = 0;
     size_t controlPointCountV = 0;
 
+    size_t degreeInU() const { return degreeU; }
+    size_t degreeInV() const { return degreeV; }
+    size_t numControlPointsInU() const { return controlPointCountU; }
+    size_t numControlPointsInV() const { return controlPointCountV; }
+    size_t numKnotsInU() const { return knotsU.size(); }
+    size_t numKnotsInV() const { return knotsV.size(); }
+
     void validate() const;
 
     double minParameterU() const override { return knotsU.at(degreeU); }
@@ -243,6 +265,30 @@ public:
                        const AcGeTol &tol = AcGeTol{}) const;
     bool isPeriodicInV(double &period,
                        const AcGeTol &tol = AcGeTol{}) const;
+    int singularityInU(const AcGeTol &tol = AcGeTol{}) const;
+    int singularityInV(const AcGeTol &tol = AcGeTol{}) const;
+
+    void getControlPoints(AcGePoint3dArray &points) const;
+    void getWeights(AcGeDoubleArray &weights) const;
+    void getUKnots(AcGeKnotVector &knots) const;
+    void getVKnots(AcGeKnotVector &knots) const;
+    void getDefinition(
+        int &degreeInU, int &degreeInV, int &propertiesInU,
+        int &propertiesInV, int &numControlPointsInU,
+        int &numControlPointsInV, AcGePoint3dArray &points,
+        AcGeDoubleArray &weights, AcGeKnotVector &knotsInU,
+        AcGeKnotVector &knotsInV) const;
+    AcGeNurbsSurface3d &set(
+        int degreeInU, int degreeInV, int propertiesInU, int propertiesInV,
+        int numControlPointsInU, int numControlPointsInV,
+        const AcGePoint3d controlPoints[], const double weights[],
+        const AcGeKnotVector &knotsInU, const AcGeKnotVector &knotsInV,
+        const AcGeTol &tol = AcGeTol{});
+    AcGeNurbsSurface3d &set(
+        size_t degreeInU, size_t degreeInV, size_t numControlPointsInU,
+        size_t numControlPointsInV, const AcGePoint3dArray &controlPoints,
+        const AcGeDoubleArray &weights, const AcGeKnotVector &knotsInU,
+        const AcGeKnotVector &knotsInV);
     void getDefinitionData(
         size_t &degreeInU, size_t &degreeInV, size_t &controlPointCountInU,
         size_t &controlPointCountInV, bool &rationalInU, bool &rationalInV,

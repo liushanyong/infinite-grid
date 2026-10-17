@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -759,6 +761,235 @@ AcGeVector3d AcGeNurbsSurface3d::normalAt(double u, double v) const
                       derivatives[0][1].length())
         throw std::domain_error("NURBS surface normal is singular.");
     return normal / length;
+}
+
+namespace
+{
+int nurbsSurfaceSingularity(const AcGeNurbsSurface3d &surface, bool inU,
+                            const AcGeTol &tol)
+{
+    surface.validate();
+    const double lower =
+        inU ? surface.minParameterU() : surface.minParameterV();
+    const double upper =
+        inU ? surface.maxParameterU() : surface.maxParameterV();
+    const double otherLower =
+        inU ? surface.minParameterV() : surface.minParameterU();
+    const double otherUpper =
+        inU ? surface.maxParameterV() : surface.maxParameterU();
+    if (!(lower < upper) || !(otherLower < otherUpper) ||
+        !std::isfinite(lower) || !std::isfinite(upper) ||
+        !std::isfinite(otherLower) || !std::isfinite(otherUpper))
+        return AcGe::kNoPoles;
+
+    const auto isPole = [&](double parameter) {
+        const double samples[] = {
+            otherLower, otherLower + (otherUpper - otherLower) * 0.25,
+            otherLower + (otherUpper - otherLower) * 0.5,
+            otherLower + (otherUpper - otherLower) * 0.75, otherUpper};
+        const auto point = [&](double other) {
+            return inU ? surface.pointAt(parameter, other)
+                       : surface.pointAt(other, parameter);
+        };
+        const AcGePoint3d reference = point(samples[0]);
+        return std::all_of(std::begin(samples) + 1, std::end(samples),
+                           [&](double sample) {
+                               return point(sample).distanceTo(reference) <=
+                                      tol.equalPoint();
+                           });
+    };
+
+    const bool atMin = isPole(lower);
+    const bool atMax = isPole(upper);
+    if (atMin && atMax)
+        return AcGe::kPoleAtBoth;
+    if (atMin)
+        return AcGe::kPoleAtMin;
+    if (atMax)
+        return AcGe::kPoleAtMax;
+    return AcGe::kNoPoles;
+}
+} // namespace
+
+int AcGeNurbsSurface3d::singularityInU(const AcGeTol &tol) const
+{
+    return nurbsSurfaceSingularity(*this, true, tol);
+}
+
+int AcGeNurbsSurface3d::singularityInV(const AcGeTol &tol) const
+{
+    return nurbsSurfaceSingularity(*this, false, tol);
+}
+
+void AcGeNurbsSurface3d::getControlPoints(AcGePoint3dArray &points) const
+{
+    validate();
+    points.clear();
+    points.reserve(controlPoints.size());
+    for (const AcGePoint4d &point : controlPoints)
+        points.emplace_back(point.x, point.y, point.z);
+}
+
+void AcGeNurbsSurface3d::getWeights(AcGeDoubleArray &weights) const
+{
+    validate();
+    weights.clear();
+    if (!isRational())
+        return;
+    weights.reserve(controlPoints.size());
+    for (const AcGePoint4d &point : controlPoints)
+        weights.push_back(point.w);
+}
+
+void AcGeNurbsSurface3d::getUKnots(AcGeKnotVector &knots) const
+{
+    validate();
+    knots = AcGeKnotVector(AcGeDoubleArray(knotsU.begin(), knotsU.end()));
+}
+
+void AcGeNurbsSurface3d::getVKnots(AcGeKnotVector &knots) const
+{
+    validate();
+    knots = AcGeKnotVector(AcGeDoubleArray(knotsV.begin(), knotsV.end()));
+}
+
+void AcGeNurbsSurface3d::getDefinition(
+    int &degreeInU, int &degreeInV, int &propertiesInU, int &propertiesInV,
+    int &numControlPointsInU, int &numControlPointsInV,
+    AcGePoint3dArray &points, AcGeDoubleArray &weights,
+    AcGeKnotVector &knotsInU, AcGeKnotVector &knotsInV) const
+{
+    validate();
+    if (degreeU > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        degreeV > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        controlPointCountU >
+            static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        controlPointCountV >
+            static_cast<size_t>(std::numeric_limits<int>::max()))
+        throw std::overflow_error("NURBS surface definition exceeds int range.");
+
+    degreeInU = static_cast<int>(degreeU);
+    degreeInV = static_cast<int>(degreeV);
+    numControlPointsInU = static_cast<int>(controlPointCountU);
+    numControlPointsInV = static_cast<int>(controlPointCountV);
+    const auto properties = [&](bool inU) {
+        int result = inU ? singularityInU() : singularityInV();
+        const bool closed = inU ? isClosedInU() : isClosedInV();
+        double period = 0.0;
+        const bool periodic = inU ? isPeriodicInU(period) : isPeriodicInV(period);
+        if (closed)
+            result |= AcGe::kClosed;
+        else
+            result |= AcGe::kOpen;
+        if (periodic)
+            result |= AcGe::kPeriodic;
+        if (inU ? isRationalInU() : isRationalInV())
+            result |= AcGe::kRational;
+        return result;
+    };
+    propertiesInU = properties(true);
+    propertiesInV = properties(false);
+    getControlPoints(points);
+    getWeights(weights);
+    getUKnots(knotsInU);
+    getVKnots(knotsInV);
+}
+
+AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
+    int degreeInU, int degreeInV, int propertiesInU, int propertiesInV,
+    int numControlPointsInU, int numControlPointsInV,
+    const AcGePoint3d controlPoints[], const double weights[],
+    const AcGeKnotVector &knotsInU, const AcGeKnotVector &knotsInV,
+    const AcGeTol &tol)
+{
+    if (degreeInU < 0 || degreeInV < 0 || numControlPointsInU <= 0 ||
+        numControlPointsInV <= 0 || controlPoints == nullptr)
+        throw std::invalid_argument("Invalid NURBS surface definition.");
+    const size_t countU = static_cast<size_t>(numControlPointsInU);
+    const size_t countV = static_cast<size_t>(numControlPointsInV);
+    if (countU > std::numeric_limits<size_t>::max() / countV)
+        throw std::length_error("NURBS surface control grid is too large.");
+    const size_t count = countU * countV;
+    const bool rational =
+        (propertiesInU & AcGe::kRational) != 0 ||
+        (propertiesInV & AcGe::kRational) != 0;
+    if (rational && weights == nullptr)
+        throw std::invalid_argument(
+            "Rational NURBS surface requires a weight array.");
+
+    AcGeNurbsSurface3d candidate;
+    candidate.degreeU = static_cast<size_t>(degreeInU);
+    candidate.degreeV = static_cast<size_t>(degreeInV);
+    candidate.controlPointCountU = countU;
+    candidate.controlPointCountV = countV;
+    if (knotsInU.length() > 0)
+        candidate.knotsU.assign(knotsInU.asArrayPtr(),
+                                knotsInU.asArrayPtr() + knotsInU.length());
+    if (knotsInV.length() > 0)
+        candidate.knotsV.assign(knotsInV.asArrayPtr(),
+                                knotsInV.asArrayPtr() + knotsInV.length());
+    candidate.controlPoints.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const double weight = rational ? weights[i] : 1.0;
+        candidate.controlPoints.emplace_back(controlPoints[i].x,
+                                             controlPoints[i].y,
+                                             controlPoints[i].z, weight);
+    }
+    candidate.validate();
+    double period = 0.0;
+    if (((propertiesInU & AcGe::kPeriodic) != 0 &&
+         !candidate.isPeriodicInU(period, tol)) ||
+        ((propertiesInV & AcGe::kPeriodic) != 0 &&
+         !candidate.isPeriodicInV(period, tol)) ||
+        ((propertiesInU & AcGe::kClosed) != 0 &&
+         !candidate.isClosedInU(tol)) ||
+        ((propertiesInV & AcGe::kClosed) != 0 &&
+         !candidate.isClosedInV(tol)))
+        throw std::invalid_argument(
+            "NURBS surface properties do not match its control data.");
+
+    degreeU = candidate.degreeU;
+    degreeV = candidate.degreeV;
+    controlPointCountU = candidate.controlPointCountU;
+    controlPointCountV = candidate.controlPointCountV;
+    knotsU = std::move(candidate.knotsU);
+    knotsV = std::move(candidate.knotsV);
+    this->controlPoints = std::move(candidate.controlPoints);
+    return *this;
+}
+
+AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
+    size_t degreeInU, size_t degreeInV, size_t numControlPointsInU,
+    size_t numControlPointsInV, const AcGePoint3dArray &points,
+    const AcGeDoubleArray &weights, const AcGeKnotVector &knotsInU,
+    const AcGeKnotVector &knotsInV)
+{
+    if (numControlPointsInV != 0 &&
+        numControlPointsInU >
+            std::numeric_limits<size_t>::max() / numControlPointsInV)
+        throw std::length_error("NURBS surface control grid is too large.");
+    if (degreeInU > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        degreeInV > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        numControlPointsInU >
+            static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        numControlPointsInV >
+            static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        numControlPointsInU * numControlPointsInV != points.size())
+        throw std::invalid_argument("Invalid NURBS surface definition.");
+    if (!weights.empty() && weights.size() != points.size())
+        throw std::invalid_argument(
+            "NURBS surface weights must match control points.");
+    std::vector<double> weightData;
+    if (!weights.empty())
+        weightData.assign(weights.begin(), weights.end());
+    return set(static_cast<int>(degreeInU), static_cast<int>(degreeInV),
+               weights.empty() ? 0 : AcGe::kRational,
+               weights.empty() ? 0 : AcGe::kRational,
+               static_cast<int>(numControlPointsInU),
+               static_cast<int>(numControlPointsInV), points.data(),
+               weightData.empty() ? nullptr : weightData.data(), knotsInU,
+               knotsInV);
 }
 
 bool AcGeNurbsSurface3d::isRational() const
