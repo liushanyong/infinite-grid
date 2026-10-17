@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <utility>
 
 int main()
 {
@@ -114,12 +115,18 @@ int main()
         AcCmEntityColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))};
     const AcCmTransparency fillOpacity[] = {
         AcCmTransparency(static_cast<std::uint8_t>(255))};
+    const size_t fillsBeforePolyPolygon = geometry.fills.size();
+    const size_t strokesBeforePolyPolygon = geometry.strokes.size();
     assert(!draw.polyPolygon(1, instances, positions, vertexCounts, polygon,
                              nullptr, nullptr, fillColors, fillOpacity));
-    assert(geometry.fills.size() == 4);
-    assert(geometry.strokes.size() == 4);
-    for (const acdb::Triangle &triangle : geometry.fills)
+    assert(geometry.fills.size() == fillsBeforePolyPolygon + 4);
+    assert(geometry.strokes.size() == strokesBeforePolyPolygon + 2);
+    for (size_t index = fillsBeforePolyPolygon; index < geometry.fills.size();
+         ++index)
+    {
+        const acdb::Triangle &triangle = geometry.fills[index];
         assert(triangle.common.color.renderColor().r > 0.99f);
+    }
 
     acdb::TessellatedEntity meshGeometry;
     acgs::ViewportDraw meshContext(meshGeometry);
@@ -164,6 +171,83 @@ int main()
     assert(shellGeometry.strokes.size() == 2);
     assert(shellGeometry.strokes.front().common.lineType == "DASHED");
     assert(shellGeometry.fills[0].hasVertexColors);
+
+    acdb::TessellatedEntity shellHoleGeometry;
+    acgs::ViewportDraw shellHoleContext(shellHoleGeometry);
+    AcGiWorldDraw shellHoleDraw(shellHoleContext);
+    const AcGePoint3d shellHoleVertices[] = {
+        {0.0, 0.0, 0.0}, {4.0, 0.0, 0.0},
+        {4.0, 4.0, 0.0}, {0.0, 4.0, 0.0},
+        {1.0, 1.0, 0.0}, {1.0, 3.0, 0.0},
+        {3.0, 3.0, 0.0}, {3.0, 1.0, 0.0}};
+    const Adesk::Int32 shellHoleFaceList[] = {
+        4, 0, 1, 2, 3, -4, 4, 5, 6, 7};
+    const Adesk::UInt8 shellHoleEdgeVisibility[] = {1, 1, 1, 1, 1, 1, 1, 1};
+    AcGiEdgeData shellHoleEdges;
+    shellHoleEdges.setVisibility(shellHoleEdgeVisibility, 8);
+    assert(!shellHoleDraw.shell(8, shellHoleVertices, 10, shellHoleFaceList,
+                                &shellHoleEdges, &faces));
+    assert(shellHoleGeometry.strokes.size() == 8);
+    assert(shellHoleGeometry.fills.front().hasVertexNormals);
+    double shellHoleArea = 0.0;
+    for (const acdb::Triangle &triangle : shellHoleGeometry.fills)
+        shellHoleArea +=
+            0.5 * glm::length(glm::cross(triangle.b - triangle.a,
+                                         triangle.c - triangle.a));
+    assert(std::abs(shellHoleArea - 12.0) < 1.0e-8);
+    const auto triangleContains = [](const glm::dvec2 &point,
+                                     const acdb::Triangle &triangle) {
+        const glm::dvec2 a(triangle.a.x, triangle.a.y);
+        const glm::dvec2 b(triangle.b.x, triangle.b.y);
+        const glm::dvec2 c(triangle.c.x, triangle.c.y);
+        const auto cross = [](const glm::dvec2 &u, const glm::dvec2 &v) {
+            return u.x * v.y - u.y * v.x;
+        };
+        const double orientation = cross(b - a, c - a);
+        const double ab = cross(b - a, point - a);
+        const double bc = cross(c - b, point - b);
+        const double ca = cross(a - c, point - c);
+        return orientation >= 0.0
+                   ? ab >= -1.0e-10 && bc >= -1.0e-10 && ca >= -1.0e-10
+                   : ab <= 1.0e-10 && bc <= 1.0e-10 && ca <= 1.0e-10;
+    };
+    for (double y = 1.2; y < 2.9; y += 0.3)
+        for (double x = 1.2; x < 2.9; x += 0.3)
+            for (const acdb::Triangle &triangle : shellHoleGeometry.fills)
+                assert(!triangleContains({x, y}, triangle));
+
+    acdb::TessellatedEntity multiHoleGeometry;
+    acgs::ViewportDraw multiHoleContext(multiHoleGeometry);
+    AcGiWorldDraw multiHoleDraw(multiHoleContext);
+    const AcGePoint3d multiHoleVertices[] = {
+        {0.0, 0.0, 0.0}, {10.0, 0.0, 0.0},
+        {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0},
+        {1.0, 1.0, 0.0}, {1.0, 3.0, 0.0},
+        {3.0, 3.0, 0.0}, {3.0, 1.0, 0.0},
+        {6.0, 6.0, 0.0}, {6.0, 8.0, 0.0},
+        {8.0, 8.0, 0.0}, {8.0, 6.0, 0.0}};
+    const Adesk::Int32 multiHoleFaceList[] = {
+        4, 0, 1, 2, 3, -4, 4, 5, 6, 7, -4, 8, 9, 10, 11};
+    const Adesk::UInt8 multiHoleEdgeVisibility[] = {
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    AcGiEdgeData multiHoleEdges;
+    multiHoleEdges.setVisibility(multiHoleEdgeVisibility, 12);
+    assert(!multiHoleDraw.shell(12, multiHoleVertices, 15,
+                                multiHoleFaceList, &multiHoleEdges, &faces));
+    double multiHoleArea = 0.0;
+    for (const acdb::Triangle &triangle : multiHoleGeometry.fills)
+        multiHoleArea +=
+            0.5 * glm::length(glm::cross(triangle.b - triangle.a,
+                                         triangle.c - triangle.a));
+    assert(std::abs(multiHoleArea - 92.0) < 1.0e-8);
+    for (const auto &holeBounds :
+         {std::pair{1.0, 3.0}, std::pair{6.0, 8.0}})
+        for (double y = holeBounds.first + 0.2;
+             y < holeBounds.second - 0.1; y += 0.3)
+            for (double x = holeBounds.first + 0.2;
+                 x < holeBounds.second - 0.1; x += 0.3)
+                for (const acdb::Triangle &triangle : multiHoleGeometry.fills)
+                    assert(!triangleContains({x, y}, triangle));
 
     acdb::TessellatedEntity imageGeometry;
     acgs::ViewportDraw imageContext(imageGeometry);

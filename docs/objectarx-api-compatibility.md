@@ -188,7 +188,10 @@ true-color and visibility arrays, apply vertex colors/normals to generated
 triangles, and emit explicitly visible edge strokes with optional color and
 linetype overrides; face transparency remains ignored as the reference currently
 specifies. Face materials/mappers/layers and selection markers are not represented
-by the draw sink. The shell `pResBuf` hatch-conversion payload is not consumed.
+by the draw sink. Shell negative-count rings are treated as holes in the
+preceding face and triangulated with simple planar outer/hole contours; edge
+attributes follow face-list ring order, while face attributes exclude holes.
+The shell `pResBuf` hatch-conversion payload is not consumed.
 `image` copies BGRA pixels and
 approximates them with two colored triangles per pixel, limited to 65,536
 pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is

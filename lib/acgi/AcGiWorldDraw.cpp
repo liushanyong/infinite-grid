@@ -7,7 +7,6 @@
 #include <cmath>
 #include <climits>
 #include <limits>
-#include <map>
 #include <type_traits>
 #include <utility>
 
@@ -103,9 +102,9 @@ triangulatePolygon(const std::vector<AcGePoint3d> &vertices)
     };
     const auto insideTriangle = [&](size_t point, size_t a, size_t b,
                                     size_t c) {
-        return cross(a, b, point) >= -1.0e-12L &&
-               cross(b, c, point) >= -1.0e-12L &&
-               cross(c, a, point) >= -1.0e-12L;
+        return cross(a, b, point) > 1.0e-12L &&
+               cross(b, c, point) > 1.0e-12L &&
+               cross(c, a, point) > 1.0e-12L;
     };
 
     std::vector<std::array<size_t, 3>> triangles;
@@ -145,6 +144,289 @@ triangulatePolygon(const std::vector<AcGePoint3d> &vertices)
     }
     triangles.push_back({remaining[0], remaining[1], remaining[2]});
     return triangles;
+}
+
+bool triangulatePolygonWithHoles(
+    const AcGePoint3d *vertices, const std::vector<std::vector<size_t>> &rings,
+    std::vector<size_t> &mergedIndices,
+    std::vector<std::array<size_t, 3>> &triangles)
+{
+    if (vertices == nullptr || rings.empty() || rings.front().size() < 3)
+        return false;
+
+    const std::vector<size_t> &outer = rings.front();
+    AcGeVector3d normal;
+    for (size_t index = 0; index < outer.size(); ++index)
+    {
+        const AcGePoint3d &current = vertices[outer[index]];
+        const AcGePoint3d &next = vertices[outer[(index + 1) % outer.size()]];
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+    if (normal.isZeroLength())
+        return false;
+    normal = normal.normal();
+    const AcGePoint3d origin = vertices[outer.front()];
+    const AcGeVector3d u = AcGeCircArc3d(origin, normal, 1.0).referenceAxis();
+    const AcGeVector3d v = normal.crossProduct(u);
+    const auto project = [&](size_t index) {
+        const AcGeVector3d relative = vertices[index] - origin;
+        return AcGePoint2d(relative.dotProduct(u), relative.dotProduct(v));
+    };
+    double scale = 1.0;
+    for (const auto &ring : rings)
+    {
+        if (ring.size() < 3)
+            return false;
+        for (const size_t index : ring)
+        {
+            const AcGeVector3d relative = vertices[index] - origin;
+            if (!std::isfinite(relative.x) || !std::isfinite(relative.y) ||
+                !std::isfinite(relative.z))
+                return false;
+            scale = std::max(scale, relative.length());
+        }
+    }
+    for (const auto &ring : rings)
+        for (const size_t index : ring)
+            if (std::abs((vertices[index] - origin).dotProduct(normal)) >
+                scale * 1.0e-8)
+                return false;
+    const double tolerance = scale * 1.0e-10;
+    const auto ringArea = [&](const std::vector<size_t> &ring) {
+        long double area = 0.0L;
+        for (size_t index = 0; index < ring.size(); ++index)
+        {
+            const AcGePoint2d a = project(ring[index]);
+            const AcGePoint2d b = project(ring[(index + 1) % ring.size()]);
+            area += static_cast<long double>(a.x) * b.y -
+                    static_cast<long double>(a.y) * b.x;
+        }
+        return area;
+    };
+    std::vector<std::vector<size_t>> oriented = rings;
+    if (std::abs(ringArea(oriented.front())) <= 1.0e-24L)
+        return false;
+    if (ringArea(oriented.front()) < 0.0L)
+        std::reverse(oriented.front().begin(), oriented.front().end());
+    for (size_t index = 1; index < oriented.size(); ++index)
+    {
+        if (std::abs(ringArea(oriented[index])) <= 1.0e-24L)
+            return false;
+        if (ringArea(oriented[index]) > 0.0L)
+            std::reverse(oriented[index].begin(), oriented[index].end());
+    }
+
+    const auto pointInRing = [&](const AcGePoint2d &point,
+                                 const std::vector<size_t> &ring) {
+        bool inside = false;
+        for (size_t index = 0, previous = ring.size() - 1;
+             index < ring.size(); previous = index++)
+        {
+            const AcGePoint2d a = project(ring[previous]);
+            const AcGePoint2d b = project(ring[index]);
+            const long double cross =
+                (static_cast<long double>(b.x) - a.x) *
+                    (static_cast<long double>(point.y) - a.y) -
+                (static_cast<long double>(b.y) - a.y) *
+                    (static_cast<long double>(point.x) - a.x);
+            if (std::abs(cross) <=
+                    tolerance * std::hypot(b.x - a.x, b.y - a.y) &&
+                point.x >= std::min(a.x, b.x) - tolerance &&
+                point.x <= std::max(a.x, b.x) + tolerance &&
+                point.y >= std::min(a.y, b.y) - tolerance &&
+                point.y <= std::max(a.y, b.y) + tolerance)
+                return false;
+            if ((a.y > point.y) != (b.y > point.y))
+            {
+                const double crossingX =
+                    a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
+                if (point.x < crossingX)
+                    inside = !inside;
+            }
+        }
+        return inside;
+    };
+    const auto orientation = [](const AcGePoint2d &a, const AcGePoint2d &b,
+                                const AcGePoint2d &c) {
+        return (static_cast<long double>(b.x) - a.x) *
+                   (static_cast<long double>(c.y) - a.y) -
+               (static_cast<long double>(b.y) - a.y) *
+                   (static_cast<long double>(c.x) - a.x);
+    };
+    const auto edgeTolerance = [&](const AcGePoint2d &a,
+                                   const AcGePoint2d &b) {
+        return tolerance * std::hypot(b.x - a.x, b.y - a.y);
+    };
+    const auto onSegment = [&](const AcGePoint2d &a, const AcGePoint2d &b,
+                               const AcGePoint2d &point) {
+        return std::abs(orientation(a, b, point)) <= edgeTolerance(a, b) &&
+               point.x >= std::min(a.x, b.x) - tolerance &&
+               point.x <= std::max(a.x, b.x) + tolerance &&
+               point.y >= std::min(a.y, b.y) - tolerance &&
+               point.y <= std::max(a.y, b.y) + tolerance;
+    };
+    const auto intersects = [&](size_t aIndex, size_t bIndex, size_t cIndex,
+                                size_t dIndex) {
+        const AcGePoint2d a = project(aIndex);
+        const AcGePoint2d b = project(bIndex);
+        const AcGePoint2d c = project(cIndex);
+        const AcGePoint2d d = project(dIndex);
+        const long double o1 = orientation(a, b, c);
+        const long double o2 = orientation(a, b, d);
+        const long double o3 = orientation(c, d, a);
+        const long double o4 = orientation(c, d, b);
+        const double abTolerance = edgeTolerance(a, b);
+        const double cdTolerance = edgeTolerance(c, d);
+        if (((o1 > abTolerance && o2 < -abTolerance) ||
+             (o1 < -abTolerance && o2 > abTolerance)) &&
+            ((o3 > cdTolerance && o4 < -cdTolerance) ||
+             (o3 < -cdTolerance && o4 > cdTolerance)))
+            return true;
+        return onSegment(a, b, c) || onSegment(a, b, d) ||
+               onSegment(c, d, a) || onSegment(c, d, b);
+    };
+
+    for (size_t holeIndex = 1; holeIndex < oriented.size(); ++holeIndex)
+    {
+        const auto &hole = oriented[holeIndex];
+        if (!pointInRing(project(hole.front()), oriented.front()))
+            return false;
+        for (size_t index = 0; index < hole.size(); ++index)
+        {
+            const size_t a = hole[index];
+            const size_t b = hole[(index + 1) % hole.size()];
+            for (const auto &ring : oriented)
+                for (size_t edge = 0; edge < ring.size(); ++edge)
+                {
+                    const size_t c = ring[edge];
+                    const size_t d = ring[(edge + 1) % ring.size()];
+                    if ((a == c || a == d || b == c || b == d) &&
+                        &ring == &hole)
+                        continue;
+                    if (intersects(a, b, c, d))
+                        return false;
+                }
+        }
+    }
+    for (size_t firstHole = 1; firstHole < oriented.size(); ++firstHole)
+        for (size_t secondHole = firstHole + 1; secondHole < oriented.size();
+             ++secondHole)
+            if (pointInRing(project(oriented[firstHole].front()),
+                            oriented[secondHole]) ||
+                pointInRing(project(oriented[secondHole].front()),
+                            oriented[firstHole]))
+                return false;
+
+    mergedIndices = oriented.front();
+    std::vector<std::pair<size_t, size_t>> bridges;
+    for (size_t holeIndex = 1; holeIndex < oriented.size(); ++holeIndex)
+    {
+        const auto &hole = oriented[holeIndex];
+        size_t holePosition = 0;
+        for (size_t index = 1; index < hole.size(); ++index)
+        {
+            const AcGePoint2d candidate = project(hole[index]);
+            const AcGePoint2d selected = project(hole[holePosition]);
+            if (candidate.x > selected.x ||
+                (candidate.x == selected.x && candidate.y < selected.y))
+                holePosition = index;
+        }
+        const size_t holeVertex = hole[holePosition];
+        const AcGePoint2d holePoint = project(holeVertex);
+        size_t bestPosition = mergedIndices.size();
+        double bestDistance = std::numeric_limits<double>::infinity();
+        for (size_t candidatePosition = 0;
+             candidatePosition < mergedIndices.size(); ++candidatePosition)
+        {
+            const size_t candidateVertex = mergedIndices[candidatePosition];
+            if (candidateVertex == holeVertex)
+                continue;
+            const AcGePoint2d candidatePoint = project(candidateVertex);
+            const AcGePoint2d midpoint((holePoint.x + candidatePoint.x) * 0.5,
+                                       (holePoint.y + candidatePoint.y) * 0.5);
+            if (!pointInRing(midpoint, oriented.front()))
+                continue;
+            bool insideHole = false;
+            for (size_t otherHole = 1; otherHole < oriented.size(); ++otherHole)
+                if (pointInRing(midpoint, oriented[otherHole]))
+                {
+                    insideHole = true;
+                    break;
+                }
+            if (insideHole)
+                continue;
+
+            bool blocked = false;
+            for (const auto &ring : oriented)
+            {
+                for (size_t edge = 0; edge < ring.size(); ++edge)
+                {
+                    const size_t a = ring[edge];
+                    const size_t b = ring[(edge + 1) % ring.size()];
+                    if (a == holeVertex || b == holeVertex ||
+                        a == candidateVertex || b == candidateVertex)
+                        continue;
+                    if (intersects(holeVertex, candidateVertex, a, b))
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+                if (blocked)
+                    break;
+            }
+            for (const auto &[a, b] : bridges)
+            {
+                if (a == holeVertex || b == holeVertex ||
+                    a == candidateVertex || b == candidateVertex)
+                    continue;
+                if (intersects(holeVertex, candidateVertex, a, b))
+                {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked)
+                continue;
+            const double dx = candidatePoint.x - holePoint.x;
+            const double dy = candidatePoint.y - holePoint.y;
+            const double distance = dx * dx + dy * dy;
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestPosition = candidatePosition;
+            }
+        }
+        if (bestPosition == mergedIndices.size())
+            return false;
+
+        const size_t bridgeVertex = mergedIndices[bestPosition];
+        std::vector<size_t> merged;
+        merged.reserve(mergedIndices.size() + hole.size() + 2);
+        merged.insert(merged.end(), mergedIndices.begin(),
+                      mergedIndices.begin() +
+                          static_cast<std::ptrdiff_t>(bestPosition + 1));
+        merged.push_back(holeVertex);
+        for (size_t offset = 1; offset < hole.size(); ++offset)
+            merged.push_back(hole[(holePosition + offset) % hole.size()]);
+        merged.push_back(holeVertex);
+        merged.push_back(bridgeVertex);
+        merged.insert(merged.end(),
+                      mergedIndices.begin() +
+                          static_cast<std::ptrdiff_t>(bestPosition + 1),
+                      mergedIndices.end());
+        mergedIndices = std::move(merged);
+        bridges.emplace_back(holeVertex, bridgeVertex);
+    }
+
+    std::vector<AcGePoint3d> mergedPoints;
+    mergedPoints.reserve(mergedIndices.size());
+    for (const size_t index : mergedIndices)
+        mergedPoints.push_back(vertices[index]);
+    triangles = triangulatePolygon(mergedPoints);
+    return !triangles.empty();
 }
 
 double ccwNormalized(double angle)
@@ -1302,20 +1584,28 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
                           const Adesk::Int32 *faceList,
                           const AcGiEdgeData *edgeData,
                           const AcGiFaceData *faceData,
-                          const AcGiVertexData *vertexData)
+                          const AcGiVertexData *vertexData,
+                          const struct resbuf *resbufData,
+                          bool autoGenerateNormals)
 {
+    (void)resbufData;
     if (nbVertex == 0 || vertexList == nullptr ||
         (faceListSize != 0 && faceList == nullptr))
         return true;
 
     struct Face
     {
-        std::vector<size_t> indices;
-        bool edgesVisible = true;
+        std::vector<size_t> outer;
+        std::vector<std::vector<size_t>> holes;
+    };
+    struct Edge
+    {
+        size_t start;
+        size_t end;
     };
     std::vector<Face> faces;
-    std::vector<std::pair<size_t, size_t>> edges;
-    std::map<std::pair<size_t, size_t>, size_t> edgeIndices;
+    std::vector<Edge> edges;
+    Face *currentFace = nullptr;
     Adesk::UInt32 position = 0;
     while (position < faceListSize)
     {
@@ -1326,28 +1616,30 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
             count < 0 ? uint64_t(-int64_t(count)) : uint64_t(count);
         if (faceSize < 3 || faceSize > faceListSize - position)
             return true; // malformed face list
-        Face face;
-        face.edgesVisible = count > 0;
-        face.indices.reserve(static_cast<size_t>(faceSize));
+        if (count > 0)
+        {
+            faces.emplace_back();
+            currentFace = &faces.back();
+        }
+        else if (currentFace == nullptr)
+        {
+            return true;
+        }
+        std::vector<size_t> &ring =
+            count > 0 ? currentFace->outer : currentFace->holes.emplace_back();
+        ring.reserve(static_cast<size_t>(faceSize));
         for (uint64_t index = 0; index < faceSize; ++index)
         {
             const Adesk::Int32 vertexIndex = faceList[position++];
             if (vertexIndex < 0 ||
                 static_cast<Adesk::UInt32>(vertexIndex) >= nbVertex)
                 return true;
-            face.indices.push_back(static_cast<size_t>(vertexIndex));
+            ring.push_back(static_cast<size_t>(vertexIndex));
         }
-        for (size_t index = 0; index < face.indices.size(); ++index)
+        for (size_t index = 0; index < ring.size(); ++index)
         {
-            const size_t a = face.indices[index];
-            const size_t b = face.indices[(index + 1) % face.indices.size()];
-            const std::pair<size_t, size_t> key{std::min(a, b), std::max(a, b)};
-            auto [edge, inserted] = edgeIndices.emplace(key, edges.size());
-            if (inserted)
-                edges.push_back(key);
-            (void)edge;
+            edges.push_back({ring[index], ring[(index + 1) % ring.size()]});
         }
-        faces.push_back(std::move(face));
     }
 
     if ((faceData != nullptr &&
@@ -1380,26 +1672,34 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
     for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
     {
         const Face &face = faces[faceIndex];
+        draw_.subEntityTraits().setFrom(originalTraits);
         if (faceData != nullptr &&
             !faceData->visibility.empty() &&
             faceData->visibility[faceIndex] == 0)
             continue;
+        std::vector<std::vector<size_t>> contours;
+        contours.reserve(face.holes.size() + 1);
+        contours.push_back(face.outer);
+        contours.insert(contours.end(), face.holes.begin(), face.holes.end());
+        std::vector<size_t> mergedIndices;
+        std::vector<std::array<size_t, 3>> triangleIndices;
+        if (!triangulatePolygonWithHoles(vertexList, contours, mergedIndices,
+                                         triangleIndices))
+        {
+            draw_.subEntityTraits().setFrom(originalTraits);
+            return true;
+        }
         if (faceData != nullptr && !faceData->trueColors.empty())
             draw_.subEntityTraits().setColor(
                 faceData->trueColors[faceIndex].renderColor());
-        std::vector<AcGePoint3d> points;
-        points.reserve(face.indices.size());
-        for (const size_t index : face.indices)
-            points.push_back(vertexList[index]);
-        for (const auto &triangleIndices : triangulatePolygon(points))
+        for (const auto &triangle : triangleIndices)
         {
             const std::array<size_t, 3> indices{
-                face.indices[triangleIndices[0]],
-                face.indices[triangleIndices[1]],
-                face.indices[triangleIndices[2]]};
+                mergedIndices[triangle[0]], mergedIndices[triangle[1]],
+                mergedIndices[triangle[2]]};
             const std::array<AcGePoint3d, 3> trianglePoints{
-                points[triangleIndices[0]], points[triangleIndices[1]],
-                points[triangleIndices[2]]};
+                vertexList[indices[0]], vertexList[indices[1]],
+                vertexList[indices[2]]};
             const size_t firstFill = sink().geometry().fills.size();
             const std::array<AcGePoint3d, 3> worldPoints{
                 apply(trianglePoints[0]), apply(trianglePoints[1]),
@@ -1412,9 +1712,13 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
                 acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
                 applyVertexData(triangle, worldPoints, indices, vertexData);
                 if (vertexData == nullptr || vertexData->normals.empty())
+                {
                     if (faceData != nullptr && !faceData->normals.empty())
                         applyTriangleNormal(triangle,
                                             &faceData->normals[faceIndex]);
+                    else if (autoGenerateNormals)
+                        applyTriangleNormal(triangle);
+                }
             }
         }
     }
@@ -1426,34 +1730,20 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
          !edgeData->visibility.empty());
     if (emitEdges)
     {
-        std::vector<bool> edgeVisible(edges.size(), false);
-        for (const Face &face : faces)
-        {
-            if (!face.edgesVisible)
-                continue;
-            for (size_t index = 0; index < face.indices.size(); ++index)
-            {
-                const size_t a = face.indices[index];
-                const size_t b = face.indices[(index + 1) % face.indices.size()];
-                const size_t edgeIndex =
-                    edgeIndices.at({std::min(a, b), std::max(a, b)});
-                edgeVisible[edgeIndex] = true;
-            }
-        }
         for (size_t edgeIndex = 0; edgeIndex < edges.size(); ++edgeIndex)
         {
-            if (!edgeVisible[edgeIndex] ||
-                (!edgeData->visibility.empty() &&
-                 edgeData->visibility[edgeIndex] == 0))
+            if (!edgeData->visibility.empty() &&
+                edgeData->visibility[edgeIndex] == 0)
                 continue;
+            draw_.subEntityTraits().setFrom(originalTraits);
             if (!edgeData->trueColors.empty())
                 draw_.subEntityTraits().setColor(
                     edgeData->trueColors[edgeIndex].renderColor());
             if (!edgeData->lineTypes.empty())
                 draw_.subEntityTraits().setLineType(
                     edgeData->lineTypes[edgeIndex]);
-            const auto [a, b] = edges[edgeIndex];
-            worldLine(vertexList[a], vertexList[b]);
+            worldLine(vertexList[edges[edgeIndex].start],
+                      vertexList[edges[edgeIndex].end]);
         }
         draw_.subEntityTraits().setFrom(originalTraits);
     }

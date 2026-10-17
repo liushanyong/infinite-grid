@@ -73,6 +73,8 @@ struct AcGiEdge2d
     std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
 };
 
+struct resbuf;
+
 enum AcGiPositionTransformBehavior
 {
     kAcGiWorldPosition,
@@ -377,16 +379,17 @@ public:
                                 const AcGiVertexData *vertexData = nullptr,
                                 const bool autoGenerateNormals = true) = 0;
 
-    // ARX face-list encoding: [n, i0 .. i(n-1), m, j0 ..], fans per face; a
-    // negative count hides edges (the sign is consumed, edges are the
-    // caller's business in this port).
+    // ARX face-list encoding: positive counts start faces and following
+    // negative counts describe holes in the preceding face.
     virtual Adesk::Boolean shell(const Adesk::UInt32 nbVertex,
                                  const AcGePoint3d *vertexList,
                                  const Adesk::UInt32 faceListSize,
                                  const Adesk::Int32 *faceList,
                                  const AcGiEdgeData *edgeData = nullptr,
                                  const AcGiFaceData *faceData = nullptr,
-                                 const AcGiVertexData *vertexData = nullptr) = 0;
+                                 const AcGiVertexData *vertexData = nullptr,
+                                 const struct resbuf *resbufData = nullptr,
+                                 bool autoGenerateNormals = true) = 0;
 
     // ---- primitives (ObjectARX contract: composed over the emitters) ----
 
@@ -703,7 +706,9 @@ public:
                          const Adesk::Int32 *faceList,
                          const AcGiEdgeData *edgeData = nullptr,
                          const AcGiFaceData *faceData = nullptr,
-                         const AcGiVertexData *vertexData = nullptr) override;
+                         const AcGiVertexData *vertexData = nullptr,
+                         const struct resbuf *resbufData = nullptr,
+                         bool autoGenerateNormals = true) override;
 
     Adesk::Boolean pushModelTransform(const AcGeMatrix3d &matrix) override
     {
