@@ -714,6 +714,8 @@ void applyVertexData(acdb::Triangle &triangle,
                     static_cast<float>(weight1) +
                 glm::vec4(vertexData->trueColors[sourceIndices[2]].renderColor()) *
                     static_cast<float>(weight2);
+            triangle.vertexColors[outputIndex].a *=
+                triangle.common.color.alpha();
             triangle.hasVertexColors = true;
         }
         if (vertexData->normals.size() > sourceIndices[0] &&
@@ -731,7 +733,46 @@ void applyVertexData(acdb::Triangle &triangle,
                 triangle.hasVertexNormals = true;
             }
         }
+        const auto copyMappingCoords =
+            [&](AcGiVertexData::MapChannel channel,
+                std::array<AcGePoint3d, 3> &output, bool &hasOutput) {
+                const AcGePoint3d *coords = vertexData->mappingCoords(channel);
+                if (coords == nullptr)
+                    return;
+                output[outputIndex] =
+                    coords[sourceIndices[0]] +
+                    (coords[sourceIndices[1]] - coords[sourceIndices[0]]) *
+                        weight1 +
+                    (coords[sourceIndices[2]] - coords[sourceIndices[0]]) *
+                        weight2;
+                hasOutput = true;
+            };
+        copyMappingCoords(AcGiVertexData::kAllChannels,
+                          triangle.allMappingCoords,
+                          triangle.hasAllMappingCoords);
+        copyMappingCoords(AcGiVertexData::kMapChannels,
+                          triangle.mapMappingCoords,
+                          triangle.hasMapMappingCoords);
     }
+}
+
+bool validMappingCoords(const AcGiVertexData *vertexData, size_t vertexCount)
+{
+    if (vertexData == nullptr)
+        return true;
+    for (const AcGiVertexData::MapChannel channel :
+         {AcGiVertexData::kAllChannels, AcGiVertexData::kMapChannels})
+    {
+        const AcGePoint3d *coords = vertexData->mappingCoords(channel);
+        if (coords == nullptr)
+            continue;
+        for (size_t index = 0; index < vertexCount; ++index)
+            if (!std::isfinite(coords[index].x) ||
+                !std::isfinite(coords[index].y) ||
+                !std::isfinite(coords[index].z))
+                return false;
+    }
+    return true;
 }
 
 void applyTriangleNormal(acdb::Triangle &triangle,
@@ -1788,7 +1829,8 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
            vertexData->trueColors.size() != vertexCountSize) ||
           (!vertexData->normals.empty() &&
            vertexData->normals.size() != vertexCountSize) ||
-          !validNormals(vertexData->normals))) ||
+          !validNormals(vertexData->normals) ||
+          !validMappingCoords(vertexData, vertexCountSize))) ||
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edgeCountSize) ||
@@ -2035,7 +2077,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
            vertexData->trueColors.size() != nbVertex) ||
           (!vertexData->normals.empty() &&
            vertexData->normals.size() != nbVertex) ||
-          !validNormals(vertexData->normals))) ||
+          !validNormals(vertexData->normals) ||
+          !validMappingCoords(vertexData, nbVertex))) ||
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edges.size()) ||

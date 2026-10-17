@@ -263,9 +263,11 @@ colors/normals, and emit explicitly visible edge strokes with optional color
 and linetype overrides. Per-edge/per-face color indices, layer IDs, selection
 markers, linetype IDs, and face material IDs are retained as metadata on the
 tessellated sink primitives; they are not resolved into renderer styles yet.
-`AcGiFaceData` mapper arrays and `AcGiVertexData` mapping coordinates are
-borrowed metadata and are not consumed by the draw sink. The vertex data also
-exposes ObjectARX-style orientation accessors. Shell negative-count rings are
+`AcGiVertexData` mapping coordinates are validated and interpolated into the
+generated triangle vertices, but are not yet bound to a renderer texture
+channel. `AcGiFaceData` mapper arrays remain borrowed metadata and are not
+consumed by the draw sink. The vertex data also exposes ObjectARX-style
+orientation accessors. Shell negative-count rings are
 treated as holes in the preceding face and triangulated with simple planar
 outer/hole contours; edge attributes follow face-list ring order, while face
 attributes exclude holes. The shell `pResBuf` hatch-conversion payload is not

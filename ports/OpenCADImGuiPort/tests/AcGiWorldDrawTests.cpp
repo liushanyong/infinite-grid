@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 int main()
@@ -268,6 +269,8 @@ int main()
     assert(allMappingCoords[0].x == 0.5);
     vertices.setMappingCoords(AcGiVertexData::kMapChannels, nullptr);
     assert(vertices.mappingCoords(AcGiVertexData::kMapChannels) == nullptr);
+    vertices.setMappingCoords(AcGiVertexData::kMapChannels,
+                              mapMappingCoords);
     AcGiEdgeData edges;
     edges.setColors(edgeColors, 4);
     edges.setLayers(edgeLayers, 4);
@@ -295,6 +298,31 @@ int main()
                     128.0f / 255.0f) < 1.0e-5f);
     assert(meshGeometry.fills[0].hasVertexColors);
     assert(meshGeometry.fills[0].hasVertexNormals);
+    assert(std::abs(meshGeometry.fills[0].vertexColors[0].a -
+                    128.0f / 255.0f) < 1.0e-5f);
+    assert(meshGeometry.fills[0].hasAllMappingCoords);
+    assert(meshGeometry.fills[0].hasMapMappingCoords);
+    assert(std::abs(meshGeometry.fills[0].allMappingCoords[0].x - 0.5) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[0].x - 0.25) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[0].y - 0.25) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[1].x - 0.75) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[2].y - 0.75) <
+           1.0e-9);
+    AcGiVertexData malformedVertices = vertices;
+    AcGePoint3d invalidMappingCoords[] = {
+        {0.0, 0.0, 0.0},
+        {std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {1.0, 1.0, 0.0}};
+    malformedVertices.setMappingCoords(AcGiVertexData::kMapChannels,
+                                       invalidMappingCoords);
+    assert(meshDraw.mesh(2, 2, meshVertices, nullptr, nullptr,
+                         &malformedVertices));
+    assert(meshGeometry.fills.size() == 2);
     AcGiEdgeData malformedEdges;
     malformedEdges.setLayers(edgeLayers, 1);
     assert(meshDraw.mesh(2, 2, meshVertices, &malformedEdges));
@@ -327,6 +355,12 @@ int main()
     assert(std::abs(shellGeometry.fills.front().common.color.alpha() -
                     128.0f / 255.0f) < 1.0e-5f);
     assert(shellGeometry.fills[0].hasVertexColors);
+    assert(std::abs(shellGeometry.fills[0].vertexColors[0].a -
+                    128.0f / 255.0f) < 1.0e-5f);
+    assert(shellGeometry.fills[0].hasAllMappingCoords);
+    assert(shellGeometry.fills[0].hasMapMappingCoords);
+    assert(std::abs(shellGeometry.fills[0].mapMappingCoords[0].x - 0.25) <
+           1.0e-9);
     acdb::TessellatedEntity wireShellGeometry;
     acgs::ViewportDraw wireShellContext(wireShellGeometry);
     AcGiWorldDraw wireShellDraw(wireShellContext);

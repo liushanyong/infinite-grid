@@ -84,6 +84,10 @@ struct Triangle
     Adesk::LongPtr selectionMarker = -1;
     short colorIndex = 0;
     bool hasColorIndex = false;
+    std::array<AcGePoint3d, 3> allMappingCoords{};
+    std::array<AcGePoint3d, 3> mapMappingCoords{};
+    bool hasAllMappingCoords = false;
+    bool hasMapMappingCoords = false;
 };
 
 struct TessellatedPoint
