@@ -29,14 +29,14 @@
 // behaviors-only APIs collapse to their world-space form; clip boundaries
 // are honored as convex planar clips for world lines, polylines, points, and
 // triangles, but clip-space transforms and front/back limits are not applied;
-// polypoint emits real point
-// primitives instead of ARX's degenerate two-point strokes.  Not ported:
-// polyPolygon (needs the AcCmTransparency/fill-opacity vocabulary), image,
-// ownerDraw object upload, edge (2D-curve fill boundaries), and pline
-// (live AcDbPolyline templates draw through acdb::worldDraw at the entity
-// layer).
+// mesh/shell consume supported color, visibility, and normal arrays; image is
+// rasterized as a bounded per-pixel triangle approximation; polypoint emits
+// real point primitives instead of ARX's degenerate two-point strokes.
+// Generic AcGeCurve2d edge loops and native GDI owner-draw uploads are not
+// implemented. AcDbPolyline already draws through acdb::worldDraw.
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include "arx/ArxTypes.h"
@@ -97,19 +97,84 @@ struct AcGiPolyline
     bool closed = false;
 };
 
-// Edge/face/vertex trait arrays: accepted by mesh()/shell(), contents not
-// consumed until trait arrays land in the sink.
 struct AcGiEdgeData
 {
+    std::vector<AcCmEntityColor> trueColors;
+    std::vector<Adesk::UInt8> visibility;
+
+    void setTrueColors(const AcCmEntityColor *values, size_t count)
+    {
+        if (values == nullptr)
+            trueColors.clear();
+        else
+            trueColors.assign(values, values + count);
+    }
+    void setVisibility(const Adesk::UInt8 *values, size_t count)
+    {
+        if (values == nullptr)
+            visibility.clear();
+        else
+            visibility.assign(values, values + count);
+    }
 };
 struct AcGiFaceData
 {
+    std::vector<AcCmEntityColor> trueColors;
+    std::vector<Adesk::UInt8> visibility;
+    std::vector<AcGeVector3d> normals;
+    std::vector<AcCmTransparency> transparency;
+
+    void setTrueColors(const AcCmEntityColor *values, size_t count)
+    {
+        if (values == nullptr)
+            trueColors.clear();
+        else
+            trueColors.assign(values, values + count);
+    }
+    void setVisibility(const Adesk::UInt8 *values, size_t count)
+    {
+        if (values == nullptr)
+            visibility.clear();
+        else
+            visibility.assign(values, values + count);
+    }
+    void setNormals(const AcGeVector3d *values, size_t count)
+    {
+        if (values == nullptr)
+            normals.clear();
+        else
+            normals.assign(values, values + count);
+    }
+    void setTransparency(const AcCmTransparency *values, size_t count)
+    {
+        if (values == nullptr)
+            transparency.clear();
+        else
+            transparency.assign(values, values + count);
+    }
 };
 struct AcGiVertexData
 {
+    std::vector<AcCmEntityColor> trueColors;
+    std::vector<AcGeVector3d> normals;
+
+    void setTrueColors(const AcCmEntityColor *values, size_t count)
+    {
+        if (values == nullptr)
+            trueColors.clear();
+        else
+            trueColors.assign(values, values + count);
+    }
+    void setNormals(const AcGeVector3d *values, size_t count)
+    {
+        if (values == nullptr)
+            normals.clear();
+        else
+            normals.assign(values, values + count);
+    }
 };
 
-// Clip boundary (port subset: the polygon in the plane of the primitives).
+// Clip boundary (port subset: a convex polygonal clip plane).
 struct AcGiClipBoundary
 {
     // The ObjectARX clip-plane contract. The lower-case `points` member is
@@ -129,6 +194,52 @@ struct AcGiClipBoundary
 
 struct AcGiGdiDrawObject
 {
+};
+
+struct AcGiPixelBGRA32
+{
+    Adesk::UInt8 b = 0;
+    Adesk::UInt8 g = 0;
+    Adesk::UInt8 r = 0;
+    Adesk::UInt8 a = 255;
+};
+
+class AcGiImageBGRA32
+{
+public:
+    AcGiImageBGRA32() = default;
+    AcGiImageBGRA32(Adesk::UInt32 width, Adesk::UInt32 height,
+                    const AcGiPixelBGRA32 *pixels)
+    {
+        setImage(width, height, pixels);
+    }
+
+    const AcGiPixelBGRA32 *image() const { return pixels_.data(); }
+    Adesk::UInt32 width() const { return width_; }
+    Adesk::UInt32 height() const { return height_; }
+    void setImage(Adesk::UInt32 width, Adesk::UInt32 height,
+                  const AcGiPixelBGRA32 *pixels)
+    {
+        pixels_.clear();
+        if (pixels != nullptr && width != 0 && height != 0 &&
+            size_t(height) <= std::numeric_limits<size_t>::max() / width)
+        {
+            const size_t count = size_t(width) * height;
+            pixels_.assign(pixels, pixels + count);
+            width_ = width;
+            height_ = height;
+        }
+        else
+        {
+            width_ = 0;
+            height_ = 0;
+        }
+    }
+
+private:
+    Adesk::UInt32 width_ = 0;
+    Adesk::UInt32 height_ = 0;
+    std::vector<AcGiPixelBGRA32> pixels_;
 };
 
 // ---- AcGiGeometry: the base class for geometry toolkits ----
@@ -304,6 +415,11 @@ public:
         const AcGiLineType *outlineTypes = nullptr,
         const AcCmEntityColor *fillColors = nullptr,
         const AcCmTransparency *fillOpacities = nullptr) = 0;
+
+    virtual Adesk::Boolean image(
+        const AcGiImageBGRA32 &imageSource, const AcGePoint3d &position,
+        const AcGeVector3d &u, const AcGeVector3d &v,
+        TransparencyMode transparencyMode = kTransparency8Bit) = 0;
 
     virtual Adesk::Boolean polypoint(
         const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList,
@@ -500,6 +616,10 @@ public:
         const AcGiLineType *outlineTypes = nullptr,
         const AcCmEntityColor *fillColors = nullptr,
         const AcCmTransparency *fillOpacities = nullptr) override;
+    Adesk::Boolean image(
+        const AcGiImageBGRA32 &imageSource, const AcGePoint3d &position,
+        const AcGeVector3d &u, const AcGeVector3d &v,
+        TransparencyMode transparencyMode = kTransparency8Bit) override;
     Adesk::Boolean worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                  const AcGePoint3d &c,
                                  bool fillIs3DFace = false) override;

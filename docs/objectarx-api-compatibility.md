@@ -177,7 +177,17 @@ interface requires a different encoding.
 triangle, and point sink. Its `pushClipBoundary`/`popClipBoundary` stack clips
 world lines, polylines, points, and triangles against strictly convex planar
 boundaries in either winding. Clip-space matrices and front/back depth limits
-are retained in the port structure but are not interpreted. Image upload,
-GDI owner-draw, per-edge/per-face/per-vertex mesh traits, and `polyPolygon`
-remain outside the implemented subset; `AcDbPolyline` already has its own
-entity-level AcGi callback path.
+are retained in the port structure but are not interpreted.
+
+`polyPolygon` expands the documented grouped shape counts and insertion
+positions, ear-clips simple planar concave outlines, and carries fill/outline
+colors and alpha into the existing primitives. Mesh/shell callbacks consume
+true-color and visibility arrays, apply vertex colors/normals to generated
+triangles, and emit explicitly visible edge strokes; face transparency remains
+ignored as the reference currently specifies. `image` copies BGRA pixels and
+approximates them with two colored triangles per pixel, limited to 65,536
+pixels per call. This is a CPU geometry fallback, not filtered GPU texture
+upload. Generic `AcGeCurve2d` edge loops and native GDI owner-draw uploads are
+not implemented; the latter remains a no-op, matching ObjectARX's default
+implementation. `AcDbPolyline` already has an entity-level AcGi callback path,
+so `pline` is not a missing renderer algorithm.

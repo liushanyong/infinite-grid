@@ -50,4 +50,53 @@ int main()
     assert(geometry.strokes.size() == 4);
     for (const acdb::Triangle &triangle : geometry.fills)
         assert(triangle.common.color.renderColor().r > 0.99f);
+
+    acdb::TessellatedEntity meshGeometry;
+    acgs::ViewportDraw meshContext(meshGeometry);
+    AcGiWorldDraw meshDraw(meshContext);
+    const AcGePoint3d meshVertices[] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}};
+    const AcCmEntityColor vertexColors[] = {
+        AcCmEntityColor(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)),
+        AcCmEntityColor(glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)),
+        AcCmEntityColor(glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)),
+        AcCmEntityColor(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f))};
+    const AcGeVector3d vertexNormals[] = {
+        {0.0, 0.0, 1.0}, {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0}, {0.0, 0.0, 1.0}};
+    const Adesk::UInt8 edgeVisibility[] = {1, 0, 1, 0};
+    AcGiFaceData faces;
+    faces.setTrueColors(fillColors, 1);
+    AcGiVertexData vertices;
+    vertices.setTrueColors(vertexColors, 4);
+    vertices.setNormals(vertexNormals, 4);
+    AcGiEdgeData edges;
+    edges.setVisibility(edgeVisibility, 4);
+    assert(!meshDraw.mesh(2, 2, meshVertices, &edges, &faces, &vertices));
+    assert(meshGeometry.fills.size() == 2);
+    assert(meshGeometry.strokes.size() == 2);
+    assert(meshGeometry.fills[0].hasVertexColors);
+    assert(meshGeometry.fills[0].hasVertexNormals);
+
+    acdb::TessellatedEntity shellGeometry;
+    acgs::ViewportDraw shellContext(shellGeometry);
+    AcGiWorldDraw shellDraw(shellContext);
+    const Adesk::Int32 shellFaces[] = {4, 0, 1, 3, 2, 0};
+    assert(!shellDraw.shell(4, meshVertices, 6, shellFaces, &edges, &faces,
+                            &vertices));
+    assert(shellGeometry.fills.size() == 2);
+    assert(shellGeometry.strokes.size() == 2);
+    assert(shellGeometry.fills[0].hasVertexColors);
+
+    acdb::TessellatedEntity imageGeometry;
+    acgs::ViewportDraw imageContext(imageGeometry);
+    AcGiWorldDraw imageDraw(imageContext);
+    const AcGiPixelBGRA32 pixel{0, 0, 255, 128};
+    const AcGiImageBGRA32 image(1, 1, &pixel);
+    assert(!imageDraw.image(image, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+                            {0.0, 1.0, 0.0}));
+    assert(imageGeometry.fills.size() == 2);
+    assert(std::abs(imageGeometry.fills.front().common.color.alpha() -
+                    128.0f / 255.0f) < 1.0e-5f);
 }

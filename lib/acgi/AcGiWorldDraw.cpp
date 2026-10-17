@@ -7,6 +7,7 @@
 #include <cmath>
 #include <climits>
 #include <limits>
+#include <map>
 #include <utility>
 
 // Return convention (ObjectARX contract): the primitive emitters return
@@ -236,6 +237,94 @@ Adesk::Boolean emitArcClosure(AcGiWorldDraw &graphics,
         graphics.worldTriangle(fanOrigin, samples[index - 1], samples[index]);
     return false;
 }
+
+void applyVertexData(acdb::Triangle &triangle,
+                     const std::array<AcGePoint3d, 3> &sourcePoints,
+                     const std::array<size_t, 3> &sourceIndices,
+                     const AcGiVertexData *vertexData)
+{
+    if (vertexData == nullptr)
+        return;
+    const AcGeVector3d edge0 = sourcePoints[1] - sourcePoints[0];
+    const AcGeVector3d edge1 = sourcePoints[2] - sourcePoints[0];
+    const double d00 = edge0.dotProduct(edge0);
+    const double d01 = edge0.dotProduct(edge1);
+    const double d11 = edge1.dotProduct(edge1);
+    const double denominator = d00 * d11 - d01 * d01;
+    if (!(std::abs(denominator) > 1.0e-30) ||
+        !std::isfinite(denominator))
+        return;
+
+    const std::array<AcGePoint3d, 3> outputPoints{
+        triangle.a, triangle.b, triangle.c};
+    for (size_t outputIndex = 0; outputIndex < outputPoints.size();
+         ++outputIndex)
+    {
+        const AcGeVector3d relative = outputPoints[outputIndex] - sourcePoints[0];
+        const double d20 = relative.dotProduct(edge0);
+        const double d21 = relative.dotProduct(edge1);
+        const double weight1 = (d11 * d20 - d01 * d21) / denominator;
+        const double weight2 = (d00 * d21 - d01 * d20) / denominator;
+        const double weight0 = 1.0 - weight1 - weight2;
+        if (vertexData->trueColors.size() > sourceIndices[0] &&
+            vertexData->trueColors.size() > sourceIndices[1] &&
+            vertexData->trueColors.size() > sourceIndices[2])
+        {
+            triangle.vertexColors[outputIndex] =
+                glm::vec4(vertexData->trueColors[sourceIndices[0]].renderColor()) *
+                    static_cast<float>(weight0) +
+                glm::vec4(vertexData->trueColors[sourceIndices[1]].renderColor()) *
+                    static_cast<float>(weight1) +
+                glm::vec4(vertexData->trueColors[sourceIndices[2]].renderColor()) *
+                    static_cast<float>(weight2);
+            triangle.hasVertexColors = true;
+        }
+        if (vertexData->normals.size() > sourceIndices[0] &&
+            vertexData->normals.size() > sourceIndices[1] &&
+            vertexData->normals.size() > sourceIndices[2])
+        {
+            AcGeVector3d normal =
+                vertexData->normals[sourceIndices[0]] * weight0 +
+                vertexData->normals[sourceIndices[1]] * weight1 +
+                vertexData->normals[sourceIndices[2]] * weight2;
+            const double lengthSq = normal.lengthSq();
+            if (lengthSq > 1.0e-24 && std::isfinite(lengthSq))
+            {
+                triangle.vertexNormals[outputIndex] = normal.normal();
+                triangle.hasVertexNormals = true;
+            }
+        }
+    }
+}
+
+void applyTriangleNormal(acdb::Triangle &triangle,
+                         const AcGeVector3d *normal = nullptr)
+{
+    AcGeVector3d value;
+    if (normal != nullptr)
+        value = *normal;
+    else
+        value = glm::cross(triangle.b - triangle.a, triangle.c - triangle.a);
+    const double lengthSq = value.lengthSq();
+    if (!(lengthSq > 1.0e-24) || !std::isfinite(lengthSq))
+        return;
+    value = value.normal();
+    triangle.vertexNormals = {value, value, value};
+    triangle.hasVertexNormals = true;
+}
+
+bool validNormals(const std::vector<AcGeVector3d> &normals)
+{
+    return std::all_of(normals.begin(), normals.end(),
+                       [](const AcGeVector3d &normal) {
+                           const double lengthSq = normal.lengthSq();
+                           return std::isfinite(normal.x) &&
+                                  std::isfinite(normal.y) &&
+                                  std::isfinite(normal.z) &&
+                                  lengthSq > 1.0e-24 &&
+                                  std::isfinite(lengthSq);
+                       });
+}
 } // namespace
 
 bool AcGiWorldDraw::worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
@@ -347,6 +436,54 @@ bool AcGiWorldDraw::polyPolygon(
         }
         pointIndex += vertexCount;
         draw_.subEntityTraits().setFrom(originalTraits);
+    }
+    draw_.subEntityTraits().setFrom(originalTraits);
+    return false;
+}
+
+bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
+                          const AcGePoint3d &position,
+                          const AcGeVector3d &u, const AcGeVector3d &v,
+                          TransparencyMode transparencyMode)
+{
+    constexpr size_t kMaximumRasterPixels = 65536;
+    const size_t width = imageSource.width();
+    const size_t height = imageSource.height();
+    const AcGiPixelBGRA32 *pixels = imageSource.image();
+    if (width == 0 || height == 0 || pixels == nullptr ||
+        width > kMaximumRasterPixels / height)
+        return true;
+
+    const acdb::AcDbEntity originalTraits =
+        draw_.subEntityTraits().traits().toEntityCommon();
+    for (size_t row = 0; row < height; ++row)
+    {
+        for (size_t column = 0; column < width; ++column)
+        {
+            const AcGiPixelBGRA32 &pixel = pixels[row * width + column];
+            float alpha = 1.0f;
+            if (transparencyMode == kTransparency1Bit)
+                alpha = pixel.a == 0 ? 0.0f : 1.0f;
+            else if (transparencyMode == kTransparency8Bit)
+                alpha = static_cast<float>(pixel.a) / 255.0f;
+            if (alpha == 0.0f)
+                continue;
+
+            draw_.subEntityTraits().setColor(
+                glm::vec4(static_cast<float>(pixel.r) / 255.0f,
+                          static_cast<float>(pixel.g) / 255.0f,
+                          static_cast<float>(pixel.b) / 255.0f, alpha));
+            const double x0 = static_cast<double>(column) / width;
+            const double x1 = static_cast<double>(column + 1) / width;
+            const double y0 = static_cast<double>(row) / height;
+            const double y1 = static_cast<double>(row + 1) / height;
+            const AcGePoint3d p00 = position + u * x0 + v * y0;
+            const AcGePoint3d p10 = position + u * x1 + v * y0;
+            const AcGePoint3d p11 = position + u * x1 + v * y1;
+            const AcGePoint3d p01 = position + u * x0 + v * y1;
+            worldTriangle(p00, p10, p11);
+            worldTriangle(p00, p11, p01);
+        }
     }
     draw_.subEntityTraits().setFrom(originalTraits);
     return false;
@@ -830,28 +967,127 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
                          const AcGiVertexData *vertexData,
                          const bool autoGenerateNormals)
 {
-    (void)edgeData;
-    (void)faceData;
-    (void)vertexData;
-    (void)autoGenerateNormals;
     if (rows < 2 || columns < 2 || vertexList == nullptr)
         return true;
+    const uint64_t vertexCount = uint64_t(rows) * columns;
+    const uint64_t faceCount = uint64_t(rows - 1) * (columns - 1);
+    const uint64_t horizontalEdgeCount = uint64_t(rows) * (columns - 1);
+    const uint64_t verticalEdgeCount = uint64_t(rows - 1) * columns;
+    if (horizontalEdgeCount >
+        std::numeric_limits<uint64_t>::max() - verticalEdgeCount)
+        return true;
+    const uint64_t edgeCount = horizontalEdgeCount + verticalEdgeCount;
+    if (vertexCount > std::numeric_limits<size_t>::max() ||
+        faceCount > std::numeric_limits<size_t>::max() ||
+        edgeCount > std::numeric_limits<size_t>::max())
+        return true;
+    const size_t vertexCountSize = static_cast<size_t>(vertexCount);
+    const size_t faceCountSize = static_cast<size_t>(faceCount);
+    const size_t edgeCountSize = static_cast<size_t>(edgeCount);
+    if ((faceData != nullptr &&
+         ((!faceData->trueColors.empty() &&
+           faceData->trueColors.size() != faceCountSize) ||
+          (!faceData->visibility.empty() &&
+           faceData->visibility.size() != faceCountSize) ||
+          (!faceData->normals.empty() &&
+           faceData->normals.size() != faceCountSize) ||
+          (!faceData->transparency.empty() &&
+           faceData->transparency.size() != faceCountSize) ||
+          !validNormals(faceData->normals))) ||
+        (vertexData != nullptr &&
+         ((!vertexData->trueColors.empty() &&
+           vertexData->trueColors.size() != vertexCountSize) ||
+          (!vertexData->normals.empty() &&
+           vertexData->normals.size() != vertexCountSize) ||
+          !validNormals(vertexData->normals))) ||
+        (edgeData != nullptr &&
+         ((!edgeData->trueColors.empty() &&
+           edgeData->trueColors.size() != edgeCountSize) ||
+          (!edgeData->visibility.empty() &&
+           edgeData->visibility.size() != edgeCountSize))))
+        return true;
+
+    const acdb::AcDbEntity originalTraits =
+        draw_.subEntityTraits().traits().toEntityCommon();
+    size_t faceIndex = 0;
+    auto emitTriangle = [&](const std::array<AcGePoint3d, 3> &points,
+                            const std::array<size_t, 3> &indices) {
+        const size_t firstFill = sink().geometry().fills.size();
+        const std::array<AcGePoint3d, 3> worldPoints{
+            apply(points[0]), apply(points[1]), apply(points[2])};
+        worldTriangle(points[0], points[1], points[2]);
+        for (size_t fillIndex = firstFill;
+             fillIndex < sink().geometry().fills.size(); ++fillIndex)
+        {
+            acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
+            applyVertexData(triangle, worldPoints, indices, vertexData);
+            if (vertexData == nullptr || vertexData->normals.empty())
+            {
+                if (faceData != nullptr && !faceData->normals.empty())
+                    applyTriangleNormal(triangle, &faceData->normals[faceIndex]);
+                else if (autoGenerateNormals)
+                    applyTriangleNormal(triangle);
+            }
+        }
+    };
+
     for (Adesk::UInt32 row = 0; row + 1 < rows; ++row)
     {
         for (Adesk::UInt32 column = 0; column + 1 < columns; ++column)
         {
-            const AcGePoint3d &v00 =
-                vertexList[row * columns + column];
-            const AcGePoint3d &v01 =
-                vertexList[row * columns + column + 1];
-            const AcGePoint3d &v10 =
-                vertexList[(row + 1) * columns + column];
-            const AcGePoint3d &v11 =
-                vertexList[(row + 1) * columns + column + 1];
-            worldTriangle(v00, v01, v11);
-            worldTriangle(v00, v11, v10);
+            const size_t i00 = size_t(row) * columns + column;
+            const size_t i01 = i00 + 1;
+            const size_t i10 = size_t(row + 1) * columns + column;
+            const size_t i11 = i10 + 1;
+            if (faceData != nullptr &&
+                !faceData->visibility.empty() &&
+                faceData->visibility[faceIndex] == 0)
+            {
+                ++faceIndex;
+                continue;
+            }
+            if (faceData != nullptr && !faceData->trueColors.empty())
+                draw_.subEntityTraits().setColor(
+                    faceData->trueColors[faceIndex].renderColor());
+            const AcGePoint3d points[] = {vertexList[i00], vertexList[i01],
+                                          vertexList[i10], vertexList[i11]};
+            emitTriangle({points[0], points[1], points[3]},
+                         {i00, i01, i11});
+            emitTriangle({points[0], points[3], points[2]},
+                         {i00, i11, i10});
+            ++faceIndex;
         }
     }
+    draw_.subEntityTraits().setFrom(originalTraits);
+
+    const bool emitEdges =
+        edgeData != nullptr &&
+        (!edgeData->trueColors.empty() || !edgeData->visibility.empty());
+    if (emitEdges)
+    {
+        auto emitEdge = [&](size_t edgeIndex, const AcGePoint3d &a,
+                            const AcGePoint3d &b) {
+            if (!edgeData->visibility.empty() &&
+                edgeData->visibility[edgeIndex] == 0)
+                return;
+            if (!edgeData->trueColors.empty())
+                draw_.subEntityTraits().setColor(
+                    edgeData->trueColors[edgeIndex].renderColor());
+            worldLine(a, b);
+        };
+        size_t edgeIndex = 0;
+        for (Adesk::UInt32 row = 0; row < rows; ++row)
+            for (Adesk::UInt32 column = 0; column + 1 < columns; ++column)
+                emitEdge(edgeIndex++, vertexList[size_t(row) * columns + column],
+                         vertexList[size_t(row) * columns + column + 1]);
+        for (Adesk::UInt32 column = 0; column < columns; ++column)
+            for (Adesk::UInt32 row = 0; row + 1 < rows; ++row)
+                emitEdge(edgeIndex++,
+                         vertexList[size_t(row) * columns + column],
+                         vertexList[size_t(row + 1) * columns + column]);
+        draw_.subEntityTraits().setFrom(originalTraits);
+    }
+    (void)autoGenerateNormals;
     return false;
 }
 
@@ -863,37 +1099,152 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
                           const AcGiFaceData *faceData,
                           const AcGiVertexData *vertexData)
 {
-    (void)edgeData;
-    (void)faceData;
-    (void)vertexData;
     if (nbVertex == 0 || vertexList == nullptr ||
         (faceListSize != 0 && faceList == nullptr))
         return true;
+
+    struct Face
+    {
+        std::vector<size_t> indices;
+        bool edgesVisible = true;
+    };
+    std::vector<Face> faces;
+    std::vector<std::pair<size_t, size_t>> edges;
+    std::map<std::pair<size_t, size_t>, size_t> edgeIndices;
     Adesk::UInt32 position = 0;
     while (position < faceListSize)
     {
         const Adesk::Int32 count = faceList[position++];
         if (count == 0)
             break;
-        const Adesk::UInt32 faceSize =
-            count < 0 ? static_cast<Adesk::UInt32>(-count)
-                      : static_cast<Adesk::UInt32>(count);
-        if (faceSize < 3 || position + faceSize > faceListSize)
+        const uint64_t faceSize =
+            count < 0 ? uint64_t(-int64_t(count)) : uint64_t(count);
+        if (faceSize < 3 || faceSize > faceListSize - position)
             return true; // malformed face list
-        const Adesk::Int32 *face = faceList + position;
-        position += faceSize;
-        for (Adesk::UInt32 index = 2; index < faceSize; ++index)
+        Face face;
+        face.edgesVisible = count > 0;
+        face.indices.reserve(static_cast<size_t>(faceSize));
+        for (uint64_t index = 0; index < faceSize; ++index)
         {
-            const Adesk::Int32 i0 = face[0];
-            const Adesk::Int32 i1 = face[index - 1];
-            const Adesk::Int32 i2 = face[index];
-            if (i0 < 0 || i1 < 0 || i2 < 0 ||
-                static_cast<Adesk::UInt32>(i0) >= nbVertex ||
-                static_cast<Adesk::UInt32>(i1) >= nbVertex ||
-                static_cast<Adesk::UInt32>(i2) >= nbVertex)
+            const Adesk::Int32 vertexIndex = faceList[position++];
+            if (vertexIndex < 0 ||
+                static_cast<Adesk::UInt32>(vertexIndex) >= nbVertex)
                 return true;
-            worldTriangle(vertexList[i0], vertexList[i1], vertexList[i2]);
+            face.indices.push_back(static_cast<size_t>(vertexIndex));
         }
+        for (size_t index = 0; index < face.indices.size(); ++index)
+        {
+            const size_t a = face.indices[index];
+            const size_t b = face.indices[(index + 1) % face.indices.size()];
+            const std::pair<size_t, size_t> key{std::min(a, b), std::max(a, b)};
+            auto [edge, inserted] = edgeIndices.emplace(key, edges.size());
+            if (inserted)
+                edges.push_back(key);
+            (void)edge;
+        }
+        faces.push_back(std::move(face));
+    }
+
+    if ((faceData != nullptr &&
+         ((!faceData->trueColors.empty() &&
+           faceData->trueColors.size() != faces.size()) ||
+          (!faceData->visibility.empty() &&
+           faceData->visibility.size() != faces.size()) ||
+          (!faceData->normals.empty() &&
+           faceData->normals.size() != faces.size()) ||
+          (!faceData->transparency.empty() &&
+           faceData->transparency.size() != faces.size()) ||
+          !validNormals(faceData->normals))) ||
+        (vertexData != nullptr &&
+         ((!vertexData->trueColors.empty() &&
+           vertexData->trueColors.size() != nbVertex) ||
+          (!vertexData->normals.empty() &&
+           vertexData->normals.size() != nbVertex) ||
+          !validNormals(vertexData->normals))) ||
+        (edgeData != nullptr &&
+         ((!edgeData->trueColors.empty() &&
+           edgeData->trueColors.size() != edges.size()) ||
+          (!edgeData->visibility.empty() &&
+           edgeData->visibility.size() != edges.size()))))
+        return true;
+
+    const acdb::AcDbEntity originalTraits =
+        draw_.subEntityTraits().traits().toEntityCommon();
+    for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
+    {
+        const Face &face = faces[faceIndex];
+        if (faceData != nullptr &&
+            !faceData->visibility.empty() &&
+            faceData->visibility[faceIndex] == 0)
+            continue;
+        if (faceData != nullptr && !faceData->trueColors.empty())
+            draw_.subEntityTraits().setColor(
+                faceData->trueColors[faceIndex].renderColor());
+        std::vector<AcGePoint3d> points;
+        points.reserve(face.indices.size());
+        for (const size_t index : face.indices)
+            points.push_back(vertexList[index]);
+        for (const auto &triangleIndices : triangulatePolygon(points))
+        {
+            const std::array<size_t, 3> indices{
+                face.indices[triangleIndices[0]],
+                face.indices[triangleIndices[1]],
+                face.indices[triangleIndices[2]]};
+            const std::array<AcGePoint3d, 3> trianglePoints{
+                points[triangleIndices[0]], points[triangleIndices[1]],
+                points[triangleIndices[2]]};
+            const size_t firstFill = sink().geometry().fills.size();
+            const std::array<AcGePoint3d, 3> worldPoints{
+                apply(trianglePoints[0]), apply(trianglePoints[1]),
+                apply(trianglePoints[2])};
+            worldTriangle(trianglePoints[0], trianglePoints[1],
+                          trianglePoints[2]);
+            for (size_t fillIndex = firstFill;
+                 fillIndex < sink().geometry().fills.size(); ++fillIndex)
+            {
+                acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
+                applyVertexData(triangle, worldPoints, indices, vertexData);
+                if (vertexData == nullptr || vertexData->normals.empty())
+                    if (faceData != nullptr && !faceData->normals.empty())
+                        applyTriangleNormal(triangle,
+                                            &faceData->normals[faceIndex]);
+            }
+        }
+    }
+    draw_.subEntityTraits().setFrom(originalTraits);
+
+    const bool emitEdges =
+        edgeData != nullptr &&
+        (!edgeData->trueColors.empty() || !edgeData->visibility.empty());
+    if (emitEdges)
+    {
+        std::vector<bool> edgeVisible(edges.size(), false);
+        for (const Face &face : faces)
+        {
+            if (!face.edgesVisible)
+                continue;
+            for (size_t index = 0; index < face.indices.size(); ++index)
+            {
+                const size_t a = face.indices[index];
+                const size_t b = face.indices[(index + 1) % face.indices.size()];
+                const size_t edgeIndex =
+                    edgeIndices.at({std::min(a, b), std::max(a, b)});
+                edgeVisible[edgeIndex] = true;
+            }
+        }
+        for (size_t edgeIndex = 0; edgeIndex < edges.size(); ++edgeIndex)
+        {
+            if (!edgeVisible[edgeIndex] ||
+                (!edgeData->visibility.empty() &&
+                 edgeData->visibility[edgeIndex] == 0))
+                continue;
+            if (!edgeData->trueColors.empty())
+                draw_.subEntityTraits().setColor(
+                    edgeData->trueColors[edgeIndex].renderColor());
+            const auto [a, b] = edges[edgeIndex];
+            worldLine(vertexList[a], vertexList[b]);
+        }
+        draw_.subEntityTraits().setFrom(originalTraits);
     }
     return false;
 }
