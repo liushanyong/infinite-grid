@@ -22,8 +22,9 @@ implemented.
 
 `AcGeMatrix3d` exposes ObjectARX-style row/column element access and common
 identity, product, pre/post-multiplication, transpose, and inverse operations.
-Its storage remains GLM-backed, and the complete native matrix API is not
-implemented.
+It also provides the documented maximum-column scale query and a tolerance-
+aware Boolean inverse that leaves the output unchanged on failure. Its storage
+remains GLM-backed, and the complete native matrix API is not implemented.
 
 The geometry layer also includes source-level subsets of `AcGeLine2d/3d`,
 `AcGeRay2d/3d`, and `AcGeScale2d/3d`. These provide point/direction setup,

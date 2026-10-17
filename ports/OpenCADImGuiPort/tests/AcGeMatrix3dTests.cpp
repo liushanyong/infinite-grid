@@ -44,6 +44,20 @@ int main()
     assert(near(roundTrip(2, 2), 1.0));
     assert(near(roundTrip(0, 3), 0.0));
 
+    AcGeMatrix3d inverse;
+    assert(product.inverse(inverse, 1.0e-12));
+    const AcGeMatrix3d inverseRoundTrip = product * inverse;
+    assert(near(inverseRoundTrip(0, 0), 1.0));
+    assert(near(inverseRoundTrip(1, 1), 1.0));
+    assert(near(inverseRoundTrip(2, 2), 1.0));
+    assert(near(product.scale(), 2.0));
+
+    AcGeMatrix3d singular;
+    singular(0, 0) = 0.0;
+    AcGeMatrix3d untouched = AcGeMatrix3d::setToTranslation({7.0, 8.0, 9.0});
+    assert(!singular.inverse(untouched, 1.0e-12));
+    assert(near(untouched(0, 3), 7.0));
+
     AcGeMatrix3d transposed = translation;
     transposed.transposeIt();
     assert(near(transposed(3, 0), 4.0));

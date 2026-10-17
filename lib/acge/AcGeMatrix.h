@@ -13,6 +13,7 @@
 #endif
 #include <glm/gtx/transform.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 
 #include "AcGeLinear.h"
@@ -46,6 +47,13 @@ struct ACGE_PORT AcGeMatrix3d
     }
 
     static AcGeMatrix3d identity() { return AcGeMatrix3d(); }
+
+    double scale() const
+    {
+        return std::max({glm::length(glm::dvec3(m[0])),
+                         glm::length(glm::dvec3(m[1])),
+                         glm::length(glm::dvec3(m[2]))});
+    }
 
     AcGeMatrix3d &setToIdentity()
     {
@@ -137,6 +145,22 @@ struct ACGE_PORT AcGeMatrix3d
         AcGeMatrix3d result;
         result.m = glm::inverse(m);
         return result;
+    }
+
+    bool inverse(AcGeMatrix3d &result, double tolerance) const
+    {
+        const double determinant = glm::determinant(m);
+        if (!std::isfinite(determinant) || !std::isfinite(tolerance) ||
+            std::abs(determinant) <= std::abs(tolerance))
+            return false;
+
+        const glm::dmat4 candidate = glm::inverse(m);
+        for (unsigned int column = 0; column < 4; ++column)
+            for (unsigned int row = 0; row < 4; ++row)
+                if (!std::isfinite(candidate[column][row]))
+                    return false;
+        result.m = candidate;
+        return true;
     }
 
     AcGeMatrix3d &invert()
