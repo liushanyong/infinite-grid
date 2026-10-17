@@ -902,7 +902,6 @@ AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
     const AcGeKnotVector &knotsInU, const AcGeKnotVector &knotsInV,
     const AcGeTol &tol)
 {
-    (void)tol;
     if (degreeInU < 0 || degreeInV < 0 || numControlPointsInU <= 0 ||
         numControlPointsInV <= 0 || controlPoints == nullptr)
         throw std::invalid_argument("Invalid NURBS surface definition.");
@@ -938,6 +937,17 @@ AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
                                              controlPoints[i].z, weight);
     }
     candidate.validate();
+    double period = 0.0;
+    if (((propertiesInU & AcGe::kPeriodic) != 0 &&
+         !candidate.isPeriodicInU(period, tol)) ||
+        ((propertiesInV & AcGe::kPeriodic) != 0 &&
+         !candidate.isPeriodicInV(period, tol)) ||
+        ((propertiesInU & AcGe::kClosed) != 0 &&
+         !candidate.isClosedInU(tol)) ||
+        ((propertiesInV & AcGe::kClosed) != 0 &&
+         !candidate.isClosedInV(tol)))
+        throw std::invalid_argument(
+            "NURBS surface properties do not match its control data.");
 
     degreeU = candidate.degreeU;
     degreeV = candidate.degreeV;
@@ -945,7 +955,7 @@ AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
     controlPointCountV = candidate.controlPointCountV;
     knotsU = std::move(candidate.knotsU);
     knotsV = std::move(candidate.knotsV);
-    controlPoints = std::move(candidate.controlPoints);
+    this->controlPoints = std::move(candidate.controlPoints);
     return *this;
 }
 
