@@ -88,6 +88,75 @@ void testNurbsSurfaceQueries()
     assert(knotsU.length() == 5 && knotsV.length() == 4);
     near(knotsU[1], 1.0);
     near(knotsU[3], 3.0);
+
+    AcGePoint3dArray definitionPoints;
+    AcGeDoubleArray definitionWeights;
+    AcGeKnotVector definitionKnotsU, definitionKnotsV;
+    int definitionDegreeU = 0, definitionDegreeV = 0;
+    int propertiesU = 0, propertiesV = 0;
+    int definitionCountU = 0, definitionCountV = 0;
+    surface.getDefinition(definitionDegreeU, definitionDegreeV, propertiesU,
+                          propertiesV, definitionCountU, definitionCountV,
+                          definitionPoints, definitionWeights,
+                          definitionKnotsU, definitionKnotsV);
+    assert(definitionDegreeU == 1 && definitionDegreeV == 1);
+    assert(definitionCountU == 3 && definitionCountV == 2);
+    assert((propertiesU & AcGe::kOpen) != 0);
+    assert((propertiesU & AcGe::kRational) != 0);
+    assert((propertiesV & AcGe::kRational) == 0);
+    assert((propertiesU & AcGe::kNoPoles) != 0);
+    assert(definitionPoints.size() == 6 && definitionWeights.size() == 6);
+    assert(surface.degreeInU() == 1 && surface.degreeInV() == 1);
+    assert(surface.numControlPointsInU() == 3);
+    assert(surface.numControlPointsInV() == 2);
+    assert(surface.numKnotsInU() == 5 && surface.numKnotsInV() == 4);
+
+    ge::AcGeNurbsSurface3d roundTrip;
+    roundTrip.set(definitionDegreeU, definitionDegreeV, propertiesU,
+                  propertiesV, definitionCountU, definitionCountV,
+                  definitionPoints.data(), definitionWeights.data(),
+                  definitionKnotsU, definitionKnotsV);
+    near(roundTrip.pointAt(2.0, 0.5).x, surface.pointAt(2.0, 0.5).x);
+    near(roundTrip.pointAt(2.0, 0.5).y, surface.pointAt(2.0, 0.5).y);
+    near(roundTrip.pointAt(2.0, 0.5).z, surface.pointAt(2.0, 0.5).z);
+
+    AcGePoint3dArray roundTripPoints;
+    AcGeDoubleArray roundTripWeights;
+    roundTrip.getControlPoints(roundTripPoints);
+    roundTrip.getWeights(roundTripWeights);
+    assert(roundTripPoints.size() == definitionPoints.size());
+    assert(roundTripWeights.size() == definitionWeights.size());
+    near(roundTripWeights[4], 3.0);
+    AcGeKnotVector roundTripKnotsU, roundTripKnotsV;
+    roundTrip.getUKnots(roundTripKnotsU);
+    roundTrip.getVKnots(roundTripKnotsV);
+    assert(roundTripKnotsU.isEqualTo(definitionKnotsU));
+    assert(roundTripKnotsV.isEqualTo(definitionKnotsV));
+
+    ge::AcGeNurbsSurface3d polynomial;
+    const AcGePoint3dArray planePoints{
+        {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {1.0, 0.0, 0.0}, {1.0, 1.0, 0.0}};
+    const AcGeDoubleArray noWeights;
+    const AcGeKnotVector linearKnots(
+        AcGeDoubleArray{0.0, 0.0, 1.0, 1.0});
+    polynomial.set(1, 1, 2, 2, planePoints, noWeights, linearKnots,
+                   linearKnots);
+    assert(!polynomial.isRational());
+    assert(polynomial.singularityInU() == AcGe::kNoPoles);
+
+    bool threw = false;
+    try
+    {
+        polynomial.set(1, 1, AcGe::kRational, 0, 2, 2, planePoints.data(),
+                       nullptr, linearKnots, linearKnots);
+    }
+    catch (const std::invalid_argument &)
+    {
+        threw = true;
+    }
+    assert(threw);
+    near(polynomial.pointAt(0.5, 0.5).x, 0.5);
 }
 
 void testPeriodicSurfaceQueries()

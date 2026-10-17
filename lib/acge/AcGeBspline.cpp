@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -921,10 +923,12 @@ AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
     candidate.degreeV = static_cast<size_t>(degreeInV);
     candidate.controlPointCountU = countU;
     candidate.controlPointCountV = countV;
-    candidate.knotsU.assign(knotsInU.asArrayPtr(),
-                            knotsInU.asArrayPtr() + knotsInU.length());
-    candidate.knotsV.assign(knotsInV.asArrayPtr(),
-                            knotsInV.asArrayPtr() + knotsInV.length());
+    if (knotsInU.length() > 0)
+        candidate.knotsU.assign(knotsInU.asArrayPtr(),
+                                knotsInU.asArrayPtr() + knotsInU.length());
+    if (knotsInV.length() > 0)
+        candidate.knotsV.assign(knotsInV.asArrayPtr(),
+                                knotsInV.asArrayPtr() + knotsInV.length());
     candidate.controlPoints.reserve(count);
     for (size_t i = 0; i < count; ++i)
     {
@@ -951,6 +955,10 @@ AcGeNurbsSurface3d &AcGeNurbsSurface3d::set(
     const AcGeDoubleArray &weights, const AcGeKnotVector &knotsInU,
     const AcGeKnotVector &knotsInV)
 {
+    if (numControlPointsInV != 0 &&
+        numControlPointsInU >
+            std::numeric_limits<size_t>::max() / numControlPointsInV)
+        throw std::length_error("NURBS surface control grid is too large.");
     if (degreeInU > static_cast<size_t>(std::numeric_limits<int>::max()) ||
         degreeInV > static_cast<size_t>(std::numeric_limits<int>::max()) ||
         numControlPointsInU >
