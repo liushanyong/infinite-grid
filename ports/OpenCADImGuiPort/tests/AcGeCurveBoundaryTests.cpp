@@ -76,6 +76,22 @@ void degenerateBoundary()
     assert(boundary.isOwnerOfCurves());
 }
 
+void twoDimensionalBoundary()
+{
+    std::vector<AcGeCurveBoundary::Contour2dElement> contour(1);
+    AcGeCurveBoundary boundary(contour, {});
+    assert(boundary.numElements() == 1);
+    assert(boundary.isDegenerate());
+
+    AcGePoint3d position{1.0, 2.0, 3.0};
+    assert(!boundary.isDegenerate(position));
+    near(position, {1.0, 2.0, 3.0});
+
+    contour[0].curve = [](double u) { return AcGePoint2d{u, u}; };
+    boundary.set({}, contour);
+    assert(!boundary.isDegenerate());
+}
+
 void validation()
 {
     std::vector<AcGeCurveBoundary::Contour3dElement> two(2);
@@ -90,6 +106,7 @@ int main()
 {
     contourRoundtrip();
     degenerateBoundary();
+    twoDimensionalBoundary();
     validation();
     std::cout << "AcGeCurveBoundaryTests passed\n";
     return 0;

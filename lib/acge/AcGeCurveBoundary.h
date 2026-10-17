@@ -87,14 +87,18 @@ public:
     // Degenerate boundary: a single element that is a position.
     bool isDegenerate() const
     {
-        return numElements() == 1 && isPosition3d(0);
+        if (numElements() != 1)
+            return false;
+        return m_contour3d.empty()
+                   ? !static_cast<bool>(m_contour2d.front().curve)
+                   : isPosition3d(0);
     }
 
     // ARX overload: returns the degenerate position and, when present, the
     // paired parameter-space curve.
     bool isDegenerate(AcGePoint3d &position) const
     {
-        if (!isDegenerate())
+        if (m_contour3d.empty() || !isDegenerate())
             return false;
         position = m_contour3d.front().position;
         return true;
