@@ -354,6 +354,37 @@ public:
     AcDbHandle createXRecord(AcDbHandle parentDictionaryHandle,
                              const std::string &name);
 
+    // ---- ACAD_MATERIAL (ObjectARX AcDbMaterial dictionary) ----
+
+    // Resolves (or creates) the standard material dictionary under NOD.
+    AcDbHandle materialDictionary(bool createIfNotFound = true);
+
+    // Adds/updates a named material and returns its record handle. A new
+    // record is assigned a database handle and an ACAD_MATERIAL entry; an
+    // existing entry repoints to new authoring data while retaining its id.
+    AcDbHandle setMaterial(const std::string &name,
+                           const AcDbMaterial &material);
+
+    [[nodiscard]] const AcDbMaterialRecord *getMaterial(
+        AcDbHandle handle) const;
+    [[nodiscard]] AcDbMaterialRecord *getMaterialMutable(AcDbHandle handle);
+    [[nodiscard]] const AcDbMaterialRecord *findMaterial(
+        const std::string &name) const;
+    [[nodiscard]] std::size_t materialCount() const;
+
+    template <typename Fn> void forEachMaterial(Fn &&fn) const
+    {
+        forEachNonGraphicalObject([&](AcDbHandle handle,
+                                      const AcDbNonGraphicalObject &object) {
+            if (const auto *material = std::get_if<AcDbMaterialRecord>(&object))
+                fn(handle, *material);
+        });
+    }
+
+    // Store/import path: inserts a fully formed material under a known
+    // handle without touching its NOD dictionary entry.
+    bool insertMaterialRecord(AcDbHandle handle, AcDbMaterialRecord material);
+
     template <typename Fn> void forEachNonGraphicalObject(Fn &&fn) const
     {
         for (const auto &[handle, object] : nonGraphicalObjects_)

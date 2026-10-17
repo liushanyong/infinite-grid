@@ -251,7 +251,7 @@ void AcDbDatabase::createDefaults()
                                  std::move(root));
     for (const char *standardName :
          {kAcadGroupDictionary, kAcadMlineStyleDictionary,
-          kAcadLayoutDictionary})
+          kAcadLayoutDictionary, kAcadMaterialDictionary})
         createSubDictionary(namedObjectsHandle_, standardName);
 }
 
@@ -474,6 +474,114 @@ AcDbHandle AcDbDatabase::createXRecord(
     nonGraphicalObjects_.emplace(handle, std::move(created));
     dictionary->setAt(name, handle);
     return handle;
+}
+
+// ---- ACAD_MATERIAL ----
+
+AcDbHandle AcDbDatabase::materialDictionary(bool createIfNotFound)
+{
+    AcDbDictionary *root = namedObjectsDictionaryMutable();
+    if (root != nullptr)
+    {
+        const AcDbHandle existing = root->getAt(kAcadMaterialDictionary);
+        if (existing.isValid())
+            return existing;
+    }
+    return createIfNotFound
+        ? createSubDictionary(namedObjectsHandle_,
+                              kAcadMaterialDictionary)
+        : kNullHandle;
+}
+
+AcDbHandle AcDbDatabase::setMaterial(const std::string &name,
+                                     const AcDbMaterial &material)
+{
+    if (name.empty())
+        return kNullHandle;
+    const AcDbHandle dictionaryHandle = materialDictionary(true);
+    AcDbNonGraphicalObject *dictionaryObject =
+        getNonGraphicalObjectMutable(dictionaryHandle);
+    AcDbDictionary *dictionary =
+        dictionaryObject ? std::get_if<AcDbDictionary>(dictionaryObject)
+                         : nullptr;
+    if (dictionary == nullptr)
+        return kNullHandle;
+
+    AcDbHandle existing = dictionary->getAt(name);
+    if (existing.isValid())
+    {
+        if (AcDbMaterialRecord *record = getMaterialMutable(existing);
+            record != nullptr)
+        {
+            record->name = name;
+            record->material = material;
+            return existing;
+        }
+        return kNullHandle;
+    }
+
+    AcDbMaterialRecord record;
+    record.name = name;
+    record.material = material;
+    const AcDbHandle handle = allocateHandle();
+    record.handle = handle;
+    record.ownerHandle = dictionaryHandle;
+    if (!nonGraphicalObjects_.emplace(handle, std::move(record)).second)
+        return kNullHandle;
+    dictionary->setAt(name, handle);
+    return handle;
+}
+
+const AcDbMaterialRecord *AcDbDatabase::getMaterial(
+    AcDbHandle handle) const
+{
+    const AcDbNonGraphicalObject *object = getNonGraphicalObject(handle);
+    return object ? std::get_if<AcDbMaterialRecord>(object) : nullptr;
+}
+
+AcDbMaterialRecord *AcDbDatabase::getMaterialMutable(AcDbHandle handle)
+{
+    AcDbNonGraphicalObject *object = getNonGraphicalObjectMutable(handle);
+    return object ? std::get_if<AcDbMaterialRecord>(object) : nullptr;
+}
+
+const AcDbMaterialRecord *AcDbDatabase::findMaterial(
+    const std::string &name) const
+{
+    const AcDbNonGraphicalObject *rootObject =
+        getNonGraphicalObject(namedObjectsHandle_);
+    const AcDbDictionary *root =
+        rootObject ? std::get_if<AcDbDictionary>(rootObject) : nullptr;
+    const AcDbHandle dictionaryHandle =
+        root != nullptr ? root->getAt(kAcadMaterialDictionary)
+                        : kNullHandle;
+    const AcDbNonGraphicalObject *dictionaryObject =
+        getNonGraphicalObject(dictionaryHandle);
+    const AcDbDictionary *dictionary =
+        dictionaryObject ? std::get_if<AcDbDictionary>(dictionaryObject)
+                         : nullptr;
+    if (dictionary == nullptr)
+        return nullptr;
+    return getMaterial(dictionary->getAt(name));
+}
+
+std::size_t AcDbDatabase::materialCount() const
+{
+    std::size_t count = 0;
+    forEachMaterial([&](AcDbHandle, const AcDbMaterialRecord &) { ++count; });
+    return count;
+}
+
+bool AcDbDatabase::insertMaterialRecord(AcDbHandle handle,
+                                        AcDbMaterialRecord material)
+{
+    if (!handle.isValid() || handle.value < nextHandle_.value ||
+        nonGraphicalObjects_.count(handle) != 0)
+        return false;
+    material.handle = handle;
+    nonGraphicalObjects_.emplace(handle, std::move(material));
+    nextHandle_.value = handle.value + 1;
+    return true;
 }
 
 void AcDbDatabase::restoreNextHandle(std::uint64_t next)

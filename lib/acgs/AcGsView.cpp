@@ -22,6 +22,7 @@
 #include "acgi/AcGiLineType.h"
 #include "acgi/AcGiTextEngine.h"
 #include "acgi/AcGiTextQueue.h"
+#include "acgi/AcGiWorldDraw.h"
 #include "rendering/RendererBackend.h"
 
 namespace acgs
@@ -30,6 +31,36 @@ namespace acgs
 AcGsSelectionManager &AcGsView::selectionManager()
 {
     return acgsGetManager()->selectionManager();
+}
+
+void AcGsView::configureViewportDraw(ViewportDraw &draw,
+                                     Adesk::Int32 viewportNumber) const
+{
+    const int width = std::max(1, frame_.viewportWidth);
+    const int height = std::max(1, frame_.viewportHeight);
+    if (frame_.pixelSizeWorld > 0.0f)
+        draw.setViewport(1.0 / double(frame_.pixelSizeWorld));
+
+    // Build a true world-to-eye matrix.  The renderer's strict RTE view has
+    // no translation because large-coordinate vertices are camera-relative;
+    // AcGi callers still speak absolute world coordinates, so restore the
+    // camera translation here at double precision.
+    glm::dmat4 worldToEye(frame_.view);
+    const glm::dvec3 camera(frame_.cameraPos);
+    worldToEye[3] = glm::dvec4(-glm::dmat3(worldToEye) * camera, 1.0);
+
+    // Clip-space -> top-left device coordinates:
+    //   x = left + 0.5 * (ndc.x + 1) * width
+    //   y = top  + 0.5 * (1 - ndc.y) * height
+    glm::dmat4 ndcToDc(1.0);
+    ndcToDc[0][0] = 0.5 * double(width);
+    ndcToDc[1][1] = -0.5 * double(height);
+    ndcToDc[3][0] = 0.5 * double(width);
+    ndcToDc[3][1] = 0.5 * double(height);
+    const glm::dmat4 projection(frame_.projection);
+    draw.setViewportFrame(viewportNumber, 0.0, 0.0, double(width),
+                          double(height), AcGeMatrix3d(worldToEye),
+                          AcGeMatrix3d(ndcToDc * projection));
 }
 
 // The device lives in the manager (Route-B encapsulation): views fetch it per call.
@@ -48,8 +79,10 @@ rendering::SurfaceMaterial toSurfaceMaterial(
     result.accentColor = material.accentColor;
     result.metallic = material.metallic;
     result.roughness = material.roughness;
+    result.emissiveColor = material.emissiveColor;
     result.transparency = material.transparency;
     result.lineWidth = material.lineWidth;
+    result.alphaMaskCutoff = material.alphaMaskCutoff;
     return result;
 }
 
@@ -1114,51 +1147,171 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
     const bool submitDebugFrameNow =
         submitDebug && (submitDebugFrame++ % 90 == 0);
 
-    static std::vector<rendering::FillVertex> fillVertices;
-    static std::vector<rendering::FillVertex> surfaceFillVertices;
-    fillVertices.clear();
-    surfaceFillVertices.clear();
-    for (const acdb::Triangle &triangle : drawList.geometry().fills)
+    struct FillBatch
     {
-        if (!triangle.common.visible)
-            continue;
-        std::vector<rendering::FillVertex> &vertices =
-            triangle.is3DFace ? surfaceFillVertices : fillVertices;
-        const glm::vec4 defaultFillColor =
-            contrastColor(triangle.common.color.renderColor());
-        const std::array<glm::vec4, 3> fillColors =
-            triangle.hasVertexColors
-                ? std::array<glm::vec4, 3>{
-                      contrastColor(triangle.vertexColors[0]),
-                      contrastColor(triangle.vertexColors[1]),
-                      contrastColor(triangle.vertexColors[2])}
-                : std::array<glm::vec4, 3>{defaultFillColor,
-                                           defaultFillColor,
-                                           defaultFillColor};
-        vertices.push_back(
-            {glm::vec3(triangle.a - ctx.cameraPos), fillColors[0]});
-        vertices.push_back(
-            {glm::vec3(triangle.b - ctx.cameraPos), fillColors[1]});
-        vertices.push_back(
-            {glm::vec3(triangle.c - ctx.cameraPos), fillColors[2]});
-    }
+        std::uint32_t textureId = 0;
+        rendering::TextureAddressMode addressU =
+            rendering::TextureAddressMode::Clamp;
+        rendering::TextureAddressMode addressV =
+            rendering::TextureAddressMode::Clamp;
+        AcGiMaterial material;
+        std::vector<rendering::FillVertex> vertices;
+    };
+    const auto textureAddressMode = [](std::uint8_t tiling) {
+        switch (static_cast<AcGiMapper::Tiling>(tiling))
+        {
+        case AcGiMapper::kTile:
+            return rendering::TextureAddressMode::Repeat;
+        case AcGiMapper::kMirror:
+            return rendering::TextureAddressMode::Mirror;
+        case AcGiMapper::kInheritTiling:
+        case AcGiMapper::kCrop:
+        case AcGiMapper::kClamp:
+        default:
+            return rendering::TextureAddressMode::Clamp;
+        }
+    };
+    std::unordered_map<std::uint32_t, std::uint32_t> imageTextureIds;
+    const auto resolveImageTexture = [&](std::uint32_t imageIndex) {
+        if (imageIndex == 0 || imageIndex > drawList.geometry().images.size())
+            return std::uint32_t{0};
+        const auto found = imageTextureIds.find(imageIndex);
+        if (found != imageTextureIds.end())
+            return found->second;
+        const acdb::RasterImage &image =
+            drawList.geometry().images[imageIndex - 1];
+        const std::string key =
+            std::to_string(image.width) + "x" +
+            std::to_string(image.height) + ":" +
+            std::to_string(image.contentHash);
+        const std::uint32_t textureId =
+            acgsGetManager()->uploadImageBGRA(
+                key, image.width, image.height, image.bgra.data());
+        imageTextureIds.emplace(imageIndex, textureId);
+        return textureId;
+    };
+
+    std::size_t submittedFillVertexCount = 0;
     for (const bool is3DFace : {false, true})
     {
-        std::vector<rendering::FillVertex> &vertices =
-            is3DFace ? surfaceFillVertices : fillVertices;
-        if (vertices.empty())
-            continue;
-        const rendering::FilledTrianglesRenderData fillData{
-            .view = ctx.view,
-            .projection = ctx.projection,
-            .vertices = vertices.data(),
-            .vertexCount = static_cast<uint32_t>(vertices.size()),
-            .is3DFace = is3DFace,
-            .layer = envLayer("GRID_FILL_LAYER"),
-            .logDepth = ctx.logDepth,
-            .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
-        };
-        viewDevice()->drawFilledTriangles(fillData);
+        std::vector<FillBatch> batches;
+        for (const acdb::Triangle &triangle : drawList.geometry().fills)
+        {
+            if (!triangle.common.visible || triangle.is3DFace != is3DFace)
+                continue;
+            const AcGiMaterialBinding *materialBinding =
+                drawList.findMaterial(triangle.materialId);
+            // A triangle image always wins over the material's image; the
+            // latter lets one AcDbMaterial texture an entire face group.
+            const std::uint32_t imageIndex = triangle.imageIndex != 0
+                ? triangle.imageIndex
+                : materialBinding != nullptr ? materialBinding->imageIndex
+                                             : 0;
+            const std::uint32_t uploadedTexture = resolveImageTexture(imageIndex);
+            const bool directImage = triangle.imageIndex != 0;
+            if (directImage && triangle.imageFallback && uploadedTexture != 0)
+                continue;
+            if (imageIndex != 0 && !triangle.imageFallback &&
+                uploadedTexture == 0)
+            {
+                continue;
+            }
+            const std::uint32_t textureId =
+                directImage && triangle.imageFallback ? 0 : uploadedTexture;
+            const AcGiMaterial material =
+                materialBinding != nullptr ? materialBinding->material
+                                           : AcGiMaterial{};
+            const rendering::TextureAddressMode addressU =
+                textureAddressMode(triangle.mapperUTiling);
+            const rendering::TextureAddressMode addressV =
+                textureAddressMode(triangle.mapperVTiling);
+            if (batches.empty() || batches.back().textureId != textureId ||
+                batches.back().addressU != addressU ||
+                batches.back().addressV != addressV ||
+                batches.back().material != material)
+            {
+                batches.push_back(
+                    {textureId, addressU, addressV, material, {}});
+            }
+            FillBatch &batch = batches.back();
+            const bool textured = textureId != 0;
+            std::array<glm::vec4, 3> fillColors;
+            if (materialBinding != nullptr)
+            {
+                // The surface shader multiplies vertex RGB by
+                // u_material.baseColor. Keep RGB neutral here so material
+                // color is not applied twice, while preserving authored
+                // face alpha and the material's alpha.
+                const float fillAlpha =
+                    material.baseColor.a *
+                    triangle.common.color.renderColor().a;
+                if (triangle.hasVertexColors)
+                {
+                    fillColors = {
+                        contrastColor(triangle.vertexColors[0]),
+                        contrastColor(triangle.vertexColors[1]),
+                        contrastColor(triangle.vertexColors[2])};
+                    for (glm::vec4 &color : fillColors)
+                        color.a *= fillAlpha;
+                }
+                else
+                {
+                    const glm::vec4 fillColor{1.0f, 1.0f, 1.0f, fillAlpha};
+                    fillColors = {fillColor, fillColor, fillColor};
+                }
+            }
+            else
+            {
+                const glm::vec4 defaultFillColor = textured
+                    ? glm::vec4(1.0f)
+                    : contrastColor(triangle.common.color.renderColor());
+                fillColors = textured
+                    ? std::array<glm::vec4, 3>{defaultFillColor,
+                                               defaultFillColor,
+                                               defaultFillColor}
+                    : triangle.hasVertexColors
+                          ? std::array<glm::vec4, 3>{
+                                contrastColor(triangle.vertexColors[0]),
+                                contrastColor(triangle.vertexColors[1]),
+                                contrastColor(triangle.vertexColors[2])}
+                          : std::array<glm::vec4, 3>{defaultFillColor,
+                                                     defaultFillColor,
+                                                     defaultFillColor};
+            }
+            const std::array<glm::vec3, 3> positions{
+                glm::vec3(triangle.a - ctx.cameraPos),
+                glm::vec3(triangle.b - ctx.cameraPos),
+                glm::vec3(triangle.c - ctx.cameraPos)};
+            for (size_t vertex = 0; vertex < positions.size(); ++vertex)
+            {
+                const glm::vec2 uv = triangle.hasTextureCoords
+                    ? triangle.textureCoords[vertex]
+                    : glm::vec2(0.0f);
+                batch.vertices.push_back(
+                    {positions[vertex], fillColors[vertex], uv});
+            }
+        }
+
+        for (const FillBatch &batch : batches)
+        {
+            if (batch.vertices.empty())
+                continue;
+            submittedFillVertexCount += batch.vertices.size();
+            const rendering::FilledTrianglesRenderData fillData{
+                .view = ctx.view,
+                .projection = ctx.projection,
+                .vertices = batch.vertices.data(),
+                .vertexCount = static_cast<uint32_t>(batch.vertices.size()),
+                .textureId = batch.textureId,
+                .textureAddressU = batch.addressU,
+                .textureAddressV = batch.addressV,
+                .is3DFace = is3DFace,
+                .layer = envLayer("GRID_FILL_LAYER"),
+                .logDepth = ctx.logDepth,
+                .material = toSurfaceMaterial(batch.material),
+            };
+            viewDevice()->drawFilledTriangles(fillData);
+        }
     }
 
     static std::vector<rendering::TargetPointInstance> points;
@@ -1240,7 +1393,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             "cam=(%.0f,%.0f,%.0f) ortho=%d clip_ok=%zu clip_rej=%zu\n",
             drawList.geometry().strokes.size(), lineInstances.size(),
             polylineVertices.size(), drawList.geometry().fills.size(),
-            fillVertices.size() + surfaceFillVertices.size(),
+            submittedFillVertexCount,
             drawList.geometry().points.size(), points.size(),
             ctx.slabNear, ctx.slabFar, ctx.cameraPos.x, ctx.cameraPos.y,
             ctx.cameraPos.z, int(ctx.ortho), debugClipAccepted,
@@ -1349,7 +1502,10 @@ void AcGsView::drawLineInstanceBatch(
 
 void AcGsView::drawFillTriangles(
     std::vector<rendering::FillVertex> &vertices, const glm::mat4 &view,
-    const glm::mat4 &projection, bool is3DFace, float layer) const
+    const glm::mat4 &projection, bool is3DFace, float layer,
+    const AcGiMaterial *material, std::uint32_t textureId,
+    rendering::TextureAddressMode addressU,
+    rendering::TextureAddressMode addressV) const
 {
     if (!viewDevice() || vertices.empty())
         return;
@@ -1358,10 +1514,14 @@ void AcGsView::drawFillTriangles(
         .projection = projection,
         .vertices = vertices.data(),
         .vertexCount = static_cast<uint32_t>(vertices.size()),
+        .textureId = textureId,
+        .textureAddressU = addressU,
+        .textureAddressV = addressV,
         .is3DFace = is3DFace,
         .layer = layer,
         .logDepth = frame_.logDepth,
-        .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
+        .material = toSurfaceMaterial(material != nullptr ? *material
+                                                          : AcGiMaterial{}),
     };
     viewDevice()->drawFilledTriangles(data);
 }

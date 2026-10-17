@@ -35,6 +35,11 @@
 #include "rendering/ProceduralMesh.h"
 #include <iostream>
 #include <iomanip>
+
+#include <bx/bx.h>
+#include <bx/error.h>
+#include <bimg/bimg.h>
+#include <bimg/decode.h>
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -697,6 +702,7 @@ void appendSceneLine(acgs::AcGsModel &drawList,
                      double lineWeight = 2.0)
 {
   acgs::ViewportDraw draw(drawList.geometry());
+  acgsView().configureViewportDraw(draw);
   AcGiWorldDraw graphics(draw);
   graphics.setColor(acgsView().contrastColor(acgs::math::Vec4(color, opacity)));
   graphics.setLineWeight(lineWeight);
@@ -717,6 +723,7 @@ void appendScenePoint(acgs::AcGsModel &drawList,
                       double pointSize)
 {
   acgs::ViewportDraw draw(drawList.geometry());
+  acgsView().configureViewportDraw(draw);
   AcGiWorldDraw graphics(draw);
   graphics.setColor(acgsView().contrastColor(acgs::math::Vec4(color, 1.0f)));
   graphics.setLineWeight(pointSize);
@@ -1087,6 +1094,7 @@ void appendMeshEntityToScene(const MeshEntityRecord &entity,
           : meshEntityColor(entity);
 
   acgs::ViewportDraw draw(drawList.geometry());
+  acgsView().configureViewportDraw(draw);
   AcGiWorldDraw graphics(draw);
   acdb::AcDbEntity meshTraits;
   meshTraits.name = entity.entity.name;
@@ -1793,6 +1801,70 @@ static const GltfDemoModelAsset &gltfDemoAsset(
   return asset;
 }
 
+// AcGi fill triangles consume decoded BGRA pixels, while glTF intentionally
+// stores encoded image bytes in acdb. Decode once at tessellation-build time
+// and append the result to the replay target's geometry image list.
+static std::uint64_t rasterImageHash(const acdb::RasterImage &image)
+{
+  std::uint64_t hash = 1469598103934665603ull;
+  const auto mix = [&hash](std::uint8_t value) {
+    hash ^= value;
+    hash *= 1099511628211ull;
+  };
+  mix(std::uint8_t(image.width & 0xff));
+  mix(std::uint8_t((image.width >> 8) & 0xff));
+  mix(std::uint8_t((image.width >> 16) & 0xff));
+  mix(std::uint8_t((image.width >> 24) & 0xff));
+  mix(std::uint8_t(image.height & 0xff));
+  mix(std::uint8_t((image.height >> 8) & 0xff));
+  mix(std::uint8_t((image.height >> 16) & 0xff));
+  mix(std::uint8_t((image.height >> 24) & 0xff));
+  for (const std::uint8_t value : image.bgra)
+    mix(value);
+  return hash;
+}
+
+static bool decodeGltfTextureImage(const acdb::AcDbGltfTexture &texture,
+                                   acdb::RasterImage &out)
+{
+  out = {};
+  if (texture.bytes.empty() || texture.bytes.size() > UINT32_MAX)
+    return false;
+  bx::DefaultAllocator allocator;
+  bx::Error error;
+  bimg::ImageContainer *image = bimg::imageParse(
+      &allocator, const_cast<std::uint8_t *>(texture.bytes.data()),
+      static_cast<std::uint32_t>(texture.bytes.size()),
+      bimg::TextureFormat::BGRA8, &error);
+  if (!image || !image->m_data || image->m_size == 0 ||
+      static_cast<bgfx::TextureFormat::Enum>(image->m_format) !=
+          bgfx::TextureFormat::BGRA8 ||
+      image->m_depth != 1 || image->m_numLayers != 1)
+  {
+    if (image)
+      bimg::imageFree(image);
+    return false;
+  }
+
+  const std::size_t width = image->m_width;
+  const std::size_t height = image->m_height;
+  const std::size_t byteCount = width * height * 4;
+  const auto *pixels = static_cast<const std::uint8_t *>(image->m_data);
+  if (width == 0 || height == 0 || width > UINT32_MAX || height > UINT32_MAX ||
+      byteCount > image->m_size)
+  {
+    bimg::imageFree(image);
+    return false;
+  }
+
+  out.width = static_cast<std::uint32_t>(width);
+  out.height = static_cast<std::uint32_t>(height);
+  out.bgra.assign(pixels, pixels + byteCount);
+  out.contentHash = rasterImageHash(out);
+  bimg::imageFree(image);
+  return true;
+}
+
 // Renderer texture slot per glTF texture key; the device owns the GPU
 // handles, the resolution cache is keyed by string and survives rebuilds.
 static std::uint32_t gltfDemoTextureIndex(const GltfDemoModelAsset &asset,
@@ -1970,6 +2042,13 @@ static void loadGltfModelIntoDocument()
     const acdb::AcDbHandle handle = document.addEntity(std::move(entity));
     gGltfDocumentHandles.push_back(handle);
     gltfStaticMeshByHandle()[handle] = asset.meshes[i];
+    if (acdb::AcDbEntityVariant *stored = document.getEntityMutable(handle);
+        stored != nullptr)
+    {
+      // The entity-embedded AcDbMaterial is the first material owner in this
+      // value-port; its stable identity is the owning entity's handle.
+      acdb::common(*stored).materialId = acdb::AcDbObjectId(handle);
+    }
   }
 }
 
@@ -1983,6 +2062,24 @@ static void appendGltfDemoMeshes(VectorPrimitivesTessellation &target)
     return;
   const acdb::AcDbDatabase &document = acdbDocument();
   const AcGePoint3d placement = gltfDemoPlacement();
+
+  // Convert every embedded image to an AcGi raster image, then bind materials
+  // to the 1-based replay image index. A key encountered multiple times shares
+  // the same image in this target.
+  std::unordered_map<std::string, std::uint32_t> imageIndexByKey;
+  for (const acdb::AcDbGltfTexture &texture : asset.import.textures)
+  {
+    if (texture.key.empty())
+      continue;
+    acdb::RasterImage raster;
+    if (!decodeGltfTextureImage(texture, raster))
+      continue;
+    target.geometry.images.push_back(std::move(raster));
+    imageIndexByKey.emplace(texture.key,
+                            static_cast<std::uint32_t>(
+                                target.geometry.images.size()));
+  }
+
   for (const acdb::AcDbHandle handle : gGltfDocumentHandles)
   {
     const acdb::AcDbEntityVariant *payload = document.getEntity(handle);
@@ -2004,6 +2101,14 @@ static void appendGltfDemoMeshes(VectorPrimitivesTessellation &target)
     record.renderScale = 1.0f;
     record.staticMesh = staticIt->second;
     const std::string &textureKey = record.entity.material.diffuseTexture;
+    const auto imageIt = imageIndexByKey.find(textureKey);
+    const std::uint32_t imageIndex =
+        imageIt != imageIndexByKey.end() ? imageIt->second : 0;
+    if (record.entity.materialId.isValid())
+    {
+      target.setMaterial(record.entity.materialId,
+                         record.entity.material, imageIndex);
+    }
     if (!textureKey.empty())
     {
       record.diffuseTextureIndex = gltfDemoTextureIndex(asset, textureKey);
@@ -2968,17 +3073,11 @@ bool cadPairedBandPoints(const acgs::AcGsEntityRange &range,
                          const acdb::TessellatedEntity &tess,
                          CadPairedBandPoints &band);
 
-// The anchor-relative frame is camera-independent, so the cached buffers stay
-// valid; cadAnchorView supplies the camera-dependent translation.
-// Visible CAD fills are immutable once tessellated.  Cache the renderer-side
-// camera-relative vertices per entity range so normal drawing does not repeat
-// the per-triangle double-to-float conversion and color contrast pass every
-// frame.  The anchor-relative frame is camera-independent.
-// Both caches below key on tessellation-stored pointers and are cleared
-// wholesale by invalidateTessellationKeyedCaches() when the tessellation
-// rebuilds (document revision bump) — a stale pointer must never resolve.
-static std::map<const acgs::AcGsEntityRange *, std::vector<rendering::FillVertex>>
-    g_cadFillVertexCache;
+// The anchor-relative frame is camera-independent, so curve caches stay
+// valid; cadAnchorView supplies the camera-dependent translation. Both caches
+// below key on tessellation-stored pointers and are cleared wholesale by
+// invalidateTessellationKeyedCaches() when the tessellation rebuilds — a stale
+// pointer must never resolve.
 static std::unordered_map<const acgs::CurveBatchCommand *,
                           std::vector<acgs::math::DVec3>>
     g_curveSampleCache;
@@ -2986,7 +3085,6 @@ static std::unordered_map<const MeshEntityRecord *, acgs::math::DVec3>
     g_curveCenterCache;
 static void invalidateTessellationKeyedCaches()
 {
-  g_cadFillVertexCache.clear();
   g_curveSampleCache.clear();
   g_curveCenterCache.clear();
   g_meshInstanceCache.clear();
@@ -2995,43 +3093,6 @@ static void invalidateTessellationKeyedCaches()
   // ids re-register (and stay stable) from the next queue refresh.
   gpuPickManager().clearRegistry();
   outlineEntity.reset();
-}
-
-static const std::vector<rendering::FillVertex> &
-cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
-{
-  auto [it, inserted] = g_cadFillVertexCache.try_emplace(&range);
-  if (!inserted)
-    return it->second;
-
-  const VectorPrimitivesTessellation &tessellation =
-      getVectorPrimitivesTessellation();
-  std::vector<rendering::FillVertex> &vertices = it->second;
-  vertices.reserve(range.count * 3);
-  for (size_t i = range.begin; i < range.begin + range.count; ++i)
-  {
-    const acdb::Triangle &triangle = tessellation.geometry.fills[i];
-    if (!triangle.common.visible)
-      continue;
-    const acgs::math::Vec4 defaultFillColor =
-        acgsView().contrastColor(triangle.common.color.renderColor());
-    const std::array<acgs::math::Vec4, 3> fillColors =
-        triangle.hasVertexColors
-            ? std::array<acgs::math::Vec4, 3>{
-                  acgsView().contrastColor(triangle.vertexColors[0]),
-                  acgsView().contrastColor(triangle.vertexColors[1]),
-                  acgsView().contrastColor(triangle.vertexColors[2])}
-            : std::array<acgs::math::Vec4, 3>{defaultFillColor,
-                                              defaultFillColor,
-                                              defaultFillColor};
-    vertices.push_back(
-        {acgs::math::Vec3(triangle.a - tessellation.anchor), fillColors[0]});
-    vertices.push_back(
-        {acgs::math::Vec3(triangle.b - tessellation.anchor), fillColors[1]});
-    vertices.push_back(
-        {acgs::math::Vec3(triangle.c - tessellation.anchor), fillColors[2]});
-  }
-  return vertices;
 }
 
 static void drawVectorPrimitivesDemo(const acgs::math::Mat4 &view,
@@ -3483,34 +3544,165 @@ static void drawVectorPrimitivesDemo(const acgs::math::Mat4 &view,
   // CAD fills bypass the generic AcGsModel copy.  Visible ranges reuse
   // their cached anchor-relative renderer vertices and submit as one batch.
   static std::vector<rendering::FillVertex> visibleFillVertices;
-  visibleFillVertices.clear();
+  static std::unordered_map<std::uint32_t, std::uint32_t> cadImageTextureIds;
+  cadImageTextureIds.clear();
+  auto resolveCadImageTexture = [&](std::uint32_t imageIndex) {
+    if (imageIndex == 0 || imageIndex > tessellation.geometry.images.size())
+      return std::uint32_t{0};
+    const auto cached = cadImageTextureIds.find(imageIndex);
+    if (cached != cadImageTextureIds.end())
+      return cached->second;
+    const acdb::RasterImage &image =
+        tessellation.geometry.images[imageIndex - 1];
+    const std::string key = "cad-fill:" +
+        std::to_string(image.contentHash);
+    const std::uint32_t textureId =
+        acgs::acgsGetManager()->uploadImageBGRA(
+            key, image.width, image.height, image.bgra.data());
+    cadImageTextureIds.emplace(imageIndex, textureId);
+    return textureId;
+  };
+  auto fillAddressMode = [](std::uint8_t tiling) {
+    switch (static_cast<AcGiMapper::Tiling>(tiling))
+    {
+    case AcGiMapper::kTile:
+      return rendering::TextureAddressMode::Repeat;
+    case AcGiMapper::kMirror:
+      return rendering::TextureAddressMode::Mirror;
+    default:
+      return rendering::TextureAddressMode::Clamp;
+    }
+  };
+  struct CadFillGroup
+  {
+    const acgs::AcGiMaterialBinding *binding = nullptr;
+    std::uint32_t textureId = 0;
+    rendering::TextureAddressMode addressU =
+        rendering::TextureAddressMode::Clamp;
+    rendering::TextureAddressMode addressV =
+        rendering::TextureAddressMode::Clamp;
+    std::vector<rendering::FillVertex> vertices;
+  };
+  static std::vector<CadFillGroup> visibleFillGroups;
   for (const VisibilityCandidate *candidate : visibleCad)
   {
     if (!candidate || candidate->kind != VisibilityKind::CadFill ||
         !candidate->cadRange || !candidate->cadRange->count)
       continue;
-    const std::vector<rendering::FillVertex> &rangeVertices =
-        cadVisibleFillVertices(*candidate->cadRange);
-    if (candidate->cadRange == selectedFillRange)
+    const acgs::AcGsEntityRange &range = *candidate->cadRange;
+    const size_t last = std::min(range.begin + range.count,
+                                 tess.fills.size());
+    visibleFillGroups.clear();
+    for (size_t i = range.begin; i < last; ++i)
     {
-      // Selected fill: recolor the inserted vertices (keep per-vertex
-      // alpha so translucency — and the depth relationship — survives).
-      for (const rendering::FillVertex &vertex : rangeVertices)
+      const acdb::Triangle &triangle = tess.fills[i];
+      if (!triangle.common.visible)
+        continue;
+      const acgs::AcGiMaterialBinding *binding =
+          tessellation.findMaterial(triangle.materialId);
+      const std::uint32_t imageIndex = triangle.imageIndex != 0
+          ? triangle.imageIndex
+          : (binding != nullptr ? binding->imageIndex : 0);
+      std::uint32_t textureId = resolveCadImageTexture(imageIndex);
+      if (imageIndex != 0 && !triangle.imageFallback && textureId == 0)
+        continue;
+      if (imageIndex != 0 && triangle.imageFallback)
+        textureId = 0;
+      const rendering::TextureAddressMode addressU =
+          fillAddressMode(triangle.mapperUTiling);
+      const rendering::TextureAddressMode addressV =
+          fillAddressMode(triangle.mapperVTiling);
+      CadFillGroup *group = nullptr;
+      for (CadFillGroup &candidateGroup : visibleFillGroups)
       {
-        visibleFillVertices.push_back(
-            {vertex.position,
-             acgs::math::Vec4(kSelectionHighlightRGB, vertex.color.a)});
+        if (candidateGroup.binding == binding &&
+            candidateGroup.textureId == textureId &&
+            candidateGroup.addressU == addressU &&
+            candidateGroup.addressV == addressV)
+        {
+          group = &candidateGroup;
+          break;
+        }
       }
-      continue;
+      if (group == nullptr)
+      {
+        visibleFillGroups.push_back(
+            {binding, textureId, addressU, addressV, {}});
+        group = &visibleFillGroups.back();
+      }
+
+      const bool textured = textureId != 0;
+      std::array<acgs::math::Vec4, 3> fillColors;
+      if (binding != nullptr)
+      {
+        const float fillAlpha =
+            binding->material.baseColor.a *
+            triangle.common.color.renderColor().a;
+        if (triangle.hasVertexColors)
+        {
+          fillColors = {
+              acgsView().contrastColor(triangle.vertexColors[0]),
+              acgsView().contrastColor(triangle.vertexColors[1]),
+              acgsView().contrastColor(triangle.vertexColors[2])};
+          for (acgs::math::Vec4 &color : fillColors)
+            color.a = fillAlpha;
+        }
+        else
+        {
+          const acgs::math::Vec4 fillColor(1.0f, 1.0f, 1.0f, fillAlpha);
+          fillColors = {fillColor, fillColor, fillColor};
+        }
+      }
+      else if (textured)
+      {
+        const float fillAlpha = triangle.common.color.renderColor().a;
+        const acgs::math::Vec4 fillColor(1.0f, 1.0f, 1.0f, fillAlpha);
+        fillColors = {fillColor, fillColor, fillColor};
+      }
+      else
+      {
+        const acgs::math::Vec4 defaultFillColor =
+            acgsView().contrastColor(triangle.common.color.renderColor());
+        fillColors = triangle.hasVertexColors
+            ? std::array<acgs::math::Vec4, 3>{
+                  acgsView().contrastColor(triangle.vertexColors[0]),
+                  acgsView().contrastColor(triangle.vertexColors[1]),
+                  acgsView().contrastColor(triangle.vertexColors[2])}
+            : std::array<acgs::math::Vec4, 3>{defaultFillColor,
+                                              defaultFillColor,
+                                              defaultFillColor};
+      }
+
+      const std::array<acgs::math::Vec2, 3> uvs =
+          triangle.hasTextureCoords
+              ? std::array<acgs::math::Vec2, 3>{triangle.textureCoords[0],
+                                                triangle.textureCoords[1],
+                                                triangle.textureCoords[2]}
+              : std::array<acgs::math::Vec2, 3>{};
+      const bool selected = candidate->cadRange == selectedFillRange;
+      const auto appendVertex = [&](const glm::dvec3 &world,
+                                    acgs::math::Vec4 color,
+                                    acgs::math::Vec2 uv) {
+        if (selected)
+          color = acgs::math::Vec4(kSelectionHighlightRGB, color.a);
+        group->vertices.push_back(
+            {acgs::math::Vec3(world - tessellation.anchor), color, uv});
+      };
+      appendVertex(triangle.a, fillColors[0], uvs[0]);
+      appendVertex(triangle.b, fillColors[1], uvs[1]);
+      appendVertex(triangle.c, fillColors[2], uvs[2]);
     }
-    visibleFillVertices.insert(visibleFillVertices.end(),
-                               rangeVertices.begin(), rangeVertices.end());
-  }
-  if (!visibleFillVertices.empty())
-  {
-    acgsView().drawFillTriangles(visibleFillVertices, cadAnchorView,
-                               projection, false,
-                               acgs::envLayer("GRID_FILL_LAYER"));
+
+    for (CadFillGroup &group : visibleFillGroups)
+    {
+      if (group.vertices.empty())
+        continue;
+      acgsView().drawFillTriangles(
+          group.vertices, cadAnchorView, projection, false,
+          acgs::envLayer("GRID_FILL_LAYER"),
+          group.binding != nullptr ? &group.binding->material : nullptr,
+          group.textureId, group.addressU, group.addressV);
+    }
   }
 
   // Wireframe modes suppress solid fills, which would make fill-only

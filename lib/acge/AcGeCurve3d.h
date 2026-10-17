@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <variant>
+#include <vector>
 
 #include "AcGeMatrix.h"
 #include "AcGePoint.h"
@@ -182,6 +184,11 @@ struct ACGE_PORT AcGeCircle3d
     {
         return AcGeCircArc3d{center, normal, radius}.pointAt(angle);
     }
+    AcGePoint3d startPoint() const { return pointAt(0.0); }
+    AcGePoint3d endPoint() const
+    {
+        return pointAt(6.2831853071795864769);
+    }
     AcGeVector3d referenceAxis() const
     {
         return AcGeCircArc3d{center, normal, radius}.referenceAxis();
@@ -277,6 +284,35 @@ struct ACGE_PORT AcGeEllipArc3d
 
     bool isInside(const AcGePoint3d &point,
                   const AcGeTol &tol = AcGeTol{}) const;
+};
+
+
+// Lightweight value-semantic AcGeCurve3d facade.  The acge layer keeps the
+// analytic curve types as values; this type erases the four curve kinds used
+// by AcGi and provides a common parameter/tessellation vocabulary without
+// inventing a virtual ObjectARX class hierarchy.
+struct ACGE_PORT AcGeCurve3d
+{
+    std::variant<AcGeLineSeg3d, AcGeCircArc3d, AcGeCircle3d, AcGeEllipArc3d>
+        curve;
+
+    AcGeCurve3d() = default;
+    AcGeCurve3d(const AcGeLineSeg3d &value) : curve(value) {}
+    AcGeCurve3d(const AcGeCircArc3d &value) : curve(value) {}
+    AcGeCurve3d(const AcGeCircle3d &value) : curve(value) {}
+    AcGeCurve3d(const AcGeEllipArc3d &value) : curve(value) {}
+
+    AcGePoint3d startPoint() const;
+    AcGePoint3d endPoint() const;
+    AcGePoint3d pointAt(double parameter) const;
+    double length() const;
+    double radius() const;
+
+    // Samples an open polyline through the curve.  Angular curves use one
+    // segment per angleStep; linear curves always return two points.
+    std::vector<AcGePoint3d> sample(double angleStep,
+                                    int minSegments = 4,
+                                    int maxSegments = 256) const;
 };
 
 using AcGeEllip3d = AcGeEllipArc3d;

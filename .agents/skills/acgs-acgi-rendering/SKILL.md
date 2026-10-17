@@ -79,7 +79,7 @@ acgi ── 协议层: AcGiDrawable(regen 协议根,**AcDbEntity 继承它 — A
   proceduralMeshFeatureEdges 为 worldLine;位置/缩放经 pushModelTransform
   (与旧 GPU 实例同一 T·S)。**GPU 拾取不变**:queueGpuMeshPick 直接从记
   录栅格化 ID,与可见通道解耦。**保留批次**:glTF 静态网格(纹理/PBR 在
-  mesh 管线,AcGi 无纹理词汇)、应力场分组实例(最多 1e6 实例,P3.4 不展
+  mesh 管线,AcGi 纹理词汇已于批次 9 启用 (filled 着色器 UV 采样 + uploadImageBGRA))、应力场分组实例(最多 1e6 实例,P3.4 不展
   平)。注意:CenterCube 默认视图隐藏(!largeCoordinateCameraView)、
   demo 网格 GRID_DEMO_MESHES 门控——默认场景像素差分 0 是这两个门控的
   结果,验证需显式开启。

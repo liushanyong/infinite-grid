@@ -25,11 +25,12 @@
 // callbacks are non-const (the sink records through a reference); primitive
 // spellings keep the port's established forms (worldCircle/worldPoint/
 // worldPolyline with a closed flag, worldTriangle, worldInfiniteLine for
-// Ray/XLine overlay semantics); viewport/screen transform behaviors and the
-// behaviors-only APIs collapse to their world-space form; clip boundaries
+// Ray/XLine overlay semantics); behavior transforms resolve viewport/screen inputs into
+// world soup at push time; clip boundaries
 // support simple concave polygons, clip-space transforms, depth limits, and
-// optional outlines; mesh/shell consume supported color, linetype, visibility,
-// and normal arrays; image is rasterized as a bounded per-pixel triangle
+// optional outlines; mesh/shell consume color, layer, linetype, selection,
+// material, transparency, visibility, and normal attributes into the sink;
+// image is rasterized as a bounded per-pixel triangle
 // approximation; polypoint emits real point primitives instead of ARX's
 // degenerate two-point strokes.
 // edge() accepts a value-semantic subset of planar curves rather than native
@@ -53,10 +54,55 @@
 
 class AcGiDrawable;
 
-// The abstract curve base is not ported yet (acge ships concrete value
-// types); the generic-curve callback binds to the future class through the
-// forward declaration.
-struct AcGeCurve3d;
+class AcGiMapper
+{
+public:
+    enum Projection
+    {
+        kInheritProjection = 0,
+        kPlanar,
+        kBox,
+        kCylinder,
+        kSphere
+    };
+    enum Tiling
+    {
+        kInheritTiling = 0,
+        kTile,
+        kCrop,
+        kClamp,
+        kMirror
+    };
+    enum AutoTransform
+    {
+        kInheritAutoTransform = 0,
+        kNone = 0x1,
+        kObject = 0x2,
+        kModel = 0x4
+    };
+
+    void set(const AcGiMapper &mapper) { *this = mapper; }
+    void setProjection(Projection value) { projection_ = value; }
+    void setAutoTransform(AutoTransform value) { autoTransform_ = value; }
+    void setTransform(const AcGeMatrix3d &value) { transform_ = value; }
+    void setUTiling(Tiling value) { uTiling_ = value; }
+    void setVTiling(Tiling value) { vTiling_ = value; }
+    Projection projection() const { return projection_; }
+    AutoTransform autoTransform() const { return autoTransform_; }
+    const AcGeMatrix3d &transform() const { return transform_; }
+    Tiling uTiling() const { return uTiling_; }
+    Tiling vTiling() const { return vTiling_; }
+
+private:
+    Projection projection_ = kInheritProjection;
+    AutoTransform autoTransform_ = kInheritAutoTransform;
+    AcGeMatrix3d transform_;
+    Tiling uTiling_ = kInheritTiling;
+    Tiling vTiling_ = kInheritTiling;
+};
+
+// AcGeCurve3d is the value-semantic type-erasing curve facade provided by
+// the acge layer; AcGi uses it to implement the generic curve callback.
 
 // ---- enums (acgidefs.h / acgi.h) ----
 
@@ -77,7 +123,8 @@ enum AcGiFillType
 // an AcGeCurve2d pointer hierarchy, which this value-semantic AcGe layer lacks.
 struct AcGiEdge2d
 {
-    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
+    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d, AcGeCurve2d>
+        curve;
 };
 
 struct resbuf;
@@ -107,6 +154,13 @@ enum AcGiOrientationTransformBehavior
     kAcGiZAxisOrientation
 };
 
+enum AcGiOrientationType
+{
+    kAcGiCounterClockwise = -1,
+    kAcGiNoOrientation = 0,
+    kAcGiClockwise = 1
+};
+
 // ---- port value types for the toolkit signatures ----
 
 struct AcGiPolyline
@@ -117,10 +171,86 @@ struct AcGiPolyline
 
 struct AcGiEdgeData
 {
+    std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<acdb::AcDbObjectId> layers;
+    std::vector<acdb::AcDbObjectId> linetypeIdValues;
+    std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<std::string> lineTypes;
     std::vector<Adesk::UInt8> visibility;
+    const acdb::AcDbObjectId *borrowedLinetypeIds = nullptr;
 
+    void setColors(const short *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            colors.clear();
+            return;
+        }
+        colors.assign(values, values + count);
+    }
+    short *colorsData() { return colors.data(); }
+    short *colorsData() const
+    {
+        return const_cast<short *>(colors.data());
+    }
+    void setLayers(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            layers.clear();
+        else
+            layers.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *layerIds() { return layers.data(); }
+    acdb::AcDbObjectId *layerIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(layers.data());
+    }
+    void setLinetypeIds(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            linetypeIdValues.clear();
+            borrowedLinetypeIds = nullptr;
+        }
+        else
+        {
+            linetypeIdValues.assign(values, values + count);
+            borrowedLinetypeIds = nullptr;
+        }
+    }
+    void setLineTypes(const acdb::AcDbObjectId *values)
+    {
+        linetypeIdValues.clear();
+        borrowedLinetypeIds = values;
+    }
+    void setLineTypes(const acdb::AcDbObjectId *values, size_t count)
+    {
+        setLinetypeIds(values, count);
+    }
+    acdb::AcDbObjectId *linetypeIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(
+            linetypeIdValues.empty() ? borrowedLinetypeIds
+                                     : linetypeIdValues.data());
+    }
+    acdb::AcDbObjectId *linetypeIdsData() { return linetypeIds(); }
+    acdb::AcDbObjectId *linetypeIdsData() const
+    {
+        return linetypeIds();
+    }
+    void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
+    {
+        if (values == nullptr)
+            selectionMarkers.clear();
+        else
+            selectionMarkers.assign(values, values + count);
+    }
+    Adesk::LongPtr *selectionMarkersData() { return selectionMarkers.data(); }
+    Adesk::LongPtr *selectionMarkersData() const
+    {
+        return const_cast<Adesk::LongPtr *>(selectionMarkers.data());
+    }
     void setLineTypes(const AcGiLineType *values, size_t count)
     {
         lineTypes.clear();
@@ -149,11 +279,33 @@ struct AcGiEdgeData
 };
 struct AcGiFaceData
 {
+    std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<acdb::AcDbObjectId> layers;
+    std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<Adesk::UInt8> visibility;
     std::vector<AcGeVector3d> normals;
+    std::vector<acdb::AcDbObjectId> materials;
+    std::vector<AcGiMapper> ownedMappers;
+    const AcGiMapper *mapperValues = nullptr;
+    size_t mapperCount = 0;
+    bool mapperCountKnown = false;
     std::vector<AcCmTransparency> transparency;
 
+    void setColors(const short *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            colors.clear();
+            return;
+        }
+        colors.assign(values, values + count);
+    }
+    short *colorsData() { return colors.data(); }
+    short *colorsData() const
+    {
+        return const_cast<short *>(colors.data());
+    }
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
         if (values == nullptr)
@@ -161,6 +313,92 @@ struct AcGiFaceData
         else
             trueColors.assign(values, values + count);
     }
+    AcCmEntityColor *trueColorsData() { return trueColors.data(); }
+    AcCmEntityColor *trueColorsData() const
+    {
+        return const_cast<AcCmEntityColor *>(trueColors.data());
+    }
+    void setLayers(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            layers.clear();
+        else
+            layers.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *layerIds() { return layers.data(); }
+    acdb::AcDbObjectId *layerIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(layers.data());
+    }
+    void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
+    {
+        if (values == nullptr)
+            selectionMarkers.clear();
+        else
+            selectionMarkers.assign(values, values + count);
+    }
+    Adesk::LongPtr *selectionMarkersData()
+    {
+        return selectionMarkers.data();
+    }
+    Adesk::LongPtr *selectionMarkersData() const
+    {
+        return const_cast<Adesk::LongPtr *>(selectionMarkers.data());
+    }
+    void setMaterials(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            materials.clear();
+        else
+            materials.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *materialsData() { return materials.data(); }
+    acdb::AcDbObjectId *materialsData() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(materials.data());
+    }
+    // Counted setters own a copy; this is the safe lifetime semantics used
+    // when an entity has already left the mapper array on the stack.
+    void setMappers(const AcGiMapper *values, size_t count)
+    {
+        ownedMappers.clear();
+        mapperValues = nullptr;
+        if (values != nullptr && count != 0)
+        {
+            ownedMappers.assign(values, values + count);
+            mapperValues = ownedMappers.data();
+            mapperCount = count;
+        }
+        else
+        {
+            mapperCount = 0;
+        }
+        mapperCountKnown = true;
+    }
+    void setMappers(std::vector<AcGiMapper> values)
+    {
+        ownedMappers = std::move(values);
+        mapperValues = ownedMappers.empty() ? nullptr : ownedMappers.data();
+        mapperCount = ownedMappers.size();
+        mapperCountKnown = true;
+    }
+
+    // ARX-compatible borrowed overload: the caller must keep |values| alive
+    // through the mesh/shell callback.  It intentionally replaces any owned
+    // mapper vector so the two lifetime modes cannot silently mix.
+    void setMappers(const AcGiMapper *values)
+    {
+        ownedMappers.clear();
+        mapperValues = values;
+        mapperCount = 0;
+        mapperCountKnown = false;
+    }
+    AcGiMapper *mappers() const
+    {
+        return const_cast<AcGiMapper *>(mapperValues);
+    }
+    size_t mapperCountData() const { return mapperCount; }
+    bool mapperCountKnownData() const { return mapperCountKnown; }
     void setVisibility(const Adesk::UInt8 *values, size_t count)
     {
         if (values == nullptr)
@@ -168,12 +406,22 @@ struct AcGiFaceData
         else
             visibility.assign(values, values + count);
     }
+    Adesk::UInt8 *visibilityData() { return visibility.data(); }
+    Adesk::UInt8 *visibilityData() const
+    {
+        return const_cast<Adesk::UInt8 *>(visibility.data());
+    }
     void setNormals(const AcGeVector3d *values, size_t count)
     {
         if (values == nullptr)
             normals.clear();
         else
             normals.assign(values, values + count);
+    }
+    AcGeVector3d *normalsData() { return normals.data(); }
+    AcGeVector3d *normalsData() const
+    {
+        return const_cast<AcGeVector3d *>(normals.data());
     }
     void setTransparency(const AcCmTransparency *values, size_t count)
     {
@@ -182,11 +430,52 @@ struct AcGiFaceData
         else
             transparency.assign(values, values + count);
     }
+    AcCmTransparency *transparencyData() { return transparency.data(); }
+    AcCmTransparency *transparencyData() const
+    {
+        return const_cast<AcCmTransparency *>(transparency.data());
+    }
 };
 struct AcGiVertexData
 {
+    enum MapChannel
+    {
+        kAllChannels,
+        kMapChannels
+    };
+
     std::vector<AcCmEntityColor> trueColors;
     std::vector<AcGeVector3d> normals;
+
+    void setOrientationFlag(AcGiOrientationType value)
+    {
+        orientation = value;
+    }
+    AcGiOrientationType orientationFlag() const { return orientation; }
+
+    void setMappingCoords(MapChannel channel, const AcGePoint3d *values)
+    {
+        switch (channel)
+        {
+        case kAllChannels:
+            allMappingCoords = values;
+            break;
+        case kMapChannels:
+            mapMappingCoords = values;
+            break;
+        }
+    }
+    AcGePoint3d *mappingCoords(MapChannel channel) const
+    {
+        switch (channel)
+        {
+        case kAllChannels:
+            return const_cast<AcGePoint3d *>(allMappingCoords);
+        case kMapChannels:
+            return const_cast<AcGePoint3d *>(mapMappingCoords);
+        }
+        return nullptr;
+    }
 
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
@@ -202,6 +491,11 @@ struct AcGiVertexData
         else
             normals.assign(values, values + count);
     }
+
+private:
+    AcGiOrientationType orientation = kAcGiNoOrientation;
+    const AcGePoint3d *allMappingCoords = nullptr;
+    const AcGePoint3d *mapMappingCoords = nullptr;
 };
 
 // Clip boundary (port subset: a convex polygonal clip plane).
@@ -225,6 +519,11 @@ struct AcGiClipBoundary
 struct AcGiGdiDrawObject
 {
 };
+
+// Minimal owner-draw tokens for the port.  Native GDI upload remains outside
+// the renderer, but AcGiViewportDraw now has protocol slots for these calls.
+class AcGiOwnerDraw {};
+class AcGiOwnerDraw3d {};
 
 struct AcGiPixelBGRA32
 {
@@ -453,6 +752,16 @@ public:
 
     virtual Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) = 0;
 
+    // ObjectARX-style planar curve array.  The concrete AcGiWorldDraw adapts
+    // these type-erased value curves to the edge-value callback above.
+    virtual Adesk::Boolean edge(const AcGeCurve2d *edges,
+                                Adesk::UInt32 nbEdges)
+    {
+        (void)edges;
+        (void)nbEdges;
+        return true;
+    }
+
     virtual Adesk::Boolean polypoint(
         const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList,
         const AcGeVector3d * /*normal*/ = nullptr,
@@ -495,9 +804,9 @@ public:
         return worldInfiniteLine(first, first - second);
     }
 
-    // Behavior transforms.  Port subset: every behavior collapses to its
-    // world-space form until per-viewport transform plumbing lands; each
-    // returns the pushed matrix.
+    // Behavior transforms.  Concrete world draw resolves viewport/screen
+    // input using its optional viewport frame; the base fallback remains
+    // world-space.  Each push returns the resolved matrix.
     virtual AcGeMatrix3d pushPositionTransform(
         AcGiPositionTransformBehavior /*behavior*/, const AcGePoint3d &offset)
     {
@@ -553,7 +862,53 @@ public:
         return true;
     }
 
-    // Generic 3D curve: ARX default stores nothing (kFalse).
+    // Eye/DC-space viewport geometry.  They are accepted here as port-level
+    // virtuals so AcGiWorldDraw can provide real conversions without yet
+    // splitting the full AcGiViewportGeometry interface.
+    virtual Adesk::Boolean polylineEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
+    {
+        (void)nbPoints;
+        (void)vertexList;
+        return true;
+    }
+    virtual Adesk::Boolean polygonEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
+    {
+        (void)nbPoints;
+        (void)vertexList;
+        return true;
+    }
+    virtual Adesk::Boolean polylineDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
+    {
+        (void)nbPoints;
+        (void)vertexList;
+        return true;
+    }
+    virtual Adesk::Boolean polygonDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
+    {
+        (void)nbPoints;
+        (void)vertexList;
+        return true;
+    }
+    virtual Adesk::Boolean ownerDrawDc(
+        Adesk::Int32 /*viewportNumber*/, Adesk::Int32 /*left*/,
+        Adesk::Int32 /*top*/, Adesk::Int32 /*right*/,
+        Adesk::Int32 /*bottom*/, AcGiOwnerDraw * /*ownerDraw*/)
+    {
+        return true;
+    }
+    virtual Adesk::Boolean ownerDraw3d(
+        AcGePoint3d & /*minimum*/, AcGePoint3d & /*maximum*/,
+        AcGiOwnerDraw3d * /*ownerDraw*/)
+    {
+        return true;
+    }
+
+    // Generic 3D curve: ARX default stores nothing (kFalse).  The concrete
+    // AcGiWorldDraw below tessellates the supported value curves.
     virtual Adesk::Boolean curve(const AcGeCurve3d * /*curve*/)
     {
         return false;
@@ -591,6 +946,8 @@ public:
     virtual void setVisibility(bool visible) = 0;
     virtual void setFillType(AcGiFillType fillType) = 0;
     virtual AcGiFillType fillType() const = 0;
+    virtual void setMaterial(const acdb::AcDbObjectId &materialId) = 0;
+    virtual const acdb::AcDbObjectId &materialId() const = 0;
 
     // Port extension: applies the entity-common attribute set in one call.
     virtual void setFrom(const acdb::AcDbEntity &common) = 0;
@@ -641,6 +998,14 @@ public:
         return subEntityTraits().traits().fillEnabled ? kAcGiFillAlways
                                                        : kAcGiFillNever;
     }
+    void setMaterial(const acdb::AcDbObjectId &value) override
+    {
+        subEntityTraits().setMaterial(value);
+    }
+    const acdb::AcDbObjectId &materialId() const override
+    {
+        return subEntityTraits().materialId();
+    }
     void setFrom(const acdb::AcDbEntity &common) override
     {
         subEntityTraits().setFrom(common);
@@ -669,6 +1034,8 @@ public:
         const AcGeVector3d &u, const AcGeVector3d &v,
         TransparencyMode transparencyMode = kTransparency8Bit) override;
     Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) override;
+    Adesk::Boolean edge(const AcGeCurve2d *edges,
+                        Adesk::UInt32 nbEdges) override;
     Adesk::Boolean worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                  const AcGePoint3d &c,
                                  bool fillIs3DFace = false) override;
@@ -738,6 +1105,37 @@ public:
         transformStack_.push_back(currentTransform() * matrix);
         return true;
     }
+
+    // Behavior-aware AcGi transforms resolve viewport/screen input into the
+    // world soup at push time.  The returned matrix is the resolved model
+    // transform; subsequent local geometry is still composed normally.
+    AcGeMatrix3d pushPositionTransform(
+        AcGiPositionTransformBehavior behavior,
+        const AcGePoint3d &offset) override;
+    AcGeMatrix3d pushScaleTransform(
+        AcGiScaleTransformBehavior behavior,
+        const AcGePoint3d &extents) override;
+    AcGeMatrix3d pushOrientationTransform(
+        AcGiOrientationTransformBehavior behavior) override;
+
+    // Viewport-space protocol: eye/DC points are first mapped to world and
+    // then emitted through the normal world sink (including current traits).
+    Adesk::Boolean polylineEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polygonEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polylineDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polygonDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean ownerDrawDc(
+        Adesk::Int32 viewportNumber, Adesk::Int32 left, Adesk::Int32 top,
+        Adesk::Int32 right, Adesk::Int32 bottom,
+        AcGiOwnerDraw *ownerDraw) override;
+    Adesk::Boolean ownerDraw3d(
+        AcGePoint3d &minimum, AcGePoint3d &maximum,
+        AcGiOwnerDraw3d *ownerDraw) override;
+    Adesk::Boolean curve(const AcGeCurve3d *curve) override;
 
     Adesk::Boolean pushModelTransform(const AcGeVector3d &translation) override
     {
@@ -814,6 +1212,23 @@ private:
     {
         return transformBy(point, currentTransform());
     }
+
+    // Maps an absolute world point back through the active model transform so
+    // converted eye/DC points can re-enter worldPolyline/worldPolygon without
+    // being transformed a second time.
+    AcGePoint3d modelPointFromWorld(const AcGePoint3d &world) const
+    {
+        return transformBy(world, currentTransform().inverted());
+    }
+    [[nodiscard]] bool behaviorNeedsViewport(
+        AcGiPositionTransformBehavior behavior) const;
+    [[nodiscard]] bool behaviorNeedsViewport(
+        AcGiScaleTransformBehavior behavior) const;
+    [[nodiscard]] AcGeVector3d viewportWorldOffset(
+        const AcGePoint3d &offset) const;
+    [[nodiscard]] AcGeVector3d viewportWorldScaleAxis(
+        double value, size_t axis) const;
+    [[nodiscard]] AcGeMatrix3d screenOrientationMatrix() const;
 
     acgs::GeometrySink &sink() { return draw_.sink(); }
 

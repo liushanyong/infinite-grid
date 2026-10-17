@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 #include "AcGePoint.h"
@@ -235,6 +237,64 @@ public:
 
     bool isInside(const AcGePoint2d &point,
                   const AcGeTol &tol = AcGeTol{}) const;
+};
+
+
+// Value-semantic type-erased planar curve.  This mirrors the AcGeCurve3d
+// facade and lets AcGi edge() accept ObjectARX-style AcGeCurve2d arrays
+// without converting this value-geometry layer to a virtual hierarchy.
+struct ACGE_PORT AcGeCurve2d
+{
+    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
+
+    AcGeCurve2d() = default;
+    AcGeCurve2d(const AcGeLineSeg2d &value) : curve(value) {}
+    AcGeCurve2d(const AcGeCircArc2d &value) : curve(value) {}
+    AcGeCurve2d(const AcGeEllipArc2d &value) : curve(value) {}
+
+    AcGePoint2d startPoint() const
+    {
+        return std::visit(
+            [](const auto &value) { return value.startPoint(); }, curve);
+    }
+    AcGePoint2d endPoint() const
+    {
+        return std::visit(
+            [](const auto &value) { return value.endPoint(); }, curve);
+    }
+    AcGePoint2d pointAt(double parameter) const
+    {
+        return std::visit(
+            [parameter](const auto &value) {
+                if constexpr (std::is_same_v<std::decay_t<decltype(value)>,
+                                             AcGeCircArc2d>)
+                {
+                    const double sweep = value.sweep() *
+                                         (value.isClockWise() ? -1.0 : 1.0);
+                    return value.pointAtAngle(value.startAng() + sweep *
+                                                                  parameter);
+                }
+                else
+                {
+                    return value.pointAt(parameter);
+                }
+            },
+            curve);
+    }
+    double radius() const
+    {
+        return std::visit(
+            [](const auto &value) -> double {
+                using Curve = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Curve, AcGeLineSeg2d>)
+                    return 0.0;
+                else if constexpr (std::is_same_v<Curve, AcGeCircArc2d>)
+                    return value.radius();
+                else
+                    return value.majorRadius();
+            },
+            curve);
+    }
 };
 
 using AcGeEllip2d = AcGeEllipArc2d;

@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "acdb/AcDbCore.h"
+#include "acdb/AcDbMaterial.h"
 #include "acge/AcGePoint.h"
 
 namespace acdb
@@ -78,6 +79,16 @@ public:
 
 private:
     std::map<std::string, AcDbHandle> entries_;
+};
+
+// ---- AcDbMaterialRecord: a named material resident in ACAD_MATERIAL ----
+
+struct ACDB_PORT AcDbMaterialRecord : AcDbObject
+{
+    // Dictionary entries point at records; the local name makes a material
+    // record independently inspectable while still preserving its NOD key.
+    std::string name;
+    AcDbMaterial material;
 };
 
 // ---- AcDbXrecord: tagged data slots keyed by integer id ----
@@ -147,6 +158,6 @@ private:
 
 // ---- the non-graphical object payload variant ----
 
-using AcDbNonGraphicalObject = std::variant<AcDbDictionary, AcDbXrecord>;
+using AcDbNonGraphicalObject = std::variant<AcDbDictionary, AcDbXrecord, AcDbMaterialRecord>;
 
 } // namespace acdb

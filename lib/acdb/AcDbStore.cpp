@@ -107,6 +107,48 @@ std::vector<double> jsonToDoubles(const Value &v)
 
 // ---- common properties ---------------------------------------------------
 
+Value materialToJson(const AcDbMaterial &material)
+{
+    Value out(json::Object{});
+    out.set("baseColorFactor", colorToJson(material.baseColorFactor));
+    out.set("emissiveFactor", colorToJson(material.emissiveFactor));
+    out.set("diffuseFactor", colorToJson(material.diffuseFactor));
+    out.set("specularFactor", colorToJson(material.specularFactor));
+    out.set("metallicFactor", material.metallicFactor);
+    out.set("roughnessFactor", material.roughnessFactor);
+    out.set("alphaMask", material.alphaMask);
+    out.set("alphaMaskCutoff", material.alphaMaskCutoff);
+    out.set("diffuseTexture", material.diffuseTexture);
+    out.set("renderClass", static_cast<int>(material.renderClass));
+    return out;
+}
+
+AcDbMaterial jsonToMaterial(const Value &value)
+{
+    AcDbMaterial material;
+    if (const Value *v = value.find("baseColorFactor"))
+        material.baseColorFactor = jsonToColor(*v);
+    if (const Value *v = value.find("emissiveFactor"))
+        material.emissiveFactor = jsonToColor(*v);
+    if (const Value *v = value.find("diffuseFactor"))
+        material.diffuseFactor = jsonToColor(*v);
+    if (const Value *v = value.find("specularFactor"))
+        material.specularFactor = jsonToColor(*v);
+    if (const Value *v = value.find("metallicFactor"))
+        material.metallicFactor = float(v->asNumber());
+    if (const Value *v = value.find("roughnessFactor"))
+        material.roughnessFactor = float(v->asNumber());
+    if (const Value *v = value.find("alphaMask"))
+        material.alphaMask = float(v->asNumber(1.0));
+    if (const Value *v = value.find("alphaMaskCutoff"))
+        material.alphaMaskCutoff = float(v->asNumber(0.5));
+    if (const Value *v = value.find("diffuseTexture"))
+        material.diffuseTexture = v->asString();
+    if (const Value *v = value.find("renderClass"))
+        material.renderClass = static_cast<RenderClass>(int(v->asNumber()));
+    return material;
+}
+
 Value commonToJson(const AcDbEntity &entity)
 {
     Value out(json::Object{});
@@ -118,6 +160,7 @@ Value commonToJson(const AcDbEntity &entity)
     out.set("lineType", entity.lineType);
     out.set("lineWeight", entity.lineWeight);
     out.set("visible", entity.visible);
+    out.set("materialId", static_cast<double>(entity.materialId.handle.value));
     return out;
 }
 
@@ -155,6 +198,12 @@ void commonFromJson(const Value &value, AcDbEntity &entity)
         entity.lineWeight = v->asNumber();
     if (const Value *v = value.find("visible"))
         entity.visible = v->asBool(true);
+    if (const Value *v = value.find("materialId"))
+    {
+        const std::uint64_t handleValue =
+            static_cast<std::uint64_t>(v->asNumber());
+        entity.materialId = AcDbObjectId{AcDbHandle{handleValue}};
+    }
 }
 
 // ---- entity payload codec (one branch per variant alternative) ----------
@@ -1388,9 +1437,11 @@ constexpr int kXrBool = 0, kXrInt32 = 1, kXrDouble = 2, kXrString = 3,
 
 const char *nonGraphicalClassName(const AcDbNonGraphicalObject &object)
 {
-    return std::holds_alternative<AcDbDictionary>(object)
-               ? "AcDbDictionary"
-               : "AcDbXrecord";
+    if (std::holds_alternative<AcDbDictionary>(object))
+        return "AcDbDictionary";
+    if (std::holds_alternative<AcDbXrecord>(object))
+        return "AcDbXrecord";
+    return "AcDbMaterialRecord";
 }
 
 Value encodeNonGraphical(const AcDbNonGraphicalObject &object)
@@ -1408,6 +1459,13 @@ Value encodeNonGraphical(const AcDbNonGraphicalObject &object)
             entries.push(std::move(entry));
         });
         out.set("entries", std::move(entries));
+        return out;
+    }
+    if (const AcDbMaterialRecord *material =
+            std::get_if<AcDbMaterialRecord>(&object))
+    {
+        out.set("name", material->name);
+        out.set("material", materialToJson(material->material));
         return out;
     }
     const AcDbXrecord *xrecord = std::get_if<AcDbXrecord>(&object);
@@ -1559,6 +1617,11 @@ bool decodeNonGraphical(const std::string &className,
     if (className == "AcDbXrecord")
     {
         out = AcDbXrecord{};
+        return true;
+    }
+    if (className == "AcDbMaterialRecord")
+    {
+        out = AcDbMaterialRecord{};
         return true;
     }
     return false;
@@ -1935,6 +1998,14 @@ StoreResult loadDatabase(const char *path, AcDbDatabase &database)
                                  std::get_if<AcDbXrecord>(&object))
                 {
                     decodeXRecordValues(*parsed, *xrecord);
+                }
+                else if (auto *material =
+                                 std::get_if<AcDbMaterialRecord>(&object))
+                {
+                    if (const Value *name = parsed->find("name"))
+                        material->name = name->asString();
+                    if (const Value *payload = parsed->find("material"))
+                        material->material = jsonToMaterial(*payload);
                 }
                 if (!loaded.insertNonGraphicalObject(handle,
                                                      std::move(object)))

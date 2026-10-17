@@ -107,6 +107,12 @@ public:
     void setVisibility(bool value) { visible = value; }
     bool getVisibility() const { return visible; }
 
+    // ObjectARX material identity. The value-port currently allows an
+    // entity-embedded AcDbMaterial (AcDbPolyFaceMesh) or a future dictionary
+    // record to own the material while this id is the renderer binding key.
+    void setMaterialId(const AcDbObjectId &value) { materialId = value; }
+    const AcDbObjectId &getMaterialId() const { return materialId; }
+
     // AcDbEntity::setName (DXF group 1 for non-graphical naming)
     void setName(const std::string &value) { name = value; }
     const std::string &getName() const { return name; }
@@ -122,6 +128,7 @@ public:
     std::string lineType = "ByLayer";
     double lineWeight = 0.0;
     bool visible = true;
+    AcDbObjectId materialId;
 
 protected:
     // Protocol hooks.  The base defaults: attributes stamp the entity

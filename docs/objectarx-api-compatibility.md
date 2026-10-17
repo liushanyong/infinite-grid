@@ -304,6 +304,19 @@ domain protocol chain (`minParameter`/`maxParameter`, `startParam`/
 `endParam`, the conic angle members/accessors, then `[0,1]`) and built
 from uniform samples plus the domain endpoints.
 
+Batch 9 enables the AcGi image-texture rendering path. The filled
+triangle shader binaries under `lib/shaders/cadPrimitives/filled` had
+been checked in before the UV sampling uniforms existed, so the renderer
+reported no AcGi image-texture support and every textured triangle fell
+back to per-pixel color. `compile_shaders_all.bat` regenerated all
+shader targets (its DX11 leg moved from the `s_4_0` profile to
+`s_5_0` because `ps_4_0` rejects combined texture-sampler types),
+and the new `fs_filled`/`vs_filled` binaries carry `s_albedo` and
+`v_uv`. With the binaries current, `BgfxRenderer::supportsAcGiImageTextures`
+now returns true, so `AcGsManager::uploadImageBGRA` uploads decoded
+`AcGiImageBGRA32` pixels, `AcGsView` binds them per batch, and
+`AcGiWorldDraw::image` quads render through the sampler instead of
+the fallback path.
 The wide `AcGiWorldDraw::text` overload accepts `ACHAR` text and converts it
 to UTF-8 before queuing it for the existing text renderer. DWG/DXF codecs,
 SQLite storage, and the current renderer remain UTF-8/narrow-string boundaries;
@@ -334,23 +347,73 @@ applicable boundary and edge strokes.
 
 `polyPolygon` expands the documented grouped shape counts and insertion
 positions, ear-clips simple planar concave outlines, and carries fill/outline
-colors and alpha into the existing primitives. Mesh/shell callbacks consume
-true-color and visibility arrays, apply vertex colors/normals to generated
-triangles, and emit explicitly visible edge strokes with optional color and
-linetype overrides; face transparency remains ignored as the reference currently
-specifies. Face materials/mappers/layers and selection markers are not represented
-by the draw sink. Shell negative-count rings are treated as holes in the
-preceding face and triangulated with simple planar outer/hole contours; edge
-attributes follow face-list ring order, while face attributes exclude holes.
-The shell `pResBuf` hatch-conversion payload is not consumed.
-`image` copies BGRA pixels and
-approximates them with two colored triangles per pixel, limited to 65,536
-pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
-proportional. This is a CPU geometry fallback, not filtered GPU texture upload.
-`edge` emits line-segment, circular-arc, and elliptical-arc edge values
-as strokes (curve tessellation is capped at 65,536 segments per edge); it does
-not accept native `AcGeCurve2d*` arrays because this port's AcGe curves are
-value types rather than a polymorphic curve hierarchy. Native GDI owner-draw
-uploads are not implemented; the callback remains a no-op, matching ObjectARX's
-default implementation. `AcDbPolyline` already has an entity-level AcGi
-callback path, so `pline` is not a missing renderer algorithm.
+colors and alpha into the existing primitives. Mesh/shell callbacks apply
+true-color and face-transparency alpha to generated triangles, apply vertex
+colors/normals, and emit explicitly visible edge strokes with optional color
+and linetype overrides. Per-edge/per-face color indices, layer IDs, selection
+markers, linetype IDs, and face material IDs are retained as metadata on the
+tessellated sink primitives. `AcGsModel::setMaterial` binds a face-material ID
+to an `AcGiMaterial` and optional 1-based raster-image index; the fill
+submission resolves triangle material IDs (with a direct triangle image taking
+priority), batches by material/texture/address, and passes the material to the
+filled-triangle shader. Model `merge` appends images and rebases incoming
+triangle and material image indices.
+
+`AcGiSubEntityTraits::setMaterial`/`materialId` completes the ObjectARX
+subentity material API. The shared sink retains the id on `Stroke`,
+`Triangle`, and `TessellatedPoint`, while fragment `append` preserves a more
+specific per-primitive id and otherwise stamps the active trait state.
+`AcDbMaterialRecord` is now a non-graphical NOD payload and the standard
+`ACAD_MATERIAL` dictionary is seeded with the other ACAD subtrees.
+`AcDbDatabase::setMaterial` / `findMaterial` / `forEachMaterial` maintain named,
+database-resident material records; `AcDbEntity::materialId` and record/handle
+bindings persist through the SQLite store. When replaying an entity whose
+material id resolves to a dictionary record, replay uses that shared record;
+otherwise it falls back to an entity-embedded `AcDbPolyFaceMesh::material`.
+`AcGsMetafile` has the matching replay material map and stamps newly emitted
+fills with that key. The glTF host bridge decodes
+embedded `AcDbGltfTexture` bytes to BGRA raster images, appends them to replay
+geometry, and binds `AcDbMaterial::diffuseTexture` by the 1-based replay image
+index. The filled shader now consumes emissive RGB and alpha-mask cutoff in
+addition to base color and texture sampling.
+`AcGiEdgeData::setLineTypes(const AcDbObjectId *)` and `linetypeIds()` follow
+the ObjectARX spelling; the pointer-only setter borrows the array until the
+next synchronous `mesh`/`shell` callback, while the counted port setter copies
+and validates its input.
+`AcGiVertexData` mapping coordinates are validated, interpolated, and bound
+as fill UVs. Face mappers are consumed per face: their projection generates
+planar/box/cylindrical/spherical coordinates when no vertex mapping is
+provided, and their transform is applied before UV submission. Inherited
+projection uses the available vertex mapping channels. `AcGiMapper`
+projection/transform/tiling/auto-transform declarations are available. Counted
+`AcGiFaceData::setMappers` calls and the vector overload own copies; the
+pointer-only overload remains ARX-compatible and borrows through the synchronous
+mesh/shell callback. `kObject` and `kModel` auto-transform normalize generated
+coordinates by the entity/model point bounds before applying the mapper
+transform. Shell negative-count rings are
+treated as holes in the preceding face and triangulated with simple planar
+outer/hole contours; edge attributes follow face-list ring order, while face
+attributes exclude holes. The shell `pResBuf` hatch-conversion payload is not
+consumed.
+`image` copies BGRA pixels and retains a UV-mapped quad plus a per-pixel
+triangle fallback. The bgfx raw BGRA upload/cache path is implemented, but
+image-texture submission remains capability-gated until the checked-in filled
+shader binaries are regenerated with UV sampling; the current WebGPU backend
+also uses the fallback. Calls are limited to 65,536 pixels; 1-bit alpha treats
+only 255 as opaque, while 8-bit alpha is proportional.
+`edge` accepts both the port's value-edge list and an ObjectARX-style
+`AcGeCurve2d*` array; line-segment, circular-arc, elliptical-arc, and
+type-erased curve values emit as strokes (curve tessellation is capped at 65,536
+segments per edge). `AcGeCurve2d`/`AcGeCurve3d` are value-semantic facades over
+the existing analytic curve values, and `AcGiGeometry::curve` tessellates line,
+circle, circular-arc, and elliptical-arc inputs through the viewport deviation
+policy. `polylineEye`, `polygonEye`, `polylineDc`, `polygonDc`,
+`ownerDrawDc`, and `ownerDraw3d` are now protocol slots on `AcGiWorldDraw`;
+eye/DC calls convert through `acgs::ViewportDraw::setViewportFrame` and reuse
+the world sink. `AcGsView::configureViewportDraw` bridges the active frame's
+true world-to-eye transform, projection-to-DC transform, viewport size, and
+pixel density. Without a viewport frame they safely return `true`. Behavior
+position/scale/orientation transforms resolve viewport and screen inputs into
+world coordinates before cached soup submission; native GDI owner-draw uploads
+remain no-ops. `AcDbPolyline` already has an entity-level AcGi callback path,
+so `pline` is not a missing renderer algorithm.

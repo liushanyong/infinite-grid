@@ -264,11 +264,13 @@ call :run_shaderc linux spirv "!VARNAME!_spv"
 if !ERRORLEVEL! equ 0 (set /a "PASS+=1") else (set /a "FAIL+=1")
 
 REM ---- Platform: DX11 (Windows) ----
-REM Compute shaders need SM 5.0 for typed UAVs, vs/fs can use SM 4.0
+REM Compute shaders need SM 5.0 for typed UAVs; fragment shaders need SM
+REM 5.0 as well: ps_4_0 rejects the bgfx sampler macro expansion used by
+REM the filled/UV shader (D3DCompile error X3090).
 if "%TYPE%"=="compute" (
     call :run_shaderc windows s_5_0 "!VARNAME!_dx11"
 ) else (
-    call :run_shaderc windows s_4_0 "!VARNAME!_dx11"
+    call :run_shaderc windows s_5_0 "!VARNAME!_dx11"
 )
 if !ERRORLEVEL! equ 0 (set /a "PASS+=1") else (set /a "FAIL+=1")
 

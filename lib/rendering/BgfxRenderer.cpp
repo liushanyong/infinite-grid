@@ -940,6 +940,43 @@ uint32_t BgfxRenderer::loadMeshTextureFromMemory(const std::string &key,
     return index;
 }
 
+uint32_t BgfxRenderer::uploadImageBGRA(const std::string &key,
+                                       uint32_t width, uint32_t height,
+                                       const std::uint8_t *pixels)
+{
+    if (!m_initialized || key.empty() || pixels == nullptr || width == 0 ||
+        height == 0 || width > UINT16_MAX || height > UINT16_MAX ||
+        width > std::numeric_limits<std::size_t>::max() / height ||
+        static_cast<std::size_t>(width) * height >
+            std::numeric_limits<std::size_t>::max() / 4)
+        return 0;
+
+    const std::string cacheKey = "acgi-image:" + key;
+    const auto cached = m_meshTextureKeys.find(cacheKey);
+    if (cached != m_meshTextureKeys.end())
+        return cached->second;
+
+    const std::uint64_t flags =
+        BGFX_TEXTURE_NONE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    if (!bgfx::isTextureValid(1, false, 1, bgfx::TextureFormat::BGRA8, flags))
+        return 0;
+    const std::size_t byteCount =
+        static_cast<std::size_t>(width) * height * 4;
+    if (byteCount > UINT32_MAX)
+        return 0;
+    const bgfx::TextureHandle texture = bgfx::createTexture2D(
+        static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height),
+        false, 1, bgfx::TextureFormat::BGRA8, flags,
+        bgfx::copy(pixels, static_cast<std::uint32_t>(byteCount)));
+    if (!bgfx::isValid(texture))
+        return 0;
+
+    m_meshTextures.push_back(texture);
+    const std::uint32_t index = static_cast<std::uint32_t>(m_meshTextures.size());
+    m_meshTextureKeys.emplace(cacheKey, index);
+    return index;
+}
+
 // Interleaves the static-model channels into the exact prototype layout:
 // Position(xyz,u) + Normal(xyz,v).  32-bit indices keep large imported
 // models intact.
@@ -1254,6 +1291,7 @@ void BgfxRenderer::shutdown()
     destroyUniform(m_meshSurface);
     destroyUniform(m_albedoSampler);
     destroyUniform(m_realisticMaterial);
+    destroyUniform(m_fillMaterialParams);
     destroyUniform(m_rAmbient);
     destroyUniform(m_rDirection);
     destroyUniform(m_rDirectionColor);
@@ -3230,7 +3268,12 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
     const uint32_t vertSize = sizeof(FillVertex);
     const glm::mat4 proj = projectionForDirect3D(data.projection);
     float logDepth[4] = { data.logDepth.x, data.logDepth.y, data.logDepth.z, data.logDepth.w };
-    const float fillStyle[4] = { depthStyleForRenderMode(m_renderMode.mode()), 0.0f, 0.0f, 0.0f };
+    const bool hasTexture =
+        data.textureId != 0 && data.textureId <= m_meshTextures.size() &&
+        bgfx::isValid(m_meshTextures[data.textureId - 1]);
+    const float fillStyle[4] = {
+        depthStyleForRenderMode(m_renderMode.mode()), 0.0f,
+        hasTexture ? 1.0f : 0.0f, 0.0f};
     const float denom = logDepthDenominator(data.logDepth);
     const uint64_t prepassState = BGFX_STATE_DEPTH_TEST_LEQUAL |
         BGFX_STATE_WRITE_Z | BGFX_STATE_MSAA;
@@ -3261,6 +3304,25 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
         bgfx::setUniform(m_primParams, fillStyle);
         bgfx::setUniform(m_realisticMaterial,
                          glm::value_ptr(data.material.baseColor));
+        const glm::vec4 materialParams(
+            data.material.emissiveColor.r, data.material.emissiveColor.g,
+            data.material.emissiveColor.b,
+            std::clamp(data.material.alphaMaskCutoff, 0.0f, 0.995f));
+        bgfx::setUniform(m_fillMaterialParams,
+                         glm::value_ptr(materialParams));
+        std::uint32_t samplerFlags = 0;
+        if (data.textureAddressU == TextureAddressMode::Mirror)
+            samplerFlags |= BGFX_SAMPLER_U_MIRROR;
+        else if (data.textureAddressU == TextureAddressMode::Clamp)
+            samplerFlags |= BGFX_SAMPLER_U_CLAMP;
+        if (data.textureAddressV == TextureAddressMode::Mirror)
+            samplerFlags |= BGFX_SAMPLER_V_MIRROR;
+        else if (data.textureAddressV == TextureAddressMode::Clamp)
+            samplerFlags |= BGFX_SAMPLER_V_CLAMP;
+        bgfx::setTexture(
+            0, m_albedoSampler,
+            hasTexture ? m_meshTextures[data.textureId - 1] : m_whiteTexture,
+            samplerFlags);
 
         glm::vec3 centroid(0.0f);
         for (uint32_t i = first; i < first + count; ++i)
@@ -3288,6 +3350,13 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
 
         first += count;
     }
+}
+
+bool BgfxRenderer::supportsAcGiImageTextures() const
+{
+    // The filled shader binaries now include the UV sampling path (s_albedo/v_uv),
+    // regenerated via compile_shaders_all.bat with the DX11 s_5_0 profile fix.
+    return true;
 }
 
 void BgfxRenderer::drawCurves(const CurveRenderData& data)
@@ -4730,6 +4799,7 @@ bool BgfxRenderer::createRenderResources()
 m_fillLayout.begin()
     .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
     .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+    .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
     .end();
 m_curveLayout.begin()
     .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
@@ -4840,6 +4910,7 @@ m_curveLayout.begin()
         m_meshSurface = createUniformHandle("uMeshSurface", bgfx::UniformType::Vec4);
         m_albedoSampler = createUniformHandle("s_albedo", bgfx::UniformType::Sampler);
         m_realisticMaterial = createUniformHandle("u_material", bgfx::UniformType::Vec4);
+        m_fillMaterialParams = createUniformHandle("u_materialParams", bgfx::UniformType::Vec4);
         m_rAmbient = createUniformHandle("u_rAmbient", bgfx::UniformType::Vec4);
         m_rDirection = createUniformHandle("u_rDirection", bgfx::UniformType::Vec4);
         m_rDirectionColor = createUniformHandle("u_rDirectionColor", bgfx::UniformType::Vec4);
@@ -4911,6 +4982,7 @@ m_curveLayout.begin()
                 bgfx::isValid(m_curveColor) &&
                 bgfx::isValid(m_curveArc);
         ready = ready && bgfx::isValid(m_realisticMaterial) &&
+                bgfx::isValid(m_fillMaterialParams) &&
                 bgfx::isValid(m_rAmbient) &&
                 bgfx::isValid(m_rDirection) &&
                 bgfx::isValid(m_rDirectionColor) &&

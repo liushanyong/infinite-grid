@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "acdb/AcDbDatabase.h"
@@ -63,6 +64,43 @@ struct AcGsMetafile
     std::vector<AcGsEntityRange> fillRanges;
     std::vector<AcGsEntityRange> pointRanges;
     std::vector<CurveBatchCommand> curves;
+
+    // Material bindings recorded alongside the tessellated geometry. This is
+    // the replay-side counterpart of AcGsModel::setMaterial and lets the
+    // host merge/submit a metafile without losing document materials.
+    AcGiMaterialBinding &setMaterial(const acdb::AcDbObjectId &materialId,
+                                      AcGiMaterial material,
+                                      std::uint32_t imageIndex = 0)
+    {
+        AcGiMaterialBinding &binding = materials_[materialId];
+        binding.materialId = materialId;
+        binding.material = material;
+        binding.imageIndex = imageIndex;
+        return binding;
+    }
+
+    AcGiMaterialBinding &setMaterial(const acdb::AcDbObjectId &materialId,
+                                      const acdb::AcDbMaterial &material,
+                                      std::uint32_t imageIndex = 0)
+    {
+        return setMaterial(materialId, toAcGiMaterial(material), imageIndex);
+    }
+
+    [[nodiscard]] const AcGiMaterialBinding *findMaterial(
+        const acdb::AcDbObjectId &materialId) const
+    {
+        if (!materialId.isValid())
+            return nullptr;
+        const auto found = materials_.find(materialId);
+        return found != materials_.end() ? &found->second : nullptr;
+    }
+
+    [[nodiscard]] const std::unordered_map<acdb::AcDbObjectId,
+                                           AcGiMaterialBinding> &
+    materials() const { return materials_; }
+
+private:
+    std::unordered_map<acdb::AcDbObjectId, AcGiMaterialBinding> materials_;
 };
 
 // Per-entity replay hints, authored alongside the entity (the metafile
@@ -180,6 +218,26 @@ private:
         skipHandles.end())
       return; // served by the host's other render channel
     const std::string &name = acdb::common(*payload).name;
+    const auto *mesh = std::get_if<acdb::AcDbPolyFaceMesh>(payload);
+    // Entity-embedded materials use the owning entity's handle as a stable
+    // replay-side binding key. When common.materialId is already populated
+    // (for example the glTF import path), it takes precedence.
+    const acdb::AcDbObjectId materialId =
+        mesh != nullptr && acdb::common(*payload).materialId.isValid()
+            ? acdb::common(*payload).materialId
+            : (mesh != nullptr ? acdb::AcDbObjectId(handle)
+                               : acdb::AcDbObjectId{});
+    if (mesh != nullptr && materialId.isValid())
+    {
+      // A shared ACAD_MATERIAL record wins when the entity points at one;
+      // otherwise the value-port's embedded mesh material is the owner.
+      if (const acdb::AcDbMaterialRecord *record =
+              document.getMaterial(materialId.handle);
+          record != nullptr)
+        target.setMaterial(materialId, record->material);
+      else
+        target.setMaterial(materialId, mesh->material);
+    }
     const auto hintIt = replayHints().find(name);
     const AcGsReplayHints hints =
         hintIt != replayHints().end() ? hintIt->second : AcGsReplayHints{};
@@ -223,8 +281,15 @@ private:
     if (drawable == nullptr)
       return;
 
+    const size_t fillBegin = target.geometry.fills.size();
     appendDrawableTree(*drawable, name.c_str(), options, target,
                        hints.pickShape, hints.excludeFromFit);
+    if (mesh != nullptr && materialId.isValid())
+    {
+      for (size_t i = fillBegin; i < target.geometry.fills.size(); ++i)
+        if (!target.geometry.fills[i].materialId.isValid())
+          target.geometry.fills[i].materialId = materialId;
+    }
     acgiDrawableEvent->sendModified(drawable);
   }
 };

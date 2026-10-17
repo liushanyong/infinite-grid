@@ -223,10 +223,12 @@ struct SurfaceMaterial
     SurfaceAlgorithm algorithm = SurfaceAlgorithm::Shaded;
     glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 accentColor{1.0f, 1.0f, 1.0f, 1.0f};
+    glm::vec4 emissiveColor{0.0f, 0.0f, 0.0f, 1.0f};
     float metallic = 0.0f;
     float roughness = 0.35f;
     float transparency = 0.0f;
     float lineWidth = 1.0f;
+    float alphaMaskCutoff = 0.0f;
 };
 
 enum class CurveAlgorithm
@@ -307,6 +309,14 @@ struct FillVertex
 {
     glm::vec3 position;
     glm::vec4 color;
+    glm::vec2 uv{0.0f};
+};
+
+enum class TextureAddressMode : std::uint8_t
+{
+    Repeat,
+    Mirror,
+    Clamp
 };
 
 struct PolylineRenderData
@@ -350,6 +360,9 @@ struct FilledTrianglesRenderData
     glm::mat4 projection;
     const FillVertex *vertices = nullptr;
     uint32_t vertexCount = 0;
+    uint32_t textureId = 0;
+    TextureAddressMode textureAddressU = TextureAddressMode::Clamp;
+    TextureAddressMode textureAddressV = TextureAddressMode::Clamp;
     bool is3DFace = false;
     float layer = 0.0f;
     glm::vec4 logDepth;

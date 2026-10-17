@@ -41,6 +41,7 @@ struct DoubleSingleVec3;
 namespace acgs
 {
 
+class ViewportDraw;
 class AcGsManager;
 class AcGsSelectionManager;
 
@@ -232,6 +233,12 @@ public:
     const ViewFrameContext &frame() const { return frame_; }
     ViewFrameContext &mutableFrame() { return frame_; }
 
+    // Bridges the active camera into AcGiViewportDraw eye/DC-space calls and
+    // behavior transforms.  This does not bake viewport data into cached world
+    // geometry; it only equips a draw callback context for the current frame.
+    void configureViewportDraw(ViewportDraw &draw,
+                               Adesk::Int32 viewportNumber = 1) const;
+
     // Visual style state (ObjectARX: AcGiVisualStyle); the V key cycles it.
     rendering::RenderModeManager &visualStyle() { return visualStyle_; }
 
@@ -326,7 +333,13 @@ public:
     void drawFillTriangles(std::vector<rendering::FillVertex> &vertices,
                            const glm::mat4 &view,
                            const glm::mat4 &projection, bool is3DFace,
-                           float layer) const;
+                           float layer,
+                           const AcGiMaterial *material = nullptr,
+                           std::uint32_t textureId = 0,
+                           rendering::TextureAddressMode addressU =
+                               rendering::TextureAddressMode::Clamp,
+                           rendering::TextureAddressMode addressV =
+                               rendering::TextureAddressMode::Clamp) const;
 
     // Wireframe-mode fill boundary: emit the single-use triangle edges of
     // a fill range as camera-facing ribbons (shared edges stay hidden).

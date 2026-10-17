@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <typeindex>
 #include <utility>
@@ -34,6 +35,7 @@ struct ACGS_PORT DrawTraits
     double lineWeight = 0.0;
     bool visible = true;
     bool fillEnabled = true;
+    acdb::AcDbObjectId materialId;
 
     [[nodiscard]] acdb::AcDbEntity toEntityCommon() const;
     static DrawTraits from(const acdb::AcDbEntity &common);
@@ -108,6 +110,12 @@ public:
     void setLineWeight(double lineWeight) { traits_.lineWeight = lineWeight; }
     void setVisibility(bool visible) { traits_.visible = visible; }
     void setFillEnabled(bool enabled) { traits_.fillEnabled = enabled; }
+    void setMaterial(const acdb::AcDbObjectId &id) { traits_.materialId = id; }
+
+    [[nodiscard]] const acdb::AcDbObjectId &materialId() const
+    {
+        return traits_.materialId;
+    }
 
     [[nodiscard]] const DrawTraits &traits() const { return traits_; }
 
@@ -144,6 +152,25 @@ private:
 // The per-viewport counterpart of AcGiViewportDraw.  This pass carries screen
 // density as world-space chord tolerance so curve tessellation can adapt without
 // mutating authored entities.
+
+// Camera/viewport frame used by the AcGi eye- and DC-space callbacks.  The
+// matrices follow the value-layer convention:
+//   worldToEye maps world points to eye space,
+//   eyeToDc maps eye points to normalized device coordinates,
+// and the inverses are precomputed for AcGiViewportDraw.
+struct ViewportFrame
+{
+    Adesk::Int32 viewportNumber = 0;
+    double left = 0.0;
+    double top = 0.0;
+    double right = 1.0;
+    double bottom = 1.0;
+    AcGeMatrix3d worldToEye;
+    AcGeMatrix3d eyeToDc;
+    AcGeMatrix3d eyeToWorld;
+    AcGeMatrix3d dcToEye;
+};
+
 class ACGS_PORT ViewportDraw final : public WorldDraw
 {
 public:
@@ -171,11 +198,52 @@ public:
     [[nodiscard]] acdb::TesselationOptions optionsFor(
         double curveRadius) const;
 
+    void setViewportFrame(
+        Adesk::Int32 viewportNumber, double left, double top, double right,
+        double bottom, const AcGeMatrix3d &worldToEye,
+        const AcGeMatrix3d &eyeToDc)
+    {
+        ViewportFrame frame;
+        frame.viewportNumber = viewportNumber;
+        frame.left = left;
+        frame.top = top;
+        frame.right = right;
+        frame.bottom = bottom;
+        frame.worldToEye = worldToEye;
+        frame.eyeToDc = eyeToDc;
+        frame.eyeToWorld = worldToEye.inverted();
+        frame.dcToEye = eyeToDc.inverted();
+        frame_ = std::move(frame);
+    }
+
+    void clearViewportFrame() { frame_.reset(); }
+    [[nodiscard]] bool hasViewportFrame() const { return frame_.has_value(); }
+    [[nodiscard]] const ViewportFrame &viewportFrame() const
+    {
+        return frame_.value();
+    }
+
+    [[nodiscard]] AcGePoint3d eyeToWorld(const AcGePoint3d &point) const
+    {
+        return frame_ ? transformBy(point, frame_->eyeToWorld) : point;
+    }
+    [[nodiscard]] AcGePoint3d dcToWorld(const AcGePoint3d &point) const
+    {
+        return frame_ ? transformBy(point, frame_->dcToEye *
+                                              frame_->eyeToWorld)
+                      : point;
+    }
+    [[nodiscard]] AcGeVector3d dcToWorldVector(
+        const AcGePoint3d &start, const AcGePoint3d &end) const
+    {
+        return dcToWorld(end) - dcToWorld(start);
+    }
+
 private:
     double pixelsPerUnit_ = 0.0;
     double chordToleranceFactor_ = 0.25;
+    std::optional<ViewportFrame> frame_;
 };
-
 struct DrawListKey
 {
     std::uint64_t entityRevision = 1;

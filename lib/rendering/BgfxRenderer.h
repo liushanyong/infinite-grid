@@ -44,6 +44,7 @@ public:
     void drawPolylines(const PolylineRenderData &data) override;
     void drawLineInstances(const LineInstancesRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+    bool supportsAcGiImageTextures() const override;
 
     // SDF text (lib/text subsystem).  uploadGlyphSdf registers a glyph's
     // R8 distance field as a texture and returns its id (0 = invalid);
@@ -104,6 +105,9 @@ public:
     uint32_t loadMeshTextureFromMemory(const std::string &key,
                                        const void *data,
                                        std::size_t size) override;
+    uint32_t uploadImageBGRA(const std::string &key, uint32_t width,
+                             uint32_t height,
+                             const std::uint8_t *pixels) override;
     uint32_t createStaticMesh(const StaticMeshVertices &vertices) override;
     void destroyStaticMesh(uint32_t staticMeshId) override;
     void setRealisticLights(const RealisticLightsRenderData &lights) override;
@@ -228,6 +232,7 @@ private:
     bgfx::UniformHandle m_meshSurface = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_albedoSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_realisticMaterial = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle m_fillMaterialParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_rAmbient = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_rDirection = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle m_rDirectionColor = BGFX_INVALID_HANDLE;

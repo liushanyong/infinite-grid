@@ -27,6 +27,8 @@ struct ACDB_PORT AcDbMaterial
 
     std::string diffuseTexture;
     RenderClass renderClass = RenderClass::Realistic;
+
+    bool operator==(const AcDbMaterial &) const = default;
 };
 
 } // namespace acdb
