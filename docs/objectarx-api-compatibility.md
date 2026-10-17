@@ -240,6 +240,9 @@ knot vectors. B-spline and NURBS surfaces expose normals from their analytic
 partial derivatives; NURBS surfaces also expose directional rationality
 queries and a copied definition-data view of degrees, control points, weights,
 and knot vectors.
+NURBS surfaces also provide numerical U/V periodicity queries (matching the
+seam position and first parameter derivative); NURBS curves expose C1/G1
+discontinuity parameter queries at internal knot breaks.
 The common `AcGeCurve2d/3d` bases provide `evalPoint` overloads with first- and
 second-derivative output, and `AcGeSurface` provides point/partial-derivative/
 normal evaluation with derivative order 0 through 2. These base evaluators use

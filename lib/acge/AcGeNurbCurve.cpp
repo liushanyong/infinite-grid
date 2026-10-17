@@ -68,6 +68,55 @@ double nurbsCurveLength(const ge::detail::NurbsCurveCore &curve,
     return length;
 }
 
+template <typename PointAt, typename DerivativesAt>
+bool collectDiscontinuities(const std::vector<double> &knots, int degree,
+                            double start, double end, const AcGeTol &tol,
+                            bool geometric, PointAt pointAt,
+                            DerivativesAt derivativesAt,
+                            AcGeDoubleArray &params)
+{
+    params.clear();
+    if (degree < 1 || knots.empty())
+        return false;
+
+    for (size_t first = 0; first < knots.size();)
+    {
+        size_t after = first + 1;
+        while (after < knots.size() && knots[after] == knots[first])
+            ++after;
+        const double knot = knots[first];
+        const size_t multiplicity = after - first;
+        if (knot > start && knot < end &&
+            multiplicity >= static_cast<size_t>(degree))
+        {
+            const size_t next = after;
+            if (first > 0 && next < knots.size())
+            {
+                const double delta =
+                    std::min(knot - knots[first - 1],
+                             knots[next] - knot) * 1.0e-6;
+                const auto leftDerivative =
+                    derivativesAt(knot - delta, 1).at(1);
+                const auto rightDerivative =
+                    derivativesAt(knot + delta, 1).at(1);
+                const bool positionsMatch =
+                    pointAt(knot - delta).distanceTo(pointAt(knot + delta)) <=
+                    tol.equalPoint();
+                const bool continuous =
+                    positionsMatch &&
+                    (geometric
+                         ? leftDerivative.isCodirectionalTo(rightDerivative,
+                                                            tol)
+                         : leftDerivative.isEqualTo(rightDerivative, tol));
+                if (!continuous)
+                    params.push_back(knot);
+            }
+        }
+        first = after;
+    }
+    return !params.empty();
+}
+
 size_t wrappedIndex(long long raw, size_t n)
 {
     const long long m = static_cast<long long>(n);
@@ -993,6 +1042,26 @@ bool AcGeNurbCurve2d::isClosed(const AcGeTol &tol) const
 {
     return startPoint().distanceTo(endPoint()) <= tol.equalPoint();
 }
+
+bool AcGeNurbCurve2d::getParamsOfC1Discontinuity(
+    AcGeDoubleArray &params, const AcGeTol &tol) const
+{
+    return collectDiscontinuities(
+        m_core.knots, m_core.degree, startParam(), endParam(), tol, false,
+        [this](double u) { return pointAt(u); },
+        [this](double u, size_t count) { return derivativesAt(u, count); },
+        params);
+}
+
+bool AcGeNurbCurve2d::getParamsOfG1Discontinuity(
+    AcGeDoubleArray &params, const AcGeTol &tol) const
+{
+    return collectDiscontinuities(
+        m_core.knots, m_core.degree, startParam(), endParam(), tol, true,
+        [this](double u) { return pointAt(u); },
+        [this](double u, size_t count) { return derivativesAt(u, count); },
+        params);
+}
 // ---------------------------------------------------------------------------
 // AcGeNurbCurve2d structural editing (ObjectARX genurb2d API)
 // ---------------------------------------------------------------------------
@@ -1216,6 +1285,26 @@ double AcGeNurbCurve3d::curvatureAt(double param) const
 bool AcGeNurbCurve3d::isClosed(const AcGeTol &tol) const
 {
     return startPoint().distanceTo(endPoint()) <= tol.equalPoint();
+}
+
+bool AcGeNurbCurve3d::getParamsOfC1Discontinuity(
+    AcGeDoubleArray &params, const AcGeTol &tol) const
+{
+    return collectDiscontinuities(
+        m_core.knots, m_core.degree, startParam(), endParam(), tol, false,
+        [this](double u) { return pointAt(u); },
+        [this](double u, size_t count) { return derivativesAt(u, count); },
+        params);
+}
+
+bool AcGeNurbCurve3d::getParamsOfG1Discontinuity(
+    AcGeDoubleArray &params, const AcGeTol &tol) const
+{
+    return collectDiscontinuities(
+        m_core.knots, m_core.degree, startParam(), endParam(), tol, true,
+        [this](double u) { return pointAt(u); },
+        [this](double u, size_t count) { return derivativesAt(u, count); },
+        params);
 }
 
 // ---------------------------------------------------------------------------

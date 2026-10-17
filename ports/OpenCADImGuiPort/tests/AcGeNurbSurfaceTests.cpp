@@ -89,12 +89,45 @@ void testNurbsSurfaceQueries()
     near(knotsU[1], 1.0);
     near(knotsU[3], 3.0);
 }
+
+void testPeriodicSurfaceQueries()
+{
+    ge::AcGeNurbsSurface3d cylinder;
+    cylinder.degreeU = 2;
+    cylinder.degreeV = 1;
+    cylinder.knotsU = {0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                       3.0, 3.0, 4.0, 4.0, 4.0};
+    cylinder.knotsV = {0.0, 0.0, 1.0, 1.0};
+    cylinder.controlPointCountU = 9;
+    cylinder.controlPointCountV = 2;
+    const double rootHalf = std::sqrt(0.5);
+    const double x[] = {1.0, 1.0, 0.0, -1.0, -1.0,
+                        -1.0, 0.0, 1.0, 1.0};
+    const double y[] = {0.0, 1.0, 1.0, 1.0, 0.0,
+                        -1.0, -1.0, -1.0, 0.0};
+    const double weights[] = {1.0, rootHalf, 1.0, rootHalf, 1.0,
+                              rootHalf, 1.0, rootHalf, 1.0};
+    for (size_t u = 0; u < 9; ++u)
+        for (size_t v = 0; v < 2; ++v)
+            cylinder.controlPoints.push_back(
+                {x[u] * weights[u], y[u] * weights[u],
+                 static_cast<double>(v) * weights[u], weights[u]});
+    cylinder.validate();
+
+    double period = -1.0;
+    assert(cylinder.isPeriodicInU(period));
+    near(period, 4.0);
+    period = -1.0;
+    assert(!cylinder.isPeriodicInV(period));
+    near(period, -1.0);
+}
 } // namespace
 
 int main()
 {
     testActiveParameterDomains();
     testNurbsSurfaceQueries();
+    testPeriodicSurfaceQueries();
     std::cout << "AcGeNurbSurfaceTests passed\n";
     return 0;
 }

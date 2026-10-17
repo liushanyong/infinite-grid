@@ -239,6 +239,10 @@ public:
     bool isRational() const;
     bool isRationalInU() const;
     bool isRationalInV() const;
+    bool isPeriodicInU(double &period,
+                       const AcGeTol &tol = AcGeTol{}) const;
+    bool isPeriodicInV(double &period,
+                       const AcGeTol &tol = AcGeTol{}) const;
     void getDefinitionData(
         size_t &degreeInU, size_t &degreeInV, size_t &controlPointCountInU,
         size_t &controlPointCountInV, bool &rationalInU, bool &rationalInV,

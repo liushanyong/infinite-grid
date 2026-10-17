@@ -813,6 +813,58 @@ bool AcGeNurbsSurface3d::isRationalInV() const
     return false;
 }
 
+namespace
+{
+bool nurbsSurfaceIsPeriodic(const AcGeNurbsSurface3d &surface, bool inU,
+                            double &period, const AcGeTol &tol)
+{
+    surface.validate();
+    const double lower =
+        inU ? surface.minParameterU() : surface.minParameterV();
+    const double upper =
+        inU ? surface.maxParameterU() : surface.maxParameterV();
+    if (!(lower < upper))
+        return false;
+
+    const double otherLower =
+        inU ? surface.minParameterV() : surface.minParameterU();
+    const double otherUpper =
+        inU ? surface.maxParameterV() : surface.maxParameterU();
+    const double otherSpan = otherUpper - otherLower;
+    const double samples[] = {otherLower, otherLower + otherSpan * 0.25,
+                              otherLower + otherSpan * 0.5,
+                              otherLower + otherSpan * 0.75, otherUpper};
+    for (double other : samples)
+    {
+        const double u0 = inU ? lower : other;
+        const double v0 = inU ? other : lower;
+        const double u1 = inU ? upper : other;
+        const double v1 = inU ? other : upper;
+        const auto start = surface.derivativesAt(u0, v0, 1, 1);
+        const auto end = surface.derivativesAt(u1, v1, 1, 1);
+        const AcGeVector3d &tangentStart = inU ? start[1][0] : start[0][1];
+        const AcGeVector3d &tangentEnd = inU ? end[1][0] : end[0][1];
+        if (start[0][0].distanceTo(end[0][0]) > tol.equalPoint() ||
+            !tangentStart.isEqualTo(tangentEnd, tol))
+            return false;
+    }
+    period = upper - lower;
+    return true;
+}
+} // namespace
+
+bool AcGeNurbsSurface3d::isPeriodicInU(double &period,
+                                      const AcGeTol &tol) const
+{
+    return nurbsSurfaceIsPeriodic(*this, true, period, tol);
+}
+
+bool AcGeNurbsSurface3d::isPeriodicInV(double &period,
+                                      const AcGeTol &tol) const
+{
+    return nurbsSurfaceIsPeriodic(*this, false, period, tol);
+}
+
 void AcGeNurbsSurface3d::getDefinitionData(
     size_t &degreeInU, size_t &degreeInV, size_t &controlPointCountInU,
     size_t &controlPointCountInV, bool &rationalInU, bool &rationalInV,
