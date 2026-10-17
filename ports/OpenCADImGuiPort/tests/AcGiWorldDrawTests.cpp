@@ -103,11 +103,16 @@ int main()
     assert(fillTypeGeometry.strokes.size() == 2);
     assert(!fillTypeDraw.circle({0.0, 0.0, 0.0}, 1.0, {0.0, 0.0, 1.0}));
     assert(fillTypeGeometry.fills.size() == 1);
+    fillTypeDraw.setFillType(kAcGiFillAlways);
+    assert(!fillTypeDraw.circle({0.0, 0.0, 0.0}, 1.0, {0.0, 0.0, 1.0}));
+    assert(fillTypeGeometry.fills.size() > 1);
+    fillTypeDraw.setFillType(kAcGiFillNever);
+    const size_t fillsBeforeUnfilledArc = fillTypeGeometry.fills.size();
     const size_t strokesBeforeUnfilledArc = fillTypeGeometry.strokes.size();
     assert(!fillTypeDraw.circularArc({0.0, 0.0, 0.0}, 1.0,
                                      {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0},
                                      1.0, kAcGiArcSector));
-    assert(fillTypeGeometry.fills.size() == 1);
+    assert(fillTypeGeometry.fills.size() == fillsBeforeUnfilledArc);
     assert(fillTypeGeometry.strokes.size() > strokesBeforeUnfilledArc + 1);
 
     acdb::TessellatedEntity boundaryDisplayGeometry;
@@ -233,6 +238,7 @@ int main()
     assert(!wireMeshDraw.mesh(2, 2, meshVertices, &edges));
     assert(wireMeshGeometry.fills.empty());
     assert(wireMeshGeometry.strokes.size() == 2);
+    assert(wireMeshDraw.fillType() == kAcGiFillNever);
 
     acdb::TessellatedEntity shellGeometry;
     acgs::ViewportDraw shellContext(shellGeometry);
@@ -251,6 +257,7 @@ int main()
     assert(!wireShellDraw.shell(4, meshVertices, 6, shellFaces, &edges));
     assert(wireShellGeometry.fills.empty());
     assert(wireShellGeometry.strokes.size() == 2);
+    assert(wireShellDraw.fillType() == kAcGiFillNever);
 
     acdb::TessellatedEntity shellHoleGeometry;
     acgs::ViewportDraw shellHoleContext(shellHoleGeometry);
