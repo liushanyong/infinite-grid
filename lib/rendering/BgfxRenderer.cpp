@@ -3345,6 +3345,12 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
     }
 }
 
+bool BgfxRenderer::supportsAcGiImageTextures() const
+{
+    // The checked-in filled shader binaries predate the UV sampling path.
+    return false;
+}
+
 void BgfxRenderer::drawCurves(const CurveRenderData& data)
 {
     if (!m_initialized || !bgfx::isValid(m_curveProgram) ||

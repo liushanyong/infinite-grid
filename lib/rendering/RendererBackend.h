@@ -103,6 +103,7 @@ public:
     virtual void drawPolylines(const PolylineRenderData &data) = 0;
     virtual void drawLineInstances(const LineInstancesRenderData &data) = 0;
     virtual void drawFilledTriangles(const FilledTrianglesRenderData &data) = 0;
+    virtual bool supportsAcGiImageTextures() const { return false; }
     virtual std::uint32_t uploadImageBGRA(const std::string &key,
                                          std::uint32_t width,
                                          std::uint32_t height,

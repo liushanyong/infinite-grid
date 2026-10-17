@@ -44,6 +44,7 @@ public:
     void drawPolylines(const PolylineRenderData &data) override;
     void drawLineInstances(const LineInstancesRenderData &data) override;
     void drawFilledTriangles(const FilledTrianglesRenderData &data) override;
+    bool supportsAcGiImageTextures() const override;
 
     // SDF text (lib/text subsystem).  uploadGlyphSdf registers a glyph's
     // R8 distance field as a texture and returns its id (0 = invalid);

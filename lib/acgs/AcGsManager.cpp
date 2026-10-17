@@ -242,7 +242,7 @@ std::uint32_t AcGsManager::uploadImageBGRA(const std::string &key,
                                            std::uint32_t height,
                                            const std::uint8_t *pixels)
 {
-    return device_ != nullptr
+    return device_ != nullptr && device_->supportsAcGiImageTextures()
                ? device_->uploadImageBGRA(key, width, height, pixels)
                : 0;
 }
