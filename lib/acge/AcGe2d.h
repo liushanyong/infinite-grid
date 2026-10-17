@@ -147,11 +147,11 @@ public:
     double sweep() const;
 
     AcGePoint2d pointAtAngle(double angle) const;
-    double startParam() const override { return 0.0; }
-    double endParam() const override { return sweep(); }
-    AcGePoint2d pointAt(double param) const override
+    double startParam() const override { return m_startAngle; }
+    double endParam() const override { return m_endAngle; }
+    AcGePoint2d pointAt(double angle) const override
     {
-        return pointAtAngle(m_startAngle + (m_clockwise ? -param : param));
+        return pointAtAngle(angle);
     }
     AcGePoint2d startPoint() const { return pointAtAngle(m_startAngle); }
     AcGePoint2d endPoint() const { return pointAtAngle(m_endAngle); }

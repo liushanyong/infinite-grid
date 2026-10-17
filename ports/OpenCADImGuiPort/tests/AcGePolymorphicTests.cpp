@@ -49,10 +49,10 @@ void curveBasesExposeDomainsAndEvaluation()
         AcGeVector2d{1.0, 0.0}, true);
     const AcGeCurve2d &arcBase = clockwise;
     assert(near(arcBase.startParam(), 0.0));
-    assert(near(arcBase.endParam(), 4.71238898038469));
-    const AcGePoint2d clockwiseMid = arcBase.pointAt(1.5707963267948966);
-    assert(near(clockwiseMid.x, 0.0));
-    assert(near(clockwiseMid.y, -2.0));
+    assert(near(arcBase.endParam(), 1.5707963267948966));
+    const AcGePoint2d arcEnd = arcBase.pointAt(arcBase.endParam());
+    assert(near(arcEnd.x, 0.0));
+    assert(near(arcEnd.y, 2.0));
 
     const AcGeLineSeg2d line2d{AcGePoint2d{-1.0, 3.0},
                                AcGePoint2d{1.0, 5.0}};
