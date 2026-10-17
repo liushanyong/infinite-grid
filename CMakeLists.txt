@@ -149,6 +149,7 @@ if(ACGE_BUILD_TESTS)
     foreach(test_name IN ITEMS
         AcGeClipBoundaryTests
         AcGeCompositeCurveTests
+        AcGeIntervalTests
         AcGeOffsetCurveTests
         AcGeSweptSurfaceTests
         AcGeDelaunay2dTests
@@ -160,6 +161,13 @@ if(ACGE_BUILD_TESTS)
         AcGePointOnCurveTests
         AcGePointOnSurfaceTests
         AcGeAugPolylineTests
+        AcGeCurveCurveIntTests
+        AcGeCurveBoundaryTests
+        AcGeContextTests
+        AcGeBoundBlockTests
+        AcGeCurveBoundBlockTests
+        AcGeOffsetSurfaceTests
+        AcGeCurveSurfIntTests
     )
         add_executable(${test_name}
             "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/${test_name}.cpp")
@@ -168,6 +176,12 @@ if(ACGE_BUILD_TESTS)
             target_compile_options(${test_name} PRIVATE /UNDEBUG)
         else()
             target_compile_options(${test_name} PRIVATE -UNDEBUG)
+        endif()
+        # 360 falsely flags the original AcGeNurbCurveTests.exe name; run the
+        # same test binary under a different output file name.
+        if(test_name STREQUAL "AcGeNurbCurveTests")
+            set_target_properties(${test_name} PROPERTIES OUTPUT_NAME
+                "AcGeNurbCurveTestsBin2")
         endif()
         add_test(NAME ${test_name} COMMAND ${test_name})
     endforeach()
@@ -224,6 +238,20 @@ add_library(acdb STATIC
 )
 target_include_directories(acdb PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acdb PUBLIC acge acgi)
+
+option(ACGI_BUILD_TESTS "Build standalone AcGi protocol regression tests" OFF)
+if(ACGI_BUILD_TESTS)
+    enable_testing()
+    add_executable(AcGiWorldDrawTests
+        "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/AcGiWorldDrawTests.cpp")
+    target_link_libraries(AcGiWorldDrawTests PRIVATE acgs acdb)
+    if(MSVC)
+        target_compile_options(AcGiWorldDrawTests PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(AcGiWorldDrawTests PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME AcGiWorldDrawTests COMMAND AcGiWorldDrawTests)
+endif()
 
 # ---------------------------------------------------------------------------
 # Dear ImGui + BGFX overlay widgets

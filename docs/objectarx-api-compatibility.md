@@ -70,8 +70,9 @@ interval, and parametric point/normal evaluation. Cone/surface intersections
 and advanced domain semantics remain outside this subset.
 
 `AcGeInterval` provides finite and one-sided/unbounded parameter domains,
-tolerance-aware containment, intersection, merge, and extent queries.
-Advanced periodicity and interval subtraction APIs remain unimplemented.
+tolerance-aware containment, intersection, merge, extent queries, subtraction
+into up to two remainder intervals, and upper-bound overlap queries.
+Periodic parameter normalization remains unimplemented.
 
 The existing 2D segment implementation is also exported as global
 `AcGeLineSeg2d` and now includes the documented endpoint, midpoint, blend,
@@ -215,6 +216,24 @@ direct construction from matching knot/point/vector bundles (missing second
 derivatives default to zero) and adaptive curve approximation from any
 type-erased curve so each chord stays within `approxTol` of the source curve,
 matching the documented ARX contract.
+Batch 5 adds the curve-curve intersection set, boundary, and context
+helpers. `AcGeCurveCurveInt.h` implements `AcGeCurveCurveInt2d/3d` over
+type-erased curve value types: the engine samples both curves, seeds from
+coarse grid scans, and refines each seed with a 2x2/3x3 Gauss-Newton
+solve of `C1(t1) - C2(t2)` (NURBS Book section 7.4 idea), falling back
+to projection steps when the system is singular. Documented queries
+`numIntPoints`, `intPoint`, `getPointOnCurve1/2`, and parameter
+accessors are supported; the shared box overlap helper checks 2D points
+without the 3D z sentinel (fixing a pre-existing bug that disabled the
+2D engine). `AcGeCurveBoundary.h` implements the documented boundary
+element loop: 3D space curves or degenerate positions paired one-to-one
+with parameter-space (2D) curves or positions, per-element orientation
+flags, degenerate-element queries, and the owner-of-curves flag (value
+semantics; the callables are always owned by the boundary).
+`AcGeContext.h` provides the documented `gTol` (the default `AcGeTol`
+with `setEqualPoint`/`setEqualVector` storing values unclamped), the
+`gErrorFunc` error-handler hook, and the `gOrthoVector` orthogonal-
+direction helper used by tolerance-sensitive algorithms.
 
 `AcGeIntArray`, `AcGeDoubleArray`, `AcGePoint2d/3dArray`,
 `AcGeVector2d/3dArray`, and `AcGeVoidPointerArray` spellings are exported
@@ -225,6 +244,65 @@ UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string
 fields are being migrated incrementally; UTF-8-oriented renderer, codec, and
 storage interfaces remain narrow strings.
+Batch 6 adds the curve/surface intersection set and the documented NURBS
+surface alias. `AcGeCurveSurfInt.h` implements `AcGeCurveSurfInt` over any
+type-erased curve (`pointAt(double)`/`pointAtAngle(double)`, optional
+analytic `firstDeriv`) and surface (`pointAt(double, double)`); parameter
+domains are discovered through the documented protocol chain
+(`minParameterU/maxParameterU/minParameterV/maxParameterV`, then
+`uRange()/vRange()`, then `getAnglesInU/getAnglesInV` for sphere/torus,
+then `getAngles`+`getHeight` for cylinder/cone, then `[0,1]^2`). The
+engine seeds from curve samples with a coarse surface grid scan and
+refines each seed with a 3x3 Gauss-Newton solve of `C(t) - S(u, v)`
+(NURBS Book section 7.4); singular systems (tangential contact, surface
+poles) fall back to alternating curve/surface projection. Documented
+queries `numIntPoints`, `intPoint`, `getIntParams` (curve parameter plus
+surface `(u, v)`), `getPointOnCurve`, `getPointOnSurface`, `tolerance`,
+and `curve()`/`surface()`-equivalent parameter accessors are supported;
+`getIntConfigs` (csiConfig) is out of scope. Fixing this also exposed and
+repaired two pre-existing engine bugs: the shared Gauss-Newton right-hand
+side had an inverted sign (curve-curve refinement was unaffected, but
+`ge::intersectCurveSurface` silently returned nothing off-grid), and
+`AcGeNurbsSurface3d::derivativesAt` differentiated the plain control
+coordinates instead of the homogeneous ones and re-multiplied by the
+weight during accumulation, returning zero first derivatives for any
+non-rational patch. `AcGeNurbSurface.h` aliases the documented
+`AcGeNurbSurface` spelling onto `ge::AcGeNurbsSurface3d`.
+
+Batch 7 completes the bound-block API and its oriented-block semantics.
+The existing `AcGeBoundBlock2d`/`AcGeBoundBlock3d` value types (in
+`AcGeUtil.h`) gain the documented `setToBox` conversion, which replaces
+an oriented block with the coordinate-aligned box of its corner points
+(the reference HTML leaves the Boolean underdocumented, and `kFalse` is
+treated as a no-op). Oriented blocks are now stored as a base corner
+plus edge vectors and per-edge parameter ranges, so `extend(point)` and
+`swell(distance)` preserve the oriented edges instead of collapsing the
+block to its coordinate box: each edge range grows independently,
+`get` returns the moved corner and scaled edge vectors, and the public
+`min`/`max` extents keep tracking the block corners. Degenerate edge
+bases fall back to the previous coordinate-box behavior. `contains`,
+`isDisjoint` (separating-axis test with touching blocks not disjoint),
+`isBox`, and `isEmpty` are unchanged in signature and covered by the
+new `AcGeBoundBlockTests` regression tests.
+
+Batch 8 adds the offset surface and the curve bounding-block queries.
+`AcGeOffsetSurface.h` implements the documented offset value type over
+type-erased base surfaces: `pointAt(u, v)` evaluates the base surface
+plus `offsetDist` times the base normal (analytic `normalAt(u, v)` when
+the base provides it, central finite differences otherwise), the offset
+preserves the base normal, and `getConstructionSurface` returns the
+erased base view. The `isPlane`/`isBoundedPlane`/`isSphere`/`isCylinder`/
+`isCone`/`isTorus` flags are resolved from the base surface C++ type;
+`getSurface` (fitted simple-surface conversion) has no value-type
+equivalent and reports failure, and the ARX `makeCopy` ownership flag is
+recorded for API parity. The curve bound-block queries arrive as free
+functions in namespace `ge` (`boundBlock`, `orthoBoundBlock`, and the 2D
+spellings `boundBlock2d`/`orthoBoundBlock2d`, with `AcGeInterval`
+subrange overloads): per the reference HTML both spellings return the
+coordinate-aligned box of the curve, discovered through the shared
+domain protocol chain (`minParameter`/`maxParameter`, `startParam`/
+`endParam`, the conic angle members/accessors, then `[0,1]`) and built
+from uniform samples plus the domain endpoints.
 
 The wide `AcGiWorldDraw::text` overload accepts `ACHAR` text and converts it
 to UTF-8 before queuing it for the existing text renderer. DWG/DXF codecs,
@@ -237,3 +315,42 @@ They do not emulate all native class methods, ownership rules, error statuses,
 or the complete AcDb/AcGi/AcGs object model. Prefer the aliases in new public
 declarations, and add narrow/wide adapters where a third-party or file-format
 interface requires a different encoding.
+
+## AcGi geometry coverage
+
+`AcGiWorldDraw` records world-space primitives into the existing stroke,
+triangle, and point sink. Its `pushClipBoundary`/`popClipBoundary` stack clips
+world lines, polylines, points, and triangles against two-corner rectangular or
+simple planar polygon boundaries in either winding. Concave boundaries are
+triangulated for polygon clipping, and segments may produce multiple visible
+strokes. The clip coordinates are computed with
+`m_xToClipSpace * m_xInverseBlockRefXForm`, and active front/back Z planes clip
+points, segments, and filled polygons. When `m_bDrawBoundary` is set, the clip
+outline is emitted if its clip-to-world transform is finite.
+`AcGiSubEntityTraits::setFillType`/`fillType` supports ObjectARX's always/never
+modes. Closed polygons, full circles, sector/chord arc closures, mesh faces,
+and shell faces omit their fill in `kAcGiFillNever` mode while retaining
+applicable boundary and edge strokes.
+
+`polyPolygon` expands the documented grouped shape counts and insertion
+positions, ear-clips simple planar concave outlines, and carries fill/outline
+colors and alpha into the existing primitives. Mesh/shell callbacks consume
+true-color and visibility arrays, apply vertex colors/normals to generated
+triangles, and emit explicitly visible edge strokes with optional color and
+linetype overrides; face transparency remains ignored as the reference currently
+specifies. Face materials/mappers/layers and selection markers are not represented
+by the draw sink. Shell negative-count rings are treated as holes in the
+preceding face and triangulated with simple planar outer/hole contours; edge
+attributes follow face-list ring order, while face attributes exclude holes.
+The shell `pResBuf` hatch-conversion payload is not consumed.
+`image` copies BGRA pixels and
+approximates them with two colored triangles per pixel, limited to 65,536
+pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
+proportional. This is a CPU geometry fallback, not filtered GPU texture upload.
+`edge` emits line-segment, circular-arc, and elliptical-arc edge values
+as strokes (curve tessellation is capped at 65,536 segments per edge); it does
+not accept native `AcGeCurve2d*` arrays because this port's AcGe curves are
+value types rather than a polymorphic curve hierarchy. Native GDI owner-draw
+uploads are not implemented; the callback remains a no-op, matching ObjectARX's
+default implementation. `AcDbPolyline` already has an entity-level AcGi
+callback path, so `pline` is not a missing renderer algorithm.

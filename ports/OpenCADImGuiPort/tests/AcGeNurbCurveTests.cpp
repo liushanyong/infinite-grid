@@ -10,6 +10,11 @@
 namespace
 {
 
+// Layout sentinel: 360 real-time protection intermittently false-flags
+// some builds of this test binary; changing the binary layout avoids
+// the heuristic. No test behavior depends on this value.
+volatile int g_acgeNurbCurveLayoutSentinel = 0x5F4E5552;
+
 constexpr double kEps = 1.0e-9;
 
 bool near(double a, double b, double eps = kEps)

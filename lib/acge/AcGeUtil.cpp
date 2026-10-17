@@ -7,7 +7,25 @@
 
 // ---------------------------------------------------------------------------
 // AcGeBoundBlock2d
+//
+// An oriented block is stored as a base corner plus three (2D: two) edge
+// vectors and per-edge parameter ranges, i.e.
+//
+//     { m_base + sum ti*m_diri,  ti in [m_tMini, m_tMaxi] }
+//
+// extend() and swell() grow the parameter ranges so the oriented edges are
+// preserved; the coordinate extents in min/max always track the block
+// corners through updateExtents().
 // ---------------------------------------------------------------------------
+
+namespace
+{
+// Parameter tolerance used for boundary-inclusive containment tests.
+constexpr double kParamTol = 1.0e-12;
+// Determinant threshold under which an oriented basis is considered
+// degenerate (zero-volume / collinear edges).
+constexpr double kDetTol = 1.0e-15;
+} // namespace
 
 void AcGeBoundBlock2d::updateExtents()
 {
@@ -42,6 +60,8 @@ AcGeBoundBlock2d &AcGeBoundBlock2d::set(const AcGePoint2d &point1,
     max = {std::max(point1.x, point2.x), std::max(point1.y, point2.y)};
     m_empty = false;
     m_oriented = false;
+    m_tMin = {0.0, 0.0};
+    m_tMax = {1.0, 1.0};
     return *this;
 }
 
@@ -54,6 +74,8 @@ AcGeBoundBlock2d &AcGeBoundBlock2d::set(const AcGePoint2d &base,
     m_dir2 = dir2;
     m_empty = false;
     m_oriented = true;
+    m_tMin = {0.0, 0.0};
+    m_tMax = {1.0, 1.0};
     updateExtents();
     return *this;
 }
@@ -62,6 +84,24 @@ AcGeBoundBlock2d &AcGeBoundBlock2d::extend(const AcGePoint2d &point)
 {
     if (m_oriented)
     {
+        const AcGeVector2d offset{point.x - m_base.x, point.y - m_base.y};
+        const double determinant =
+            m_dir1.x * m_dir2.y - m_dir1.y * m_dir2.x;
+        if (std::abs(determinant) > kDetTol)
+        {
+            const double t1 =
+                (offset.x * m_dir2.y - offset.y * m_dir2.x) / determinant;
+            const double t2 =
+                (m_dir1.x * offset.y - m_dir1.y * offset.x) / determinant;
+            m_tMin[0] = std::min(m_tMin[0], t1);
+            m_tMax[0] = std::max(m_tMax[0], t1);
+            m_tMin[1] = std::min(m_tMin[1], t2);
+            m_tMax[1] = std::max(m_tMax[1], t2);
+            updateExtents();
+            return *this;
+        }
+        // Degenerate edges: fall back to the coordinate box of the
+        // current block plus the new point.
         const AcGePoint2d oldMin = min;
         const AcGePoint2d oldMax = max;
         m_oriented = false;
@@ -90,21 +130,49 @@ AcGeBoundBlock2d &AcGeBoundBlock2d::extend(const AcGePoint2d *points,
 
 AcGeBoundBlock2d &AcGeBoundBlock2d::swell(double distance)
 {
-    if (!m_empty)
+    if (m_empty || distance == 0.0)
+        return *this;
+    if (m_oriented)
     {
-        if (m_oriented)
+        bool grew = false;
+        const AcGeVector2d dirs[2] = {m_dir1, m_dir2};
+        for (int i = 0; i < 2; ++i)
         {
-            const AcGePoint2d oldMin = min;
-            const AcGePoint2d oldMax = max;
-            m_oriented = false;
-            set(oldMin, oldMax);
+            const double len = dirs[i].length();
+            if (len > kDetTol)
+            {
+                const double delta = distance / len;
+                m_tMin[i] -= delta;
+                m_tMax[i] += delta;
+                grew = true;
+            }
         }
-        min.x -= distance;
-        min.y -= distance;
-        max.x += distance;
-        max.y += distance;
+        if (grew)
+        {
+            updateExtents();
+            return *this;
+        }
+        // Fully degenerate block: swell the coordinate box instead.
+        const AcGePoint2d oldMin = min;
+        const AcGePoint2d oldMax = max;
+        m_oriented = false;
+        set(oldMin, oldMax);
     }
+    min.x -= distance;
+    min.y -= distance;
+    max.x += distance;
+    max.y += distance;
     return *this;
+}
+
+// ARX AcGeBoundBlock2d::setToBox: sets the block to the coordinate-aligned
+// box of its corner points. The Boolean requests the conversion; kFalse is
+// treated as a no-op (the reference HTML leaves the parameter undocumented).
+AcGeBoundBlock2d &AcGeBoundBlock2d::setToBox(bool convert)
+{
+    if (!convert || m_empty || !m_oriented)
+        return *this;
+    return set(min, max);
 }
 
 void AcGeBoundBlock2d::get(AcGePoint2d &origin, AcGeVector2d &side1,
@@ -112,9 +180,9 @@ void AcGeBoundBlock2d::get(AcGePoint2d &origin, AcGeVector2d &side1,
 {
     if (m_oriented)
     {
-        origin = m_base;
-        side1 = m_dir1;
-        side2 = m_dir2;
+        origin = cornerAt(0, 0);
+        side1 = m_dir1 * (m_tMax[0] - m_tMin[0]);
+        side2 = m_dir2 * (m_tMax[1] - m_tMin[1]);
     }
     else
     {
@@ -133,16 +201,15 @@ bool AcGeBoundBlock2d::contains(const AcGePoint2d &point) const
                point.y >= min.y && point.y <= max.y;
     const double determinant =
         m_dir1.x * m_dir2.y - m_dir1.y * m_dir2.x;
-    if (std::abs(determinant) <= 1.0e-15)
+    if (std::abs(determinant) <= kDetTol)
         return false;
     const AcGeVector2d offset{point.x - m_base.x, point.y - m_base.y};
     const double u =
         (offset.x * m_dir2.y - offset.y * m_dir2.x) / determinant;
     const double v =
         (m_dir1.x * offset.y - m_dir1.y * offset.x) / determinant;
-    constexpr double tol = 1.0e-12;
-    return u >= -tol && u <= 1.0 + tol && v >= -tol &&
-           v <= 1.0 + tol;
+    return u >= m_tMin[0] - kParamTol && u <= m_tMax[0] + kParamTol &&
+           v >= m_tMin[1] - kParamTol && v <= m_tMax[1] + kParamTol;
 }
 
 bool AcGeBoundBlock2d::isDisjoint(const AcGeBoundBlock2d &block) const
@@ -250,6 +317,8 @@ AcGeBoundBlock3d &AcGeBoundBlock3d::set(const AcGePoint3d &point1,
            std::max(point1.z, point2.z)};
     m_empty = false;
     m_oriented = false;
+    m_tMin = {0.0, 0.0, 0.0};
+    m_tMax = {1.0, 1.0, 1.0};
     return *this;
 }
 
@@ -264,6 +333,8 @@ AcGeBoundBlock3d &AcGeBoundBlock3d::set(const AcGePoint3d &base,
     m_dir3 = dir3;
     m_empty = false;
     m_oriented = true;
+    m_tMin = {0.0, 0.0, 0.0};
+    m_tMax = {1.0, 1.0, 1.0};
     updateExtents();
     return *this;
 }
@@ -272,6 +343,28 @@ AcGeBoundBlock3d &AcGeBoundBlock3d::extend(const AcGePoint3d &point)
 {
     if (m_oriented)
     {
+        const AcGeVector3d offset = point - m_base;
+        const double determinant =
+            m_dir1.dotProduct(m_dir2.crossProduct(m_dir3));
+        if (std::abs(determinant) > kDetTol)
+        {
+            const double t1 =
+                offset.dotProduct(m_dir2.crossProduct(m_dir3)) / determinant;
+            const double t2 =
+                m_dir1.dotProduct(offset.crossProduct(m_dir3)) / determinant;
+            const double t3 =
+                m_dir1.dotProduct(m_dir2.crossProduct(offset)) / determinant;
+            m_tMin[0] = std::min(m_tMin[0], t1);
+            m_tMax[0] = std::max(m_tMax[0], t1);
+            m_tMin[1] = std::min(m_tMin[1], t2);
+            m_tMax[1] = std::max(m_tMax[1], t2);
+            m_tMin[2] = std::min(m_tMin[2], t3);
+            m_tMax[2] = std::max(m_tMax[2], t3);
+            updateExtents();
+            return *this;
+        }
+        // Degenerate edges: fall back to the coordinate box of the
+        // current block plus the new point.
         const AcGePoint3d oldMin = min;
         const AcGePoint3d oldMax = max;
         m_oriented = false;
@@ -302,23 +395,51 @@ AcGeBoundBlock3d &AcGeBoundBlock3d::extend(const AcGePoint3d *points,
 
 AcGeBoundBlock3d &AcGeBoundBlock3d::swell(double distance)
 {
-    if (!m_empty)
+    if (m_empty || distance == 0.0)
+        return *this;
+    if (m_oriented)
     {
-        if (m_oriented)
+        bool grew = false;
+        const AcGeVector3d dirs[3] = {m_dir1, m_dir2, m_dir3};
+        for (int i = 0; i < 3; ++i)
         {
-            const AcGePoint3d oldMin = min;
-            const AcGePoint3d oldMax = max;
-            m_oriented = false;
-            set(oldMin, oldMax);
+            const double len = dirs[i].length();
+            if (len > kDetTol)
+            {
+                const double delta = distance / len;
+                m_tMin[i] -= delta;
+                m_tMax[i] += delta;
+                grew = true;
+            }
         }
-        min.x -= distance;
-        min.y -= distance;
-        min.z -= distance;
-        max.x += distance;
-        max.y += distance;
-        max.z += distance;
+        if (grew)
+        {
+            updateExtents();
+            return *this;
+        }
+        // Fully degenerate block: swell the coordinate box instead.
+        const AcGePoint3d oldMin = min;
+        const AcGePoint3d oldMax = max;
+        m_oriented = false;
+        set(oldMin, oldMax);
     }
+    min.x -= distance;
+    min.y -= distance;
+    min.z -= distance;
+    max.x += distance;
+    max.y += distance;
+    max.z += distance;
     return *this;
+}
+
+// ARX AcGeBoundBlock3d::setToBox: sets the block to the coordinate-aligned
+// box of its corner points. The Boolean requests the conversion; kFalse is
+// treated as a no-op (the reference HTML leaves the parameter undocumented).
+AcGeBoundBlock3d &AcGeBoundBlock3d::setToBox(bool convert)
+{
+    if (!convert || m_empty || !m_oriented)
+        return *this;
+    return set(min, max);
 }
 
 void AcGeBoundBlock3d::get(AcGePoint3d &origin, AcGeVector3d &side1,
@@ -326,10 +447,10 @@ void AcGeBoundBlock3d::get(AcGePoint3d &origin, AcGeVector3d &side1,
 {
     if (m_oriented)
     {
-        origin = m_base;
-        side1 = m_dir1;
-        side2 = m_dir2;
-        side3 = m_dir3;
+        origin = cornerAt(0, 0, 0);
+        side1 = m_dir1 * (m_tMax[0] - m_tMin[0]);
+        side2 = m_dir2 * (m_tMax[1] - m_tMin[1]);
+        side3 = m_dir3 * (m_tMax[2] - m_tMin[2]);
     }
     else
     {
@@ -350,7 +471,7 @@ bool AcGeBoundBlock3d::contains(const AcGePoint3d &point) const
                point.z >= min.z && point.z <= max.z;
     const double determinant =
         m_dir1.dotProduct(m_dir2.crossProduct(m_dir3));
-    if (std::abs(determinant) <= 1.0e-15)
+    if (std::abs(determinant) <= kDetTol)
         return false;
     const AcGeVector3d offset = point - m_base;
     const double u =
@@ -359,9 +480,9 @@ bool AcGeBoundBlock3d::contains(const AcGePoint3d &point) const
         m_dir1.dotProduct(offset.crossProduct(m_dir3)) / determinant;
     const double w =
         m_dir1.dotProduct(m_dir2.crossProduct(offset)) / determinant;
-    constexpr double tol = 1.0e-12;
-    return u >= -tol && u <= 1.0 + tol && v >= -tol &&
-           v <= 1.0 + tol && w >= -tol && w <= 1.0 + tol;
+    return u >= m_tMin[0] - kParamTol && u <= m_tMax[0] + kParamTol &&
+           v >= m_tMin[1] - kParamTol && v <= m_tMax[1] + kParamTol &&
+           w >= m_tMin[2] - kParamTol && w <= m_tMax[2] + kParamTol;
 }
 
 bool AcGeBoundBlock3d::isDisjoint(const AcGeBoundBlock3d &block) const

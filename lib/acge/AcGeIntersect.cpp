@@ -172,7 +172,7 @@ std::vector<CurveSurfaceIntersection> intersectCurveSurface(
             double rhs[3];
             for (int r = 0; r < 3; ++r)
             {
-                rhs[r] = -columns[r].dotProduct(difference);
+                rhs[r] = columns[r].dotProduct(difference);
                 for (int c = 0; c < 3; ++c)
                     matrix[r][c] = columns[r].dotProduct(columns[c]);
             }

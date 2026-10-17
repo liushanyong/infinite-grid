@@ -611,9 +611,11 @@ std::vector<std::vector<AcGeVector3d>> AcGeNurbsSurface3d::derivativesAt(
                             wPoints[(i + 1) * countV + j];
                         const double scale =
                             static_cast<double>(degU);
-                        differences[i * countV + j] = AcGePoint4d(
-                            (b.x - a.x) * scale, (b.y - a.y) * scale,
-                            (b.z - a.z) * scale, (b.w - a.w) * scale);
+                        // Homogeneous differences: d(x*w) and dw.
+                        differences[i * countV + j] = AcGePoint4d((b.x * b.w - a.x * a.w) * scale,
+                            (b.y * b.w - a.y * a.w) * scale,
+                            (b.z * b.w - a.z * a.w) * scale,
+                            (b.w - a.w) * scale);
                     }
                 wKnotsU = std::move(inner);
                 wPoints = std::move(differences);
@@ -633,11 +635,12 @@ std::vector<std::vector<AcGeVector3d>> AcGeNurbsSurface3d::derivativesAt(
                             wPoints[i * countV + j + 1];
                         const double scale =
                             static_cast<double>(degV);
-                        differences[i * (countV - 1) + j] =
-                            AcGePoint4d((b.x - a.x) * scale,
-                                        (b.y - a.y) * scale,
-                                        (b.z - a.z) * scale,
-                                        (b.w - a.w) * scale);
+                        // Homogeneous differences: d(x*w) and dw.
+                        differences[i * (countV - 1) + j] = AcGePoint4d(
+                            (b.x * b.w - a.x * a.w) * scale,
+                            (b.y * b.w - a.y * a.w) * scale,
+                            (b.z * b.w - a.z * a.w) * scale,
+                            (b.w - a.w) * scale);
                     }
                 wKnotsV = std::move(inner);
                 wPoints = std::move(differences);
@@ -675,11 +678,15 @@ std::vector<std::vector<AcGeVector3d>> AcGeNurbsSurface3d::derivativesAt(
                         wPoints[(spanU - degU + i) * countV +
                                 spanV - degV + j];
                     const double weight = basisU[i] * basisV[j];
-                    sum += AcGePoint4d(p.x * p.w * weight,
-                                       p.y * p.w * weight,
-                                       p.z * p.w * weight,
-                                       p.w * weight);
-                }
+                    const double ax =
+                        (k == 0 && l == 0) ? p.x * p.w : p.x;
+                    const double ay =
+                        (k == 0 && l == 0) ? p.y * p.w : p.y;
+                    const double az =
+                        (k == 0 && l == 0) ? p.z * p.w : p.z;
+                    sum += AcGePoint4d(ax * weight, ay * weight,
+                                       az * weight, p.w * weight);
+            }
             hx[k][l] = sum.x;
             hy[k][l] = sum.y;
             hz[k][l] = sum.z;
