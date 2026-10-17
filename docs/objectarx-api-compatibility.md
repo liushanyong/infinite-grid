@@ -240,6 +240,11 @@ knot vectors. B-spline and NURBS surfaces expose normals from their analytic
 partial derivatives; NURBS surfaces also expose directional rationality
 queries and a copied definition-data view of degrees, control points, weights,
 and knot vectors.
+The common `AcGeCurve2d/3d` bases provide `evalPoint` overloads with first- and
+second-derivative output, and `AcGeSurface` provides point/partial-derivative/
+normal evaluation with derivative order 0 through 2. These base evaluators use
+finite differences (including one-sided stencils at bounded edges); their
+surface derivative array order is `du`, `dv`, then `duu`, `duv`, `dvv`.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
 wrappers in the ObjectARX sense: they bind any curve/surface value type and a
 cached parameter, then expose `point`, `deriv`/`uDeriv`/`vDeriv` (orders 1-2),

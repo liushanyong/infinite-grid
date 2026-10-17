@@ -150,6 +150,7 @@ if(ACGE_BUILD_TESTS)
         AcGeClipBoundaryTests
         AcGeCompositeCurveTests
         AcGeMatrix3dTests
+        AcGeCurveSurfaceEvalTests
         AcGeNurbSurfaceTests
         AcGeIntervalTests
         AcGeOffsetCurveTests
