@@ -7,13 +7,15 @@
 #include <functional>
 #include <initializer_list>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "AcGeCurve.h"
 #include "AcGeInterval.h"
 #include "AcGePoint.h"
 
-// Original source-level subset, not an AcGeCurve/entity hierarchy adaptation.
+// Original source-level subset using the common AcGeCurve evaluation interface.
 // Each segment owns a copy of a curve and an explicit, strictly increasing,
 // finite local domain. Global [i, i+1] maps linearly to segment i's domain.
 // Interior integer parameters select the RIGHT segment; the final parameter
@@ -32,6 +34,8 @@ namespace detail
 
 template <typename Point>
 class CompositeCurve
+    : public std::conditional_t<std::is_same_v<Point, AcGePoint2d>,
+                                AcGeCurve2d, AcGeCurve3d>
 {
     static Point checkedPoint(const Point &point)
     {
@@ -246,6 +250,8 @@ public:
     // connectivity and closedness predicates are false.
     double minParameter() const { requireNonempty(); return 0.0; }
     double maxParameter() const { requireNonempty(); return double(numSegments()); }
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
     AcGeInterval domain() const { return {minParameter(), maxParameter(), 0.0}; }
 
     double globalToLocalParam(double parameter, std::size_t &segmentIndex) const
@@ -282,7 +288,7 @@ public:
         // evaluating that integer uses the right segment, even at a gap.
         return double(segmentIndex) + fraction;
     }
-    Point pointAt(double parameter) const
+    Point pointAt(double parameter) const override
     {
         std::size_t index;
         const double local = globalToLocalParam(parameter, index);
