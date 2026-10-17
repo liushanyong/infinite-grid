@@ -61,6 +61,11 @@ struct Stroke
     // must treat the geometry as starting at points[0] and continuing forever
     // along points[1] - points[0].
     bool semiInfinite = false;
+    AcDbObjectId layerId;
+    AcDbObjectId linetypeId;
+    Adesk::LongPtr selectionMarker = -1;
+    short colorIndex = 0;
+    bool hasColorIndex = false;
 };
 
 struct Triangle
@@ -74,6 +79,11 @@ struct Triangle
     std::array<AcGeVector3d, 3> vertexNormals{};
     bool hasVertexColors = false;
     bool hasVertexNormals = false;
+    AcDbObjectId layerId;
+    AcDbObjectId materialId;
+    Adesk::LongPtr selectionMarker = -1;
+    short colorIndex = 0;
+    bool hasColorIndex = false;
 };
 
 struct TessellatedPoint

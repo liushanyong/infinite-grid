@@ -217,8 +217,33 @@ int main()
     const AcGiLineType dashedLineType{"DASHED", nullptr, 0};
     const AcGiLineType edgeLineTypes[] = {
         dashedLineType, dashedLineType, dashedLineType, dashedLineType};
+    const short faceColors[] = {5};
+    const short edgeColors[] = {2, 3, 4, 5};
+    const acdb::AcDbObjectId faceLayers[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{101})};
+    const acdb::AcDbObjectId edgeLayers[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{201}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{202}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{203}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{204})};
+    const acdb::AcDbObjectId edgeLinetypes[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{301}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{302}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{303}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{304})};
+    const acdb::AcDbObjectId materials[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{401})};
+    const Adesk::LongPtr faceMarkers[] = {0x1234};
+    const Adesk::LongPtr edgeMarkers[] = {0x11, 0x22, 0x33, 0x44};
+    const AcCmTransparency faceTransparency[] = {
+        AcCmTransparency(static_cast<std::uint8_t>(128))};
     AcGiFaceData faces;
+    faces.setColors(faceColors, 1);
     faces.setTrueColors(fillColors, 1);
+    faces.setLayers(faceLayers, 1);
+    faces.setSelectionMarkers(faceMarkers, 1);
+    faces.setMaterials(materials, 1);
+    faces.setTransparency(faceTransparency, 1);
     AcGiVertexData vertices;
     vertices.setTrueColors(vertexColors, 4);
     vertices.setNormals(vertexNormals, 4);
@@ -244,14 +269,37 @@ int main()
     vertices.setMappingCoords(AcGiVertexData::kMapChannels, nullptr);
     assert(vertices.mappingCoords(AcGiVertexData::kMapChannels) == nullptr);
     AcGiEdgeData edges;
+    edges.setColors(edgeColors, 4);
+    edges.setLayers(edgeLayers, 4);
+    edges.setLinetypeIds(edgeLinetypes, 4);
+    edges.setSelectionMarkers(edgeMarkers, 4);
     edges.setVisibility(edgeVisibility, 4);
     edges.setLineTypes(edgeLineTypes, 4);
     assert(!meshDraw.mesh(2, 2, meshVertices, &edges, &faces, &vertices));
     assert(meshGeometry.fills.size() == 2);
     assert(meshGeometry.strokes.size() == 2);
     assert(meshGeometry.strokes.front().common.lineType == "DASHED");
+    assert(meshGeometry.strokes[0].layerId == edgeLayers[0]);
+    assert(meshGeometry.strokes[0].linetypeId == edgeLinetypes[0]);
+    assert(meshGeometry.strokes[0].selectionMarker == edgeMarkers[0]);
+    assert(meshGeometry.strokes[0].hasColorIndex);
+    assert(meshGeometry.strokes[0].colorIndex == edgeColors[0]);
+    assert(meshGeometry.strokes[1].layerId == edgeLayers[2]);
+    assert(meshGeometry.strokes[1].selectionMarker == edgeMarkers[2]);
+    assert(meshGeometry.fills[0].layerId == faceLayers[0]);
+    assert(meshGeometry.fills[0].materialId == materials[0]);
+    assert(meshGeometry.fills[0].selectionMarker == faceMarkers[0]);
+    assert(meshGeometry.fills[0].hasColorIndex);
+    assert(meshGeometry.fills[0].colorIndex == faceColors[0]);
+    assert(std::abs(meshGeometry.fills[0].common.color.alpha() -
+                    128.0f / 255.0f) < 1.0e-5f);
     assert(meshGeometry.fills[0].hasVertexColors);
     assert(meshGeometry.fills[0].hasVertexNormals);
+    AcGiEdgeData malformedEdges;
+    malformedEdges.setLayers(edgeLayers, 1);
+    assert(meshDraw.mesh(2, 2, meshVertices, &malformedEdges));
+    assert(meshGeometry.fills.size() == 2);
+    assert(meshGeometry.strokes.size() == 2);
     acdb::TessellatedEntity wireMeshGeometry;
     acgs::ViewportDraw wireMeshContext(wireMeshGeometry);
     AcGiWorldDraw wireMeshDraw(wireMeshContext);
@@ -270,6 +318,14 @@ int main()
     assert(shellGeometry.fills.size() == 2);
     assert(shellGeometry.strokes.size() == 2);
     assert(shellGeometry.strokes.front().common.lineType == "DASHED");
+    assert(shellGeometry.strokes.front().layerId == edgeLayers[0]);
+    assert(shellGeometry.strokes.front().linetypeId == edgeLinetypes[0]);
+    assert(shellGeometry.strokes.front().selectionMarker == edgeMarkers[0]);
+    assert(shellGeometry.fills.front().layerId == faceLayers[0]);
+    assert(shellGeometry.fills.front().materialId == materials[0]);
+    assert(shellGeometry.fills.front().selectionMarker == faceMarkers[0]);
+    assert(std::abs(shellGeometry.fills.front().common.color.alpha() -
+                    128.0f / 255.0f) < 1.0e-5f);
     assert(shellGeometry.fills[0].hasVertexColors);
     acdb::TessellatedEntity wireShellGeometry;
     acgs::ViewportDraw wireShellContext(wireShellGeometry);

@@ -1768,6 +1768,14 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
     if ((faceData != nullptr &&
          ((!faceData->trueColors.empty() &&
            faceData->trueColors.size() != faceCountSize) ||
+          (!faceData->colors.empty() &&
+           faceData->colors.size() != faceCountSize) ||
+          (!faceData->layers.empty() &&
+           faceData->layers.size() != faceCountSize) ||
+          (!faceData->selectionMarkers.empty() &&
+           faceData->selectionMarkers.size() != faceCountSize) ||
+          (!faceData->materials.empty() &&
+           faceData->materials.size() != faceCountSize) ||
           (!faceData->visibility.empty() &&
            faceData->visibility.size() != faceCountSize) ||
           (!faceData->normals.empty() &&
@@ -1784,6 +1792,14 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edgeCountSize) ||
+          (!edgeData->colors.empty() &&
+           edgeData->colors.size() != edgeCountSize) ||
+          (!edgeData->layers.empty() &&
+           edgeData->layers.size() != edgeCountSize) ||
+          (!edgeData->linetypeIds.empty() &&
+           edgeData->linetypeIds.size() != edgeCountSize) ||
+          (!edgeData->selectionMarkers.empty() &&
+           edgeData->selectionMarkers.size() != edgeCountSize) ||
           (!edgeData->lineTypes.empty() &&
            edgeData->lineTypes.size() != edgeCountSize) ||
           (!edgeData->visibility.empty() &&
@@ -1805,6 +1821,21 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
              fillIndex < sink().geometry().fills.size(); ++fillIndex)
         {
             acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
+            if (faceData != nullptr)
+            {
+                if (!faceData->layers.empty())
+                    triangle.layerId = faceData->layers[faceIndex];
+                if (!faceData->materials.empty())
+                    triangle.materialId = faceData->materials[faceIndex];
+                if (!faceData->selectionMarkers.empty())
+                    triangle.selectionMarker =
+                        faceData->selectionMarkers[faceIndex];
+                if (!faceData->colors.empty())
+                {
+                    triangle.colorIndex = faceData->colors[faceIndex];
+                    triangle.hasColorIndex = true;
+                }
+            }
             applyVertexData(triangle, worldPoints, indices, vertexData);
             if (vertexData == nullptr || vertexData->normals.empty())
             {
@@ -1836,9 +1867,20 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
                 ++faceIndex;
                 continue;
             }
+            draw_.subEntityTraits().setFrom(originalTraits);
             if (faceData != nullptr && !faceData->trueColors.empty())
                 draw_.subEntityTraits().setColor(
                     faceData->trueColors[faceIndex].renderColor());
+            if (faceData != nullptr && !faceData->transparency.empty() &&
+                faceData->transparency[faceIndex].isByAlpha())
+            {
+                glm::vec4 color = draw_.subEntityTraits().traits().color;
+                color.a *=
+                    static_cast<float>(
+                        faceData->transparency[faceIndex].alpha()) /
+                    255.0f;
+                draw_.subEntityTraits().setColor(color);
+            }
             const AcGePoint3d points[] = {vertexList[i00], vertexList[i01],
                                           vertexList[i10], vertexList[i11]};
             emitTriangle({points[0], points[1], points[3]},
@@ -1852,7 +1894,9 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
 
     const bool emitEdges =
         edgeData != nullptr &&
-        (!edgeData->trueColors.empty() || !edgeData->lineTypes.empty() ||
+        (!edgeData->colors.empty() || !edgeData->trueColors.empty() ||
+         !edgeData->layers.empty() || !edgeData->linetypeIds.empty() ||
+         !edgeData->selectionMarkers.empty() || !edgeData->lineTypes.empty() ||
          !edgeData->visibility.empty());
     if (emitEdges)
     {
@@ -1867,7 +1911,26 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
             if (!edgeData->lineTypes.empty())
                 draw_.subEntityTraits().setLineType(
                     edgeData->lineTypes[edgeIndex]);
+            const size_t firstStroke = sink().geometry().strokes.size();
             worldLine(a, b);
+            for (size_t strokeIndex = firstStroke;
+                 strokeIndex < sink().geometry().strokes.size(); ++strokeIndex)
+            {
+                acdb::Stroke &stroke =
+                    sink().geometry().strokes[strokeIndex];
+                if (!edgeData->layers.empty())
+                    stroke.layerId = edgeData->layers[edgeIndex];
+                if (!edgeData->linetypeIds.empty())
+                    stroke.linetypeId = edgeData->linetypeIds[edgeIndex];
+                if (!edgeData->selectionMarkers.empty())
+                    stroke.selectionMarker =
+                        edgeData->selectionMarkers[edgeIndex];
+                if (!edgeData->colors.empty())
+                {
+                    stroke.colorIndex = edgeData->colors[edgeIndex];
+                    stroke.hasColorIndex = true;
+                }
+            }
         };
         size_t edgeIndex = 0;
         for (Adesk::UInt32 row = 0; row < rows; ++row)
@@ -1952,6 +2015,14 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
     if ((faceData != nullptr &&
          ((!faceData->trueColors.empty() &&
            faceData->trueColors.size() != faces.size()) ||
+          (!faceData->colors.empty() &&
+           faceData->colors.size() != faces.size()) ||
+          (!faceData->layers.empty() &&
+           faceData->layers.size() != faces.size()) ||
+          (!faceData->selectionMarkers.empty() &&
+           faceData->selectionMarkers.size() != faces.size()) ||
+          (!faceData->materials.empty() &&
+           faceData->materials.size() != faces.size()) ||
           (!faceData->visibility.empty() &&
            faceData->visibility.size() != faces.size()) ||
           (!faceData->normals.empty() &&
@@ -1968,6 +2039,14 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edges.size()) ||
+          (!edgeData->colors.empty() &&
+           edgeData->colors.size() != edges.size()) ||
+          (!edgeData->layers.empty() &&
+           edgeData->layers.size() != edges.size()) ||
+          (!edgeData->linetypeIds.empty() &&
+           edgeData->linetypeIds.size() != edges.size()) ||
+          (!edgeData->selectionMarkers.empty() &&
+           edgeData->selectionMarkers.size() != edges.size()) ||
           (!edgeData->lineTypes.empty() &&
            edgeData->lineTypes.size() != edges.size()) ||
           (!edgeData->visibility.empty() &&
@@ -2001,6 +2080,15 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         if (faceData != nullptr && !faceData->trueColors.empty())
             draw_.subEntityTraits().setColor(
                 faceData->trueColors[faceIndex].renderColor());
+        if (faceData != nullptr && !faceData->transparency.empty() &&
+            faceData->transparency[faceIndex].isByAlpha())
+        {
+            glm::vec4 color = draw_.subEntityTraits().traits().color;
+            color.a *=
+                static_cast<float>(faceData->transparency[faceIndex].alpha()) /
+                255.0f;
+            draw_.subEntityTraits().setColor(color);
+        }
         for (const auto &triangle : triangleIndices)
         {
             const std::array<size_t, 3> indices{
@@ -2019,6 +2107,21 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
                  fillIndex < sink().geometry().fills.size(); ++fillIndex)
             {
                 acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
+                if (faceData != nullptr)
+                {
+                    if (!faceData->layers.empty())
+                        triangle.layerId = faceData->layers[faceIndex];
+                    if (!faceData->materials.empty())
+                        triangle.materialId = faceData->materials[faceIndex];
+                    if (!faceData->selectionMarkers.empty())
+                        triangle.selectionMarker =
+                            faceData->selectionMarkers[faceIndex];
+                    if (!faceData->colors.empty())
+                    {
+                        triangle.colorIndex = faceData->colors[faceIndex];
+                        triangle.hasColorIndex = true;
+                    }
+                }
                 applyVertexData(triangle, worldPoints, indices, vertexData);
                 if (vertexData == nullptr || vertexData->normals.empty())
                 {
@@ -2035,7 +2138,9 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
 
     const bool emitEdges =
         edgeData != nullptr &&
-        (!edgeData->trueColors.empty() || !edgeData->lineTypes.empty() ||
+        (!edgeData->colors.empty() || !edgeData->trueColors.empty() ||
+         !edgeData->layers.empty() || !edgeData->linetypeIds.empty() ||
+         !edgeData->selectionMarkers.empty() || !edgeData->lineTypes.empty() ||
          !edgeData->visibility.empty());
     if (emitEdges)
     {
@@ -2051,8 +2156,27 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
             if (!edgeData->lineTypes.empty())
                 draw_.subEntityTraits().setLineType(
                     edgeData->lineTypes[edgeIndex]);
+            const size_t firstStroke = sink().geometry().strokes.size();
             worldLine(vertexList[edges[edgeIndex].start],
                       vertexList[edges[edgeIndex].end]);
+            for (size_t strokeIndex = firstStroke;
+                 strokeIndex < sink().geometry().strokes.size(); ++strokeIndex)
+            {
+                acdb::Stroke &stroke =
+                    sink().geometry().strokes[strokeIndex];
+                if (!edgeData->layers.empty())
+                    stroke.layerId = edgeData->layers[edgeIndex];
+                if (!edgeData->linetypeIds.empty())
+                    stroke.linetypeId = edgeData->linetypeIds[edgeIndex];
+                if (!edgeData->selectionMarkers.empty())
+                    stroke.selectionMarker =
+                        edgeData->selectionMarkers[edgeIndex];
+                if (!edgeData->colors.empty())
+                {
+                    stroke.colorIndex = edgeData->colors[edgeIndex];
+                    stroke.hasColorIndex = true;
+                }
+            }
         }
         draw_.subEntityTraits().setFrom(originalTraits);
     }

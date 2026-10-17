@@ -28,8 +28,9 @@
 // Ray/XLine overlay semantics); viewport/screen transform behaviors and the
 // behaviors-only APIs collapse to their world-space form; clip boundaries
 // support simple concave polygons, clip-space transforms, depth limits, and
-// optional outlines; mesh/shell consume supported color, linetype, visibility,
-// and normal arrays; image is rasterized as a bounded per-pixel triangle
+// optional outlines; mesh/shell consume color, layer, linetype, selection,
+// material, transparency, visibility, and normal attributes into the sink;
+// image is rasterized as a bounded per-pixel triangle
 // approximation; polypoint emits real point primitives instead of ARX's
 // degenerate two-point strokes.
 // edge() accepts a value-semantic subset of planar curves rather than native
@@ -52,6 +53,7 @@
 #include "AcGiTextQueue.h"
 
 class AcGiDrawable;
+class AcGiMapper;
 
 // The abstract curve base is not ported yet (acge ships concrete value
 // types); the generic-curve callback binds to the future class through the
@@ -124,10 +126,64 @@ struct AcGiPolyline
 
 struct AcGiEdgeData
 {
+    std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<acdb::AcDbObjectId> layers;
+    std::vector<acdb::AcDbObjectId> linetypeIds;
+    std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<std::string> lineTypes;
     std::vector<Adesk::UInt8> visibility;
 
+    void setColors(const short *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            colors.clear();
+            return;
+        }
+        colors.assign(values, values + count);
+    }
+    short *colorsData() { return colors.data(); }
+    short *colorsData() const
+    {
+        return const_cast<short *>(colors.data());
+    }
+    void setLayers(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            layers.clear();
+        else
+            layers.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *layerIds() { return layers.data(); }
+    acdb::AcDbObjectId *layerIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(layers.data());
+    }
+    void setLinetypeIds(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            linetypeIds.clear();
+        else
+            linetypeIds.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *linetypeIdsData() { return linetypeIds.data(); }
+    acdb::AcDbObjectId *linetypeIdsData() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(linetypeIds.data());
+    }
+    void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
+    {
+        if (values == nullptr)
+            selectionMarkers.clear();
+        else
+            selectionMarkers.assign(values, values + count);
+    }
+    Adesk::LongPtr *selectionMarkersData() { return selectionMarkers.data(); }
+    Adesk::LongPtr *selectionMarkersData() const
+    {
+        return const_cast<Adesk::LongPtr *>(selectionMarkers.data());
+    }
     void setLineTypes(const AcGiLineType *values, size_t count)
     {
         lineTypes.clear();
@@ -156,11 +212,31 @@ struct AcGiEdgeData
 };
 struct AcGiFaceData
 {
+    std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<acdb::AcDbObjectId> layers;
+    std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<Adesk::UInt8> visibility;
     std::vector<AcGeVector3d> normals;
+    std::vector<acdb::AcDbObjectId> materials;
+    const AcGiMapper *mapperValues = nullptr;
+    size_t mapperCount = 0;
     std::vector<AcCmTransparency> transparency;
 
+    void setColors(const short *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            colors.clear();
+            return;
+        }
+        colors.assign(values, values + count);
+    }
+    short *colorsData() { return colors.data(); }
+    short *colorsData() const
+    {
+        return const_cast<short *>(colors.data());
+    }
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
         if (values == nullptr)
@@ -168,12 +244,75 @@ struct AcGiFaceData
         else
             trueColors.assign(values, values + count);
     }
+    AcCmEntityColor *trueColorsData() { return trueColors.data(); }
+    AcCmEntityColor *trueColorsData() const
+    {
+        return const_cast<AcCmEntityColor *>(trueColors.data());
+    }
+    void setLayers(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            layers.clear();
+        else
+            layers.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *layerIds() { return layers.data(); }
+    acdb::AcDbObjectId *layerIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(layers.data());
+    }
+    void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
+    {
+        if (values == nullptr)
+            selectionMarkers.clear();
+        else
+            selectionMarkers.assign(values, values + count);
+    }
+    Adesk::LongPtr *selectionMarkersData()
+    {
+        return selectionMarkers.data();
+    }
+    Adesk::LongPtr *selectionMarkersData() const
+    {
+        return const_cast<Adesk::LongPtr *>(selectionMarkers.data());
+    }
+    void setMaterials(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            materials.clear();
+        else
+            materials.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *materialsData() { return materials.data(); }
+    acdb::AcDbObjectId *materialsData() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(materials.data());
+    }
+    void setMappers(const AcGiMapper *values, size_t count)
+    {
+        mapperValues = values;
+        mapperCount = values == nullptr ? 0 : count;
+    }
+    AcGiMapper *mappersData()
+    {
+        return const_cast<AcGiMapper *>(mapperValues);
+    }
+    AcGiMapper *mappersData() const
+    {
+        return const_cast<AcGiMapper *>(mapperValues);
+    }
+    size_t mapperCountData() const { return mapperCount; }
     void setVisibility(const Adesk::UInt8 *values, size_t count)
     {
         if (values == nullptr)
             visibility.clear();
         else
             visibility.assign(values, values + count);
+    }
+    Adesk::UInt8 *visibilityData() { return visibility.data(); }
+    Adesk::UInt8 *visibilityData() const
+    {
+        return const_cast<Adesk::UInt8 *>(visibility.data());
     }
     void setNormals(const AcGeVector3d *values, size_t count)
     {
@@ -182,12 +321,22 @@ struct AcGiFaceData
         else
             normals.assign(values, values + count);
     }
+    AcGeVector3d *normalsData() { return normals.data(); }
+    AcGeVector3d *normalsData() const
+    {
+        return const_cast<AcGeVector3d *>(normals.data());
+    }
     void setTransparency(const AcCmTransparency *values, size_t count)
     {
         if (values == nullptr)
             transparency.clear();
         else
             transparency.assign(values, values + count);
+    }
+    AcCmTransparency *transparencyData() { return transparency.data(); }
+    AcCmTransparency *transparencyData() const
+    {
+        return const_cast<AcCmTransparency *>(transparency.data());
     }
 };
 struct AcGiVertexData

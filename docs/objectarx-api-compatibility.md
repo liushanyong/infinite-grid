@@ -257,17 +257,19 @@ applicable boundary and edge strokes.
 
 `polyPolygon` expands the documented grouped shape counts and insertion
 positions, ear-clips simple planar concave outlines, and carries fill/outline
-colors and alpha into the existing primitives. Mesh/shell callbacks consume
-true-color and visibility arrays, apply vertex colors/normals to generated
-triangles, and emit explicitly visible edge strokes with optional color and
-linetype overrides; face transparency remains ignored as the reference currently
-specifies. `AcGiVertexData` also exposes ObjectARX-style orientation and mapping
-coordinate accessors; mapping coordinates are borrowed pointers and are not yet
-consumed by the draw sink. Face materials/mappers/layers and selection markers
-are not represented by the draw sink. Shell negative-count rings are treated as holes in the
-preceding face and triangulated with simple planar outer/hole contours; edge
-attributes follow face-list ring order, while face attributes exclude holes.
-The shell `pResBuf` hatch-conversion payload is not consumed.
+colors and alpha into the existing primitives. Mesh/shell callbacks apply
+true-color and face-transparency alpha to generated triangles, apply vertex
+colors/normals, and emit explicitly visible edge strokes with optional color
+and linetype overrides. Per-edge/per-face color indices, layer IDs, selection
+markers, linetype IDs, and face material IDs are retained as metadata on the
+tessellated sink primitives; they are not resolved into renderer styles yet.
+`AcGiFaceData` mapper arrays and `AcGiVertexData` mapping coordinates are
+borrowed metadata and are not consumed by the draw sink. The vertex data also
+exposes ObjectARX-style orientation accessors. Shell negative-count rings are
+treated as holes in the preceding face and triangulated with simple planar
+outer/hole contours; edge attributes follow face-list ring order, while face
+attributes exclude holes. The shell `pResBuf` hatch-conversion payload is not
+consumed.
 `image` copies BGRA pixels and
 approximates them with two colored triangles per pixel, limited to 65,536
 pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
