@@ -61,7 +61,7 @@ double nurbsCurveLength(const ge::detail::NurbsCurveCore &curve,
             const double dy = derivatives[1][1];
             const double dz = derivatives[1][2];
             length += halfSpan * quadrature.second[i] *
-                      std::sqrt(dx * dx + dy * dy + dz * dz);
+                      std::hypot(dx, dy, dz);
         }
         start = spanEnd;
     }
