@@ -213,7 +213,12 @@ shape (A5.2 consistency check, otherwise `false`),
 (original multiplicity + increment), `hardTrimByParams` clamps both cut
 parameters to full multiplicity and slices the control polygon, and
 `joinWith` performs a C0 join of equal-degree open curves with coincident
-endpoints (junction knot multiplicity = degree). Not implemented: the
+endpoints (junction knot multiplicity = degree). `length()` and
+`length(fromParam, toParam, tol)` integrate derivative magnitude with
+24-point Gauss-Legendre quadrature split at knot spans; parameter intervals
+are clipped to the curve domain, reversed bounds produce the same positive
+length, and results no greater than `abs(tol)` are reported as zero. Not
+implemented: the
 `AcGeCurve2d/3d` inheritance hierarchy, curve fitting, extend, and
 surface classes.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point

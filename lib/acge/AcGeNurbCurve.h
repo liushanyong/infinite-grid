@@ -135,6 +135,9 @@ public:
 
     AcGePoint2d pointAt(double param) const;
     AcGeVector2d firstDeriv(double param) const;
+    double length() const { return length(startParam(), endParam()); }
+    double length(double fromParam, double toParam,
+                  double tol = AcGeTol{}.equalPoint()) const;
     std::vector<AcGeVector2d> derivativesAt(
         double param, size_t derivativeCount) const;
     double curvatureAt(double param) const;
@@ -191,6 +194,9 @@ public:
 
     AcGePoint3d pointAt(double param) const;
     AcGeVector3d firstDeriv(double param) const;
+    double length() const { return length(startParam(), endParam()); }
+    double length(double fromParam, double toParam,
+                  double tol = AcGeTol{}.equalPoint()) const;
     std::vector<AcGeVector3d> derivativesAt(
         double param, size_t derivativeCount) const;
     double curvatureAt(double param) const;
