@@ -257,19 +257,34 @@ applicable boundary and edge strokes.
 
 `polyPolygon` expands the documented grouped shape counts and insertion
 positions, ear-clips simple planar concave outlines, and carries fill/outline
-colors and alpha into the existing primitives. Mesh/shell callbacks consume
-true-color and visibility arrays, apply vertex colors/normals to generated
-triangles, and emit explicitly visible edge strokes with optional color and
-linetype overrides; face transparency remains ignored as the reference currently
-specifies. Face materials/mappers/layers and selection markers are not represented
-by the draw sink. Shell negative-count rings are treated as holes in the
-preceding face and triangulated with simple planar outer/hole contours; edge
-attributes follow face-list ring order, while face attributes exclude holes.
-The shell `pResBuf` hatch-conversion payload is not consumed.
-`image` copies BGRA pixels and
-approximates them with two colored triangles per pixel, limited to 65,536
-pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
-proportional. This is a CPU geometry fallback, not filtered GPU texture upload.
+colors and alpha into the existing primitives. Mesh/shell callbacks apply
+true-color and face-transparency alpha to generated triangles, apply vertex
+colors/normals, and emit explicitly visible edge strokes with optional color
+and linetype overrides. Per-edge/per-face color indices, layer IDs, selection
+markers, linetype IDs, and face material IDs are retained as metadata on the
+tessellated sink primitives; they are not resolved into renderer styles yet.
+`AcGiEdgeData::setLineTypes(const AcDbObjectId *)` and `linetypeIds()` follow
+the ObjectARX spelling; the pointer-only setter borrows the array until the
+next synchronous `mesh`/`shell` callback, while the counted port setter copies
+and validates its input.
+`AcGiVertexData` mapping coordinates are validated, interpolated, and bound
+as fill UVs. Face mappers are consumed per face: their projection generates
+planar/box/cylindrical/spherical coordinates when no vertex mapping is
+provided, and their transform is applied before UV submission. Inherited
+projection uses the available vertex mapping channels. `AcGiMapper`
+projection/transform/tiling declarations and counted or pointer-only
+`AcGiFaceData::setMappers` overloads are available; mapper arrays remain
+borrowed for the synchronous mesh/shell callback. Shell negative-count rings are
+treated as holes in the preceding face and triangulated with simple planar
+outer/hole contours; edge attributes follow face-list ring order, while face
+attributes exclude holes. The shell `pResBuf` hatch-conversion payload is not
+consumed.
+`image` copies BGRA pixels and retains a UV-mapped quad plus a per-pixel
+triangle fallback. The bgfx raw BGRA upload/cache path is implemented, but
+image-texture submission remains capability-gated until the checked-in filled
+shader binaries are regenerated with UV sampling; the current WebGPU backend
+also uses the fallback. Calls are limited to 65,536 pixels; 1-bit alpha treats
+only 255 as opaque, while 8-bit alpha is proportional.
 `edge` emits line-segment, circular-arc, and elliptical-arc edge values
 as strokes (curve tessellation is capped at 65,536 segments per edge); it does
 not accept native `AcGeCurve2d*` arrays because this port's AcGe curves are

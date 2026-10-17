@@ -22,6 +22,7 @@
 #include "acgi/AcGiLineType.h"
 #include "acgi/AcGiTextEngine.h"
 #include "acgi/AcGiTextQueue.h"
+#include "acgi/AcGiWorldDraw.h"
 #include "rendering/RendererBackend.h"
 
 namespace acgs
@@ -1114,51 +1115,126 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
     const bool submitDebugFrameNow =
         submitDebug && (submitDebugFrame++ % 90 == 0);
 
-    static std::vector<rendering::FillVertex> fillVertices;
-    static std::vector<rendering::FillVertex> surfaceFillVertices;
-    fillVertices.clear();
-    surfaceFillVertices.clear();
-    for (const acdb::Triangle &triangle : drawList.geometry().fills)
+    struct FillBatch
     {
-        if (!triangle.common.visible)
-            continue;
-        std::vector<rendering::FillVertex> &vertices =
-            triangle.is3DFace ? surfaceFillVertices : fillVertices;
-        const glm::vec4 defaultFillColor =
-            contrastColor(triangle.common.color.renderColor());
-        const std::array<glm::vec4, 3> fillColors =
-            triangle.hasVertexColors
-                ? std::array<glm::vec4, 3>{
-                      contrastColor(triangle.vertexColors[0]),
-                      contrastColor(triangle.vertexColors[1]),
-                      contrastColor(triangle.vertexColors[2])}
-                : std::array<glm::vec4, 3>{defaultFillColor,
-                                           defaultFillColor,
-                                           defaultFillColor};
-        vertices.push_back(
-            {glm::vec3(triangle.a - ctx.cameraPos), fillColors[0]});
-        vertices.push_back(
-            {glm::vec3(triangle.b - ctx.cameraPos), fillColors[1]});
-        vertices.push_back(
-            {glm::vec3(triangle.c - ctx.cameraPos), fillColors[2]});
-    }
+        std::uint32_t textureId = 0;
+        rendering::TextureAddressMode addressU =
+            rendering::TextureAddressMode::Clamp;
+        rendering::TextureAddressMode addressV =
+            rendering::TextureAddressMode::Clamp;
+        std::vector<rendering::FillVertex> vertices;
+    };
+    const auto textureAddressMode = [](std::uint8_t tiling) {
+        switch (static_cast<AcGiMapper::Tiling>(tiling))
+        {
+        case AcGiMapper::kTile:
+            return rendering::TextureAddressMode::Repeat;
+        case AcGiMapper::kMirror:
+            return rendering::TextureAddressMode::Mirror;
+        case AcGiMapper::kInheritTiling:
+        case AcGiMapper::kCrop:
+        case AcGiMapper::kClamp:
+        default:
+            return rendering::TextureAddressMode::Clamp;
+        }
+    };
+    std::unordered_map<std::uint32_t, std::uint32_t> imageTextureIds;
+    const auto resolveImageTexture = [&](std::uint32_t imageIndex) {
+        if (imageIndex == 0 || imageIndex > drawList.geometry().images.size())
+            return std::uint32_t{0};
+        const auto found = imageTextureIds.find(imageIndex);
+        if (found != imageTextureIds.end())
+            return found->second;
+        const acdb::RasterImage &image =
+            drawList.geometry().images[imageIndex - 1];
+        const std::string key =
+            std::to_string(image.width) + "x" +
+            std::to_string(image.height) + ":" +
+            std::to_string(image.contentHash);
+        const std::uint32_t textureId =
+            acgsGetManager()->uploadImageBGRA(
+                key, image.width, image.height, image.bgra.data());
+        imageTextureIds.emplace(imageIndex, textureId);
+        return textureId;
+    };
+
+    std::size_t submittedFillVertexCount = 0;
     for (const bool is3DFace : {false, true})
     {
-        std::vector<rendering::FillVertex> &vertices =
-            is3DFace ? surfaceFillVertices : fillVertices;
-        if (vertices.empty())
-            continue;
-        const rendering::FilledTrianglesRenderData fillData{
-            .view = ctx.view,
-            .projection = ctx.projection,
-            .vertices = vertices.data(),
-            .vertexCount = static_cast<uint32_t>(vertices.size()),
-            .is3DFace = is3DFace,
-            .layer = envLayer("GRID_FILL_LAYER"),
-            .logDepth = ctx.logDepth,
-            .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
-        };
-        viewDevice()->drawFilledTriangles(fillData);
+        std::vector<FillBatch> batches;
+        for (const acdb::Triangle &triangle : drawList.geometry().fills)
+        {
+            if (!triangle.common.visible || triangle.is3DFace != is3DFace)
+                continue;
+            const std::uint32_t uploadedTexture =
+                resolveImageTexture(triangle.imageIndex);
+            if (triangle.imageFallback && uploadedTexture != 0)
+                continue;
+            if (!triangle.imageFallback && triangle.imageIndex != 0 &&
+                uploadedTexture == 0)
+                continue;
+            const std::uint32_t textureId =
+                triangle.imageFallback ? 0 : uploadedTexture;
+            const rendering::TextureAddressMode addressU =
+                textureAddressMode(triangle.mapperUTiling);
+            const rendering::TextureAddressMode addressV =
+                textureAddressMode(triangle.mapperVTiling);
+            if (batches.empty() || batches.back().textureId != textureId ||
+                batches.back().addressU != addressU ||
+                batches.back().addressV != addressV)
+                batches.push_back({textureId, addressU, addressV, {}});
+            FillBatch &batch = batches.back();
+            const bool textured = textureId != 0;
+            const glm::vec4 defaultFillColor = textured
+                ? glm::vec4(1.0f)
+                : contrastColor(triangle.common.color.renderColor());
+            const std::array<glm::vec4, 3> fillColors =
+                textured
+                    ? std::array<glm::vec4, 3>{defaultFillColor,
+                                               defaultFillColor,
+                                               defaultFillColor}
+                    : triangle.hasVertexColors
+                          ? std::array<glm::vec4, 3>{
+                                contrastColor(triangle.vertexColors[0]),
+                                contrastColor(triangle.vertexColors[1]),
+                                contrastColor(triangle.vertexColors[2])}
+                          : std::array<glm::vec4, 3>{defaultFillColor,
+                                                     defaultFillColor,
+                                                     defaultFillColor};
+            const std::array<glm::vec3, 3> positions{
+                glm::vec3(triangle.a - ctx.cameraPos),
+                glm::vec3(triangle.b - ctx.cameraPos),
+                glm::vec3(triangle.c - ctx.cameraPos)};
+            for (size_t vertex = 0; vertex < positions.size(); ++vertex)
+            {
+                const glm::vec2 uv = triangle.hasTextureCoords
+                    ? triangle.textureCoords[vertex]
+                    : glm::vec2(0.0f);
+                batch.vertices.push_back(
+                    {positions[vertex], fillColors[vertex], uv});
+            }
+        }
+
+        for (const FillBatch &batch : batches)
+        {
+            if (batch.vertices.empty())
+                continue;
+            submittedFillVertexCount += batch.vertices.size();
+            const rendering::FilledTrianglesRenderData fillData{
+                .view = ctx.view,
+                .projection = ctx.projection,
+                .vertices = batch.vertices.data(),
+                .vertexCount = static_cast<uint32_t>(batch.vertices.size()),
+                .textureId = batch.textureId,
+                .textureAddressU = batch.addressU,
+                .textureAddressV = batch.addressV,
+                .is3DFace = is3DFace,
+                .layer = envLayer("GRID_FILL_LAYER"),
+                .logDepth = ctx.logDepth,
+                .material = toSurfaceMaterial(acgs::AcGiMaterial{}),
+            };
+            viewDevice()->drawFilledTriangles(fillData);
+        }
     }
 
     static std::vector<rendering::TargetPointInstance> points;
@@ -1240,7 +1316,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             "cam=(%.0f,%.0f,%.0f) ortho=%d clip_ok=%zu clip_rej=%zu\n",
             drawList.geometry().strokes.size(), lineInstances.size(),
             polylineVertices.size(), drawList.geometry().fills.size(),
-            fillVertices.size() + surfaceFillVertices.size(),
+            submittedFillVertexCount,
             drawList.geometry().points.size(), points.size(),
             ctx.slabNear, ctx.slabFar, ctx.cameraPos.x, ctx.cameraPos.y,
             ctx.cameraPos.z, int(ctx.ortho), debugClipAccepted,

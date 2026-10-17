@@ -1,7 +1,9 @@
 #include "acgi/AcGiWorldDraw.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 int main()
@@ -217,20 +219,163 @@ int main()
     const AcGiLineType dashedLineType{"DASHED", nullptr, 0};
     const AcGiLineType edgeLineTypes[] = {
         dashedLineType, dashedLineType, dashedLineType, dashedLineType};
+    const short faceColors[] = {5};
+    const short edgeColors[] = {2, 3, 4, 5};
+    const acdb::AcDbObjectId faceLayers[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{101})};
+    const acdb::AcDbObjectId edgeLayers[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{201}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{202}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{203}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{204})};
+    const acdb::AcDbObjectId edgeLinetypes[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{301}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{302}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{303}),
+        acdb::AcDbObjectId(acdb::AcDbHandle{304})};
+    const acdb::AcDbObjectId materials[] = {
+        acdb::AcDbObjectId(acdb::AcDbHandle{401})};
+    const Adesk::LongPtr faceMarkers[] = {0x1234};
+    const Adesk::LongPtr edgeMarkers[] = {0x11, 0x22, 0x33, 0x44};
+    const AcCmTransparency faceTransparency[] = {
+        AcCmTransparency(static_cast<std::uint8_t>(128))};
     AcGiFaceData faces;
+    faces.setColors(faceColors, 1);
     faces.setTrueColors(fillColors, 1);
+    faces.setLayers(faceLayers, 1);
+    faces.setSelectionMarkers(faceMarkers, 1);
+    faces.setMaterials(materials, 1);
+    faces.setTransparency(faceTransparency, 1);
     AcGiVertexData vertices;
     vertices.setTrueColors(vertexColors, 4);
     vertices.setNormals(vertexNormals, 4);
+    assert(vertices.orientationFlag() == kAcGiNoOrientation);
+    vertices.setOrientationFlag(kAcGiClockwise);
+    assert(vertices.orientationFlag() == kAcGiClockwise);
+    AcGePoint3d allMappingCoords[] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}};
+    AcGePoint3d mapMappingCoords[] = {
+        {0.25, 0.25, 0.0}, {0.75, 0.25, 0.0},
+        {0.25, 0.75, 0.0}, {0.75, 0.75, 0.0}};
+    vertices.setMappingCoords(AcGiVertexData::kAllChannels,
+                              allMappingCoords);
+    vertices.setMappingCoords(AcGiVertexData::kMapChannels,
+                              mapMappingCoords);
+    assert(vertices.mappingCoords(AcGiVertexData::kAllChannels) ==
+           allMappingCoords);
+    assert(vertices.mappingCoords(AcGiVertexData::kMapChannels) ==
+           mapMappingCoords);
+    vertices.mappingCoords(AcGiVertexData::kAllChannels)[0].x = 0.5;
+    assert(allMappingCoords[0].x == 0.5);
+    vertices.setMappingCoords(AcGiVertexData::kMapChannels, nullptr);
+    assert(vertices.mappingCoords(AcGiVertexData::kMapChannels) == nullptr);
+    vertices.setMappingCoords(AcGiVertexData::kMapChannels,
+                              mapMappingCoords);
     AcGiEdgeData edges;
+    edges.setColors(edgeColors, 4);
+    edges.setLayers(edgeLayers, 4);
+    edges.setLineTypes(edgeLinetypes);
+    assert(edges.linetypeIds() == edgeLinetypes);
+    edges.setSelectionMarkers(edgeMarkers, 4);
     edges.setVisibility(edgeVisibility, 4);
     edges.setLineTypes(edgeLineTypes, 4);
     assert(!meshDraw.mesh(2, 2, meshVertices, &edges, &faces, &vertices));
     assert(meshGeometry.fills.size() == 2);
     assert(meshGeometry.strokes.size() == 2);
     assert(meshGeometry.strokes.front().common.lineType == "DASHED");
+    assert(meshGeometry.strokes[0].layerId == edgeLayers[0]);
+    assert(meshGeometry.strokes[0].linetypeId == edgeLinetypes[0]);
+    assert(meshGeometry.strokes[0].selectionMarker == edgeMarkers[0]);
+    assert(meshGeometry.strokes[0].hasColorIndex);
+    assert(meshGeometry.strokes[0].colorIndex == edgeColors[0]);
+    assert(meshGeometry.strokes[1].layerId == edgeLayers[2]);
+    assert(meshGeometry.strokes[1].selectionMarker == edgeMarkers[2]);
+    assert(meshGeometry.fills[0].layerId == faceLayers[0]);
+    assert(meshGeometry.fills[0].materialId == materials[0]);
+    assert(meshGeometry.fills[0].selectionMarker == faceMarkers[0]);
+    assert(meshGeometry.fills[0].hasColorIndex);
+    assert(meshGeometry.fills[0].colorIndex == faceColors[0]);
+    assert(std::abs(meshGeometry.fills[0].common.color.alpha() -
+                    128.0f / 255.0f) < 1.0e-5f);
     assert(meshGeometry.fills[0].hasVertexColors);
     assert(meshGeometry.fills[0].hasVertexNormals);
+    assert(std::abs(meshGeometry.fills[0].vertexColors[0].a -
+                    128.0f / 255.0f) < 1.0e-5f);
+    assert(meshGeometry.fills[0].hasAllMappingCoords);
+    assert(meshGeometry.fills[0].hasMapMappingCoords);
+    assert(std::abs(meshGeometry.fills[0].allMappingCoords[0].x - 0.5) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[0].x - 0.25) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[0].y - 0.25) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[1].x - 0.75) <
+           1.0e-9);
+    assert(std::abs(meshGeometry.fills[0].mapMappingCoords[2].y - 0.75) <
+           1.0e-9);
+    assert(meshGeometry.fills[0].hasTextureCoords);
+    assert(std::abs(meshGeometry.fills[0].textureCoords[0].x - 0.25f) <
+           1.0e-6f);
+    AcGiMapper mappedFaceMapper;
+    mappedFaceMapper.setTransform(
+        AcGeMatrix3d::setToTranslation(AcGeVector3d(0.5, 0.25, 0.0)));
+    mappedFaceMapper.setUTiling(AcGiMapper::kTile);
+    mappedFaceMapper.setVTiling(AcGiMapper::kMirror);
+    AcGiFaceData mappedFaceData;
+    mappedFaceData.setMappers(&mappedFaceMapper, 1);
+    acdb::TessellatedEntity mappedGeometry;
+    acgs::ViewportDraw mappedContext(mappedGeometry);
+    AcGiWorldDraw mappedDraw(mappedContext);
+    assert(!mappedDraw.mesh(2, 2, meshVertices, nullptr, &mappedFaceData,
+                            &vertices));
+    assert(mappedGeometry.fills.size() == 2);
+    assert(mappedGeometry.fills[0].hasTextureCoords);
+    assert(std::abs(mappedGeometry.fills[0].textureCoords[0].x - 0.75f) <
+           1.0e-6f);
+    assert(std::abs(mappedGeometry.fills[0].textureCoords[0].y - 0.5f) <
+           1.0e-6f);
+    assert(mappedGeometry.fills[0].mapperUTiling == AcGiMapper::kTile);
+    assert(mappedGeometry.fills[0].mapperVTiling == AcGiMapper::kMirror);
+    AcGiMapper planarMapper;
+    planarMapper.setProjection(AcGiMapper::kPlanar);
+    AcGiFaceData planarFaceData;
+    planarFaceData.setMappers(&planarMapper, 1);
+    acdb::TessellatedEntity planarGeometry;
+    acgs::ViewportDraw planarContext(planarGeometry);
+    AcGiWorldDraw planarDraw(planarContext);
+    assert(!planarDraw.mesh(2, 2, meshVertices, nullptr, &planarFaceData));
+    assert(planarGeometry.fills.size() == 2);
+    assert(planarGeometry.fills[0].hasTextureCoords);
+    for (const glm::vec2 &uv : planarGeometry.fills[0].textureCoords)
+        assert(uv.x >= 0.0f && uv.x <= 1.0f &&
+               uv.y >= 0.0f && uv.y <= 1.0f);
+    AcGiVertexData malformedVertices = vertices;
+    AcGePoint3d invalidMappingCoords[] = {
+        {0.0, 0.0, 0.0},
+        {std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {1.0, 1.0, 0.0}};
+    malformedVertices.setMappingCoords(AcGiVertexData::kMapChannels,
+                                       invalidMappingCoords);
+    assert(meshDraw.mesh(2, 2, meshVertices, nullptr, nullptr,
+                         &malformedVertices));
+    assert(meshGeometry.fills.size() == 2);
+    AcGiFaceData nativeMapperApi;
+    nativeMapperApi.setMappers(nullptr);
+    assert(nativeMapperApi.mappers() == nullptr);
+    assert(!nativeMapperApi.mapperCountKnownData());
+    AcGiFaceData malformedMappers;
+    int mapperStorage = 0;
+    malformedMappers.setMappers(
+        reinterpret_cast<const AcGiMapper *>(&mapperStorage), 2);
+    assert(meshDraw.mesh(2, 2, meshVertices, nullptr, &malformedMappers));
+    assert(meshGeometry.fills.size() == 2);
+    AcGiEdgeData malformedEdges;
+    malformedEdges.setLayers(edgeLayers, 1);
+    assert(meshDraw.mesh(2, 2, meshVertices, &malformedEdges));
+    assert(meshGeometry.fills.size() == 2);
+    assert(meshGeometry.strokes.size() == 2);
     acdb::TessellatedEntity wireMeshGeometry;
     acgs::ViewportDraw wireMeshContext(wireMeshGeometry);
     AcGiWorldDraw wireMeshDraw(wireMeshContext);
@@ -249,7 +394,21 @@ int main()
     assert(shellGeometry.fills.size() == 2);
     assert(shellGeometry.strokes.size() == 2);
     assert(shellGeometry.strokes.front().common.lineType == "DASHED");
+    assert(shellGeometry.strokes.front().layerId == edgeLayers[0]);
+    assert(shellGeometry.strokes.front().linetypeId == edgeLinetypes[0]);
+    assert(shellGeometry.strokes.front().selectionMarker == edgeMarkers[0]);
+    assert(shellGeometry.fills.front().layerId == faceLayers[0]);
+    assert(shellGeometry.fills.front().materialId == materials[0]);
+    assert(shellGeometry.fills.front().selectionMarker == faceMarkers[0]);
+    assert(std::abs(shellGeometry.fills.front().common.color.alpha() -
+                    128.0f / 255.0f) < 1.0e-5f);
     assert(shellGeometry.fills[0].hasVertexColors);
+    assert(std::abs(shellGeometry.fills[0].vertexColors[0].a -
+                    128.0f / 255.0f) < 1.0e-5f);
+    assert(shellGeometry.fills[0].hasAllMappingCoords);
+    assert(shellGeometry.fills[0].hasMapMappingCoords);
+    assert(std::abs(shellGeometry.fills[0].mapMappingCoords[0].x - 0.25) <
+           1.0e-9);
     acdb::TessellatedEntity wireShellGeometry;
     acgs::ViewportDraw wireShellContext(wireShellGeometry);
     AcGiWorldDraw wireShellDraw(wireShellContext);
@@ -356,11 +515,21 @@ int main()
     assert(!binaryAlphaDraw.image(
         binaryAlphaImage, {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
         {0.0, 1.0, 0.0}, AcGiGeometry::kTransparency1Bit));
-    assert(binaryAlphaGeometry.fills.size() == 2);
-    assert(binaryAlphaGeometry.fills.front().common.color.renderColor().b >
+    assert(binaryAlphaGeometry.images.size() == 1);
+    assert(binaryAlphaGeometry.images[0].width == 3);
+    assert(binaryAlphaGeometry.images[0].height == 1);
+    assert(binaryAlphaGeometry.images[0].bgra[3] == 0);
+    assert(binaryAlphaGeometry.fills.size() == 4);
+    const auto fallbackFill = std::find_if(
+        binaryAlphaGeometry.fills.begin(), binaryAlphaGeometry.fills.end(),
+        [](const acdb::Triangle &triangle) { return triangle.imageFallback; });
+    assert(fallbackFill != binaryAlphaGeometry.fills.end());
+    assert(fallbackFill->common.color.renderColor().b >
            0.99f);
-    assert(binaryAlphaGeometry.fills.front().common.color.renderColor().r <
+    assert(fallbackFill->common.color.renderColor().r <
            0.01f);
+    assert(binaryAlphaGeometry.fills[0].hasTextureCoords);
+    assert(binaryAlphaGeometry.fills[0].imageIndex == 1);
 
     acdb::TessellatedEntity opaqueModeGeometry;
     acgs::ViewportDraw opaqueModeContext(opaqueModeGeometry);
@@ -368,7 +537,7 @@ int main()
     assert(!opaqueModeDraw.image(
         binaryAlphaImage, {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
         {0.0, 1.0, 0.0}, AcGiGeometry::kTransparencyOff));
-    assert(opaqueModeGeometry.fills.size() == 6);
+    assert(opaqueModeGeometry.fills.size() == 8);
     assert(std::abs(opaqueModeGeometry.fills.front().common.color.alpha() -
                     1.0f) < 1.0e-5f);
 

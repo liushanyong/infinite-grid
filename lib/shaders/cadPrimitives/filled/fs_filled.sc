@@ -1,4 +1,4 @@
-$input v_color, v_depth
+$input v_color, v_uv, v_depth
 
 #include <bgfx_shader.sh>
 #include <cadCore/depth.sh>
@@ -6,9 +6,15 @@ $input v_color, v_depth
 uniform vec4 uPrimParams;
 uniform vec4 u_material;
 uniform vec4 uDepthDisplay;
+uniform sampler2D s_albedo;
 
 void main()
 {
+    vec4 color = v_color;
+    if (uPrimParams.z > 0.5)
+        color *= texture2D(s_albedo, v_uv);
+    if (color.a <= 0.0)
+        discard;
     if (uPrimParams.y > 0.5)
     {
         // Slab-free overlay depth (GPU ID screen overlays such as SDF
@@ -17,7 +23,7 @@ void main()
         // the slab too, or text outside [near, far] loses its ID while
         // still visible on screen.
         gl_FragDepth = gl_FragCoord.z;
-        gl_FragColor = vec4(v_color.rgb * u_material.rgb, v_color.a);
+        gl_FragColor = vec4(color.rgb * u_material.rgb, color.a);
         return;
     }
     gl_FragDepth = cad_outputDepth(gl_FragCoord.z, v_depth);
@@ -29,5 +35,5 @@ void main()
         gl_FragColor = vec4(vec3_splat(1.0 - depthT), 1.0);
         return;
     }
-    gl_FragColor = vec4(v_color.rgb * u_material.rgb, v_color.a);
+    gl_FragColor = vec4(color.rgb * u_material.rgb, color.a);
 }
