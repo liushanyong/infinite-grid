@@ -9,6 +9,8 @@
 
 #include "AcGeNurbsCore.h"
 #include "AcGeNurbsSpline.h"
+#include "AcGeBspline.h"
+#include "AcGeCurves2d.h"
 
 namespace
 {
@@ -814,6 +816,19 @@ void NurbsCurveCore::makeRational(double weight)
     rebuildEvalData();
 }
 
+void NurbsCurveCore::makeNonPeriodic()
+{
+    if (!periodic)
+        return;
+
+    NurbsCurveCore candidate;
+    const std::vector<double> candidateWeights =
+        rational ? ew : std::vector<double>{};
+    candidate.build(degree, evalKnots, ex, ey, ez, candidateWeights, false,
+                    rational);
+    *this = std::move(candidate);
+}
+
 void NurbsCurveCore::join(const NurbsCurveCore &other, double tol)
 {
     if (periodic || other.periodic)
@@ -1063,6 +1078,126 @@ bool AcGeNurbCurve2d::getParamsOfG1Discontinuity(
         [this](double u, size_t count) { return derivativesAt(u, count); },
         params);
 }
+
+int AcGeNurbCurve2d::numFitPoints() const
+{
+    return static_cast<int>(m_fitPoints.size());
+}
+
+bool AcGeNurbCurve2d::getFitPointAt(int index, AcGePoint2d &point) const
+{
+    if (index < 0 || static_cast<size_t>(index) >= m_fitPoints.size())
+        return false;
+    point = m_fitPoints[static_cast<size_t>(index)];
+    return true;
+}
+
+bool AcGeNurbCurve2d::getFitData(AcGePoint2dArray &points,
+                                 AcGeTol &fitTolerance) const
+{
+    if (m_fitPoints.empty())
+        return false;
+    points = m_fitPoints;
+    fitTolerance = m_fitTolerance;
+    return true;
+}
+
+AcGeNurbCurve2d &AcGeNurbCurve2d::setFitData(
+    int degree, const AcGePoint2dArray &points, const AcGeTol &fitTolerance)
+{
+    if (degree < 1 || degree > 31 ||
+        points.size() < static_cast<size_t>(degree + 1))
+        throw std::invalid_argument("Invalid NURBS fit-point data.");
+    std::vector<AcGePoint2d> fit(points.begin(), points.end());
+    const ge::AcGeBsplineCurve2d interpolated =
+        ge::AcGeBsplineCurve2d::interpolate(fit, static_cast<size_t>(degree));
+    std::vector<double> px, py;
+    px.reserve(interpolated.controlPoints.size());
+    py.reserve(interpolated.controlPoints.size());
+    for (const AcGePoint2d &point : interpolated.controlPoints)
+    {
+        px.push_back(point.x);
+        py.push_back(point.y);
+    }
+    ge::detail::NurbsCurveCore candidate;
+    candidate.build(degree, interpolated.knots, px, py,
+                    std::vector<double>(px.size(), 0.0), {}, false, false);
+    m_core = std::move(candidate);
+    m_fitPoints = points;
+    m_fitTolerance = fitTolerance;
+    m_fitDegree = degree;
+    return *this;
+}
+
+bool AcGeNurbCurve2d::setFitPointAt(int index, const AcGePoint2d &point)
+{
+    if (m_fitPoints.empty() || index < 0 ||
+        static_cast<size_t>(index) >= m_fitPoints.size())
+        return false;
+    AcGePoint2dArray updated = m_fitPoints;
+    updated[static_cast<size_t>(index)] = point;
+    setFitData(m_fitDegree, updated, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve2d::addFitPointAt(int index, const AcGePoint2d &point)
+{
+    if (m_fitPoints.empty() || index < 0 ||
+        static_cast<size_t>(index) > m_fitPoints.size())
+        return false;
+    AcGePoint2dArray updated = m_fitPoints;
+    updated.insert(updated.begin() + index, point);
+    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+               updated, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve2d::deleteFitPointAt(int index)
+{
+    if (m_fitPoints.empty() || index < 0 ||
+        static_cast<size_t>(index) >= m_fitPoints.size() ||
+        m_fitPoints.size() <= 2)
+        return false;
+    AcGePoint2dArray updated = m_fitPoints;
+    updated.erase(updated.begin() + index);
+    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+               updated, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve2d::getFitTolerance(AcGeTol &fitTolerance) const
+{
+    if (m_fitPoints.empty())
+        return false;
+    fitTolerance = m_fitTolerance;
+    return true;
+}
+
+bool AcGeNurbCurve2d::setFitTolerance(const AcGeTol &fitTolerance)
+{
+    if (m_fitPoints.empty())
+        return false;
+    m_fitTolerance = fitTolerance;
+    return true;
+}
+
+bool AcGeNurbCurve2d::buildFitData()
+{
+    if (m_fitPoints.empty())
+        return false;
+    setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve2d::purgeFitData()
+{
+    if (m_fitPoints.empty())
+        return false;
+    m_fitPoints.clear();
+    m_fitDegree = 0;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // AcGeNurbCurve2d structural editing (ObjectARX genurb2d API)
 // ---------------------------------------------------------------------------
@@ -1111,6 +1246,12 @@ AcGeNurbCurve2d &AcGeNurbCurve2d::hardTrimByParams(double newStartParam,
 AcGeNurbCurve2d &AcGeNurbCurve2d::joinWith(const AcGeNurbCurve2d &curve)
 {
     m_core.join(curve.m_core, AcGeTol{}.equalPoint());
+    return *this;
+}
+
+AcGeNurbCurve2d &AcGeNurbCurve2d::makeNonPeriodic()
+{
+    m_core.makeNonPeriodic();
     return *this;
 }
 
@@ -1308,6 +1449,126 @@ bool AcGeNurbCurve3d::getParamsOfG1Discontinuity(
         params);
 }
 
+int AcGeNurbCurve3d::numFitPoints() const
+{
+    return static_cast<int>(m_fitPoints.size());
+}
+
+bool AcGeNurbCurve3d::getFitPointAt(int index, AcGePoint3d &point) const
+{
+    if (index < 0 || static_cast<size_t>(index) >= m_fitPoints.size())
+        return false;
+    point = m_fitPoints[static_cast<size_t>(index)];
+    return true;
+}
+
+bool AcGeNurbCurve3d::getFitData(AcGePoint3dArray &points,
+                                 AcGeTol &fitTolerance) const
+{
+    if (m_fitPoints.empty())
+        return false;
+    points = m_fitPoints;
+    fitTolerance = m_fitTolerance;
+    return true;
+}
+
+AcGeNurbCurve3d &AcGeNurbCurve3d::setFitData(
+    int degree, const AcGePoint3dArray &points, const AcGeTol &fitTolerance)
+{
+    if (degree < 1 || degree > 31 ||
+        points.size() < static_cast<size_t>(degree + 1))
+        throw std::invalid_argument("Invalid NURBS fit-point data.");
+    std::vector<AcGePoint3d> fit(points.begin(), points.end());
+    const ge::AcGeBsplineCurve3d interpolated =
+        ge::AcGeBsplineCurve3d::interpolate(fit, static_cast<size_t>(degree));
+    std::vector<double> px, py, pz;
+    px.reserve(interpolated.controlPoints.size());
+    py.reserve(interpolated.controlPoints.size());
+    pz.reserve(interpolated.controlPoints.size());
+    for (const AcGePoint3d &point : interpolated.controlPoints)
+    {
+        px.push_back(point.x);
+        py.push_back(point.y);
+        pz.push_back(point.z);
+    }
+    ge::detail::NurbsCurveCore candidate;
+    candidate.build(degree, interpolated.knots, px, py, pz, {}, false, false);
+    m_core = std::move(candidate);
+    m_fitPoints = points;
+    m_fitTolerance = fitTolerance;
+    m_fitDegree = degree;
+    return *this;
+}
+
+bool AcGeNurbCurve3d::setFitPointAt(int index, const AcGePoint3d &point)
+{
+    if (m_fitPoints.empty() || index < 0 ||
+        static_cast<size_t>(index) >= m_fitPoints.size())
+        return false;
+    AcGePoint3dArray updated = m_fitPoints;
+    updated[static_cast<size_t>(index)] = point;
+    setFitData(m_fitDegree, updated, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve3d::addFitPointAt(int index, const AcGePoint3d &point)
+{
+    if (m_fitPoints.empty() || index < 0 ||
+        static_cast<size_t>(index) > m_fitPoints.size())
+        return false;
+    AcGePoint3dArray updated = m_fitPoints;
+    updated.insert(updated.begin() + index, point);
+    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+               updated, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve3d::deleteFitPointAt(int index)
+{
+    if (m_fitPoints.empty() || index < 0 ||
+        static_cast<size_t>(index) >= m_fitPoints.size() ||
+        m_fitPoints.size() <= 2)
+        return false;
+    AcGePoint3dArray updated = m_fitPoints;
+    updated.erase(updated.begin() + index);
+    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+               updated, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve3d::getFitTolerance(AcGeTol &fitTolerance) const
+{
+    if (m_fitPoints.empty())
+        return false;
+    fitTolerance = m_fitTolerance;
+    return true;
+}
+
+bool AcGeNurbCurve3d::setFitTolerance(const AcGeTol &fitTolerance)
+{
+    if (m_fitPoints.empty())
+        return false;
+    m_fitTolerance = fitTolerance;
+    return true;
+}
+
+bool AcGeNurbCurve3d::buildFitData()
+{
+    if (m_fitPoints.empty())
+        return false;
+    setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+    return true;
+}
+
+bool AcGeNurbCurve3d::purgeFitData()
+{
+    if (m_fitPoints.empty())
+        return false;
+    m_fitPoints.clear();
+    m_fitDegree = 0;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // AcGeNurbCurve3d structural editing (ObjectARX genurb3d API)
 // ---------------------------------------------------------------------------
@@ -1356,5 +1617,11 @@ AcGeNurbCurve3d &AcGeNurbCurve3d::hardTrimByParams(double newStartParam,
 AcGeNurbCurve3d &AcGeNurbCurve3d::joinWith(const AcGeNurbCurve3d &curve)
 {
     m_core.join(curve.m_core, AcGeTol{}.equalPoint());
+    return *this;
+}
+
+AcGeNurbCurve3d &AcGeNurbCurve3d::makeNonPeriodic()
+{
+    m_core.makeNonPeriodic();
     return *this;
 }

@@ -29,10 +29,12 @@
 // machinery on the existing AcGeNurbsCore).
 //
 // Evaluation supports derivatives up to the degree (A4.2 quotient rule).
-// These types implement the common AcGeCurve2d/3d evaluation interface, but
-// not the full curve API, fitting from a generic curve, or filer/IO protocols.
-// Structural editing (knot insertion, exact removal, degree elevation, hard
-// trim, makeRational, joinWith) is provided for non-periodic curves.
+// These types implement the common AcGeCurve2d/3d evaluation interface and an
+// exact interpolation-based fit-point subset, but not fitting from a generic
+// curve or filer/IO protocols. Structural editing (knot insertion, exact
+// removal, degree elevation, hard trim, makeRational, and joinWith) is
+// provided for non-periodic curves. Periodic curves can be converted to an
+// equivalent non-periodic expanded representation.
 
 namespace ge
 {
@@ -88,6 +90,9 @@ struct ACGE_PORT NurbsCurveCore
     // Assign the weight to every control point (make rational) or scale
     // all existing weights (already rational).
     void makeRational(double weight);
+    // Convert the wrapped periodic representation to an equivalent clamped
+    // curve over the same active parameter interval.
+    void makeNonPeriodic();
     // C0 join: append a compatible clamped curve of equal degree whose
     // start point matches this curve's endpoint (within tol).
     void join(const NurbsCurveCore &other, double tol);
@@ -147,6 +152,18 @@ public:
         AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
     bool getParamsOfG1Discontinuity(
         AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
+    int numFitPoints() const;
+    bool getFitPointAt(int index, AcGePoint2d &point) const;
+    bool getFitData(AcGePoint2dArray &points, AcGeTol &fitTolerance) const;
+    AcGeNurbCurve2d &setFitData(int degree, const AcGePoint2dArray &points,
+                                const AcGeTol &fitTolerance = AcGeTol{});
+    bool setFitPointAt(int index, const AcGePoint2d &point);
+    bool addFitPointAt(int index, const AcGePoint2d &point);
+    bool deleteFitPointAt(int index);
+    bool getFitTolerance(AcGeTol &fitTolerance) const;
+    bool setFitTolerance(const AcGeTol &fitTolerance);
+    bool buildFitData();
+    bool purgeFitData();
 
     // Structural editing (ObjectARX genurb2d API; non-periodic only).
     AcGeNurbCurve2d &insertKnot(double param);
@@ -157,9 +174,13 @@ public:
     AcGeNurbCurve2d &hardTrimByParams(double newStartParam,
                                       double newEndParam);
     AcGeNurbCurve2d &joinWith(const AcGeNurbCurve2d &curve);
+    AcGeNurbCurve2d &makeNonPeriodic();
 
 private:
     ge::detail::NurbsCurveCore m_core;
+    AcGePoint2dArray m_fitPoints;
+    AcGeTol m_fitTolerance;
+    int m_fitDegree = 0;
 };
 
 class ACGE_PORT AcGeNurbCurve3d : public AcGeCurve3d
@@ -210,6 +231,18 @@ public:
         AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
     bool getParamsOfG1Discontinuity(
         AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
+    int numFitPoints() const;
+    bool getFitPointAt(int index, AcGePoint3d &point) const;
+    bool getFitData(AcGePoint3dArray &points, AcGeTol &fitTolerance) const;
+    AcGeNurbCurve3d &setFitData(int degree, const AcGePoint3dArray &points,
+                                const AcGeTol &fitTolerance = AcGeTol{});
+    bool setFitPointAt(int index, const AcGePoint3d &point);
+    bool addFitPointAt(int index, const AcGePoint3d &point);
+    bool deleteFitPointAt(int index);
+    bool getFitTolerance(AcGeTol &fitTolerance) const;
+    bool setFitTolerance(const AcGeTol &fitTolerance);
+    bool buildFitData();
+    bool purgeFitData();
 
     // Structural editing (ObjectARX genurb3d API; non-periodic only).
     AcGeNurbCurve3d &insertKnot(double param);
@@ -220,7 +253,11 @@ public:
     AcGeNurbCurve3d &hardTrimByParams(double newStartParam,
                                       double newEndParam);
     AcGeNurbCurve3d &joinWith(const AcGeNurbCurve3d &curve);
+    AcGeNurbCurve3d &makeNonPeriodic();
 
 private:
     ge::detail::NurbsCurveCore m_core;
+    AcGePoint3dArray m_fitPoints;
+    AcGeTol m_fitTolerance;
+    int m_fitDegree = 0;
 };

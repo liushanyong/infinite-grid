@@ -225,6 +225,16 @@ endpoints (junction knot multiplicity = degree). `length()` and
 24-point Gauss-Legendre quadrature split at knot spans; parameter intervals
 are clipped to the curve domain, reversed bounds produce the same positive
 length, and results no greater than `abs(tol)` are reported as zero.
+The 2D/3D NURBS curves also expose a fit-data subset: `setFitData(degree,
+fitPoints, fitTolerance)` interpolates the points exactly using chord-length
+parameterization, fit points can be queried/inserted/updated/deleted and
+rebuilt, and `purgeFitData` drops only the saved fit metadata. The tolerance is
+retained for round-trip compatibility but does not enable approximate fitting;
+tangent-constrained fitting, alternate knot parameterizations, and other
+ObjectARX fit-data overloads remain unsupported. `makeNonPeriodic` exactly
+converts wrapped periodic curve data to its expanded non-periodic basis over
+the same active parameter interval; conversion in the opposite direction and
+makeClosed/makeOpen are not yet implemented.
 `AcGeCurve2d/3d` provide a small polymorphic parameter-domain/evaluation
 interface implemented by 2D/3D line segments, circular and elliptical arcs,
 circles, composite curves, NURBS/B-spline/Bézier curves, and interpolation
