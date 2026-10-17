@@ -1210,67 +1210,7 @@ bool AcGiWorldDraw::edge(const std::vector<AcGiEdge2d> &edges)
         std::visit(
             [&](const auto &curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, AcGeCurve2d>)
-                {
-                    const acdb::TesselationOptions options =
-                        context().optionsFor(curve.radius());
-                    const int maxSegments =
-                        std::clamp(options.maxSegments, 2, 65536);
-                    const int minSegments =
-                        std::clamp(options.minSegments, 2, maxSegments);
-                    points = std::visit(
-                        [&](const auto &value) ->
-                            std::vector<AcGePoint3d> {
-                            using Value =
-                                std::decay_t<decltype(value)>;
-                            if constexpr (std::is_same_v<Value,
-                                                         AcGeLineSeg2d>)
-                            {
-                                return {AcGePoint3d(value.startPoint().x,
-                                                    value.startPoint().y,
-                                                    0.0),
-                                        AcGePoint3d(value.endPoint().x,
-                                                    value.endPoint().y,
-                                                    0.0)};
-                            }
-                            else
-                            {
-                                const int segments =
-                                    std::max(minSegments, 32);
-                                std::vector<AcGePoint3d> sampled;
-                                sampled.reserve(size_t(segments) + 1);
-                                for (int index = 0; index <= segments;
-                                     ++index)
-                                {
-                                    AcGePoint2d point;
-                                    if constexpr (std::is_same_v<
-                                                      Value,
-                                                      AcGeCircArc2d>)
-                                    {
-                                        const double sweep =
-                                            value.sweep() *
-                                            (value.isClockWise() ? -1.0
-                                                                 : 1.0);
-                                        point = value.pointAtAngle(
-                                            value.startAng() +
-                                            sweep *
-                                                (double(index) / segments));
-                                    }
-                                    else
-                                    {
-                                        point = value.pointAt(
-                                            double(index) / segments);
-                                    }
-                                    sampled.emplace_back(point.x, point.y,
-                                                         0.0);
-                                }
-                                return sampled;
-                            }
-                        },
-                        curve.curve);
-                    return;
-                }
-                else if constexpr (std::is_same_v<Curve, AcGeLineSeg2d>)
+                if constexpr (std::is_same_v<Curve, AcGeLineSeg2d>)
                 {
                     points.emplace_back(curve.startPoint().x,
                                         curve.startPoint().y, 0.0);
@@ -1530,15 +1470,95 @@ Adesk::Boolean AcGiWorldDraw::ownerDraw3d(
     return true;
 }
 
+namespace
+{
+int analyticSegmentCount(double sweep, const acdb::TesselationOptions &options)
+{
+    const int maxSegments = std::clamp(options.maxSegments, 1, 65536);
+    const int minSegments = std::clamp(options.minSegments, 1, maxSegments);
+    if (!(std::abs(sweep) > 0.0) || !(options.angleStep > 0.0) ||
+        !std::isfinite(sweep) || !std::isfinite(options.angleStep))
+        return std::max(minSegments, 32);
+    const double desired = std::ceil(std::abs(sweep) / options.angleStep);
+    return desired >= maxSegments
+               ? maxSegments
+               : std::max(minSegments, static_cast<int>(desired));
+}
+
+double analyticCurveRadius(const AcGeCurve3d &curve)
+{
+    if (const auto *circle = dynamic_cast<const AcGeCircle3d *>(&curve))
+        return circle->radius;
+    if (const auto *arc = dynamic_cast<const AcGeCircArc3d *>(&curve))
+        return arc->radius;
+    if (const auto *ellipse =
+            dynamic_cast<const AcGeEllipArc3d *>(&curve))
+        return std::max(ellipse->majorRadius(), ellipse->minorRadius());
+    return 0.0;
+}
+
+double analyticCurveRadius(const AcGeCurve2d &curve)
+{
+    if (const auto *arc = dynamic_cast<const AcGeCircArc2d *>(&curve))
+        return arc->radius();
+    if (const auto *ellipse =
+            dynamic_cast<const AcGeEllipArc2d *>(&curve))
+        return ellipse->majorRadius();
+    return 0.0;
+}
+
+std::vector<AcGePoint3d> sampleBaseCurve3d(
+    const AcGeCurve3d &curve, const acdb::TesselationOptions &options)
+{
+    if (const auto *line = dynamic_cast<const AcGeLineSeg3d *>(&curve))
+        return {line->startPoint(), line->endPoint()};
+
+    const double start = curve.startParam();
+    const double end = curve.endParam();
+    const int segments = analyticSegmentCount(end - start, options);
+    std::vector<AcGePoint3d> points;
+    points.reserve(static_cast<size_t>(segments) + 1);
+    for (int index = 0; index <= segments; ++index)
+    {
+        points.push_back(curve.pointAt(
+            start + (end - start) * (double(index) / segments)));
+    }
+    return points;
+}
+
+std::vector<AcGePoint3d> sampleBaseCurve2d(
+    const AcGeCurve2d &curve, const acdb::TesselationOptions &options)
+{
+    if (const auto *line = dynamic_cast<const AcGeLineSeg2d *>(&curve))
+    {
+        const AcGePoint2d start = line->startPoint();
+        const AcGePoint2d end = line->endPoint();
+        return {AcGePoint3d(start.x, start.y, 0.0),
+                AcGePoint3d(end.x, end.y, 0.0)};
+    }
+
+    const double start = curve.startParam();
+    const double end = curve.endParam();
+    const int segments = analyticSegmentCount(end - start, options);
+    std::vector<AcGePoint3d> points;
+    points.reserve(static_cast<size_t>(segments) + 1);
+    for (int index = 0; index <= segments; ++index)
+    {
+        const AcGePoint2d point = curve.pointAt(
+            start + (end - start) * (double(index) / segments));
+        points.emplace_back(point.x, point.y, 0.0);
+    }
+    return points;
+}
+} // namespace
+
 Adesk::Boolean AcGiWorldDraw::curve(const AcGeCurve3d *curve)
 {
     if (curve == nullptr)
         return true;
     const acdb::TesselationOptions options =
-        context().optionsFor(curve->radius());
-    std::vector<AcGePoint3d> points =
-        curve->sample(options.angleStep, options.minSegments,
-                      options.maxSegments);
+        context().optionsFor(analyticCurveRadius(*curve));
+    std::vector<AcGePoint3d> points = sampleBaseCurve3d(*curve, options);
     if (points.size() < 2)
         return true;
     points.erase(std::remove_if(points.begin(), points.end(),
@@ -1554,16 +1574,34 @@ Adesk::Boolean AcGiWorldDraw::curve(const AcGeCurve3d *curve)
                          false);
 }
 
-Adesk::Boolean AcGiWorldDraw::edge(const AcGeCurve2d *edges,
+Adesk::Boolean AcGiWorldDraw::edge(const AcGeCurve2d *const *edges,
                                    Adesk::UInt32 nbEdges)
 {
     if (edges == nullptr || nbEdges == 0)
         return true;
-    std::vector<AcGiEdge2d> adapted;
-    adapted.reserve(nbEdges);
+
     for (Adesk::UInt32 index = 0; index < nbEdges; ++index)
-        adapted.push_back(AcGiEdge2d{edges[index]});
-    return edge(adapted);
+    {
+        if (edges[index] == nullptr)
+            return true;
+        const AcGeCurve2d &curve = *edges[index];
+        const acdb::TesselationOptions options =
+            context().optionsFor(analyticCurveRadius(curve));
+        std::vector<AcGePoint3d> points = sampleBaseCurve2d(curve, options);
+        points.erase(std::remove_if(points.begin(), points.end(),
+                                    [](const AcGePoint3d &point) {
+                                        return !std::isfinite(point.x) ||
+                                               !std::isfinite(point.y) ||
+                                               !std::isfinite(point.z);
+                                    }),
+                     points.end());
+        if (points.size() < 2)
+            return true;
+        if (worldPolyline(points.data(),
+                          static_cast<int>(points.size()), false))
+            return true;
+    }
+    return false;
 }
 
 bool AcGiWorldDraw::worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,

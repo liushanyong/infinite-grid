@@ -16,12 +16,13 @@
 #include <vector>
 
 #include "AcGePoint.h"
+#include "AcGeCurve.h"
 #include "AcGePredicates.h"
 #include "AcGeLinear.h"
 
 #include <glm/glm.hpp>
 
-struct ACGE_PORT AcGeLineSeg2d
+struct ACGE_PORT AcGeLineSeg2d : AcGeCurve2d
 {
 private:
     AcGePoint2d m_start{0.0, 0.0};
@@ -39,7 +40,10 @@ public:
     AcGePoint2d startPoint() const { return m_start; }
     AcGePoint2d endPoint() const { return m_end; }
 
+    double startParam() const override { return 0.0; }
+    double endParam() const override { return 1.0; }
     AcGeVector2d direction() const { return m_end - m_start; }
+    AcGeVector2d derivativeAt(double) const { return direction(); }
     double parameterOf(const AcGePoint2d &point) const;
     double length() const { return m_start.distanceTo(m_end); }
     double length(double fromParam, double toParam,
@@ -49,7 +53,10 @@ public:
     {
         return m_start + (m_end - m_start) * blendCoeff;
     }
-    AcGePoint2d pointAt(double parameter) const { return baryComb(parameter); }
+    AcGePoint2d pointAt(double parameter) const override
+    {
+        return baryComb(parameter);
+    }
     AcGePoint2d closestPointTo(
         const AcGePoint2d &point,
         const AcGeTol & = AcGeTol{}) const
@@ -70,7 +77,7 @@ public:
     }
 };
 
-struct ACGE_PORT AcGeCircArc2d
+struct ACGE_PORT AcGeCircArc2d : AcGeCurve2d
 {
 private:
     AcGePoint2d m_center{0.0, 0.0};
@@ -142,6 +149,12 @@ public:
     double sweep() const;
 
     AcGePoint2d pointAtAngle(double angle) const;
+    double startParam() const override { return m_startAngle; }
+    double endParam() const override { return m_endAngle; }
+    AcGePoint2d pointAt(double angle) const override
+    {
+        return pointAtAngle(angle);
+    }
     AcGePoint2d startPoint() const { return pointAtAngle(m_startAngle); }
     AcGePoint2d endPoint() const { return pointAtAngle(m_endAngle); }
 
@@ -151,7 +164,7 @@ public:
     bool contains(const AcGePoint2d &point) const { return isInside(point); }
 };
 
-struct ACGE_PORT AcGeEllipArc2d
+struct ACGE_PORT AcGeEllipArc2d : AcGeCurve2d
 {
 private:
     AcGePoint2d m_center{0.0, 0.0};
@@ -215,6 +228,8 @@ public:
     double minorRadius() const { return m_minorRadius; }
     double startAng() const { return m_startAngle; }
     double endAng() const { return m_endAngle; }
+    double startParam() const override { return m_startAngle; }
+    double endParam() const override { return m_endAngle; }
     bool isClockWise() const
     {
         return m_majorAxis.x * m_minorAxis.y -
@@ -227,7 +242,7 @@ public:
                tol.equalVector();
     }
 
-    AcGePoint2d pointAt(double angle) const
+    AcGePoint2d pointAt(double angle) const override
     {
         return m_center + m_majorAxis * (m_majorRadius * std::cos(angle)) +
                m_minorAxis * (m_minorRadius * std::sin(angle));
@@ -239,63 +254,6 @@ public:
                   const AcGeTol &tol = AcGeTol{}) const;
 };
 
-
-// Value-semantic type-erased planar curve.  This mirrors the AcGeCurve3d
-// facade and lets AcGi edge() accept ObjectARX-style AcGeCurve2d arrays
-// without converting this value-geometry layer to a virtual hierarchy.
-struct ACGE_PORT AcGeCurve2d
-{
-    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
-
-    AcGeCurve2d() = default;
-    AcGeCurve2d(const AcGeLineSeg2d &value) : curve(value) {}
-    AcGeCurve2d(const AcGeCircArc2d &value) : curve(value) {}
-    AcGeCurve2d(const AcGeEllipArc2d &value) : curve(value) {}
-
-    AcGePoint2d startPoint() const
-    {
-        return std::visit(
-            [](const auto &value) { return value.startPoint(); }, curve);
-    }
-    AcGePoint2d endPoint() const
-    {
-        return std::visit(
-            [](const auto &value) { return value.endPoint(); }, curve);
-    }
-    AcGePoint2d pointAt(double parameter) const
-    {
-        return std::visit(
-            [parameter](const auto &value) {
-                if constexpr (std::is_same_v<std::decay_t<decltype(value)>,
-                                             AcGeCircArc2d>)
-                {
-                    const double sweep = value.sweep() *
-                                         (value.isClockWise() ? -1.0 : 1.0);
-                    return value.pointAtAngle(value.startAng() + sweep *
-                                                                  parameter);
-                }
-                else
-                {
-                    return value.pointAt(parameter);
-                }
-            },
-            curve);
-    }
-    double radius() const
-    {
-        return std::visit(
-            [](const auto &value) -> double {
-                using Curve = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<Curve, AcGeLineSeg2d>)
-                    return 0.0;
-                else if constexpr (std::is_same_v<Curve, AcGeCircArc2d>)
-                    return value.radius();
-                else
-                    return value.majorRadius();
-            },
-            curve);
-    }
-};
 
 using AcGeEllip2d = AcGeEllipArc2d;
 using AcGeEllipse2d = AcGeEllipArc2d;
@@ -310,11 +268,24 @@ using ::AcGeEllipArc2d;
 
 // ---- AcGeCircle2d ----
 
-struct ACGE_PORT AcGeCircle2d
+struct ACGE_PORT AcGeCircle2d : AcGeCurve2d
 {
     AcGePoint2d center{0.0, 0.0};
     double radius = 1.0;
 
+    AcGeCircle2d() = default;
+    AcGeCircle2d(const AcGePoint2d &circleCenter, double circleRadius)
+        : center(circleCenter), radius(circleRadius)
+    {
+    }
+
+    double startParam() const override { return 0.0; }
+    double endParam() const override { return 6.2831853071795864769; }
+    AcGePoint2d pointAt(double angle) const override
+    {
+        return {center.x + radius * std::cos(angle),
+                center.y + radius * std::sin(angle)};
+    }
     bool contains(const AcGePoint2d &p) const;
 };
 

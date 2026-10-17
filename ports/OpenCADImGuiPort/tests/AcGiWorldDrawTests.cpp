@@ -754,21 +754,17 @@ int main()
     AcGiWorldDraw curveDraw(curveContext);
     AcGeLineSeg3d line3d(AcGePoint3d(0.0, 0.0, 0.0),
                          AcGePoint3d(2.0, 0.0, 0.0));
-    AcGeCurve3d genericCurve(line3d);
-    assert(std::abs(genericCurve.length() - 2.0) < 1.0e-12);
-    assert(!curveDraw.curve(&genericCurve));
+    assert(!curveDraw.curve(&line3d));
     assert(curveGeometry.strokes.size() == 1);
     assert(curveGeometry.strokes.back().points.size() == 2);
     AcGeCircle3d circle3d(AcGePoint3d(0.0, 0.0, 0.0),
                           AcGeVector3d::kZAxis, 1.0);
-    AcGeCurve3d genericCircle(circle3d);
-    assert(!curveDraw.curve(&genericCircle));
+    assert(!curveDraw.curve(&circle3d));
     assert(curveGeometry.strokes.back().points.size() > 16);
 
     AcGeCircArc2d arc2d(AcGePoint2d(0.0, 0.0), 1.0, 0.0,
                         1.5707963267948966);
-    AcGeCurve2d genericArc2d(arc2d);
-    const std::vector<AcGiEdge2d> genericEdges{{genericArc2d}};
+    const std::vector<AcGiEdge2d> genericEdges{{arc2d}};
     acdb::TessellatedEntity genericEdgeGeometry;
     acgs::ViewportDraw genericEdgeContext(genericEdgeGeometry);
     AcGiWorldDraw genericEdgeDraw(genericEdgeContext);
@@ -810,8 +806,7 @@ int main()
     // ARX-style AcGeCurve2d pointer arrays adapt to the edge-value pipeline.
     AcGeLineSeg2d genericLine2d(AcGePoint2d(0.0, 0.0),
                                 AcGePoint2d(1.0, 0.0));
-    AcGeCurve2d genericEdgeCurves[] = {
-        AcGeCurve2d(genericLine2d), AcGeCurve2d(arc2d)};
+    const AcGeCurve2d *genericEdgeCurves[] = {&genericLine2d, &arc2d};
     acdb::TessellatedEntity nativeEdgeGeometry;
     acgs::ViewportDraw nativeEdgeContext(nativeEdgeGeometry);
     AcGiWorldDraw nativeEdgeDraw(nativeEdgeContext);

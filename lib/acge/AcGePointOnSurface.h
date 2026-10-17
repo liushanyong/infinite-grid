@@ -17,13 +17,12 @@
 // derivatives up to order 2, mixed partial, normal, and tangent-plane
 // vector maps.
 //
-// The library keeps surface entities as independent value types (no
-// AcGeSurface hierarchy), so the wrapper type-erases any surface providing
-// const pointAt(double, double) -- Sphere, Cylinder, Cone, Torus,
-// BoundedPlane, and the swept-surface family all share this protocol.
-// Partial derivatives are obtained by central finite differences of the
-// point function; all built-in surfaces use smooth radian/linear
-// parameterizations, so a fixed relative step gives accurate results.
+// Most surfaces remain independent value types; the AcGeSurface base
+// currently covers the 3D B-spline and NURBS patches. This wrapper continues
+// to type-erase any surface providing const pointAt(double, double), including
+// Sphere, Cylinder, Cone, Torus, BoundedPlane, and swept surfaces. Partial
+// derivatives are obtained by central finite differences of the point
+// function; built-in surfaces use smooth radian/linear parameterizations.
 
 namespace ge
 {

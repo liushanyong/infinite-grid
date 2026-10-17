@@ -9,9 +9,10 @@
 #include "AcGeInterval.h"
 #include "AcGePoint.h"
 #include "AcGeTol.h"
+#include "AcGeCurve.h"
 
 // Source-level AcGeBoundedPlane subset with an orthonormal parameter frame.
-struct ACGE_PORT AcGeBoundedPlane
+struct ACGE_PORT AcGeBoundedPlane : AcGeSurface
 {
 private:
     AcGePoint3d m_origin{0.0, 0.0, 0.0};
@@ -46,8 +47,12 @@ public:
     AcGeVector3d vAxis() const { return m_vAxis; }
     AcGeInterval uRange() const { return m_uRange; }
     AcGeInterval vRange() const { return m_vRange; }
+    double minParameterU() const override { return m_uRange.lowerBound(); }
+    double maxParameterU() const override { return m_uRange.upperBound(); }
+    double minParameterV() const override { return m_vRange.lowerBound(); }
+    double maxParameterV() const override { return m_vRange.upperBound(); }
 
-    AcGePoint3d pointAt(double u, double v) const
+    AcGePoint3d pointAt(double u, double v) const override
     {
         return m_origin + m_uAxis * u + m_vAxis * v;
     }

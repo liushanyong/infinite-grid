@@ -8,6 +8,7 @@
 
 #include "AcGeArrays.h"
 #include "AcGeKnotVector.h"
+#include "AcGeCurve.h"
 #include "AcGePoint.h"
 #include "AcGeTol.h"
 
@@ -28,10 +29,10 @@
 // machinery on the existing AcGeNurbsCore).
 //
 // Evaluation supports derivatives up to the degree (A4.2 quotient rule).
-// These value types do not implement the AcGeCurve2d/3d hierarchy,
-// fitting from a generic curve, or the filer/IO protocols. Structural
-// editing (knot insertion, exact removal, degree elevation, hard trim,
-// makeRational, joinWith) is provided for non-periodic curves.
+// These types implement the common AcGeCurve2d/3d evaluation interface, but
+// not the full curve API, fitting from a generic curve, or filer/IO protocols.
+// Structural editing (knot insertion, exact removal, degree elevation, hard
+// trim, makeRational, joinWith) is provided for non-periodic curves.
 
 namespace ge
 {
@@ -98,7 +99,7 @@ private:
 } // namespace detail
 } // namespace ge
 
-class ACGE_PORT AcGeNurbCurve2d
+class ACGE_PORT AcGeNurbCurve2d : public AcGeCurve2d
 {
 public:
     AcGeNurbCurve2d() = default;
@@ -123,8 +124,8 @@ public:
     double weightAt(int i) const;
     AcGeNurbCurve2d &setWeightAt(int i, double weight);
 
-    double startParam() const { return m_core.u0; }
-    double endParam() const { return m_core.u1; }
+    double startParam() const override { return m_core.u0; }
+    double endParam() const override { return m_core.u1; }
     AcGePoint2d startPoint() const { return pointAt(m_core.u0); }
     AcGePoint2d endPoint() const { return pointAt(m_core.u1); }
 
@@ -133,7 +134,7 @@ public:
                            AcGePoint2dArray &controlPoints,
                            AcGeDoubleArray &weights) const;
 
-    AcGePoint2d pointAt(double param) const;
+    AcGePoint2d pointAt(double param) const override;
     AcGeVector2d firstDeriv(double param) const;
     double length() const { return length(startParam(), endParam()); }
     double length(double fromParam, double toParam,
@@ -157,7 +158,7 @@ private:
     ge::detail::NurbsCurveCore m_core;
 };
 
-class ACGE_PORT AcGeNurbCurve3d
+class ACGE_PORT AcGeNurbCurve3d : public AcGeCurve3d
 {
 public:
     AcGeNurbCurve3d() = default;
@@ -182,8 +183,8 @@ public:
     double weightAt(int i) const;
     AcGeNurbCurve3d &setWeightAt(int i, double weight);
 
-    double startParam() const { return m_core.u0; }
-    double endParam() const { return m_core.u1; }
+    double startParam() const override { return m_core.u0; }
+    double endParam() const override { return m_core.u1; }
     AcGePoint3d startPoint() const { return pointAt(m_core.u0); }
     AcGePoint3d endPoint() const { return pointAt(m_core.u1); }
 
@@ -192,7 +193,7 @@ public:
                            AcGePoint3dArray &controlPoints,
                            AcGeDoubleArray &weights) const;
 
-    AcGePoint3d pointAt(double param) const;
+    AcGePoint3d pointAt(double param) const override;
     AcGeVector3d firstDeriv(double param) const;
     double length() const { return length(startParam(), endParam()); }
     double length(double fromParam, double toParam,

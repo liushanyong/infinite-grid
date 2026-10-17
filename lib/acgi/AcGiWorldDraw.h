@@ -101,8 +101,8 @@ private:
     Tiling vTiling_ = kInheritTiling;
 };
 
-// AcGeCurve3d is the value-semantic type-erasing curve facade provided by
-// the acge layer; AcGi uses it to implement the generic curve callback.
+// AcGeCurve3d is the analytic curve base provided by the acge layer;
+// AcGi uses it to implement the generic curve callback.
 
 // ---- enums (acgidefs.h / acgi.h) ----
 
@@ -119,12 +119,11 @@ enum AcGiFillType
     kAcGiFillNever
 };
 
-// Value-segment subset used by the port's edge() callback; ObjectARX exposes
-// an AcGeCurve2d pointer hierarchy, which this value-semantic AcGe layer lacks.
+// Value-segment subset used by the port's edge() callback.  The separate
+// edge(const AcGeCurve2d*, count) overload accepts the analytic base hierarchy.
 struct AcGiEdge2d
 {
-    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d, AcGeCurve2d>
-        curve;
+    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
 };
 
 struct resbuf;
@@ -754,7 +753,7 @@ public:
 
     // ObjectARX-style planar curve array.  The concrete AcGiWorldDraw adapts
     // these type-erased value curves to the edge-value callback above.
-    virtual Adesk::Boolean edge(const AcGeCurve2d *edges,
+    virtual Adesk::Boolean edge(const AcGeCurve2d *const *edges,
                                 Adesk::UInt32 nbEdges)
     {
         (void)edges;
@@ -1034,7 +1033,7 @@ public:
         const AcGeVector3d &u, const AcGeVector3d &v,
         TransparencyMode transparencyMode = kTransparency8Bit) override;
     Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) override;
-    Adesk::Boolean edge(const AcGeCurve2d *edges,
+    Adesk::Boolean edge(const AcGeCurve2d *const *edges,
                         Adesk::UInt32 nbEdges) override;
     Adesk::Boolean worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                  const AcGePoint3d &c,
