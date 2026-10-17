@@ -62,10 +62,27 @@ void curveBasesExposeDomainsAndEvaluation()
     assert(near(line2d.derivativeAt(0.0).x, 2.0));
     assert(near(line2d.derivativeAt(0.75).y, 2.0));
 
+    const ge::AcGeCircle2d circle2d{{2.0, -1.0}, 3.0};
+    const AcGeCurve2d &circle2dBase = circle2d;
+    assert(near(circle2dBase.startParam(), 0.0));
+    assert(near(circle2dBase.endParam(), 6.283185307179586));
+    assert(near(circle2dBase.pointAt(0.0).x, 5.0));
+    const AcGeEllipArc2d ellipse2d;
+    const AcGeCurve2d &ellipse2dBase = ellipse2d;
+    assert(near(ellipse2dBase.pointAt(0.0).x, 1.0));
+
     const AcGeLineSeg3d line3d{AcGePoint3d{1.0, 2.0, 3.0},
                                AcGePoint3d{4.0, 6.0, 3.0}};
     assert(near(line3d.derivativeAt(0.0).x, 3.0));
     assert(near(line3d.derivativeAt(1.0).y, 4.0));
+    const AcGeCircle3d circle3d{{1.0, 2.0, 3.0},
+                                {0.0, 0.0, 1.0}, 2.0};
+    const AcGeCurve3d &circle3dBase = circle3d;
+    assert(near(circle3dBase.endParam(), 6.283185307179586));
+    assert(near(circle3dBase.pointAt(0.0).x, 3.0));
+    const AcGeEllipArc3d ellipse3d;
+    const AcGeCurve3d &ellipse3dBase = ellipse3d;
+    assert(near(ellipse3dBase.pointAt(0.0).x, 1.0));
 
     AcGeCompositeCurve2d composite;
     composite.addSegment(line2d, AcGeInterval{0.0, 1.0});
