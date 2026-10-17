@@ -8,16 +8,64 @@
 #include <utility>
 
 #include "AcGeNurbsCore.h"
+#include "AcGeNurbsSpline.h"
 
 namespace
 {
 
 constexpr int kMinDegree = 1;
 constexpr int kMaxDegree = 31; // A2.3 fixed tables support up to 32 spans
+constexpr size_t kArcLengthQuadratureOrder = 24;
 
 bool finite(double v)
 {
     return std::isfinite(v);
+}
+
+double nurbsCurveLength(const ge::detail::NurbsCurveCore &curve,
+                        double fromParam, double toParam)
+{
+    if (curve.degree < 1 || curve.evalKnots.empty() ||
+        !(curve.u0 < curve.u1))
+        return 0.0;
+
+    if (fromParam > toParam)
+        std::swap(fromParam, toParam);
+    double start = std::max(fromParam, curve.u0);
+    const double end = std::min(toParam, curve.u1);
+    if (!(start < end))
+        return 0.0;
+
+    const auto quadrature = ge::gaussLegendreNodes(kArcLengthQuadratureOrder);
+    double length = 0.0;
+    while (start < end)
+    {
+        const auto nextKnot =
+            std::upper_bound(curve.evalKnots.begin(), curve.evalKnots.end(),
+                             start);
+        const double spanEnd =
+            nextKnot == curve.evalKnots.end()
+                ? end
+                : std::min(end, *nextKnot);
+        if (!(start < spanEnd))
+            break;
+
+        const double halfSpan = (spanEnd - start) * 0.5;
+        for (size_t i = 0; i < quadrature.first.size(); ++i)
+        {
+            const double param =
+                start + halfSpan * (quadrature.first[i] + 1.0);
+            std::vector<std::array<double, 4>> derivatives;
+            curve.homogeneousDerivatives(param, 1, derivatives);
+            const double dx = derivatives[1][0];
+            const double dy = derivatives[1][1];
+            const double dz = derivatives[1][2];
+            length += halfSpan * quadrature.second[i] *
+                      std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        start = spanEnd;
+    }
+    return length;
 }
 
 size_t wrappedIndex(long long raw, size_t n)
@@ -907,6 +955,16 @@ AcGeVector2d AcGeNurbCurve2d::firstDeriv(double param) const
     return {ders[1][0], ders[1][1]};
 }
 
+double AcGeNurbCurve2d::length(double fromParam, double toParam,
+                               double tol) const
+{
+    if (!finite(fromParam) || !finite(toParam) || !finite(tol))
+        throw std::invalid_argument(
+            "AcGeNurbCurve2d length parameters must be finite.");
+    const double result = nurbsCurveLength(m_core, fromParam, toParam);
+    return result <= std::abs(tol) ? 0.0 : result;
+}
+
 std::vector<AcGeVector2d> AcGeNurbCurve2d::derivativesAt(
     double param, size_t derivativeCount) const
 {
@@ -1118,6 +1176,16 @@ AcGeVector3d AcGeNurbCurve3d::firstDeriv(double param) const
     std::vector<std::array<double, 4>> ders;
     m_core.homogeneousDerivatives(param, 1, ders);
     return {ders[1][0], ders[1][1], ders[1][2]};
+}
+
+double AcGeNurbCurve3d::length(double fromParam, double toParam,
+                               double tol) const
+{
+    if (!finite(fromParam) || !finite(toParam) || !finite(tol))
+        throw std::invalid_argument(
+            "AcGeNurbCurve3d length parameters must be finite.");
+    const double result = nurbsCurveLength(m_core, fromParam, toParam);
+    return result <= std::abs(tol) ? 0.0 : result;
 }
 
 std::vector<AcGeVector3d> AcGeNurbCurve3d::derivativesAt(
