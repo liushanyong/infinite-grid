@@ -522,6 +522,19 @@ std::vector<std::vector<AcGeVector3d>> AcGeBsplineSurface3d::derivativesAt(
     return result;
 }
 
+AcGeVector3d AcGeBsplineSurface3d::normalAt(double u, double v) const
+{
+    const auto derivatives = derivativesAt(u, v, 1, 1);
+    const AcGeVector3d normal =
+        derivatives[1][0].crossProduct(derivatives[0][1]);
+    const double length = normal.length();
+    if (length <= 64.0 * std::numeric_limits<double>::epsilon() *
+                      derivatives[1][0].length() *
+                      derivatives[0][1].length())
+        throw std::domain_error("B-spline surface normal is singular.");
+    return normal / length;
+}
+
 // ---------------------------------------------------------------------------
 // AcGeNurbsSurface3d
 // ---------------------------------------------------------------------------
@@ -733,6 +746,100 @@ double AcGeNurbsSurface3d::binomialCoefficient(size_t n, size_t k)
     for (size_t i = 1; i <= k; ++i)
         result = result * double(n - k + i) / double(i);
     return result;
+}
+
+AcGeVector3d AcGeNurbsSurface3d::normalAt(double u, double v) const
+{
+    const auto derivatives = derivativesAt(u, v, 1, 1);
+    const AcGeVector3d normal =
+        derivatives[1][0].crossProduct(derivatives[0][1]);
+    const double length = normal.length();
+    if (length <= 64.0 * std::numeric_limits<double>::epsilon() *
+                      derivatives[1][0].length() *
+                      derivatives[0][1].length())
+        throw std::domain_error("NURBS surface normal is singular.");
+    return normal / length;
+}
+
+bool AcGeNurbsSurface3d::isRational() const
+{
+    validate();
+    for (const AcGePoint4d &point : controlPoints)
+        if (std::abs(point.w - 1.0) >
+            64.0 * std::numeric_limits<double>::epsilon())
+            return true;
+    return false;
+}
+
+bool AcGeNurbsSurface3d::isRationalInU() const
+{
+    validate();
+    constexpr double relativeTolerance =
+        64.0 * std::numeric_limits<double>::epsilon();
+    for (size_t v = 0; v < controlPointCountV; ++v)
+    {
+        const double reference =
+            controlPoints[v].w;
+        for (size_t u = 1; u < controlPointCountU; ++u)
+        {
+            const double weight = controlPoints[u * controlPointCountV + v].w;
+            if (std::abs(weight - reference) >
+                relativeTolerance *
+                    std::max({1.0, std::abs(weight), std::abs(reference)}))
+                return true;
+        }
+    }
+    return false;
+}
+
+bool AcGeNurbsSurface3d::isRationalInV() const
+{
+    validate();
+    constexpr double relativeTolerance =
+        64.0 * std::numeric_limits<double>::epsilon();
+    for (size_t u = 0; u < controlPointCountU; ++u)
+    {
+        const size_t row = u * controlPointCountV;
+        const double reference = controlPoints[row].w;
+        for (size_t v = 1; v < controlPointCountV; ++v)
+        {
+            const double weight = controlPoints[row + v].w;
+            if (std::abs(weight - reference) >
+                relativeTolerance *
+                    std::max({1.0, std::abs(weight), std::abs(reference)}))
+                return true;
+        }
+    }
+    return false;
+}
+
+void AcGeNurbsSurface3d::getDefinitionData(
+    size_t &degreeInU, size_t &degreeInV, size_t &controlPointCountInU,
+    size_t &controlPointCountInV, bool &rationalInU, bool &rationalInV,
+    AcGePoint3dArray &points, AcGeDoubleArray &weights,
+    AcGeKnotVector &knotsInU, AcGeKnotVector &knotsInV) const
+{
+    validate();
+    degreeInU = degreeU;
+    degreeInV = degreeV;
+    controlPointCountInU = this->controlPointCountU;
+    controlPointCountInV = this->controlPointCountV;
+    rationalInU = isRationalInU();
+    rationalInV = isRationalInV();
+    const bool rational = isRational();
+    points.clear();
+    weights.clear();
+    points.reserve(controlPoints.size());
+    if (rational)
+        weights.reserve(controlPoints.size());
+    for (const AcGePoint4d &point : controlPoints)
+    {
+        points.emplace_back(point.x, point.y, point.z);
+        if (rational)
+            weights.push_back(point.w);
+    }
+    knotsInU = AcGeKnotVector(AcGeDoubleArray(knotsU.begin(), knotsU.end()));
+    knotsInV = AcGeKnotVector(AcGeDoubleArray(knotsV.begin(), knotsV.end()));
 }
 
 } // namespace ge

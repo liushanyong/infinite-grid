@@ -233,6 +233,13 @@ splines. Line segments expose their exact constant parameter derivatives.
 torus, bounded plane, and 3D B-spline/NURBS patches. These are source-level
 foundations, not the complete ObjectARX curve/surface method sets; generic
 curve fitting, extension, and many native methods remain incomplete.
+
+B-spline and NURBS curve/surface parameter ranges use the active interval
+`[U[degree], U[controlPointCount]]` (and likewise for V), including non-clamped
+knot vectors. B-spline and NURBS surfaces expose normals from their analytic
+partial derivatives; NURBS surfaces also expose directional rationality
+queries and a copied definition-data view of degrees, control points, weights,
+and knot vectors.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
 wrappers in the ObjectARX sense: they bind any curve/surface value type and a
 cached parameter, then expose `point`, `deriv`/`uDeriv`/`vDeriv` (orders 1-2),
