@@ -821,6 +821,18 @@ int AcGeNurbsSurface3d::singularityInV(const AcGeTol &tol) const
     return nurbsSurfaceSingularity(*this, false, tol);
 }
 
+AcGeNurbsSurface3d::AcGeNurbsSurface3d(
+    int degreeInU, int degreeInV, int propertiesInU, int propertiesInV,
+    int numControlPointsInU, int numControlPointsInV,
+    const AcGePoint3d controlPoints[], const double weights[],
+    const AcGeKnotVector &knotsInU, const AcGeKnotVector &knotsInV,
+    const AcGeTol &tol)
+{
+    set(degreeInU, degreeInV, propertiesInU, propertiesInV,
+        numControlPointsInU, numControlPointsInV, controlPoints, weights,
+        knotsInU, knotsInV, tol);
+}
+
 void AcGeNurbsSurface3d::getControlPoints(AcGePoint3dArray &points) const
 {
     validate();

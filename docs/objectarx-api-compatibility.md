@@ -227,10 +227,12 @@ are clipped to the curve domain, reversed bounds produce the same positive
 length, and results no greater than `abs(tol)` are reported as zero.
 The 2D/3D NURBS curves also expose a fit-data subset: `setFitData(degree,
 fitPoints, fitTolerance)` interpolates the points exactly using chord-length
-parameterization, fit points can be queried/inserted/updated/deleted and
-rebuilt, and `purgeFitData` drops only the saved fit metadata. The tolerance is
-retained for round-trip compatibility but does not enable approximate fitting;
-tangent-constrained fitting, alternate knot parameterizations, and other
+parameterization by default; `getFitKnotParameterization` and
+`setFitKnotParameterization` also support chord, square-root-chord, and uniform
+parameterization and rebuild the interpolation when changed. Fit points can be
+queried/inserted/updated/deleted and rebuilt, and `purgeFitData` drops only the
+saved fit metadata. The tolerance is retained for round-trip compatibility but
+does not enable approximate fitting; tangent-constrained fitting and other
 ObjectARX fit-data overloads remain unsupported. `makeNonPeriodic` exactly
 converts wrapped periodic curve data to its expanded non-periodic basis over
 the same active parameter interval; conversion in the opposite direction and
@@ -255,10 +257,11 @@ seam position and first parameter derivative); NURBS curves expose C1/G1
 discontinuity parameter queries at internal knot breaks.
 The NURBS surface exposes ObjectARX-style degree, control-grid, and knot-count
 queries; control-point, weight, and knot extraction; definition-data
-round-tripping; and validated `set` overloads. Its per-direction properties
-report open/closed/periodic and rational flags, with pole classification based
-on boundary samples. Fit-point management, periodic topology editing, and
-complete NURBS curve/surface construction overloads remain outside this subset.
+round-tripping; validated `set` overloads; and the documented raw-array
+definition constructor. Its per-direction properties report
+open/closed/periodic and rational flags, with pole classification based on
+boundary samples. Fit-point management, periodic topology editing, and other
+NURBS curve/surface construction overloads remain outside this subset.
 The common `AcGeCurve2d/3d` bases provide `evalPoint` overloads with first- and
 second-derivative output, and `AcGeSurface` provides point/partial-derivative/
 normal evaluation with derivative order 0 through 2. These base evaluators use

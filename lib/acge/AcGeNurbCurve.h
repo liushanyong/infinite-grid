@@ -12,6 +12,17 @@
 #include "AcGePoint.h"
 #include "AcGeTol.h"
 
+namespace AcGe
+{
+enum KnotParameterization
+{
+    kChord = 0,
+    kSqrtChord = 1,
+    kUniform = 2,
+    kCustomParameterization = 15
+};
+} // namespace AcGe
+
 // Source-level AcGeNurbCurve2d/3d aligned with the ObjectARX reference
 // (genurb2d.h / genurb3d.h): non-uniform rational B-spline curves.
 //
@@ -162,6 +173,10 @@ public:
     bool deleteFitPointAt(int index);
     bool getFitTolerance(AcGeTol &fitTolerance) const;
     bool setFitTolerance(const AcGeTol &fitTolerance);
+    bool getFitKnotParameterization(
+        AcGe::KnotParameterization &knotParameterization) const;
+    bool setFitKnotParameterization(
+        AcGe::KnotParameterization knotParameterization);
     bool buildFitData();
     bool purgeFitData();
 
@@ -181,6 +196,7 @@ private:
     AcGePoint2dArray m_fitPoints;
     AcGeTol m_fitTolerance;
     int m_fitDegree = 0;
+    AcGe::KnotParameterization m_fitKnotParameterization = AcGe::kChord;
 };
 
 class ACGE_PORT AcGeNurbCurve3d : public AcGeCurve3d
@@ -241,6 +257,10 @@ public:
     bool deleteFitPointAt(int index);
     bool getFitTolerance(AcGeTol &fitTolerance) const;
     bool setFitTolerance(const AcGeTol &fitTolerance);
+    bool getFitKnotParameterization(
+        AcGe::KnotParameterization &knotParameterization) const;
+    bool setFitKnotParameterization(
+        AcGe::KnotParameterization knotParameterization);
     bool buildFitData();
     bool purgeFitData();
 
@@ -260,4 +280,5 @@ private:
     AcGePoint3dArray m_fitPoints;
     AcGeTol m_fitTolerance;
     int m_fitDegree = 0;
+    AcGe::KnotParameterization m_fitKnotParameterization = AcGe::kChord;
 };

@@ -789,10 +789,13 @@ void testFitPointManagement()
 {
     AcGeNurbCurve2d curve;
     AcGePoint2d fitPoint;
+    AcGe::KnotParameterization knotParameterization = AcGe::kUniform;
     assert(curve.numFitPoints() == 0);
     assert(!curve.getFitPointAt(0, fitPoint));
     assert(!curve.buildFitData());
     assert(!curve.purgeFitData());
+    assert(!curve.getFitKnotParameterization(knotParameterization));
+    assert(!curve.setFitKnotParameterization(AcGe::kUniform));
 
     const AcGePoint2dArray points{{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
     curve.setFitData(2, points);
@@ -814,9 +817,30 @@ void testFitPointManagement()
     AcGeTol retrievedTolerance;
     assert(curve.getFitTolerance(retrievedTolerance));
     near(retrievedTolerance.equalPoint(), 1.0e-6);
+
+    const AcGePoint2dArray parameterizationPoints{
+        {0.0, 0.0}, {1.0, 2.0}, {4.0, 0.0}, {6.0, 1.0}};
+    AcGeNurbCurve2d parameterizedCurve;
+    parameterizedCurve.setFitData(2, parameterizationPoints);
+    assert(parameterizedCurve.getFitKnotParameterization(knotParameterization));
+    assert(knotParameterization == AcGe::kChord);
+    const double chordPoint = parameterizedCurve.pointAt(0.4).y;
+    assert(parameterizedCurve.setFitKnotParameterization(AcGe::kUniform));
+    assert(parameterizedCurve.getFitKnotParameterization(knotParameterization));
+    assert(knotParameterization == AcGe::kUniform);
+    assert(std::abs(parameterizedCurve.pointAt(0.4).y - chordPoint) > 1.0e-3);
+    assert(parameterizedCurve.setFitKnotParameterization(AcGe::kSqrtChord));
+    assert(parameterizedCurve.getFitKnotParameterization(knotParameterization));
+    assert(knotParameterization == AcGe::kSqrtChord);
+    assert(!parameterizedCurve.setFitKnotParameterization(
+        static_cast<AcGe::KnotParameterization>(99)));
+    assert(parameterizedCurve.getFitKnotParameterization(knotParameterization));
+    assert(knotParameterization == AcGe::kSqrtChord);
+
     assert(curve.purgeFitData());
     assert(curve.numFitPoints() == 0);
     assert(!curve.getFitPointAt(0, fitPoint));
+    assert(!curve.getFitKnotParameterization(knotParameterization));
     assert(near(curve.pointAt(0.5).y, 2.0));
 
     AcGeNurbCurve3d curve3d;
@@ -832,6 +856,9 @@ void testFitPointManagement()
     assert(near(curve3d.pointAt(0.5).z, 2.0));
     assert(curve3d.addFitPointAt(1, {0.5, 0.0, 1.0}));
     assert(curve3d.deleteFitPointAt(1));
+    assert(curve3d.setFitKnotParameterization(AcGe::kUniform));
+    assert(curve3d.getFitKnotParameterization(knotParameterization));
+    assert(knotParameterization == AcGe::kUniform);
     assert(curve3d.purgeFitData());
     assert(curve3d.numFitPoints() == 0);
     assert(near(curve3d.pointAt(0.5).z, 2.0));

@@ -127,6 +127,22 @@ size_t wrappedIndex(long long raw, size_t n)
     return static_cast<size_t>(wrapped);
 }
 
+double fitParameterizationAlpha(AcGe::KnotParameterization parameterization)
+{
+    switch (parameterization)
+    {
+    case AcGe::kChord:
+        return 1.0;
+    case AcGe::kSqrtChord:
+        return 0.5;
+    case AcGe::kUniform:
+        return 0.0;
+    default:
+        throw std::invalid_argument(
+            "Unsupported NURBS fit knot parameterization.");
+    }
+}
+
 } // namespace
 
 namespace ge
@@ -1110,7 +1126,9 @@ AcGeNurbCurve2d &AcGeNurbCurve2d::setFitData(
         throw std::invalid_argument("Invalid NURBS fit-point data.");
     std::vector<AcGePoint2d> fit(points.begin(), points.end());
     const ge::AcGeBsplineCurve2d interpolated =
-        ge::AcGeBsplineCurve2d::interpolate(fit, static_cast<size_t>(degree));
+        ge::AcGeBsplineCurve2d::interpolate(
+            fit, static_cast<size_t>(degree),
+            fitParameterizationAlpha(m_fitKnotParameterization));
     std::vector<double> px, py;
     px.reserve(interpolated.controlPoints.size());
     py.reserve(interpolated.controlPoints.size());
@@ -1178,6 +1196,42 @@ bool AcGeNurbCurve2d::setFitTolerance(const AcGeTol &fitTolerance)
     if (m_fitPoints.empty())
         return false;
     m_fitTolerance = fitTolerance;
+    return true;
+}
+
+bool AcGeNurbCurve2d::getFitKnotParameterization(
+    AcGe::KnotParameterization &knotParameterization) const
+{
+    if (m_fitPoints.empty())
+        return false;
+    knotParameterization = m_fitKnotParameterization;
+    return true;
+}
+
+bool AcGeNurbCurve2d::setFitKnotParameterization(
+    AcGe::KnotParameterization knotParameterization)
+{
+    if (m_fitPoints.empty())
+        return false;
+    try
+    {
+        (void)fitParameterizationAlpha(knotParameterization);
+    }
+    catch (const std::invalid_argument &)
+    {
+        return false;
+    }
+    const AcGe::KnotParameterization previous = m_fitKnotParameterization;
+    m_fitKnotParameterization = knotParameterization;
+    try
+    {
+        setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+    }
+    catch (...)
+    {
+        m_fitKnotParameterization = previous;
+        throw;
+    }
     return true;
 }
 
@@ -1480,7 +1534,9 @@ AcGeNurbCurve3d &AcGeNurbCurve3d::setFitData(
         throw std::invalid_argument("Invalid NURBS fit-point data.");
     std::vector<AcGePoint3d> fit(points.begin(), points.end());
     const ge::AcGeBsplineCurve3d interpolated =
-        ge::AcGeBsplineCurve3d::interpolate(fit, static_cast<size_t>(degree));
+        ge::AcGeBsplineCurve3d::interpolate(
+            fit, static_cast<size_t>(degree),
+            fitParameterizationAlpha(m_fitKnotParameterization));
     std::vector<double> px, py, pz;
     px.reserve(interpolated.controlPoints.size());
     py.reserve(interpolated.controlPoints.size());
@@ -1549,6 +1605,42 @@ bool AcGeNurbCurve3d::setFitTolerance(const AcGeTol &fitTolerance)
     if (m_fitPoints.empty())
         return false;
     m_fitTolerance = fitTolerance;
+    return true;
+}
+
+bool AcGeNurbCurve3d::getFitKnotParameterization(
+    AcGe::KnotParameterization &knotParameterization) const
+{
+    if (m_fitPoints.empty())
+        return false;
+    knotParameterization = m_fitKnotParameterization;
+    return true;
+}
+
+bool AcGeNurbCurve3d::setFitKnotParameterization(
+    AcGe::KnotParameterization knotParameterization)
+{
+    if (m_fitPoints.empty())
+        return false;
+    try
+    {
+        (void)fitParameterizationAlpha(knotParameterization);
+    }
+    catch (const std::invalid_argument &)
+    {
+        return false;
+    }
+    const AcGe::KnotParameterization previous = m_fitKnotParameterization;
+    m_fitKnotParameterization = knotParameterization;
+    try
+    {
+        setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+    }
+    catch (...)
+    {
+        m_fitKnotParameterization = previous;
+        throw;
+    }
     return true;
 }
 
