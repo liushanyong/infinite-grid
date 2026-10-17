@@ -222,6 +222,27 @@ int main()
     AcGiVertexData vertices;
     vertices.setTrueColors(vertexColors, 4);
     vertices.setNormals(vertexNormals, 4);
+    assert(vertices.orientationFlag() == kAcGiNoOrientation);
+    vertices.setOrientationFlag(kAcGiClockwise);
+    assert(vertices.orientationFlag() == kAcGiClockwise);
+    AcGePoint3d allMappingCoords[] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}};
+    AcGePoint3d mapMappingCoords[] = {
+        {0.25, 0.25, 0.0}, {0.75, 0.25, 0.0},
+        {0.25, 0.75, 0.0}, {0.75, 0.75, 0.0}};
+    vertices.setMappingCoords(AcGiVertexData::kAllChannels,
+                              allMappingCoords);
+    vertices.setMappingCoords(AcGiVertexData::kMapChannels,
+                              mapMappingCoords);
+    assert(vertices.mappingCoords(AcGiVertexData::kAllChannels) ==
+           allMappingCoords);
+    assert(vertices.mappingCoords(AcGiVertexData::kMapChannels) ==
+           mapMappingCoords);
+    vertices.mappingCoords(AcGiVertexData::kAllChannels)[0].x = 0.5;
+    assert(allMappingCoords[0].x == 0.5);
+    vertices.setMappingCoords(AcGiVertexData::kMapChannels, nullptr);
+    assert(vertices.mappingCoords(AcGiVertexData::kMapChannels) == nullptr);
     AcGiEdgeData edges;
     edges.setVisibility(edgeVisibility, 4);
     edges.setLineTypes(edgeLineTypes, 4);

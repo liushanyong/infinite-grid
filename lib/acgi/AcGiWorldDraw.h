@@ -107,6 +107,13 @@ enum AcGiOrientationTransformBehavior
     kAcGiZAxisOrientation
 };
 
+enum AcGiOrientationType
+{
+    kAcGiCounterClockwise = -1,
+    kAcGiNoOrientation = 0,
+    kAcGiClockwise = 1
+};
+
 // ---- port value types for the toolkit signatures ----
 
 struct AcGiPolyline
@@ -185,8 +192,44 @@ struct AcGiFaceData
 };
 struct AcGiVertexData
 {
+    enum MapChannel
+    {
+        kAllChannels,
+        kMapChannels
+    };
+
     std::vector<AcCmEntityColor> trueColors;
     std::vector<AcGeVector3d> normals;
+
+    void setOrientationFlag(AcGiOrientationType value)
+    {
+        orientation = value;
+    }
+    AcGiOrientationType orientationFlag() const { return orientation; }
+
+    void setMappingCoords(MapChannel channel, const AcGePoint3d *values)
+    {
+        switch (channel)
+        {
+        case kAllChannels:
+            allMappingCoords = values;
+            break;
+        case kMapChannels:
+            mapMappingCoords = values;
+            break;
+        }
+    }
+    AcGePoint3d *mappingCoords(MapChannel channel) const
+    {
+        switch (channel)
+        {
+        case kAllChannels:
+            return const_cast<AcGePoint3d *>(allMappingCoords);
+        case kMapChannels:
+            return const_cast<AcGePoint3d *>(mapMappingCoords);
+        }
+        return nullptr;
+    }
 
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
@@ -202,6 +245,11 @@ struct AcGiVertexData
         else
             normals.assign(values, values + count);
     }
+
+private:
+    AcGiOrientationType orientation = kAcGiNoOrientation;
+    const AcGePoint3d *allMappingCoords = nullptr;
+    const AcGePoint3d *mapMappingCoords = nullptr;
 };
 
 // Clip boundary (port subset: a convex polygonal clip plane).
