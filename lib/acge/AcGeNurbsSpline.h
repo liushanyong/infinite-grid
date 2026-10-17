@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "AcGePoint.h"
+#include "AcGeCurve.h"
 
 namespace ge
 {
@@ -58,7 +59,7 @@ gaussLegendreNodes(size_t order);
 // Interpolating cubic spline through fit points.  Open curves use natural
 // end conditions; a periodic curve treats the point list as a closed ring
 // (chord-length parametrization of the ring) and stays C2 across the seam.
-class ACGE_PORT AcGeFitSpline3d
+class ACGE_PORT AcGeFitSpline3d : public AcGeCurve3d
 {
 public:
     AcGeFitSpline3d() = default;
@@ -76,8 +77,10 @@ public:
     bool isEmpty() const { return points_.empty(); }
     double minParameter() const { return 0.0; }
     double maxParameter() const { return span_; }
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
 
-    AcGePoint3d pointAt(double u) const;
+    AcGePoint3d pointAt(double u) const override;
     AcGeVector3d gradientAt(double u) const;
 
     // Gauss-Legendre arc length of the parameter interval.

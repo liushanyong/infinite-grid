@@ -14,9 +14,10 @@
 #include <vector>
 
 #include "AcGeMatrix.h"
+#include "AcGeCurve.h"
 #include "AcGePoint.h"
 
-struct ACGE_PORT AcGeLineSeg3d
+struct ACGE_PORT AcGeLineSeg3d : AcGeCurve3d
 {
 private:
     AcGePoint3d m_startPoint{0.0, 0.0, 0.0};
@@ -33,7 +34,10 @@ public:
 
     AcGePoint3d startPoint() const { return m_startPoint; }
     AcGePoint3d endPoint() const { return m_endPoint; }
+    double startParam() const override { return 0.0; }
+    double endParam() const override { return 1.0; }
     AcGeVector3d direction() const { return m_endPoint - m_startPoint; }
+    AcGeVector3d derivativeAt(double) const { return direction(); }
     double parameterOf(const AcGePoint3d &point) const;
 
     double length() const { return m_startPoint.distanceTo(m_endPoint); }
@@ -45,7 +49,7 @@ public:
         return m_startPoint + direction() * blendCoeff;
     }
 
-    AcGePoint3d pointAt(double t) const
+    AcGePoint3d pointAt(double t) const override
     {
         return baryComb(t);
     }
@@ -70,7 +74,7 @@ public:
     }
 };
 
-struct ACGE_PORT AcGeCircArc3d
+struct ACGE_PORT AcGeCircArc3d : AcGeCurve3d
 {
     AcGePoint3d center{0.0, 0.0, 0.0};
     AcGeVector3d normal{0.0, 0.0, 1.0};
@@ -120,7 +124,9 @@ struct ACGE_PORT AcGeCircArc3d
     }
 
     // Point on the arc at an angle parameter (radians, plane basis).
-    AcGePoint3d pointAt(double angle) const;
+    double startParam() const override { return startAngle; }
+    double endParam() const override { return endAngle; }
+    AcGePoint3d pointAt(double angle) const override;
 
     // Stable in-plane reference vector perpendicular to the normal.
     AcGeVector3d referenceAxis() const;
@@ -142,7 +148,7 @@ struct ACGE_PORT AcGeCircArc3d
     }
 };
 
-struct ACGE_PORT AcGeCircle3d
+struct ACGE_PORT AcGeCircle3d : AcGeCurve3d
 {
     AcGePoint3d center{0.0, 0.0, 0.0};
     AcGeVector3d normal{0.0, 0.0, 1.0};
@@ -180,7 +186,9 @@ struct ACGE_PORT AcGeCircle3d
         return *this;
     }
 
-    AcGePoint3d pointAt(double angle) const
+    double startParam() const override { return 0.0; }
+    double endParam() const override { return 6.2831853071795864769; }
+    AcGePoint3d pointAt(double angle) const override
     {
         return AcGeCircArc3d{center, normal, radius}.pointAt(angle);
     }
@@ -213,7 +221,7 @@ struct ACGE_PORT AcGeCircle3d
                   const AcGeTol &tol = AcGeTol{}) const;
 };
 
-struct ACGE_PORT AcGeEllipArc3d
+struct ACGE_PORT AcGeEllipArc3d : AcGeCurve3d
 {
     AcGePoint3d center{0.0, 0.0, 0.0};
     AcGeVector3d majorAxis{1.0, 0.0, 0.0};
@@ -277,7 +285,9 @@ struct ACGE_PORT AcGeEllipArc3d
         return std::abs(majorRadius() - minorRadius()) <= tol.equalVector();
     }
 
-    AcGePoint3d pointAt(double angle) const;
+    double startParam() const override { return startAngle; }
+    double endParam() const override { return endAngle; }
+    AcGePoint3d pointAt(double angle) const override;
 
     AcGePoint3d startPoint() const { return pointAt(startAngle); }
     AcGePoint3d endPoint() const { return pointAt(endAngle); }

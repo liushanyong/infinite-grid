@@ -4,12 +4,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "AcGePoint.h"
 #include "AcGeInterval.h"
+#include "AcGeCurve.h"
 
 // Source-level AcGeSphere subset for a spherical surface or angular segment.
-struct ACGE_PORT AcGeSphere
+struct ACGE_PORT AcGeSphere : AcGeSurface
 {
 private:
     double m_radius = 1.0;
@@ -80,7 +82,11 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double u, double v) const;
+    double minParameterU() const override { return m_startAngleU; }
+    double maxParameterU() const override { return m_endAngleU; }
+    double minParameterV() const override { return m_startAngleV; }
+    double maxParameterV() const override { return m_endAngleV; }
+    AcGePoint3d pointAt(double u, double v) const override;
 
     AcGeVector3d normalAt(double u, double v) const
     {
@@ -98,7 +104,7 @@ public:
     }
 };
 
-struct ACGE_PORT AcGeCylinder
+struct ACGE_PORT AcGeCylinder : AcGeSurface
 {
 private:
     double m_radius = 1.0;
@@ -154,7 +160,21 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double angle, double height) const;
+    double minParameterU() const override { return m_startAngle; }
+    double maxParameterU() const override { return m_endAngle; }
+    double minParameterV() const override
+    {
+        return m_height.isBoundedBelow()
+                   ? m_height.lowerBound()
+                   : -std::numeric_limits<double>::infinity();
+    }
+    double maxParameterV() const override
+    {
+        return m_height.isBoundedAbove()
+                   ? m_height.upperBound()
+                   : std::numeric_limits<double>::infinity();
+    }
+    AcGePoint3d pointAt(double angle, double height) const override;
     AcGeVector3d normalAt(double angle, double) const;
     bool isClosed(const AcGeTol &tol = AcGeTol{}) const
     {
@@ -164,7 +184,7 @@ public:
     }
 };
 
-struct ACGE_PORT AcGeTorus
+struct ACGE_PORT AcGeTorus : AcGeSurface
 {
 private:
     double m_majorRadius = 2.0;
@@ -233,7 +253,11 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double u, double v) const;
+    double minParameterU() const override { return m_startAngleU; }
+    double maxParameterU() const override { return m_endAngleU; }
+    double minParameterV() const override { return m_startAngleV; }
+    double maxParameterV() const override { return m_endAngleV; }
+    AcGePoint3d pointAt(double u, double v) const override;
     AcGeVector3d normalAt(double u, double v) const;
 
     bool isDoughnut() const { return m_majorRadius > m_minorRadius; }
@@ -249,7 +273,7 @@ public:
     }
 };
 
-struct ACGE_PORT AcGeCone
+struct ACGE_PORT AcGeCone : AcGeSurface
 {
 private:
     double m_halfAngle = 0.78539816339744830962;
@@ -325,7 +349,21 @@ public:
         return *this;
     }
 
-    AcGePoint3d pointAt(double angle, double height) const;
+    double minParameterU() const override { return m_startAngle; }
+    double maxParameterU() const override { return m_endAngle; }
+    double minParameterV() const override
+    {
+        return m_height.isBoundedBelow()
+                   ? m_height.lowerBound()
+                   : -std::numeric_limits<double>::infinity();
+    }
+    double maxParameterV() const override
+    {
+        return m_height.isBoundedAbove()
+                   ? m_height.upperBound()
+                   : std::numeric_limits<double>::infinity();
+    }
+    AcGePoint3d pointAt(double angle, double height) const override;
     AcGeVector3d normalAt(double angle, double) const;
     bool isClosed(const AcGeTol &tol = AcGeTol{}) const
     {
