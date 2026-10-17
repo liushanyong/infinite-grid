@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 // Return convention (ObjectARX contract): the primitive emitters return
@@ -14,6 +15,28 @@
 namespace
 {
 constexpr double kTwoPi = 6.2831853071795864769;
+
+long double signedDistance(const AcGePoint2d &edgeStart,
+                           const AcGePoint2d &edgeEnd,
+                           const AcGePoint2d &point, double winding)
+{
+    if (!std::isfinite(edgeStart.x) || !std::isfinite(edgeStart.y) ||
+        !std::isfinite(edgeEnd.x) || !std::isfinite(edgeEnd.y) ||
+        !std::isfinite(point.x) || !std::isfinite(point.y))
+        return -std::numeric_limits<long double>::infinity();
+    const long double dx =
+        static_cast<long double>(edgeEnd.x) - edgeStart.x;
+    const long double dy =
+        static_cast<long double>(edgeEnd.y) - edgeStart.y;
+    const long double length = std::hypot(dx, dy);
+    if (!(length > 0.0L) || !std::isfinite(length))
+        return -std::numeric_limits<long double>::infinity();
+    const long double px =
+        static_cast<long double>(point.x) - edgeStart.x;
+    const long double py =
+        static_cast<long double>(point.y) - edgeStart.y;
+    return ((dx * py - dy * px) / length) * winding;
+}
 
 double ccwNormalized(double angle)
 {
@@ -203,10 +226,10 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
         return false;
     normal = normal.normal();
 
+    AcGeClipBoundary2d validated;
     try
     {
-        AcGeClipBoundary2d validated(points);
-        (void)validated;
+        validated.set(points);
     }
     catch (const std::exception &)
     {
@@ -214,20 +237,22 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
     }
 
     ClipFrame frame;
-    frame.boundary = points;
+    frame.boundary = validated.vertices();
     frame.origin = boundary->m_ptPoint;
     frame.u = AcGeCircArc3d(frame.origin, normal, 1.0).referenceAxis();
     frame.v = normal.crossProduct(frame.u);
-    double areaTwice = 0.0;
-    for (size_t index = 0; index < points.size(); ++index)
+    long double areaTwice = 0.0L;
+    for (size_t index = 0; index < frame.boundary.size(); ++index)
     {
-        const AcGePoint2d &current = points[index];
-        const AcGePoint2d &next = points[(index + 1) % points.size()];
-        areaTwice += current.x * next.y - current.y * next.x;
+        const AcGePoint2d &current = frame.boundary[index];
+        const AcGePoint2d &next =
+            frame.boundary[(index + 1) % frame.boundary.size()];
+        areaTwice += static_cast<long double>(current.x) * next.y -
+                     static_cast<long double>(current.y) * next.x;
     }
-    if (!std::isfinite(areaTwice) || std::abs(areaTwice) <= 1.0e-20)
+    if (!std::isfinite(areaTwice) || areaTwice == 0.0L)
         return false;
-    frame.winding = areaTwice > 0.0 ? 1.0 : -1.0;
+    frame.winding = areaTwice > 0.0L ? 1.0 : -1.0;
     clipStack_.push_back(std::move(frame));
     return true;
 }
@@ -250,11 +275,7 @@ bool AcGiWorldDraw::clipPoint(AcGePoint3d &point) const
             const AcGePoint2d &a = frame.boundary[index];
             const AcGePoint2d &b =
                 frame.boundary[(index + 1) % frame.boundary.size()];
-            const double side =
-                ((b.x - a.x) * (projected.y - a.y) -
-                 (b.y - a.y) * (projected.x - a.x)) *
-                frame.winding;
-            if (side < -1.0e-10)
+            if (signedDistance(a, b, projected, frame.winding) < -1.0e-10L)
                 return false;
         }
     }
@@ -278,21 +299,19 @@ bool AcGiWorldDraw::clipSegment(AcGePoint3d &start, AcGePoint3d &end) const
             const AcGePoint2d &edgeStart = frame.boundary[index];
             const AcGePoint2d &edgeEnd =
                 frame.boundary[(index + 1) % frame.boundary.size()];
-            const auto side = [&](const AcGePoint2d &point) {
-                return ((edgeEnd.x - edgeStart.x) *
-                            (point.y - edgeStart.y) -
-                        (edgeEnd.y - edgeStart.y) *
-                            (point.x - edgeStart.x)) *
-                       frame.winding;
-            };
-            const double d0 = side(a0);
-            const double d1 = side(a1);
-            if (d0 < -1.0e-10 && d1 < -1.0e-10)
+            const long double d0 =
+                signedDistance(edgeStart, edgeEnd, a0, frame.winding);
+            const long double d1 =
+                signedDistance(edgeStart, edgeEnd, a1, frame.winding);
+            if (!std::isfinite(d0) || !std::isfinite(d1))
                 return false;
-            if ((d0 < -1.0e-10) != (d1 < -1.0e-10))
+            if (d0 < -1.0e-10L && d1 < -1.0e-10L)
+                return false;
+            if ((d0 < -1.0e-10L) != (d1 < -1.0e-10L))
             {
-                const double t = std::clamp(d0 / (d0 - d1), 0.0, 1.0);
-                if (d0 < -1.0e-10)
+                const double t = static_cast<double>(
+                    std::clamp(d0 / (d0 - d1), 0.0L, 1.0L));
+                if (d0 < -1.0e-10L)
                     first = std::max(first, t);
                 else
                     last = std::min(last, t);
@@ -322,25 +341,29 @@ AcGiWorldDraw::clipPolygon(std::vector<AcGePoint3d> polygon) const
                 frame.boundary[(edgeIndex + 1) % frame.boundary.size()];
             const auto side = [&](const AcGePoint3d &point) {
                 const AcGeVector3d relative = point - frame.origin;
-                const double x = relative.dotProduct(frame.u);
-                const double y = relative.dotProduct(frame.v);
-                return ((edgeEnd.x - edgeStart.x) * (y - edgeStart.y) -
-                        (edgeEnd.y - edgeStart.y) * (x - edgeStart.x)) *
-                       frame.winding;
+                const AcGePoint2d projected(relative.dotProduct(frame.u),
+                                            relative.dotProduct(frame.v));
+                return signedDistance(edgeStart, edgeEnd, projected,
+                                      frame.winding);
             };
             std::vector<AcGePoint3d> output;
             output.reserve(polygon.size() + 1);
             AcGePoint3d previous = polygon.back();
-            double previousSide = side(previous);
+            long double previousSide = side(previous);
+            if (!std::isfinite(previousSide))
+                return {};
             for (const AcGePoint3d &current : polygon)
             {
-                const double currentSide = side(current);
-                const bool previousInside = previousSide >= -1.0e-10;
-                const bool currentInside = currentSide >= -1.0e-10;
+                const long double currentSide = side(current);
+                if (!std::isfinite(currentSide))
+                    return {};
+                const bool previousInside = previousSide >= -1.0e-10L;
+                const bool currentInside = currentSide >= -1.0e-10L;
                 if (previousInside != currentInside)
                 {
-                    const double t = std::clamp(
-                        previousSide / (previousSide - currentSide), 0.0, 1.0);
+                    const double t = static_cast<double>(std::clamp(
+                        previousSide / (previousSide - currentSide),
+                        0.0L, 1.0L));
                     output.push_back(previous + (current - previous) * t);
                 }
                 if (currentInside)
