@@ -67,6 +67,12 @@ enum AcGiArcType
     kAcGiArcChord       // area bounded by the arc and its end points
 };
 
+enum AcGiFillType
+{
+    kAcGiFillAlways = 1,
+    kAcGiFillNever
+};
+
 // Value-segment subset used by the port's edge() callback; ObjectARX exposes
 // an AcGeCurve2d pointer hierarchy, which this value-semantic AcGe layer lacks.
 struct AcGiEdge2d
@@ -422,8 +428,7 @@ public:
         return false;
     }
 
-    // Closed automatically; fill type support pending in the sink, so the
-    // boundary stroke is what stores today.
+    // Closed automatically; fillType() controls whether its interior is emitted.
     virtual Adesk::Boolean polygon(const Adesk::UInt32 nbPoints,
                                    const AcGePoint3d *vertexList)
     {
@@ -534,7 +539,7 @@ public:
     }
 
     // Clip boundaries are stacked and applied to subsequent world geometry.
-    // The port supports two-corner rectangles and convex polygons in the
+    // The port supports two-corner rectangles and simple polygons in the
     // documented clip coordinate system, including front/back depth limits.
     virtual Adesk::Boolean pushClipBoundary(AcGiClipBoundary *boundary) = 0;
     virtual void popClipBoundary() = 0;
@@ -584,6 +589,8 @@ public:
     virtual void setLineType(std::string lineType) = 0;
     virtual void setLineWeight(double lineWeight) = 0;
     virtual void setVisibility(bool visible) = 0;
+    virtual void setFillType(AcGiFillType fillType) = 0;
+    virtual AcGiFillType fillType() const = 0;
 
     // Port extension: applies the entity-common attribute set in one call.
     virtual void setFrom(const acdb::AcDbEntity &common) = 0;
@@ -599,6 +606,10 @@ public:
 
     // The trait state the sink applies to subsequently emitted primitives.
     acgs::SubEntityTraits &subEntityTraits() { return draw_.subEntityTraits(); }
+    const acgs::SubEntityTraits &subEntityTraits() const
+    {
+        return draw_.subEntityTraits();
+    }
 
     // AcGiSubEntityTraits facet: forwards to the trait state above.
     void setColor(const glm::vec4 &color) override
@@ -621,6 +632,15 @@ public:
     {
         subEntityTraits().setVisibility(visible);
     }
+    void setFillType(AcGiFillType fillType) override
+    {
+        subEntityTraits().setFillEnabled(fillType == kAcGiFillAlways);
+    }
+    AcGiFillType fillType() const override
+    {
+        return subEntityTraits().traits().fillEnabled ? kAcGiFillAlways
+                                                       : kAcGiFillNever;
+    }
     void setFrom(const acdb::AcDbEntity &common) override
     {
         subEntityTraits().setFrom(common);
@@ -632,6 +652,8 @@ public:
                              const AcGePoint3d &to) override;
     Adesk::Boolean worldPolyline(const AcGePoint3d *points, int count,
                                  bool closed) override;
+    Adesk::Boolean polygon(Adesk::UInt32 nbPoints,
+                           const AcGePoint3d *vertexList) override;
     Adesk::Boolean polyPolygon(
         const Adesk::UInt32 numPolygonIndices,
         const Adesk::UInt32 *numPolygonPositions,

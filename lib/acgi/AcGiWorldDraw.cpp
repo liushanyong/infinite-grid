@@ -649,9 +649,7 @@ std::vector<AcGePoint3d> sampleArcPoints(const acgs::ViewportDraw &context,
     return samples;
 }
 
-// Sector/chord closure strokes and the filled fan (ARX fills the closure
-// areas per AcGiSubEntityTraits::fillType; the port treats fillType as its
-// default kFill).
+// Sector/chord closure strokes and their optionally filled fan.
 Adesk::Boolean emitArcClosure(AcGiWorldDraw &graphics,
                               const AcGePoint3d &fanOrigin,
                               const AcGePoint3d &start,
@@ -670,8 +668,10 @@ Adesk::Boolean emitArcClosure(AcGiWorldDraw &graphics,
     {
         graphics.worldLine(start, end);
     }
-    for (size_t index = 1; index < samples.size(); ++index)
-        graphics.worldTriangle(fanOrigin, samples[index - 1], samples[index]);
+    if (graphics.fillType() == kAcGiFillAlways)
+        for (size_t index = 1; index < samples.size(); ++index)
+            graphics.worldTriangle(fanOrigin, samples[index - 1],
+                                   samples[index]);
     return false;
 }
 
@@ -797,6 +797,24 @@ bool AcGiWorldDraw::worldPolyline(const AcGePoint3d *points, int count,
     return false;
 }
 
+bool AcGiWorldDraw::polygon(Adesk::UInt32 pointCount,
+                            const AcGePoint3d *vertexList)
+{
+    if (vertexList == nullptr || pointCount < 2 ||
+        pointCount > static_cast<Adesk::UInt32>(INT_MAX))
+        return true;
+
+    if (fillType() == kAcGiFillAlways && pointCount >= 3)
+    {
+        const std::vector<AcGePoint3d> vertices(vertexList,
+                                                 vertexList + pointCount);
+        for (const auto &indices : triangulatePolygon(vertices))
+            worldTriangle(vertices[indices[0]], vertices[indices[1]],
+                          vertices[indices[2]]);
+    }
+    return worldPolyline(vertexList, static_cast<int>(pointCount), true);
+}
+
 bool AcGiWorldDraw::polyPolygon(
     const Adesk::UInt32 numPolygonIndices,
     const Adesk::UInt32 *numPolygonPositions,
@@ -832,15 +850,15 @@ bool AcGiWorldDraw::polyPolygon(
     (void)totalPositions;
     (void)totalPoints;
 
-    const acdb::AcDbEntity originalTraits =
-        draw_.subEntityTraits().traits().toEntityCommon();
+    const acgs::DrawTraits originalTraits =
+        draw_.subEntityTraits().traits();
     size_t positionIndex = 0;
     size_t pointIndex = 0;
     for (Adesk::UInt32 type = 0; type < numPolygonIndices; ++type)
     {
         const Adesk::UInt32 instanceCount = numPolygonPositions[type];
         const Adesk::UInt32 vertexCount = numPolygonPoints[type];
-        glm::vec4 fillColor = originalTraits.color.renderColor();
+        glm::vec4 fillColor = originalTraits.color;
         if (fillColors != nullptr)
             fillColor = fillColors[type].renderColor();
         if (fillOpacities != nullptr &&
@@ -864,7 +882,7 @@ bool AcGiWorldDraw::polyPolygon(
                                   vertices[indices[2]]);
             }
 
-            glm::vec4 outlineColor = originalTraits.color.renderColor();
+            glm::vec4 outlineColor = originalTraits.color;
             if (outlineColors != nullptr)
                 outlineColor = outlineColors[type].renderColor();
             draw_.subEntityTraits().setColor(outlineColor);
@@ -892,8 +910,8 @@ bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
         width > kMaximumRasterPixels / height)
         return true;
 
-    const acdb::AcDbEntity originalTraits =
-        draw_.subEntityTraits().traits().toEntityCommon();
+    const acgs::DrawTraits originalTraits =
+        draw_.subEntityTraits().traits();
     for (size_t row = 0; row < height; ++row)
     {
         for (size_t column = 0; column < width; ++column)
@@ -1494,6 +1512,10 @@ bool AcGiWorldDraw::worldCircle(const AcGeCircArc3d &arc)
         const double t = sweep * static_cast<double>(i) / segments;
         points.push_back(arc.pointAt(arc.startAngle + t));
     }
+    if (closed && fillType() == kAcGiFillAlways)
+        for (int index = 0; index < pointCount; ++index)
+            worldTriangle(arc.center, points[index],
+                          points[(index + 1) % pointCount]);
     return worldPolyline(points.data(), pointCount, closed);
 }
 
@@ -1768,11 +1790,13 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
            edgeData->visibility.size() != edgeCountSize))))
         return true;
 
-    const acdb::AcDbEntity originalTraits =
-        draw_.subEntityTraits().traits().toEntityCommon();
+    const acgs::DrawTraits originalTraits =
+        draw_.subEntityTraits().traits();
     size_t faceIndex = 0;
     auto emitTriangle = [&](const std::array<AcGePoint3d, 3> &points,
                             const std::array<size_t, 3> &indices) {
+        if (fillType() == kAcGiFillNever)
+            return;
         const size_t firstFill = sink().geometry().fills.size();
         const std::array<AcGePoint3d, 3> worldPoints{
             apply(points[0]), apply(points[1]), apply(points[2])};
@@ -1800,6 +1824,11 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
             const size_t i01 = i00 + 1;
             const size_t i10 = size_t(row + 1) * columns + column;
             const size_t i11 = i10 + 1;
+            if (fillType() == kAcGiFillNever)
+            {
+                ++faceIndex;
+                continue;
+            }
             if (faceData != nullptr &&
                 !faceData->visibility.empty() &&
                 faceData->visibility[faceIndex] == 0)
@@ -1945,8 +1974,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
            edgeData->visibility.size() != edges.size()))))
         return true;
 
-    const acdb::AcDbEntity originalTraits =
-        draw_.subEntityTraits().traits().toEntityCommon();
+    const acgs::DrawTraits originalTraits =
+        draw_.subEntityTraits().traits();
     for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
     {
         const Face &face = faces[faceIndex];
@@ -1954,6 +1983,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         if (faceData != nullptr &&
             !faceData->visibility.empty() &&
             faceData->visibility[faceIndex] == 0)
+            continue;
+        if (fillType() == kAcGiFillNever)
             continue;
         std::vector<std::vector<size_t>> contours;
         contours.reserve(face.holes.size() + 1);

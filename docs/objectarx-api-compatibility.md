@@ -182,6 +182,10 @@ strokes. The clip coordinates are computed with
 `m_xToClipSpace * m_xInverseBlockRefXForm`, and active front/back Z planes clip
 points, segments, and filled polygons. When `m_bDrawBoundary` is set, the clip
 outline is emitted if its clip-to-world transform is finite.
+`AcGiSubEntityTraits::setFillType`/`fillType` supports ObjectARX's always/never
+modes. Closed polygons, full circles, sector/chord arc closures, mesh faces,
+and shell faces omit their fill in `kAcGiFillNever` mode while retaining
+applicable boundary and edge strokes.
 
 `polyPolygon` expands the documented grouped shape counts and insertion
 positions, ear-clips simple planar concave outlines, and carries fill/outline

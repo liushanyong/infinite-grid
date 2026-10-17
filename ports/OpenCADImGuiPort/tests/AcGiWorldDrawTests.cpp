@@ -87,6 +87,29 @@ int main()
     assert(std::abs(concaveFillArea - 10.0) < 1.0e-8);
     concaveClipDraw.popClipBoundary();
 
+    acdb::TessellatedEntity fillTypeGeometry;
+    acgs::ViewportDraw fillTypeContext(fillTypeGeometry);
+    AcGiWorldDraw fillTypeDraw(fillTypeContext);
+    const AcGePoint3d fillTypePolygon[] = {
+        {0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {1.0, 1.0, 0.0}};
+    assert(fillTypeDraw.fillType() == kAcGiFillAlways);
+    assert(!fillTypeDraw.polygon(3, fillTypePolygon));
+    assert(fillTypeGeometry.fills.size() == 1);
+    assert(fillTypeGeometry.strokes.size() == 1);
+    fillTypeDraw.setFillType(kAcGiFillNever);
+    assert(fillTypeDraw.fillType() == kAcGiFillNever);
+    assert(!fillTypeDraw.polygon(3, fillTypePolygon));
+    assert(fillTypeGeometry.fills.size() == 1);
+    assert(fillTypeGeometry.strokes.size() == 2);
+    assert(!fillTypeDraw.circle({0.0, 0.0, 0.0}, 1.0, {0.0, 0.0, 1.0}));
+    assert(fillTypeGeometry.fills.size() == 1);
+    const size_t strokesBeforeUnfilledArc = fillTypeGeometry.strokes.size();
+    assert(!fillTypeDraw.circularArc({0.0, 0.0, 0.0}, 1.0,
+                                     {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0},
+                                     1.0, kAcGiArcSector));
+    assert(fillTypeGeometry.fills.size() == 1);
+    assert(fillTypeGeometry.strokes.size() > strokesBeforeUnfilledArc + 1);
+
     acdb::TessellatedEntity boundaryDisplayGeometry;
     acgs::ViewportDraw boundaryDisplayContext(boundaryDisplayGeometry);
     AcGiWorldDraw boundaryDisplayDraw(boundaryDisplayContext);
@@ -203,6 +226,13 @@ int main()
     assert(meshGeometry.strokes.front().common.lineType == "DASHED");
     assert(meshGeometry.fills[0].hasVertexColors);
     assert(meshGeometry.fills[0].hasVertexNormals);
+    acdb::TessellatedEntity wireMeshGeometry;
+    acgs::ViewportDraw wireMeshContext(wireMeshGeometry);
+    AcGiWorldDraw wireMeshDraw(wireMeshContext);
+    wireMeshDraw.setFillType(kAcGiFillNever);
+    assert(!wireMeshDraw.mesh(2, 2, meshVertices, &edges));
+    assert(wireMeshGeometry.fills.empty());
+    assert(wireMeshGeometry.strokes.size() == 2);
 
     acdb::TessellatedEntity shellGeometry;
     acgs::ViewportDraw shellContext(shellGeometry);
@@ -214,6 +244,13 @@ int main()
     assert(shellGeometry.strokes.size() == 2);
     assert(shellGeometry.strokes.front().common.lineType == "DASHED");
     assert(shellGeometry.fills[0].hasVertexColors);
+    acdb::TessellatedEntity wireShellGeometry;
+    acgs::ViewportDraw wireShellContext(wireShellGeometry);
+    AcGiWorldDraw wireShellDraw(wireShellContext);
+    wireShellDraw.setFillType(kAcGiFillNever);
+    assert(!wireShellDraw.shell(4, meshVertices, 6, shellFaces, &edges));
+    assert(wireShellGeometry.fills.empty());
+    assert(wireShellGeometry.strokes.size() == 2);
 
     acdb::TessellatedEntity shellHoleGeometry;
     acgs::ViewportDraw shellHoleContext(shellHoleGeometry);
