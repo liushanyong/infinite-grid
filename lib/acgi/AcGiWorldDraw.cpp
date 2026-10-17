@@ -1806,6 +1806,8 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
     const size_t vertexCountSize = static_cast<size_t>(vertexCount);
     const size_t faceCountSize = static_cast<size_t>(faceCount);
     const size_t edgeCountSize = static_cast<size_t>(edgeCount);
+    const acdb::AcDbObjectId *edgeLinetypeIds =
+        edgeData == nullptr ? nullptr : edgeData->linetypeIds();
     if ((faceData != nullptr &&
          ((!faceData->trueColors.empty() &&
            faceData->trueColors.size() != faceCountSize) ||
@@ -1841,8 +1843,8 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
            edgeData->colors.size() != edgeCountSize) ||
           (!edgeData->layers.empty() &&
            edgeData->layers.size() != edgeCountSize) ||
-          (!edgeData->linetypeIds.empty() &&
-           edgeData->linetypeIds.size() != edgeCountSize) ||
+          (!edgeData->linetypeIdValues.empty() &&
+           edgeData->linetypeIdValues.size() != edgeCountSize) ||
           (!edgeData->selectionMarkers.empty() &&
            edgeData->selectionMarkers.size() != edgeCountSize) ||
           (!edgeData->lineTypes.empty() &&
@@ -1940,7 +1942,7 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
     const bool emitEdges =
         edgeData != nullptr &&
         (!edgeData->colors.empty() || !edgeData->trueColors.empty() ||
-         !edgeData->layers.empty() || !edgeData->linetypeIds.empty() ||
+         !edgeData->layers.empty() || edgeLinetypeIds != nullptr ||
          !edgeData->selectionMarkers.empty() || !edgeData->lineTypes.empty() ||
          !edgeData->visibility.empty());
     if (emitEdges)
@@ -1965,8 +1967,8 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
                     sink().geometry().strokes[strokeIndex];
                 if (!edgeData->layers.empty())
                     stroke.layerId = edgeData->layers[edgeIndex];
-                if (!edgeData->linetypeIds.empty())
-                    stroke.linetypeId = edgeData->linetypeIds[edgeIndex];
+                if (edgeLinetypeIds != nullptr)
+                    stroke.linetypeId = edgeLinetypeIds[edgeIndex];
                 if (!edgeData->selectionMarkers.empty())
                     stroke.selectionMarker =
                         edgeData->selectionMarkers[edgeIndex];
@@ -2057,6 +2059,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         }
     }
 
+    const acdb::AcDbObjectId *edgeLinetypeIds =
+        edgeData == nullptr ? nullptr : edgeData->linetypeIds();
     if ((faceData != nullptr &&
          ((!faceData->trueColors.empty() &&
            faceData->trueColors.size() != faces.size()) ||
@@ -2092,8 +2096,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
            edgeData->colors.size() != edges.size()) ||
           (!edgeData->layers.empty() &&
            edgeData->layers.size() != edges.size()) ||
-          (!edgeData->linetypeIds.empty() &&
-           edgeData->linetypeIds.size() != edges.size()) ||
+          (!edgeData->linetypeIdValues.empty() &&
+           edgeData->linetypeIdValues.size() != edges.size()) ||
           (!edgeData->selectionMarkers.empty() &&
            edgeData->selectionMarkers.size() != edges.size()) ||
           (!edgeData->lineTypes.empty() &&
@@ -2188,7 +2192,7 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
     const bool emitEdges =
         edgeData != nullptr &&
         (!edgeData->colors.empty() || !edgeData->trueColors.empty() ||
-         !edgeData->layers.empty() || !edgeData->linetypeIds.empty() ||
+         !edgeData->layers.empty() || edgeLinetypeIds != nullptr ||
          !edgeData->selectionMarkers.empty() || !edgeData->lineTypes.empty() ||
          !edgeData->visibility.empty());
     if (emitEdges)
@@ -2215,8 +2219,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
                     sink().geometry().strokes[strokeIndex];
                 if (!edgeData->layers.empty())
                     stroke.layerId = edgeData->layers[edgeIndex];
-                if (!edgeData->linetypeIds.empty())
-                    stroke.linetypeId = edgeData->linetypeIds[edgeIndex];
+                if (edgeLinetypeIds != nullptr)
+                    stroke.linetypeId = edgeLinetypeIds[edgeIndex];
                 if (!edgeData->selectionMarkers.empty())
                     stroke.selectionMarker =
                         edgeData->selectionMarkers[edgeIndex];

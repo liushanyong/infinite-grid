@@ -129,10 +129,11 @@ struct AcGiEdgeData
     std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
     std::vector<acdb::AcDbObjectId> layers;
-    std::vector<acdb::AcDbObjectId> linetypeIds;
+    std::vector<acdb::AcDbObjectId> linetypeIdValues;
     std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<std::string> lineTypes;
     std::vector<Adesk::UInt8> visibility;
+    const acdb::AcDbObjectId *borrowedLinetypeIds = nullptr;
 
     void setColors(const short *values, size_t count)
     {
@@ -163,14 +164,35 @@ struct AcGiEdgeData
     void setLinetypeIds(const acdb::AcDbObjectId *values, size_t count)
     {
         if (values == nullptr)
-            linetypeIds.clear();
+        {
+            linetypeIdValues.clear();
+            borrowedLinetypeIds = nullptr;
+        }
         else
-            linetypeIds.assign(values, values + count);
+        {
+            linetypeIdValues.assign(values, values + count);
+            borrowedLinetypeIds = nullptr;
+        }
     }
-    acdb::AcDbObjectId *linetypeIdsData() { return linetypeIds.data(); }
+    void setLineTypes(const acdb::AcDbObjectId *values)
+    {
+        linetypeIdValues.clear();
+        borrowedLinetypeIds = values;
+    }
+    void setLineTypes(const acdb::AcDbObjectId *values, size_t count)
+    {
+        setLinetypeIds(values, count);
+    }
+    acdb::AcDbObjectId *linetypeIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(
+            linetypeIdValues.empty() ? borrowedLinetypeIds
+                                     : linetypeIdValues.data());
+    }
+    acdb::AcDbObjectId *linetypeIdsData() { return linetypeIds(); }
     acdb::AcDbObjectId *linetypeIdsData() const
     {
-        return const_cast<acdb::AcDbObjectId *>(linetypeIds.data());
+        return linetypeIds();
     }
     void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
     {

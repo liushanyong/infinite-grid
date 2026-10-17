@@ -274,7 +274,8 @@ int main()
     AcGiEdgeData edges;
     edges.setColors(edgeColors, 4);
     edges.setLayers(edgeLayers, 4);
-    edges.setLinetypeIds(edgeLinetypes, 4);
+    edges.setLineTypes(edgeLinetypes);
+    assert(edges.linetypeIds() == edgeLinetypes);
     edges.setSelectionMarkers(edgeMarkers, 4);
     edges.setVisibility(edgeVisibility, 4);
     edges.setLineTypes(edgeLineTypes, 4);

@@ -263,6 +263,10 @@ colors/normals, and emit explicitly visible edge strokes with optional color
 and linetype overrides. Per-edge/per-face color indices, layer IDs, selection
 markers, linetype IDs, and face material IDs are retained as metadata on the
 tessellated sink primitives; they are not resolved into renderer styles yet.
+`AcGiEdgeData::setLineTypes(const AcDbObjectId *)` and `linetypeIds()` follow
+the ObjectARX spelling; the pointer-only setter borrows the array until the
+next synchronous `mesh`/`shell` callback, while the counted port setter copies
+and validates its input.
 `AcGiVertexData` mapping coordinates are validated and interpolated into the
 generated triangle vertices, but are not yet bound to a renderer texture
 channel. `AcGiFaceData` mapper arrays remain borrowed metadata and are not
