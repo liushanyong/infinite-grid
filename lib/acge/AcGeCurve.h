@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 #include "AcGeArrays.h"
 #include "AcGePoint.h"
@@ -139,6 +140,16 @@ public:
     virtual double maxParameterV() const = 0;
     virtual AcGePoint3d pointAt(double u, double v) const = 0;
 
+    bool isClosedInU(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return isClosedAtSeam(true, tol);
+    }
+
+    bool isClosedInV(const AcGeTol &tol = AcGeTol{}) const
+    {
+        return isClosedAtSeam(false, tol);
+    }
+
     AcGePoint3d evalPoint(const AcGePoint2d &param) const
     {
         return pointAt(param.x, param.y);
@@ -270,5 +281,47 @@ public:
         AcGeVector3d normal;
         (void)evalPoint({u, v}, 1, derivatives, normal);
         return normal;
+    }
+
+private:
+    bool isClosedAtSeam(bool inU, const AcGeTol &tol) const
+    {
+        const double lower = inU ? minParameterU() : minParameterV();
+        const double upper = inU ? maxParameterU() : maxParameterV();
+        if (!std::isfinite(lower) || !std::isfinite(upper) || !(lower < upper))
+            return false;
+
+        const double otherLower = inU ? minParameterV() : minParameterU();
+        const double otherUpper = inU ? maxParameterV() : maxParameterU();
+        std::vector<double> samples;
+        if (std::isfinite(otherLower) && std::isfinite(otherUpper))
+        {
+            if (!(otherLower < otherUpper))
+                samples.push_back(otherLower);
+            else
+            {
+                const double span = otherUpper - otherLower;
+                samples = {otherLower, otherLower + span * 0.25,
+                           otherLower + span * 0.5,
+                           otherLower + span * 0.75, otherUpper};
+            }
+        }
+        else if (std::isfinite(otherLower))
+            samples = {otherLower, otherLower + 1.0, otherLower + 2.0};
+        else if (std::isfinite(otherUpper))
+            samples = {otherUpper - 2.0, otherUpper - 1.0, otherUpper};
+        else
+            samples = {-1.0, 0.0, 1.0};
+
+        for (double sample : samples)
+        {
+            const AcGePoint3d start =
+                inU ? pointAt(lower, sample) : pointAt(sample, lower);
+            const AcGePoint3d end =
+                inU ? pointAt(upper, sample) : pointAt(sample, upper);
+            if (start.distanceTo(end) > tol.equalPoint())
+                return false;
+        }
+        return true;
     }
 };

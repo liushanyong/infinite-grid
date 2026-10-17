@@ -1,4 +1,5 @@
 #include "acge/AcGeCurve.h"
+#include "acge/AcGeSurface3d.h"
 
 #include <cassert>
 #include <cmath>
@@ -49,6 +50,25 @@ public:
     }
 };
 
+class ClosedUUnboundedV final : public AcGeSurface
+{
+public:
+    double minParameterU() const override { return 0.0; }
+    double maxParameterU() const override { return 2.0 * std::acos(-1.0); }
+    double minParameterV() const override
+    {
+        return -std::numeric_limits<double>::infinity();
+    }
+    double maxParameterV() const override
+    {
+        return std::numeric_limits<double>::infinity();
+    }
+    AcGePoint3d pointAt(double u, double v) const override
+    {
+        return {std::cos(u), std::sin(u), v};
+    }
+};
+
 void near(double actual, double expected, double tolerance = 2.0e-4)
 {
     assert(std::abs(actual - expected) <= tolerance);
@@ -88,6 +108,8 @@ void testCurveEvaluation()
 void testSurfaceEvaluation()
 {
     const QuadraticPatch surface;
+    assert(!surface.isClosedInU());
+    assert(!surface.isClosedInV());
     AcGeVector3dArray derivatives;
     AcGeVector3d normal;
     const AcGePoint3d point =
@@ -119,6 +141,17 @@ void testSurfaceEvaluation()
     near(unboundedPoint.z, 20.5);
     near(derivatives[0].z, 1.0);
     near(derivatives[1].z, 2.0);
+
+    const ClosedUUnboundedV closed;
+    assert(closed.isClosedInU());
+    assert(!closed.isClosedInV());
+
+    const AcGeCylinder cylinder{2.0, {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}};
+    assert(cylinder.isClosedInU());
+    assert(!cylinder.isClosedInV());
+    const AcGeTorus torus;
+    assert(torus.isClosedInU());
+    assert(torus.isClosedInV());
 }
 } // namespace
 

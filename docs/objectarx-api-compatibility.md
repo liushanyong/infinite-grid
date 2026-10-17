@@ -245,6 +245,8 @@ second-derivative output, and `AcGeSurface` provides point/partial-derivative/
 normal evaluation with derivative order 0 through 2. These base evaluators use
 finite differences (including one-sided stencils at bounded edges); their
 surface derivative array order is `du`, `dv`, then `duu`, `duv`, `dvv`.
+`AcGeSurface::isClosedInU/V` checks seam point agreement over representative
+samples of the other parameter range, including unbounded ranges.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
 wrappers in the ObjectARX sense: they bind any curve/surface value type and a
 cached parameter, then expose `point`, `deriv`/`uDeriv`/`vDeriv` (orders 1-2),
