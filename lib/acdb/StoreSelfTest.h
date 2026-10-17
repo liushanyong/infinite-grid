@@ -460,10 +460,46 @@ inline int runStoreSelfTest()
         blockRefHandle = document.addBlockReference(
             "Bolt", {5.0, 5.0, 0.0}, 0.5, {2.0, 2.0, 2.0});
 
+        AcDbEntityVariant remainingPayloads[] = {
+            AcDbEllipse{}, AcDbRay{}, AcDbXline{}, AcDbSolid{}, AcDbHatch{},
+            AcDb3dPolyline{}, AcDbPolyline{}, AcDbMText{}, AcDbMline{},
+            AcDbPolyFaceMesh{}, AcDb3dSolid{}, AcDbLight{},
+            AcDbRotatedDimension{}, AcDbAlignedDimension{},
+            AcDb2LineAngularDimension{}, AcDb3PointAngularDimension{},
+            AcDbRadialDimension{}, AcDbDiametricDimension{},
+            AcDbOrdinateDimension{}, AcDbLeader{}, AcDbFcf{}, AcDbShape{},
+            AcDbAttributeDefinition{}, AcDbAttribute{}, AcDbMInsertBlock{}};
+        AcDbPolyFaceMesh &mesh =
+            std::get<AcDbPolyFaceMesh>(remainingPayloads[9]);
+        mesh.material.baseColorFactor = {0.1f, 0.2f, 0.3f, 0.4f};
+        mesh.material.emissiveFactor = {0.2f, 0.3f, 0.4f, 1.0f};
+        mesh.material.diffuseFactor = {0.3f, 0.4f, 0.5f, 0.6f};
+        mesh.material.specularFactor = {0.4f, 0.5f, 0.6f, 0.7f};
+        mesh.material.metallicFactor = 0.25f;
+        mesh.material.roughnessFactor = 0.75f;
+        mesh.material.alphaMask = 0.8f;
+        mesh.material.alphaMaskCutoff = 0.35f;
+        mesh.material.diffuseTexture = "textures/material.png";
+        mesh.material.renderClass = RenderClass::Realistic;
+        AcDb3dSolid &solid =
+            std::get<AcDb3dSolid>(remainingPayloads[10]);
+        solid.vertices = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0},
+                          {7.0, 8.0, 9.0}};
+        solid.indices = {0, 1, 2};
+        solid.renderClass = RenderClass::Realistic;
+        solid.fillIs3DFace = true;
+        for (AcDbEntityVariant &payload : remainingPayloads)
+            std::visit(
+                [&](auto &typed) { document.addEntity(std::move(typed)); },
+                payload);
+
         document.setActiveLayerName("Walls");
         document.setActiveColor(glm::vec4(0.9f, 0.5f, 0.1f, 1.0f));
     }
-    check(document.entityCount() == 7, "document holds 7 entities");
+    constexpr std::size_t expectedEntityCount =
+        std::variant_size_v<AcDbEntityVariant>;
+    check(document.entityCount() == expectedEntityCount,
+          "document holds one instance of every entity payload");
     check(blockRefHandle.isValid(), "block reference inserted");
 
     // A configured second viewport rides the save (ObjectARX VPORT).
@@ -480,7 +516,8 @@ inline int runStoreSelfTest()
     const StoreResult saved = saveDatabase(document,
                                            "store_selftest.db");
     check(saved.ok, "saveDatabase succeeds");
-    check(saved.entities == 7, "save wrote 7 entity rows");
+    check(saved.entities == expectedEntityCount,
+          "save wrote every entity payload");
     if (!saved.ok)
         std::fprintf(report, "  save error: %s\n",
                      saved.error.c_str());
@@ -491,9 +528,54 @@ inline int runStoreSelfTest()
     if (!load.ok)
         std::fprintf(report, "  load error: %s\n",
                      load.error.c_str());
-    check(load.entities == 7, "load read 7 entity rows");
+    check(load.entities == expectedEntityCount,
+          "load read every entity payload");
     check(loaded.entityCount() == document.entityCount(),
           "loaded entity count matches");
+    auto entityTypeMix = [](const AcDbDatabase &database) {
+        std::map<std::size_t, int> types;
+        database.forEachEntity(
+            [&](AcDbHandle, const AcDbEntityVariant &payload) {
+                ++types[payload.index()];
+            });
+        return types;
+    };
+    check(entityTypeMix(document) == entityTypeMix(loaded) &&
+              entityTypeMix(loaded).size() ==
+                  std::variant_size_v<AcDbEntityVariant>,
+          "every concrete entity type round-trips through SQLite");
+    const AcDbPolyFaceMesh *loadedMesh = nullptr;
+    const AcDb3dSolid *loadedSolid = nullptr;
+    loaded.forEachEntity([&](AcDbHandle, const AcDbEntityVariant &payload) {
+        if (const auto *mesh = std::get_if<AcDbPolyFaceMesh>(&payload))
+            loadedMesh = mesh;
+        if (const auto *solid = std::get_if<AcDb3dSolid>(&payload))
+            loadedSolid = solid;
+    });
+    check(loadedMesh != nullptr &&
+              glm::length(loadedMesh->material.baseColorFactor -
+                          glm::vec4(0.1f, 0.2f, 0.3f, 0.4f)) < 1.0e-6f &&
+              glm::length(loadedMesh->material.emissiveFactor -
+                          glm::vec4(0.2f, 0.3f, 0.4f, 1.0f)) < 1.0e-6f &&
+              glm::length(loadedMesh->material.diffuseFactor -
+                          glm::vec4(0.3f, 0.4f, 0.5f, 0.6f)) < 1.0e-6f &&
+              glm::length(loadedMesh->material.specularFactor -
+                          glm::vec4(0.4f, 0.5f, 0.6f, 0.7f)) < 1.0e-6f &&
+              std::abs(loadedMesh->material.metallicFactor - 0.25f) <
+                  1.0e-6f &&
+              std::abs(loadedMesh->material.roughnessFactor - 0.75f) <
+                  1.0e-6f &&
+              std::abs(loadedMesh->material.alphaMask - 0.8f) < 1.0e-6f &&
+              std::abs(loadedMesh->material.alphaMaskCutoff - 0.35f) <
+                  1.0e-6f &&
+              loadedMesh->material.diffuseTexture == "textures/material.png" &&
+              loadedMesh->material.renderClass == RenderClass::Realistic,
+          "polyface material fully round-trips");
+    check(loadedSolid != nullptr && loadedSolid->fillIs3DFace &&
+              loadedSolid->renderClass == RenderClass::Realistic &&
+              loadedSolid->vertices.size() == 3 &&
+              loadedSolid->indices == std::vector<std::uint32_t>{0, 1, 2},
+          "3dSolid render properties and geometry round-trip");
     for (const AcDbHandle memberHandle :
          {blockMemberAHandle, blockMemberBHandle})
     {

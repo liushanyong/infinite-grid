@@ -183,6 +183,15 @@ inline AcDbDatabase buildSampleDocument()
     alignedDim.dimensionLinePoint = AcGePoint3d(170.0, -120.0, 0.0);
     add(alignedDim);
 
+    AcDb2LineAngularDimension angular2LineDim;
+    angular2LineDim.dimension.textHeight = 8.0;
+    angular2LineDim.xLine1StartPoint = AcGePoint3d(500.0, -100.0, 0.0);
+    angular2LineDim.xLine1EndPoint = AcGePoint3d(560.0, -100.0, 0.0);
+    angular2LineDim.xLine2StartPoint = AcGePoint3d(520.0, -120.0, 0.0);
+    angular2LineDim.xLine2EndPoint = AcGePoint3d(520.0, -40.0, 0.0);
+    angular2LineDim.arcPoint = AcGePoint3d(540.0, -80.0, 0.0);
+    add(angular2LineDim);
+
     AcDbRadialDimension radialDim;
     radialDim.dimension.textHeight = 8.0;
     radialDim.centerPoint = AcGePoint3d(300.0, -100.0, 0.0);
