@@ -7,6 +7,7 @@
 #include "AcGeArrays.h"
 #include "AcGeKnotVector.h"
 #include "AcGePoint.h"
+#include "AcGeCurve.h"
 #include "AcGeTol.h"
 
 // Source-level AcGeCubicSplineCurve2d/3d aligned with the ObjectARX
@@ -24,7 +25,7 @@
 // value types do not implement the AcGeCurve2d/3d inheritance hierarchy,
 // curve fitting from a generic curve, or the filer/IO protocols.
 
-class ACGE_PORT AcGeCubicSplineCurve2d
+class ACGE_PORT AcGeCubicSplineCurve2d : public AcGeCurve2d
 {
 public:
     enum class FitMode
@@ -54,13 +55,13 @@ public:
     AcGeCubicSplineCurve2d &setFirstDerivAt(int idx,
                                             const AcGeVector2d &deriv);
 
-    double startParam() const;
-    double endParam() const;
+    double startParam() const override;
+    double endParam() const override;
     bool isPeriodic() const { return m_periodic; }
     FitMode fitMode() const { return m_mode; }
     const AcGeKnotVector &knots() const { return m_knots; }
 
-    AcGePoint2d pointAt(double param) const;
+    AcGePoint2d pointAt(double param) const override;
     AcGeVector2d firstDeriv(double param) const;
 
 private:
@@ -77,7 +78,7 @@ private:
     void wrapParameter(double &param) const;
 };
 
-class ACGE_PORT AcGeCubicSplineCurve3d
+class ACGE_PORT AcGeCubicSplineCurve3d : public AcGeCurve3d
 {
 public:
     enum class FitMode
@@ -107,13 +108,13 @@ public:
     AcGeCubicSplineCurve3d &setFirstDerivAt(int idx,
                                             const AcGeVector3d &deriv);
 
-    double startParam() const;
-    double endParam() const;
+    double startParam() const override;
+    double endParam() const override;
     bool isPeriodic() const { return m_periodic; }
     FitMode fitMode() const { return m_mode; }
     const AcGeKnotVector &knots() const { return m_knots; }
 
-    AcGePoint3d pointAt(double param) const;
+    AcGePoint3d pointAt(double param) const override;
     AcGeVector3d firstDeriv(double param) const;
 
 private:

@@ -30,7 +30,7 @@ inline AcGeVector2d projectVector(const AcGeVector3d &vector)
 
 } // namespace detail
 
-class ACGE_PORT AcGeBezierCurve2d
+class ACGE_PORT AcGeBezierCurve2d : public AcGeCurve2d
 {
 public:
     std::vector<AcGePoint2d> controlPoints;
@@ -42,6 +42,8 @@ public:
     {
         return controlPoints.empty() ? 0 : controlPoints.size() - 1;
     }
+    double startParam() const override { return 0.0; }
+    double endParam() const override { return 1.0; }
     AcGePoint2d pointAt(double parameter) const
     {
         return detail::projectPoint(
@@ -56,7 +58,7 @@ public:
     }
 };
 
-class ACGE_PORT AcGeBsplineCurve2d
+class ACGE_PORT AcGeBsplineCurve2d : public AcGeCurve2d
 {
 public:
     size_t degree = 3;
@@ -70,7 +72,9 @@ public:
     void validate() const;
     double minParameter() const { return knots.front(); }
     double maxParameter() const { return knots.back(); }
-    AcGePoint2d pointAt(double parameter) const
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
+    AcGePoint2d pointAt(double parameter) const override
     {
         return detail::projectPoint(as3d().pointAt(parameter));
     }
@@ -87,7 +91,7 @@ private:
         const std::vector<AcGePoint3d> &points);
 };
 
-class ACGE_PORT AcGeNurbsCurve2d
+class ACGE_PORT AcGeNurbsCurve2d : public AcGeCurve2d
 {
 public:
     size_t degree = 3;
@@ -101,7 +105,9 @@ public:
     void validate() const;
     double minParameter() const { return knots.front(); }
     double maxParameter() const { return knots.back(); }
-    AcGePoint2d pointAt(double parameter) const
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
+    AcGePoint2d pointAt(double parameter) const override
     {
         return detail::projectPoint(as3d().pointAt(parameter));
     }

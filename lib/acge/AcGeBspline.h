@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "AcGePoint.h"
+#include "AcGeCurve.h"
 #include "AcGeNurbsCore.h"
 
 namespace ge
@@ -61,7 +62,7 @@ inline std::vector<double> innerKnotVector(const std::vector<double> &knots)
 // ---------------------------------------------------------------------------
 // Bézier curve (de Casteljau).
 // ---------------------------------------------------------------------------
-class ACGE_PORT AcGeBezierCurve3d
+class ACGE_PORT AcGeBezierCurve3d : public AcGeCurve3d
 {
 public:
     std::vector<AcGePoint3d> controlPoints;
@@ -71,7 +72,9 @@ public:
 
     size_t degree() const { return controlPoints.size() - 1; }
 
-    AcGePoint3d pointAt(double t) const;
+    double startParam() const override { return 0.0; }
+    double endParam() const override { return 1.0; }
+    AcGePoint3d pointAt(double t) const override;
 
     // First derivative via the degree-(p-1) Bézier of control-point
     // differences (NURBS Book eq. 1.7 / 1.8).
@@ -81,7 +84,7 @@ public:
 // ---------------------------------------------------------------------------
 // B-spline curve (A3.1 / A3.2).
 // ---------------------------------------------------------------------------
-class ACGE_PORT AcGeBsplineCurve3d
+class ACGE_PORT AcGeBsplineCurve3d : public AcGeCurve3d
 {
 public:
     size_t degree = 3;
@@ -96,9 +99,11 @@ public:
 
     double minParameter() const { return knots.front(); }
     double maxParameter() const { return knots.back(); }
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
 
     // A3.1
-    AcGePoint3d pointAt(double u) const;
+    AcGePoint3d pointAt(double u) const override;
 
     // A3.2 via eq. 3.8: the k-th derivative is a degree-(p-k) B-spline
     // whose knots drop the first/last pair and whose control points are
@@ -120,7 +125,7 @@ public:
 // ---------------------------------------------------------------------------
 // NURBS curve (A4.1 / A4.2).
 // ---------------------------------------------------------------------------
-class ACGE_PORT AcGeNurbsCurve3d
+class ACGE_PORT AcGeNurbsCurve3d : public AcGeCurve3d
 {
 public:
     size_t degree = 3;
@@ -135,9 +140,11 @@ public:
 
     double minParameter() const { return knots.front(); }
     double maxParameter() const { return knots.back(); }
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
 
     // A4.1: projective evaluation of the rational curve.
-    AcGePoint3d pointAt(double u) const;
+    AcGePoint3d pointAt(double u) const override;
 
     // A4.2 via scalar difference splines: differentiate the weight and the
     // three homogeneous component splines k times each (degree drops per
@@ -152,7 +159,7 @@ public:
 // ---------------------------------------------------------------------------
 // B-spline surface (A3.5 / A3.6 difference surfaces).
 // ---------------------------------------------------------------------------
-class ACGE_PORT AcGeBsplineSurface3d
+class ACGE_PORT AcGeBsplineSurface3d : public AcGeSurface
 {
 public:
     size_t degreeU = 3;
@@ -166,13 +173,13 @@ public:
 
     void validate() const;
 
-    double minParameterU() const { return knotsU.front(); }
-    double maxParameterU() const { return knotsU.back(); }
-    double minParameterV() const { return knotsV.front(); }
-    double maxParameterV() const { return knotsV.back(); }
+    double minParameterU() const override { return knotsU.front(); }
+    double maxParameterU() const override { return knotsU.back(); }
+    double minParameterV() const override { return knotsV.front(); }
+    double maxParameterV() const override { return knotsV.back(); }
 
     // A3.5: tensor-product evaluation.
-    AcGePoint3d pointAt(double u, double v) const;
+    AcGePoint3d pointAt(double u, double v) const override;
 
     // Partial derivatives up to dU in u and dV in v via difference surfaces:
     // result[k][l] = d^(k+l) S / du^k dv^l (eq. 3.9, the operations commute).
@@ -184,7 +191,7 @@ public:
 // ---------------------------------------------------------------------------
 // NURBS surface (A4.3 rational tensor product).
 // ---------------------------------------------------------------------------
-class ACGE_PORT AcGeNurbsSurface3d
+class ACGE_PORT AcGeNurbsSurface3d : public AcGeSurface
 {
 public:
     size_t degreeU = 3;
@@ -197,13 +204,13 @@ public:
 
     void validate() const;
 
-    double minParameterU() const { return knotsU.front(); }
-    double maxParameterU() const { return knotsU.back(); }
-    double minParameterV() const { return knotsV.front(); }
-    double maxParameterV() const { return knotsV.back(); }
+    double minParameterU() const override { return knotsU.front(); }
+    double maxParameterU() const override { return knotsU.back(); }
+    double minParameterV() const override { return knotsV.front(); }
+    double maxParameterV() const override { return knotsV.back(); }
 
     // A4.3: rational tensor-product evaluation.
-    AcGePoint3d pointAt(double u, double v) const;
+    AcGePoint3d pointAt(double u, double v) const override;
 
     // Partial derivatives up to dU in u and dV in v via homogeneous
     // difference surfaces: for each (k, l) re-derive a working surface

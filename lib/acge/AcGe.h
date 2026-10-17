@@ -7,6 +7,7 @@
 // "AcGe Overview"); the implementation is original and glm-interopable.
 
 #include "AcGePoint.h"
+#include "AcGeCurve.h"
 #include "AcGeTol.h"
 #include "AcGeMatrix2d.h"
 #include "AcGeMatrix.h"
