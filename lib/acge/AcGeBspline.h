@@ -20,6 +20,7 @@
 #include "AcGePoint.h"
 #include "AcGeCurve.h"
 #include "AcGeNurbsCore.h"
+#include "AcGeKnotVector.h"
 
 namespace ge
 {
@@ -97,8 +98,8 @@ public:
 
     void validate() const;
 
-    double minParameter() const { return knots.front(); }
-    double maxParameter() const { return knots.back(); }
+    double minParameter() const { return knots.at(degree); }
+    double maxParameter() const { return knots.at(controlPoints.size()); }
     double startParam() const override { return minParameter(); }
     double endParam() const override { return maxParameter(); }
 
@@ -138,8 +139,8 @@ public:
 
     void validate() const;
 
-    double minParameter() const { return knots.front(); }
-    double maxParameter() const { return knots.back(); }
+    double minParameter() const { return knots.at(degree); }
+    double maxParameter() const { return knots.at(controlPoints.size()); }
     double startParam() const override { return minParameter(); }
     double endParam() const override { return maxParameter(); }
 
@@ -173,10 +174,16 @@ public:
 
     void validate() const;
 
-    double minParameterU() const override { return knotsU.front(); }
-    double maxParameterU() const override { return knotsU.back(); }
-    double minParameterV() const override { return knotsV.front(); }
-    double maxParameterV() const override { return knotsV.back(); }
+    double minParameterU() const override { return knotsU.at(degreeU); }
+    double maxParameterU() const override
+    {
+        return knotsU.at(controlPointCountU);
+    }
+    double minParameterV() const override { return knotsV.at(degreeV); }
+    double maxParameterV() const override
+    {
+        return knotsV.at(controlPointCountV);
+    }
 
     // A3.5: tensor-product evaluation.
     AcGePoint3d pointAt(double u, double v) const override;
@@ -186,6 +193,7 @@ public:
     std::vector<std::vector<AcGeVector3d>> derivativesAt(
         double u, double v, size_t derivativeCountU,
         size_t derivativeCountV) const;
+    AcGeVector3d normalAt(double u, double v) const;
 };
 
 // ---------------------------------------------------------------------------
@@ -204,10 +212,16 @@ public:
 
     void validate() const;
 
-    double minParameterU() const override { return knotsU.front(); }
-    double maxParameterU() const override { return knotsU.back(); }
-    double minParameterV() const override { return knotsV.front(); }
-    double maxParameterV() const override { return knotsV.back(); }
+    double minParameterU() const override { return knotsU.at(degreeU); }
+    double maxParameterU() const override
+    {
+        return knotsU.at(controlPointCountU);
+    }
+    double minParameterV() const override { return knotsV.at(degreeV); }
+    double maxParameterV() const override
+    {
+        return knotsV.at(controlPointCountV);
+    }
 
     // A4.3: rational tensor-product evaluation.
     AcGePoint3d pointAt(double u, double v) const override;
@@ -220,6 +234,20 @@ public:
     std::vector<std::vector<AcGeVector3d>> derivativesAt(
         double u, double v, size_t derivativeCountU,
         size_t derivativeCountV) const;
+
+    AcGeVector3d normalAt(double u, double v) const;
+    bool isRational() const;
+    bool isRationalInU() const;
+    bool isRationalInV() const;
+    bool isPeriodicInU(double &period,
+                       const AcGeTol &tol = AcGeTol{}) const;
+    bool isPeriodicInV(double &period,
+                       const AcGeTol &tol = AcGeTol{}) const;
+    void getDefinitionData(
+        size_t &degreeInU, size_t &degreeInV, size_t &controlPointCountInU,
+        size_t &controlPointCountInV, bool &rationalInU, bool &rationalInV,
+        AcGePoint3dArray &points, AcGeDoubleArray &weights,
+        AcGeKnotVector &knotsInU, AcGeKnotVector &knotsInV) const;
 
     static double binomialCoefficient(size_t n, size_t k);
 };

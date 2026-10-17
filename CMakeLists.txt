@@ -149,6 +149,9 @@ if(ACGE_BUILD_TESTS)
     foreach(test_name IN ITEMS
         AcGeClipBoundaryTests
         AcGeCompositeCurveTests
+        AcGeMatrix3dTests
+        AcGeCurveSurfaceEvalTests
+        AcGeNurbSurfaceTests
         AcGeIntervalTests
         AcGeOffsetCurveTests
         AcGeSweptSurfaceTests
