@@ -53,4 +53,6 @@
 #include "AcGeCurveBoundBlock.h"
 #include "AcGeOffsetSurface.h"
 #include "AcGeNurbSurface.h"
+#include "AcGeExternalGeometry.h"
+#include "AcGeSurfSurfInt.h"
 #include "AcGeCurveCurveInt.h"
