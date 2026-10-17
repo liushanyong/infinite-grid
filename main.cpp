@@ -3013,14 +3013,23 @@ cadVisibleFillVertices(const acgs::AcGsEntityRange &range)
     const acdb::Triangle &triangle = tessellation.geometry.fills[i];
     if (!triangle.common.visible)
       continue;
-    const acgs::math::Vec4 fillColor =
+    const acgs::math::Vec4 defaultFillColor =
         acgsView().contrastColor(triangle.common.color.renderColor());
+    const std::array<acgs::math::Vec4, 3> fillColors =
+        triangle.hasVertexColors
+            ? std::array<acgs::math::Vec4, 3>{
+                  acgsView().contrastColor(triangle.vertexColors[0]),
+                  acgsView().contrastColor(triangle.vertexColors[1]),
+                  acgsView().contrastColor(triangle.vertexColors[2])}
+            : std::array<acgs::math::Vec4, 3>{defaultFillColor,
+                                              defaultFillColor,
+                                              defaultFillColor};
     vertices.push_back(
-        {acgs::math::Vec3(triangle.a - tessellation.anchor), fillColor});
+        {acgs::math::Vec3(triangle.a - tessellation.anchor), fillColors[0]});
     vertices.push_back(
-        {acgs::math::Vec3(triangle.b - tessellation.anchor), fillColor});
+        {acgs::math::Vec3(triangle.b - tessellation.anchor), fillColors[1]});
     vertices.push_back(
-        {acgs::math::Vec3(triangle.c - tessellation.anchor), fillColor});
+        {acgs::math::Vec3(triangle.c - tessellation.anchor), fillColors[2]});
   }
   return vertices;
 }

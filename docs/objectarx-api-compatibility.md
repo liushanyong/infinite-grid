@@ -70,8 +70,9 @@ interval, and parametric point/normal evaluation. Cone/surface intersections
 and advanced domain semantics remain outside this subset.
 
 `AcGeInterval` provides finite and one-sided/unbounded parameter domains,
-tolerance-aware containment, intersection, merge, and extent queries.
-Advanced periodicity and interval subtraction APIs remain unimplemented.
+tolerance-aware containment, intersection, merge, extent queries, subtraction
+into up to two remainder intervals, and upper-bound overlap queries.
+Periodic parameter normalization remains unimplemented.
 
 The existing 2D segment implementation is also exported as global
 `AcGeLineSeg2d` and now includes the documented endpoint, midpoint, blend,
@@ -237,3 +238,42 @@ They do not emulate all native class methods, ownership rules, error statuses,
 or the complete AcDb/AcGi/AcGs object model. Prefer the aliases in new public
 declarations, and add narrow/wide adapters where a third-party or file-format
 interface requires a different encoding.
+
+## AcGi geometry coverage
+
+`AcGiWorldDraw` records world-space primitives into the existing stroke,
+triangle, and point sink. Its `pushClipBoundary`/`popClipBoundary` stack clips
+world lines, polylines, points, and triangles against two-corner rectangular or
+simple planar polygon boundaries in either winding. Concave boundaries are
+triangulated for polygon clipping, and segments may produce multiple visible
+strokes. The clip coordinates are computed with
+`m_xToClipSpace * m_xInverseBlockRefXForm`, and active front/back Z planes clip
+points, segments, and filled polygons. When `m_bDrawBoundary` is set, the clip
+outline is emitted if its clip-to-world transform is finite.
+`AcGiSubEntityTraits::setFillType`/`fillType` supports ObjectARX's always/never
+modes. Closed polygons, full circles, sector/chord arc closures, mesh faces,
+and shell faces omit their fill in `kAcGiFillNever` mode while retaining
+applicable boundary and edge strokes.
+
+`polyPolygon` expands the documented grouped shape counts and insertion
+positions, ear-clips simple planar concave outlines, and carries fill/outline
+colors and alpha into the existing primitives. Mesh/shell callbacks consume
+true-color and visibility arrays, apply vertex colors/normals to generated
+triangles, and emit explicitly visible edge strokes with optional color and
+linetype overrides; face transparency remains ignored as the reference currently
+specifies. Face materials/mappers/layers and selection markers are not represented
+by the draw sink. Shell negative-count rings are treated as holes in the
+preceding face and triangulated with simple planar outer/hole contours; edge
+attributes follow face-list ring order, while face attributes exclude holes.
+The shell `pResBuf` hatch-conversion payload is not consumed.
+`image` copies BGRA pixels and
+approximates them with two colored triangles per pixel, limited to 65,536
+pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
+proportional. This is a CPU geometry fallback, not filtered GPU texture upload.
+`edge` emits line-segment, circular-arc, and elliptical-arc edge values
+as strokes (curve tessellation is capped at 65,536 segments per edge); it does
+not accept native `AcGeCurve2d*` arrays because this port's AcGe curves are
+value types rather than a polymorphic curve hierarchy. Native GDI owner-draw
+uploads are not implemented; the callback remains a no-op, matching ObjectARX's
+default implementation. `AcDbPolyline` already has an entity-level AcGi
+callback path, so `pline` is not a missing renderer algorithm.
