@@ -21,9 +21,9 @@
 //   (knots, fitPoints, firstDerivs)     -> explicit derivative data
 //
 // Evaluation follows the ObjectARX parameterization domain [startParam,
-// endParam]; periodic curves wrap the parameter around the span.  These
-// value types do not implement the AcGeCurve2d/3d inheritance hierarchy,
-// curve fitting from a generic curve, or the filer/IO protocols.
+// endParam]; periodic curves wrap the parameter around the span. These types
+// implement the common AcGeCurve2d/3d evaluation interface, but not curve
+// fitting from a generic curve or the filer/IO protocols.
 
 class ACGE_PORT AcGeCubicSplineCurve2d : public AcGeCurve2d
 {

@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "AcGePoint.h"
+#include "AcGeCurve.h"
 
 namespace ge
 {

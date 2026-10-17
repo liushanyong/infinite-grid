@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "AcGeBspline.h"
+#include "AcGeCurve.h"
 #include "AcGeNurbsSpline.h"
 
 namespace ge
@@ -119,7 +120,7 @@ private:
     AcGeNurbsCurve3d as3d() const;
 };
 
-class ACGE_PORT AcGeFitSpline2d
+class ACGE_PORT AcGeFitSpline2d : public AcGeCurve2d
 {
 public:
     AcGeFitSpline2d() = default;
@@ -136,7 +137,9 @@ public:
     bool isEmpty() const { return curve_.isEmpty(); }
     double minParameter() const { return curve_.minParameter(); }
     double maxParameter() const { return curve_.maxParameter(); }
-    AcGePoint2d pointAt(double parameter) const
+    double startParam() const override { return minParameter(); }
+    double endParam() const override { return maxParameter(); }
+    AcGePoint2d pointAt(double parameter) const override
     {
         return detail::projectPoint(curve_.pointAt(parameter));
     }

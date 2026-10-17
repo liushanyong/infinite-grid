@@ -217,22 +217,23 @@ endpoints (junction knot multiplicity = degree). `length()` and
 `length(fromParam, toParam, tol)` integrate derivative magnitude with
 24-point Gauss-Legendre quadrature split at knot spans; parameter intervals
 are clipped to the curve domain, reversed bounds produce the same positive
-length, and results no greater than `abs(tol)` are reported as zero. Not
-implemented: the
-`AcGeCurve2d/3d` inheritance hierarchy, curve fitting, extend, and
-surface classes.
+length, and results no greater than `abs(tol)` are reported as zero.
+`AcGeCurve2d/3d` now provide a small polymorphic evaluation interface used by
+the 2D/3D NURBS, B-spline, and Bézier curve types and interpolation splines.
+`AcGeSurface` similarly provides domain/evaluation dispatch for the 3D
+B-spline and NURBS surfaces. These are source-level foundations, not the
+complete ObjectARX curve/surface method sets; generic curve fitting, extension,
+and the native surface hierarchy remain incomplete.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
 wrappers in the ObjectARX sense: they bind any curve/surface value type and a
 cached parameter, then expose `point`, `deriv`/`uDeriv`/`vDeriv` (orders 1-2),
 `mixedPartial`, `normal`, `tangentVector`, `inverseTangentVector`,
 `curvature` (including the `curvature(param, res)` Boolean overload), and
-`isSingular`. Because this port keeps curve/surface entities as independent
-value types (no `AcGeCurve2d/3d` or `AcGeSurface` hierarchy), the wrappers
-type-erase any curve providing `pointAt(double)` or `pointAtAngle(double)` and
-any surface providing `pointAt(double, double)` — the same protocol as the
-swept-surface source curves. Analytic `firstDeriv(double)`/`derivativeAt(double)`
-is used when present; otherwise derivatives come from central finite
-differences.
+`isSingular`. The wrappers continue to type-erase any curve providing
+`pointAt(double)` or `pointAtAngle(double)` and any surface providing
+`pointAt(double, double)` — the same protocol as the swept-surface source
+curves. Analytic `firstDeriv(double)`/`derivativeAt(double)` is used when
+present; otherwise derivatives come from central finite differences.
 `AcGeAugPolyline3d` stores per-vertex points, first-derivative vectors, and
 second-derivative vectors over a `AcGeKnotVector` parameterization. It supports
 direct construction from matching knot/point/vector bundles (missing second

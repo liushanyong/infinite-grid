@@ -29,10 +29,10 @@
 // machinery on the existing AcGeNurbsCore).
 //
 // Evaluation supports derivatives up to the degree (A4.2 quotient rule).
-// These value types do not implement the AcGeCurve2d/3d hierarchy,
-// fitting from a generic curve, or the filer/IO protocols. Structural
-// editing (knot insertion, exact removal, degree elevation, hard trim,
-// makeRational, joinWith) is provided for non-periodic curves.
+// These types implement the common AcGeCurve2d/3d evaluation interface, but
+// not the full curve API, fitting from a generic curve, or filer/IO protocols.
+// Structural editing (knot insertion, exact removal, degree elevation, hard
+// trim, makeRational, joinWith) is provided for non-periodic curves.
 
 namespace ge
 {
