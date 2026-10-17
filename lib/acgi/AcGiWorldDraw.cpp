@@ -676,7 +676,33 @@ bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
     if (!std::isfinite(areaTwice) || areaTwice == 0.0L)
         return false;
     frame.winding = areaTwice > 0.0L ? 1.0 : -1.0;
+    std::vector<AcGePoint3d> displayBoundary;
+    if (boundary->m_bDrawBoundary)
+    {
+        const AcGeMatrix3d clipToWorld = frame.toClipSpace.inverted();
+        displayBoundary.reserve(frame.boundary.size());
+        for (const AcGePoint2d &point : frame.boundary)
+        {
+            const AcGePoint3d world =
+                transformBy(AcGePoint3d(point.x, point.y, 0.0), clipToWorld);
+            if (!std::isfinite(world.x) || !std::isfinite(world.y) ||
+                !std::isfinite(world.z))
+            {
+                displayBoundary.clear();
+                break;
+            }
+            displayBoundary.push_back(world);
+        }
+    }
     clipStack_.push_back(std::move(frame));
+    if (displayBoundary.size() >= 3)
+    {
+        acdb::Stroke &stroke = sink().addStroke(true);
+        stroke.points.reserve(displayBoundary.size());
+        for (const AcGePoint3d &point : displayBoundary)
+            stroke.points.emplace_back(glm::dvec3(point));
+        applyTraits(stroke);
+    }
     return true;
 }
 

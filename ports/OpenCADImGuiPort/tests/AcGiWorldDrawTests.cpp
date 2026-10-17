@@ -43,6 +43,21 @@ int main()
     assert(std::abs(geometry.strokes.back().points.back().x - 1.0) < 1.0e-9);
     draw.popClipBoundary();
 
+    acdb::TessellatedEntity boundaryDisplayGeometry;
+    acgs::ViewportDraw boundaryDisplayContext(boundaryDisplayGeometry);
+    AcGiWorldDraw boundaryDisplayDraw(boundaryDisplayContext);
+    AcGiClipBoundary displayBoundary;
+    displayBoundary.m_aptPoints =
+        {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}};
+    displayBoundary.m_bDrawBoundary = true;
+    assert(boundaryDisplayDraw.pushClipBoundary(&displayBoundary));
+    assert(boundaryDisplayGeometry.strokes.size() == 1);
+    assert(boundaryDisplayGeometry.strokes.front().closed);
+    assert(boundaryDisplayGeometry.strokes.front().points.size() == 4);
+    assert(std::abs(boundaryDisplayGeometry.strokes.front().points[2].x -
+                    1.0) < 1.0e-9);
+    boundaryDisplayDraw.popClipBoundary();
+
     acdb::TessellatedEntity transformedClipGeometry;
     acgs::ViewportDraw transformedClipContext(transformedClipGeometry);
     AcGiWorldDraw transformedClipDraw(transformedClipContext);

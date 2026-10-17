@@ -178,8 +178,8 @@ triangle, and point sink. Its `pushClipBoundary`/`popClipBoundary` stack clips
 world lines, polylines, points, and triangles against two-corner rectangular or
 strictly convex planar boundaries in either winding. The clip coordinates are
 computed with `m_xToClipSpace * m_xInverseBlockRefXForm`, and active front/back
-Z planes clip points, segments, and filled polygons. `m_bDrawBoundary` is only
-metadata; the boundary itself is not emitted as visible geometry.
+Z planes clip points, segments, and filled polygons. When `m_bDrawBoundary` is
+set, the clip outline is emitted if its clip-to-world transform is finite.
 
 `polyPolygon` expands the documented grouped shape counts and insertion
 positions, ear-clips simple planar concave outlines, and carries fill/outline
