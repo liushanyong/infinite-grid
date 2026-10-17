@@ -3,6 +3,7 @@
 #include "AcDbPort.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <map>
@@ -69,6 +70,10 @@ struct Triangle
     glm::dvec3 b;
     glm::dvec3 c;
     bool is3DFace = false;
+    std::array<glm::vec4, 3> vertexColors{};
+    std::array<AcGeVector3d, 3> vertexNormals{};
+    bool hasVertexColors = false;
+    bool hasVertexNormals = false;
 };
 
 struct TessellatedPoint

@@ -27,19 +27,27 @@
 // worldPolyline with a closed flag, worldTriangle, worldInfiniteLine for
 // Ray/XLine overlay semantics); viewport/screen transform behaviors and the
 // behaviors-only APIs collapse to their world-space form; clip boundaries
-// are accepted but not yet honored by the sink; polypoint emits real point
-// primitives instead of ARX's degenerate two-point strokes.  Not ported:
-// polyPolygon (needs the AcCmTransparency/fill-opacity vocabulary), image,
-// ownerDraw object upload, edge (2D-curve fill boundaries), and pline
-// (live AcDbPolyline templates draw through acdb::worldDraw at the entity
-// layer).
+// support simple concave polygons, clip-space transforms, depth limits, and
+// optional outlines; mesh/shell consume supported color, linetype, visibility,
+// and normal arrays; image is rasterized as a bounded per-pixel triangle
+// approximation; polypoint emits real point primitives instead of ARX's
+// degenerate two-point strokes.
+// edge() accepts a value-semantic subset of planar curves rather than native
+// AcGeCurve2d pointers; native GDI owner-draw uploads are not implemented.
 
 #include <cmath>
+#include <limits>
+#include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include "arx/ArxTypes.h"
+#include "arx/AcCmEntityColor.h"
+#include "arx/AcCmTransparency.h"
 #include "../acge/AcGe.h"
 #include "../acgs/model/DrawContext.h"
+#include "AcGiLineType.h"
 #include "AcGiTextStyle.h"
 #include "AcGiTextQueue.h"
 
@@ -58,6 +66,21 @@ enum AcGiArcType
     kAcGiArcSector,     // area bounded by the arc and its center of curvature
     kAcGiArcChord       // area bounded by the arc and its end points
 };
+
+enum AcGiFillType
+{
+    kAcGiFillAlways = 1,
+    kAcGiFillNever
+};
+
+// Value-segment subset used by the port's edge() callback; ObjectARX exposes
+// an AcGeCurve2d pointer hierarchy, which this value-semantic AcGe layer lacks.
+struct AcGiEdge2d
+{
+    std::variant<AcGeLineSeg2d, AcGeCircArc2d, AcGeEllipArc2d> curve;
+};
+
+struct resbuf;
 
 enum AcGiPositionTransformBehavior
 {
@@ -92,26 +115,161 @@ struct AcGiPolyline
     bool closed = false;
 };
 
-// Edge/face/vertex trait arrays: accepted by mesh()/shell(), contents not
-// consumed until trait arrays land in the sink.
 struct AcGiEdgeData
 {
+    std::vector<AcCmEntityColor> trueColors;
+    std::vector<std::string> lineTypes;
+    std::vector<Adesk::UInt8> visibility;
+
+    void setLineTypes(const AcGiLineType *values, size_t count)
+    {
+        lineTypes.clear();
+        if (values == nullptr)
+            return;
+        lineTypes.reserve(count);
+        for (size_t index = 0; index < count; ++index)
+            lineTypes.emplace_back(values[index].name == nullptr
+                                       ? ""
+                                       : values[index].name);
+    }
+    void setTrueColors(const AcCmEntityColor *values, size_t count)
+    {
+        if (values == nullptr)
+            trueColors.clear();
+        else
+            trueColors.assign(values, values + count);
+    }
+    void setVisibility(const Adesk::UInt8 *values, size_t count)
+    {
+        if (values == nullptr)
+            visibility.clear();
+        else
+            visibility.assign(values, values + count);
+    }
 };
 struct AcGiFaceData
 {
+    std::vector<AcCmEntityColor> trueColors;
+    std::vector<Adesk::UInt8> visibility;
+    std::vector<AcGeVector3d> normals;
+    std::vector<AcCmTransparency> transparency;
+
+    void setTrueColors(const AcCmEntityColor *values, size_t count)
+    {
+        if (values == nullptr)
+            trueColors.clear();
+        else
+            trueColors.assign(values, values + count);
+    }
+    void setVisibility(const Adesk::UInt8 *values, size_t count)
+    {
+        if (values == nullptr)
+            visibility.clear();
+        else
+            visibility.assign(values, values + count);
+    }
+    void setNormals(const AcGeVector3d *values, size_t count)
+    {
+        if (values == nullptr)
+            normals.clear();
+        else
+            normals.assign(values, values + count);
+    }
+    void setTransparency(const AcCmTransparency *values, size_t count)
+    {
+        if (values == nullptr)
+            transparency.clear();
+        else
+            transparency.assign(values, values + count);
+    }
 };
 struct AcGiVertexData
 {
+    std::vector<AcCmEntityColor> trueColors;
+    std::vector<AcGeVector3d> normals;
+
+    void setTrueColors(const AcCmEntityColor *values, size_t count)
+    {
+        if (values == nullptr)
+            trueColors.clear();
+        else
+            trueColors.assign(values, values + count);
+    }
+    void setNormals(const AcGeVector3d *values, size_t count)
+    {
+        if (values == nullptr)
+            normals.clear();
+        else
+            normals.assign(values, values + count);
+    }
 };
 
-// Clip boundary (port subset: the polygon in the plane of the primitives).
+// Clip boundary (port subset: a convex polygonal clip plane).
 struct AcGiClipBoundary
 {
+    // The ObjectARX clip-plane contract. The lower-case `points` member is
+    // retained as a convenience for existing port callers.
+    AcGeVector3d m_vNormal{0.0, 0.0, 1.0};
+    AcGePoint3d m_ptPoint{0.0, 0.0, 0.0};
+    std::vector<AcGePoint2d> m_aptPoints;
+    AcGeMatrix3d m_xToClipSpace;
+    AcGeMatrix3d m_xInverseBlockRefXForm;
+    bool m_bClippingFront = false;
+    bool m_bClippingBack = false;
+    double m_dFrontClipZ = 0.0;
+    double m_dBackClipZ = 0.0;
+    bool m_bDrawBoundary = false;
     std::vector<AcGePoint2d> points;
 };
 
 struct AcGiGdiDrawObject
 {
+};
+
+struct AcGiPixelBGRA32
+{
+    Adesk::UInt8 b = 0;
+    Adesk::UInt8 g = 0;
+    Adesk::UInt8 r = 0;
+    Adesk::UInt8 a = 255;
+};
+
+class AcGiImageBGRA32
+{
+public:
+    AcGiImageBGRA32() = default;
+    AcGiImageBGRA32(Adesk::UInt32 width, Adesk::UInt32 height,
+                    const AcGiPixelBGRA32 *pixels)
+    {
+        setImage(width, height, pixels);
+    }
+
+    const AcGiPixelBGRA32 *image() const { return pixels_.data(); }
+    Adesk::UInt32 width() const { return width_; }
+    Adesk::UInt32 height() const { return height_; }
+    void setImage(Adesk::UInt32 width, Adesk::UInt32 height,
+                  const AcGiPixelBGRA32 *pixels)
+    {
+        pixels_.clear();
+        if (pixels != nullptr && width != 0 && height != 0 &&
+            size_t(height) <= std::numeric_limits<size_t>::max() / width)
+        {
+            const size_t count = size_t(width) * height;
+            pixels_.assign(pixels, pixels + count);
+            width_ = width;
+            height_ = height;
+        }
+        else
+        {
+            width_ = 0;
+            height_ = 0;
+        }
+    }
+
+private:
+    Adesk::UInt32 width_ = 0;
+    Adesk::UInt32 height_ = 0;
+    std::vector<AcGiPixelBGRA32> pixels_;
 };
 
 // ---- AcGiGeometry: the base class for geometry toolkits ----
@@ -228,16 +386,17 @@ public:
                                 const AcGiVertexData *vertexData = nullptr,
                                 const bool autoGenerateNormals = true) = 0;
 
-    // ARX face-list encoding: [n, i0 .. i(n-1), m, j0 ..], fans per face; a
-    // negative count hides edges (the sign is consumed, edges are the
-    // caller's business in this port).
+    // ARX face-list encoding: positive counts start faces and following
+    // negative counts describe holes in the preceding face.
     virtual Adesk::Boolean shell(const Adesk::UInt32 nbVertex,
                                  const AcGePoint3d *vertexList,
                                  const Adesk::UInt32 faceListSize,
                                  const Adesk::Int32 *faceList,
                                  const AcGiEdgeData *edgeData = nullptr,
                                  const AcGiFaceData *faceData = nullptr,
-                                 const AcGiVertexData *vertexData = nullptr) = 0;
+                                 const AcGiVertexData *vertexData = nullptr,
+                                 const struct resbuf *resbufData = nullptr,
+                                 bool autoGenerateNormals = true) = 0;
 
     // ---- primitives (ObjectARX contract: composed over the emitters) ----
 
@@ -269,13 +428,30 @@ public:
         return false;
     }
 
-    // Closed automatically; fill type support pending in the sink, so the
-    // boundary stroke is what stores today.
+    // Closed automatically; fillType() controls whether its interior is emitted.
     virtual Adesk::Boolean polygon(const Adesk::UInt32 nbPoints,
                                    const AcGePoint3d *vertexList)
     {
         return worldPolyline(vertexList, static_cast<int>(nbPoints), true);
     }
+
+    virtual Adesk::Boolean polyPolygon(
+        const Adesk::UInt32 numPolygonIndices,
+        const Adesk::UInt32 *numPolygonPositions,
+        const AcGePoint3d *polygonPositions,
+        const Adesk::UInt32 *numPolygonPoints,
+        const AcGePoint3d *polygonPoints,
+        const AcCmEntityColor *outlineColors = nullptr,
+        const AcGiLineType *outlineTypes = nullptr,
+        const AcCmEntityColor *fillColors = nullptr,
+        const AcCmTransparency *fillOpacities = nullptr) = 0;
+
+    virtual Adesk::Boolean image(
+        const AcGiImageBGRA32 &imageSource, const AcGePoint3d &position,
+        const AcGeVector3d &u, const AcGeVector3d &v,
+        TransparencyMode transparencyMode = kTransparency8Bit) = 0;
+
+    virtual Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) = 0;
 
     virtual Adesk::Boolean polypoint(
         const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList,
@@ -362,13 +538,11 @@ public:
         return matrix;
     }
 
-    // Clip boundaries: accepted; the sink honors them once clip support
-    // lands (ARX: kTrue on successful push, paired with a pop).
-    virtual Adesk::Boolean pushClipBoundary(AcGiClipBoundary * /*boundary*/)
-    {
-        return true;
-    }
-    virtual void popClipBoundary() {}
+    // Clip boundaries are stacked and applied to subsequent world geometry.
+    // The port supports two-corner rectangles and simple polygons in the
+    // documented clip coordinate system, including front/back depth limits.
+    virtual Adesk::Boolean pushClipBoundary(AcGiClipBoundary *boundary) = 0;
+    virtual void popClipBoundary() = 0;
 
     // GDI owner-draw object: no-op default per ObjectARX (kTrue).
     virtual Adesk::Boolean ownerDraw(AcGiGdiDrawObject * /*object*/,
@@ -415,6 +589,8 @@ public:
     virtual void setLineType(std::string lineType) = 0;
     virtual void setLineWeight(double lineWeight) = 0;
     virtual void setVisibility(bool visible) = 0;
+    virtual void setFillType(AcGiFillType fillType) = 0;
+    virtual AcGiFillType fillType() const = 0;
 
     // Port extension: applies the entity-common attribute set in one call.
     virtual void setFrom(const acdb::AcDbEntity &common) = 0;
@@ -430,6 +606,10 @@ public:
 
     // The trait state the sink applies to subsequently emitted primitives.
     acgs::SubEntityTraits &subEntityTraits() { return draw_.subEntityTraits(); }
+    const acgs::SubEntityTraits &subEntityTraits() const
+    {
+        return draw_.subEntityTraits();
+    }
 
     // AcGiSubEntityTraits facet: forwards to the trait state above.
     void setColor(const glm::vec4 &color) override
@@ -452,6 +632,15 @@ public:
     {
         subEntityTraits().setVisibility(visible);
     }
+    void setFillType(AcGiFillType fillType) override
+    {
+        subEntityTraits().setFillEnabled(fillType == kAcGiFillAlways);
+    }
+    AcGiFillType fillType() const override
+    {
+        return subEntityTraits().traits().fillEnabled ? kAcGiFillAlways
+                                                       : kAcGiFillNever;
+    }
     void setFrom(const acdb::AcDbEntity &common) override
     {
         subEntityTraits().setFrom(common);
@@ -463,6 +652,23 @@ public:
                              const AcGePoint3d &to) override;
     Adesk::Boolean worldPolyline(const AcGePoint3d *points, int count,
                                  bool closed) override;
+    Adesk::Boolean polygon(Adesk::UInt32 nbPoints,
+                           const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polyPolygon(
+        const Adesk::UInt32 numPolygonIndices,
+        const Adesk::UInt32 *numPolygonPositions,
+        const AcGePoint3d *polygonPositions,
+        const Adesk::UInt32 *numPolygonPoints,
+        const AcGePoint3d *polygonPoints,
+        const AcCmEntityColor *outlineColors = nullptr,
+        const AcGiLineType *outlineTypes = nullptr,
+        const AcCmEntityColor *fillColors = nullptr,
+        const AcCmTransparency *fillOpacities = nullptr) override;
+    Adesk::Boolean image(
+        const AcGiImageBGRA32 &imageSource, const AcGePoint3d &position,
+        const AcGeVector3d &u, const AcGeVector3d &v,
+        TransparencyMode transparencyMode = kTransparency8Bit) override;
+    Adesk::Boolean edge(const std::vector<AcGiEdge2d> &edges) override;
     Adesk::Boolean worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                  const AcGePoint3d &c,
                                  bool fillIs3DFace = false) override;
@@ -473,6 +679,11 @@ public:
             acge::PointDisplayStyle::Circle) override;
     Adesk::Boolean worldInfiniteLine(const AcGePoint3d &start,
                                      const AcGeVector3d &direction) override;
+    Adesk::Boolean pushClipBoundary(AcGiClipBoundary *boundary) override
+    {
+        return pushClipBoundaryImpl(boundary);
+    }
+    void popClipBoundary() override { popClipBoundaryImpl(); }
     Adesk::Boolean text(const AcGePoint3d &position, const AcGeVector3d &normal,
                         const AcGeVector3d &direction, const char *message,
                         const AcGiTextStyle &style) override;
@@ -518,7 +729,9 @@ public:
                          const Adesk::Int32 *faceList,
                          const AcGiEdgeData *edgeData = nullptr,
                          const AcGiFaceData *faceData = nullptr,
-                         const AcGiVertexData *vertexData = nullptr) override;
+                         const AcGiVertexData *vertexData = nullptr,
+                         const struct resbuf *resbufData = nullptr,
+                         bool autoGenerateNormals = true) override;
 
     Adesk::Boolean pushModelTransform(const AcGeMatrix3d &matrix) override
     {
@@ -562,6 +775,35 @@ public:
     }
 
 private:
+    struct ClipFrame
+    {
+        std::vector<AcGePoint2d> boundary;
+        std::vector<std::array<size_t, 3>> triangles;
+        AcGeMatrix3d toClipSpace;
+        bool clippingFront = false;
+        bool clippingBack = false;
+        double frontClipZ = 0.0;
+        double backClipZ = 0.0;
+        double winding = 1.0;
+        bool convex = true;
+
+        bool coordinates(const AcGePoint3d &world,
+                         AcGePoint3d &clip) const
+        {
+            clip = transformBy(world, toClipSpace);
+            return std::isfinite(clip.x) && std::isfinite(clip.y) &&
+                   std::isfinite(clip.z);
+        }
+    };
+
+    bool pushClipBoundaryImpl(const AcGiClipBoundary *boundary);
+    void popClipBoundaryImpl();
+    bool clipPoint(AcGePoint3d &point) const;
+    std::vector<std::pair<AcGePoint3d, AcGePoint3d>>
+    clipSegment(const AcGePoint3d &start, const AcGePoint3d &end) const;
+    std::vector<std::vector<AcGePoint3d>> clipPolygon(
+        std::vector<AcGePoint3d> polygon) const;
+
     AcGeMatrix3d currentTransform() const
     {
         return transformStack_.empty() ? AcGeMatrix3d()
@@ -580,6 +822,7 @@ private:
 
     acgs::ViewportDraw &draw_;
     std::vector<AcGeMatrix3d> transformStack_;
+    std::vector<ClipFrame> clipStack_;
 };
 
 // The per-viewport counterpart of AcGiWorldDraw (ObjectARX AcGiViewportDraw).

@@ -101,6 +101,95 @@ void AcGeInterval::getMerge(const AcGeInterval &other,
         result.m_upper = std::max(m_upper, other.m_upper);
 }
 
+int AcGeInterval::subtract(const AcGeInterval &other, AcGeInterval &left,
+                           AcGeInterval &right) const
+{
+    const double negativeInfinity =
+        -std::numeric_limits<double>::infinity();
+    const double positiveInfinity =
+        std::numeric_limits<double>::infinity();
+    const double thisLower = m_boundedBelow ? m_lower : negativeInfinity;
+    const double thisUpper = m_boundedAbove ? m_upper : positiveInfinity;
+    const double otherLower =
+        other.m_boundedBelow ? other.m_lower : negativeInfinity;
+    const double otherUpper =
+        other.m_boundedAbove ? other.m_upper : positiveInfinity;
+    const double tolerance = std::max(m_tolerance, other.m_tolerance);
+
+    const double cutLower = std::max(thisLower, otherLower);
+    const double cutUpper = std::min(thisUpper, otherUpper);
+    const bool removesSingleton =
+        isSingleton() && otherLower < m_lower - tolerance &&
+        m_lower < otherUpper - tolerance;
+    if (!(cutLower < cutUpper - tolerance) && !removesSingleton)
+    {
+        left = *this;
+        return 1;
+    }
+
+    AcGeInterval leftResult(m_tolerance);
+    AcGeInterval rightResult(m_tolerance);
+    int count = 0;
+
+    // ObjectARX treats the subtrahend as open: its endpoint values remain in
+    // the result, including when one coincides with an endpoint of this range.
+    if (other.m_boundedBelow &&
+        other.m_lower >= thisLower - tolerance)
+    {
+        leftResult = *this;
+        if (m_boundedAbove && other.m_lower > m_upper)
+        {
+            left = *this;
+            return 1;
+        }
+        double split = other.m_lower;
+        if (m_boundedBelow && std::abs(split - m_lower) <= tolerance)
+            split = m_lower;
+        if (m_boundedAbove && std::abs(split - m_upper) <= tolerance)
+            split = m_upper;
+        leftResult.setUpper(split);
+        left = leftResult;
+        ++count;
+    }
+    if (other.m_boundedAbove &&
+        other.m_upper <= thisUpper + tolerance)
+    {
+        rightResult = *this;
+        if (m_boundedBelow && other.m_upper < m_lower)
+        {
+            left = *this;
+            return 1;
+        }
+        double split = other.m_upper;
+        if (m_boundedBelow && std::abs(split - m_lower) <= tolerance)
+            split = m_lower;
+        if (m_boundedAbove && std::abs(split - m_upper) <= tolerance)
+            split = m_upper;
+        rightResult.setLower(split);
+        if (count == 0)
+            left = rightResult;
+        else
+            right = rightResult;
+        ++count;
+    }
+    return count;
+}
+
+bool AcGeInterval::isOverlapAtUpper(const AcGeInterval &other,
+                                    AcGeInterval &overlap) const
+{
+    if (!m_boundedAbove || !other.m_boundedBelow || isSingleton() ||
+        other.isSingleton() || !other.contains(m_upper) ||
+        !contains(other.m_lower))
+        return false;
+
+    AcGeInterval intersection;
+    if (!intersectWith(other, intersection) || intersection == *this)
+        return false;
+    overlap = intersection;
+    return true;
+}
+
 bool AcGeInterval::operator==(const AcGeInterval &other) const
 {
     return m_boundedBelow == other.m_boundedBelow &&

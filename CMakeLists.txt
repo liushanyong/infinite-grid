@@ -146,6 +146,7 @@ if(ACGE_BUILD_TESTS)
     foreach(test_name IN ITEMS
         AcGeClipBoundaryTests
         AcGeCompositeCurveTests
+        AcGeIntervalTests
         AcGeOffsetCurveTests
         AcGeSweptSurfaceTests
         AcGeDelaunay2dTests
@@ -215,6 +216,20 @@ add_library(acdb STATIC
 )
 target_include_directories(acdb PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acdb PUBLIC acge acgi)
+
+option(ACGI_BUILD_TESTS "Build standalone AcGi protocol regression tests" OFF)
+if(ACGI_BUILD_TESTS)
+    enable_testing()
+    add_executable(AcGiWorldDrawTests
+        "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/AcGiWorldDrawTests.cpp")
+    target_link_libraries(AcGiWorldDrawTests PRIVATE acgs acdb)
+    if(MSVC)
+        target_compile_options(AcGiWorldDrawTests PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(AcGiWorldDrawTests PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME AcGiWorldDrawTests COMMAND AcGiWorldDrawTests)
+endif()
 
 # ---------------------------------------------------------------------------
 # Dear ImGui + BGFX overlay widgets

@@ -33,6 +33,7 @@ struct ACGS_PORT DrawTraits
     std::string lineType = "ByLayer";
     double lineWeight = 0.0;
     bool visible = true;
+    bool fillEnabled = true;
 
     [[nodiscard]] acdb::AcDbEntity toEntityCommon() const;
     static DrawTraits from(const acdb::AcDbEntity &common);
@@ -100,11 +101,13 @@ public:
     {
         traits_ = DrawTraits::from(common);
     }
+    void setFrom(const DrawTraits &traits) { traits_ = traits; }
     void setColor(const glm::vec4 &color) { traits_.color = color; }
     void setLayer(std::string layer) { traits_.layer = std::move(layer); }
     void setLineType(std::string lineType) { traits_.lineType = std::move(lineType); }
     void setLineWeight(double lineWeight) { traits_.lineWeight = lineWeight; }
     void setVisibility(bool visible) { traits_.visible = visible; }
+    void setFillEnabled(bool enabled) { traits_.fillEnabled = enabled; }
 
     [[nodiscard]] const DrawTraits &traits() const { return traits_; }
 

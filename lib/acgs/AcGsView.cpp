@@ -8,6 +8,7 @@
 #include "acgs/AcGsManager.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1123,14 +1124,23 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             continue;
         std::vector<rendering::FillVertex> &vertices =
             triangle.is3DFace ? surfaceFillVertices : fillVertices;
-        const glm::vec4 fillColor =
+        const glm::vec4 defaultFillColor =
             contrastColor(triangle.common.color.renderColor());
+        const std::array<glm::vec4, 3> fillColors =
+            triangle.hasVertexColors
+                ? std::array<glm::vec4, 3>{
+                      contrastColor(triangle.vertexColors[0]),
+                      contrastColor(triangle.vertexColors[1]),
+                      contrastColor(triangle.vertexColors[2])}
+                : std::array<glm::vec4, 3>{defaultFillColor,
+                                           defaultFillColor,
+                                           defaultFillColor};
         vertices.push_back(
-            {glm::vec3(triangle.a - ctx.cameraPos), fillColor});
+            {glm::vec3(triangle.a - ctx.cameraPos), fillColors[0]});
         vertices.push_back(
-            {glm::vec3(triangle.b - ctx.cameraPos), fillColor});
+            {glm::vec3(triangle.b - ctx.cameraPos), fillColors[1]});
         vertices.push_back(
-            {glm::vec3(triangle.c - ctx.cameraPos), fillColor});
+            {glm::vec3(triangle.c - ctx.cameraPos), fillColors[2]});
     }
     for (const bool is3DFace : {false, true})
     {
