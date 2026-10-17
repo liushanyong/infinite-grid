@@ -9,7 +9,12 @@
 // context (see AcGiWorldDraw.h).
 Adesk::Boolean AcGiWorldDraw::draw(AcGiDrawable *nested)
 {
-    return nested != nullptr ? nested->worldDraw(this) : false;
+    if (nested == nullptr)
+        return false;
+    ++drawDepth_; // AcGiContext::isNesting support
+    const Adesk::Boolean result = nested->worldDraw(this);
+    --drawDepth_;
+    return result;
 }
 
 void AcGiDrawableTraits::setFrom(const acdb::AcDbEntity &common)

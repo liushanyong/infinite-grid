@@ -58,9 +58,34 @@ void AcGsView::configureViewportDraw(ViewportDraw &draw,
     ndcToDc[3][0] = 0.5 * double(width);
     ndcToDc[3][1] = 0.5 * double(height);
     const glm::dmat4 projection(frame_.projection);
-    draw.setViewportFrame(viewportNumber, 0.0, 0.0, double(width),
-                          double(height), AcGeMatrix3d(worldToEye),
-                          AcGeMatrix3d(ndcToDc * projection));
+
+    // Full AcGiViewport frame: camera parameters mirror the active orbit
+    // camera; the orbit target sits at the configured focus depth along the
+    // camera front axis.  Depth-slab distances are reported through
+    // AcGiViewport's clip query, but the flags stay off because slab
+    // scheduling remains renderer-internal.
+    ViewportFrame frame;
+    frame.viewportNumber = viewportNumber;
+    frame.left = 0.0;
+    frame.top = 0.0;
+    frame.right = double(width);
+    frame.bottom = double(height);
+    frame.worldToEye = AcGeMatrix3d(worldToEye);
+    frame.eyeToDc = AcGeMatrix3d(ndcToDc * projection);
+    frame.perspective = !frame_.ortho;
+    frame.cameraLocation = AcGePoint3d(
+        frame_.cameraPos.x, frame_.cameraPos.y, frame_.cameraPos.z);
+    const glm::dvec3 target = frame_.cameraPos +
+                              frame_.cameraFront * frame_.orbitDistance;
+    frame.cameraTarget = AcGePoint3d(target.x, target.y, target.z);
+    frame.cameraUp = AcGeVector3d(frame_.cameraUp.x, frame_.cameraUp.y,
+                                  frame_.cameraUp.z);
+    frame.viewportObjectId = viewportObjectId_;
+    frame.clipFront = false;
+    frame.clipBack = false;
+    frame.frontClipDistance = frame_.slabNear;
+    frame.backClipDistance = frame_.slabFar;
+    draw.setViewportFrame(frame);
 }
 
 // The device lives in the manager (Route-B encapsulation): views fetch it per call.

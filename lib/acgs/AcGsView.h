@@ -233,6 +233,18 @@ public:
     const ViewFrameContext &frame() const { return frame_; }
     ViewFrameContext &mutableFrame() { return frame_; }
 
+    // AcDbViewportTableRecord binding surfaced through
+    // AcGiViewportDraw::viewportObjectId / AcGiViewport.  The view does not
+    // resolve the id itself; the host (which owns the database) assigns it.
+    void setViewportObjectId(const acdb::AcDbObjectId &objectId)
+    {
+        viewportObjectId_ = objectId;
+    }
+    [[nodiscard]] const acdb::AcDbObjectId &viewportObjectId() const
+    {
+        return viewportObjectId_;
+    }
+
     // Bridges the active camera into AcGiViewportDraw eye/DC-space calls and
     // behavior transforms.  This does not bake viewport data into cached world
     // geometry; it only equips a draw callback context for the current frame.
@@ -402,6 +414,7 @@ private:
     bool orthoMode_ = false;
     rendering::RenderModeManager visualStyle_;
     std::string viewportRecordName_;
+    acdb::AcDbObjectId viewportObjectId_;
     const acgi::TextRequest *overriddenText_ = nullptr;
     glm::vec4 textOverrideColor_{0.0f};
 

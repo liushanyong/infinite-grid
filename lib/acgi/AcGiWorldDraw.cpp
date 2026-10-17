@@ -950,6 +950,141 @@ bool validNormals(const std::vector<AcGeVector3d> &normals)
 }
 } // namespace
 
+// ---- AcGiCommonDraw state implementations ----
+
+namespace
+{
+
+// AcGiContext view over the draw context's state (ObjectARX subset).
+class GiDrawContext final : public AcGiContext
+{
+public:
+    explicit GiDrawContext(const AcGiWorldDraw *draw) : draw_(draw) {}
+
+    AcGiRegenType regenType() const override
+    {
+        return draw_->regenType();
+    }
+    Adesk::Boolean isDragging() const override { return draw_->isDragging(); }
+    Adesk::Boolean isPsOut() const override { return false; }
+    Adesk::Boolean isPlotGeneration() const override { return false; }
+    acdb::AcDbDatabase *database() const override
+    {
+        return draw_->gsContext().database();
+    }
+    bool isBoundaryClipping() const override
+    {
+        return draw_->hasActiveClipBoundary();
+    }
+    bool isNesting() const override { return draw_->nestingDepth() > 0; }
+    AcCmEntityColor effectiveColor() const override
+    {
+        return AcCmEntityColor(draw_->gsSubEntityTraits().traits().color);
+    }
+    double byBlockLineWeight() const override
+    {
+        return draw_->gsSubEntityTraits().traits().lineWeight;
+    }
+    bool supportsTrueTypeText() override { return true; }
+    bool supportsOwnerDraw() override { return true; }
+    bool supportsFillTrait() const override { return true; }
+    bool supportsCurveTrait() const override { return true; }
+
+private:
+    const AcGiWorldDraw *draw_;
+};
+
+} // namespace
+
+AcGiContext *AcGiWorldDraw::context()
+{
+    if (!commonContext_)
+        commonContext_ = std::make_unique<GiDrawContext>(this);
+    return commonContext_.get();
+}
+
+double AcGiWorldDraw::deviation(AcGiDeviationType type,
+                                const AcGePoint3d &point) const
+{
+    (void)type;
+    if (gsContext().hasViewportFrame())
+    {
+        AcGiViewport viewport(gsContext().viewportFrame());
+        AcGePoint2d pixels;
+        if (viewport.getNumPixelsInUnitSquare(point, pixels))
+        {
+            const double pixelsPerUnit = std::max(pixels.x, pixels.y);
+            if (pixelsPerUnit > 1.0e-12)
+                return std::max(1.0e-9, 0.25 / pixelsPerUnit);
+        }
+    }
+    return gsContext().deviation(1.0);
+}
+
+// ---- AcGiViewportDraw raster-image / owner-draw / viewport extras ----
+
+Adesk::Boolean AcGiViewportDraw::rasterImageDc(
+    const AcGePoint3d &origin, const AcGeVector3d &u, const AcGeVector3d &v,
+    const AcGiImageBGRA32 &imageSource, TransparencyMode transparencyMode)
+{
+    if (!gsContext().hasViewportFrame())
+        return true;
+    AcGeMatrix3d worldToModel;
+    getWorldToModelTransform(worldToModel);
+    const auto toModelWorld = [&](const AcGePoint3d &device) {
+        return transformBy(gsContext().dcToWorld(device), worldToModel);
+    };
+    const AcGePoint3d worldOrigin = toModelWorld(origin);
+    const AcGeVector3d worldU = toModelWorld(origin + u) - worldOrigin;
+    const AcGeVector3d worldV = toModelWorld(origin + v) - worldOrigin;
+    return image(imageSource, worldOrigin, worldU, worldV, transparencyMode);
+}
+
+Adesk::Boolean AcGiViewportDraw::rasterImageDc(
+    const AcGePoint3d &origin, const AcGeVector3d &u, const AcGeVector3d &v,
+    const acdb::AcDbObjectId &imageEntityId, ImageSource source,
+    Adesk::UInt32 imageWidth, Adesk::UInt32 imageHeight,
+    Adesk::Int16 imageColorDepth, bool transparency)
+{
+    (void)origin;
+    (void)u;
+    (void)v;
+    (void)source;
+    (void)imageColorDepth;
+    if (!rasterImageResolver_)
+        return true; // no consumption protocol installed by the host
+    const AcGiImageBGRA32 *resolved = rasterImageResolver_(imageEntityId);
+    if (resolved == nullptr || resolved->width() != imageWidth ||
+        resolved->height() != imageHeight)
+        return true;
+    return rasterImageDc(origin, u, v, *resolved,
+                         transparency ? kTransparency8Bit
+                                      : kTransparencyOff);
+}
+
+Adesk::UInt32 AcGiViewportDraw::sequenceNumber() const
+{
+    return gsContext().hasViewportFrame()
+               ? static_cast<Adesk::UInt32>(std::max(
+                     0, gsContext().viewportFrame().viewportNumber))
+               : 0;
+}
+
+Adesk::Boolean AcGiViewportDraw::isValidId(Adesk::ULongPtr acgiId) const
+{
+    // The context accepts exactly the ids it minted through mintAcgiId().
+    return acgiId != 0 && acgiId <= gsContext().mintedAcgiIdCount();
+}
+
+acdb::AcDbObjectId AcGiViewportDraw::viewportObjectId() const
+{
+    // The host binds the AcDbViewportTableRecord id through
+    // AcGsView::setViewportObjectId / ViewportFrame::viewportObjectId.
+    return gsContext().hasViewportFrame()
+               ? gsContext().viewportFrame().viewportObjectId
+               : acdb::AcDbObjectId{};
+}
+
 bool AcGiWorldDraw::worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
 {
     AcGePoint3d start = apply(from);
@@ -1233,7 +1368,7 @@ bool AcGiWorldDraw::edge(const std::vector<AcGiEdge2d> &edges)
                         radius = curve.majorRadius();
                     }
                     const acdb::TesselationOptions options =
-                        context().optionsFor(radius);
+                        gsContext().optionsFor(radius);
                     if (!(options.angleStep > 0.0) ||
                         !std::isfinite(options.angleStep) ||
                         !std::isfinite(sweep) || sweep == 0.0)
@@ -1296,15 +1431,15 @@ bool AcGiWorldDraw::behaviorNeedsViewport(
 AcGeVector3d AcGiWorldDraw::viewportWorldOffset(
     const AcGePoint3d &offset) const
 {
-    if (!context().hasViewportFrame())
+    if (!gsContext().hasViewportFrame())
         return offset.asVector();
-    return context().dcToWorldVector(AcGePoint3d{}, offset);
+    return gsContext().dcToWorldVector(AcGePoint3d{}, offset);
 }
 
 AcGeVector3d AcGiWorldDraw::viewportWorldScaleAxis(
     double value, size_t axis) const
 {
-    if (!context().hasViewportFrame() || value == 0.0)
+    if (!gsContext().hasViewportFrame() || value == 0.0)
         return AcGeVector3d();
     AcGePoint3d unit;
     if (axis == 0)
@@ -1313,14 +1448,14 @@ AcGeVector3d AcGiWorldDraw::viewportWorldScaleAxis(
         unit = AcGePoint3d(0.0, 1.0, 0.0);
     else
         unit = AcGePoint3d(0.0, 0.0, 1.0);
-    return context().dcToWorldVector(AcGePoint3d{}, unit) * value;
+    return gsContext().dcToWorldVector(AcGePoint3d{}, unit) * value;
 }
 
 AcGeMatrix3d AcGiWorldDraw::screenOrientationMatrix() const
 {
-    if (!context().hasViewportFrame())
+    if (!gsContext().hasViewportFrame())
         return AcGeMatrix3d();
-    const AcGeMatrix3d eyeToWorld = context().viewportFrame().eyeToWorld;
+    const AcGeMatrix3d eyeToWorld = gsContext().viewportFrame().eyeToWorld;
     const AcGeVector3d xAxis = transformBy(AcGeVector3d::kXAxis, eyeToWorld);
     const AcGeVector3d yAxis = transformBy(AcGeVector3d::kYAxis, eyeToWorld);
     const AcGeVector3d zAxis = transformBy(AcGeVector3d::kZAxis, eyeToWorld);
@@ -1351,7 +1486,7 @@ AcGeMatrix3d AcGiWorldDraw::pushPositionTransform(
 AcGeMatrix3d AcGiWorldDraw::pushScaleTransform(
     AcGiScaleTransformBehavior behavior, const AcGePoint3d &extents)
 {
-    if (!behaviorNeedsViewport(behavior) || !context().hasViewportFrame())
+    if (!behaviorNeedsViewport(behavior) || !gsContext().hasViewportFrame())
     {
         const AcGeMatrix3d matrix = AcGeMatrix3d::setToScaling(
             AcGeVector3d(extents.x, extents.y, extents.z));
@@ -1379,95 +1514,101 @@ AcGeMatrix3d AcGiWorldDraw::pushOrientationTransform(
     return matrix;
 }
 
-Adesk::Boolean AcGiWorldDraw::polylineEye(
+Adesk::Boolean AcGiViewportDraw::polylineEye(
     const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
 {
     if (vertexList == nullptr || nbPoints < 2 ||
-        !context().hasViewportFrame())
+        !gsContext().hasViewportFrame())
         return true;
     std::vector<AcGePoint3d> points;
     points.reserve(nbPoints);
     for (Adesk::UInt32 index = 0; index < nbPoints; ++index)
     {
         points.push_back(modelPointFromWorld(
-            context().eyeToWorld(vertexList[index])));
+            gsContext().eyeToWorld(vertexList[index])));
     }
     return worldPolyline(points.data(), static_cast<int>(points.size()),
                          false);
 }
 
-Adesk::Boolean AcGiWorldDraw::polygonEye(
+Adesk::Boolean AcGiViewportDraw::polygonEye(
     const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
 {
     if (vertexList == nullptr || nbPoints < 2 ||
-        !context().hasViewportFrame())
+        !gsContext().hasViewportFrame())
         return true;
     std::vector<AcGePoint3d> points;
     points.reserve(nbPoints);
     for (Adesk::UInt32 index = 0; index < nbPoints; ++index)
     {
         points.push_back(modelPointFromWorld(
-            context().eyeToWorld(vertexList[index])));
+            gsContext().eyeToWorld(vertexList[index])));
     }
     return worldPolyline(points.data(), static_cast<int>(points.size()),
                          true);
 }
 
-Adesk::Boolean AcGiWorldDraw::polylineDc(
+Adesk::Boolean AcGiViewportDraw::polylineDc(
     const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
 {
     if (vertexList == nullptr || nbPoints < 2 ||
-        !context().hasViewportFrame())
+        !gsContext().hasViewportFrame())
         return true;
     std::vector<AcGePoint3d> points;
     points.reserve(nbPoints);
     for (Adesk::UInt32 index = 0; index < nbPoints; ++index)
     {
         points.push_back(modelPointFromWorld(
-            context().dcToWorld(vertexList[index])));
+            gsContext().dcToWorld(vertexList[index])));
     }
     return worldPolyline(points.data(), static_cast<int>(points.size()),
                          false);
 }
 
-Adesk::Boolean AcGiWorldDraw::polygonDc(
+Adesk::Boolean AcGiViewportDraw::polygonDc(
     const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
 {
     if (vertexList == nullptr || nbPoints < 2 ||
-        !context().hasViewportFrame())
+        !gsContext().hasViewportFrame())
         return true;
     std::vector<AcGePoint3d> points;
     points.reserve(nbPoints);
     for (Adesk::UInt32 index = 0; index < nbPoints; ++index)
     {
         points.push_back(modelPointFromWorld(
-            context().dcToWorld(vertexList[index])));
+            gsContext().dcToWorld(vertexList[index])));
     }
     return worldPolyline(points.data(), static_cast<int>(points.size()),
                          true);
 }
 
-Adesk::Boolean AcGiWorldDraw::ownerDrawDc(
+Adesk::Boolean AcGiViewportDraw::ownerDrawDc(
     Adesk::Int32 viewportNumber, Adesk::Int32 left, Adesk::Int32 top,
     Adesk::Int32 right, Adesk::Int32 bottom, AcGiOwnerDraw *ownerDraw)
 {
-    (void)viewportNumber;
-    (void)left;
-    (void)top;
-    (void)right;
-    (void)bottom;
     (void)ownerDraw;
-    return true;
+    acgs::OwnerDrawCommand command;
+    command.kind = acgs::OwnerDrawCommand::Kind::Dc;
+    command.viewportNumber = viewportNumber;
+    command.left = left;
+    command.top = top;
+    command.right = right;
+    command.bottom = bottom;
+    gsContext().ownerDrawCommands().push_back(command);
+    return false; // stored: the host flushes pending owner-draw requests
 }
 
-Adesk::Boolean AcGiWorldDraw::ownerDraw3d(
+Adesk::Boolean AcGiViewportDraw::ownerDraw3d(
     AcGePoint3d &minimum, AcGePoint3d &maximum,
     AcGiOwnerDraw3d *ownerDraw)
 {
-    (void)minimum;
-    (void)maximum;
     (void)ownerDraw;
-    return true;
+    acgs::OwnerDrawCommand command;
+    command.kind = acgs::OwnerDrawCommand::Kind::World3d;
+    command.minimum = minimum;
+    command.maximum = maximum;
+    gsContext().ownerDrawCommands().push_back(command);
+    return false; // stored: the host flushes pending owner-draw requests
 }
 
 namespace
@@ -1552,15 +1693,172 @@ std::vector<AcGePoint3d> sampleBaseCurve2d(
 }
 } // namespace
 
+// Deviation-driven refinement for generic (non-analytic-radius) curves:
+// midpoint subdivision while the curve midpoint strays from the chord by
+// more than |tolerance|.  Bounded by depth and point budget so pathological
+// curves cannot loop.
+// Derivative-aware midpoint: weight the parametric midpoint by the tangent
+// magnitudes so refinement approximates arc-length parameterization even
+// when the curve's parameterization is uneven.  Falls back to the plain
+// midpoint when the curve reports no tangents (generic base curves).
+double adaptiveMidParam3d(const AcGeCurve3d &curve, double a, double b)
+{
+    AcGeVector3d ta;
+    AcGeVector3d tb;
+    if (curve.tangent(ta, a) && curve.tangent(tb, b))
+    {
+        const double la = ta.length();
+        const double lb = tb.length();
+        if (la > 1.0e-300 && lb > 1.0e-300)
+        {
+            const double mid = (a * lb + b * la) / (la + lb);
+            if (mid > a && mid < b)
+                return mid;
+        }
+    }
+    return 0.5 * (a + b);
+}
+
+double adaptiveMidParam2d(const AcGeCurve2d &curve, double a, double b)
+{
+    AcGeVector2d ta;
+    AcGeVector2d tb;
+    if (curve.tangent(ta, a) && curve.tangent(tb, b))
+    {
+        const double la = ta.length();
+        const double lb = tb.length();
+        if (la > 1.0e-300 && lb > 1.0e-300)
+        {
+            const double mid = (a * lb + b * la) / (la + lb);
+            if (mid > a && mid < b)
+                return mid;
+        }
+    }
+    return 0.5 * (a + b);
+}
+
+void appendAdaptiveCurve3d(const AcGeCurve3d &curve, double a,
+                           const AcGePoint3d &pa, double b,
+                           const AcGePoint3d &pb, double tolerance, int depth,
+                           size_t maxPoints, std::vector<AcGePoint3d> &out)
+{
+    if (depth >= 12 || out.size() >= maxPoints)
+        return;
+    const double mid = adaptiveMidParam3d(curve, a, b);
+    if (!(std::abs(b - a) > 0.0) || !std::isfinite(mid))
+        return;
+    const AcGePoint3d pm = curve.pointAt(mid);
+    if (!std::isfinite(pm.x) || !std::isfinite(pm.y) || !std::isfinite(pm.z))
+        return;
+    const AcGePoint3d chordMid{(pa.x + pb.x) * 0.5, (pa.y + pb.y) * 0.5,
+                               (pa.z + pb.z) * 0.5};
+    if (!(pm.distanceTo(chordMid) > tolerance))
+        return;
+    appendAdaptiveCurve3d(curve, a, pa, mid, pm, tolerance, depth + 1,
+                          maxPoints, out);
+    out.push_back(pm);
+    appendAdaptiveCurve3d(curve, mid, pm, b, pb, tolerance, depth + 1,
+                          maxPoints, out);
+}
+
+void appendAdaptiveCurve2d(const AcGeCurve2d &curve, double a,
+                           const AcGePoint3d &pa, double b,
+                           const AcGePoint3d &pb, double tolerance, int depth,
+                           size_t maxPoints, std::vector<AcGePoint3d> &out)
+{
+    if (depth >= 12 || out.size() >= maxPoints)
+        return;
+    const double mid = adaptiveMidParam2d(curve, a, b);
+    if (!(std::abs(b - a) > 0.0) || !std::isfinite(mid))
+        return;
+    const AcGePoint2d pm2d = curve.pointAt(mid);
+    if (!std::isfinite(pm2d.x) || !std::isfinite(pm2d.y))
+        return;
+    const AcGePoint3d pm(pm2d.x, pm2d.y, 0.0);
+    const AcGePoint3d chordMid{(pa.x + pb.x) * 0.5, (pa.y + pb.y) * 0.5, 0.0};
+    if (!(pm.distanceTo(chordMid) > tolerance))
+        return;
+    appendAdaptiveCurve2d(curve, a, pa, mid, pm, tolerance, depth + 1,
+                          maxPoints, out);
+    out.push_back(pm);
+    appendAdaptiveCurve2d(curve, mid, pm, b, pb, tolerance, depth + 1,
+                          maxPoints, out);
+}
+
+double coarseSampleExtent(const std::vector<AcGePoint3d> &points)
+{
+    double minX = 0.0, minY = 0.0, minZ = 0.0;
+    double maxX = 0.0, maxY = 0.0, maxZ = 0.0;
+    bool first = true;
+    for (const AcGePoint3d &point : points)
+    {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z))
+            continue;
+        if (first)
+        {
+            minX = maxX = point.x;
+            minY = maxY = point.y;
+            minZ = maxZ = point.z;
+            first = false;
+            continue;
+        }
+        minX = std::min(minX, point.x);
+        minY = std::min(minY, point.y);
+        minZ = std::min(minZ, point.z);
+        maxX = std::max(maxX, point.x);
+        maxY = std::max(maxY, point.y);
+        maxZ = std::max(maxZ, point.z);
+    }
+    if (first)
+        return 0.0;
+    return std::hypot(maxX - minX, maxY - minY, maxZ - minZ);
+}
+
 Adesk::Boolean AcGiWorldDraw::curve(const AcGeCurve3d *curve)
 {
     if (curve == nullptr)
         return true;
+    const double curveRadius = analyticCurveRadius(*curve);
     const acdb::TesselationOptions options =
-        context().optionsFor(analyticCurveRadius(*curve));
+        gsContext().optionsFor(curveRadius);
     std::vector<AcGePoint3d> points = sampleBaseCurve3d(*curve, options);
     if (points.size() < 2)
         return true;
+
+    // Deviation-driven refinement: analytic radius curves already derive an
+    // angle step from the viewport tolerance, while generic curves (splines,
+    // composites) get true chord-error subdivision.  The coarse extent gives
+    // a scale-relative fallback when no viewport density is known.
+    const double extent = coarseSampleExtent(points);
+    double tolerance = std::max(options.minSegmentLength, extent * 1.0e-3);
+    const double pixelTolerance = gsContext().deviation(1.0);
+    if (pixelTolerance > 0.0 && pixelTolerance < tolerance)
+        tolerance = pixelTolerance;
+    if (points.size() > 2 || curveRadius <= 0.0)
+    {
+        const size_t maxPoints = 65536;
+        const double start = curve->startParam();
+        const double end = curve->endParam();
+        std::vector<AcGePoint3d> refined;
+        refined.reserve(points.size());
+        refined.push_back(points.front());
+        for (size_t index = 1; index < points.size(); ++index)
+        {
+            const double tA =
+                start + (end - start) * (double(index - 1) /
+                                         double(points.size() - 1));
+            const double tB =
+                start + (end - start) * (double(index) /
+                                         double(points.size() - 1));
+            appendAdaptiveCurve3d(*curve, tA, refined.back(), tB, points[index],
+                                  tolerance, 0, maxPoints, refined);
+            refined.push_back(points[index]);
+            if (refined.size() >= maxPoints)
+                break;
+        }
+        points = std::move(refined);
+    }
     points.erase(std::remove_if(points.begin(), points.end(),
                                 [](const AcGePoint3d &point) {
                                     return !std::isfinite(point.x) ||
@@ -1585,9 +1883,40 @@ Adesk::Boolean AcGiWorldDraw::edge(const AcGeCurve2d *const *edges,
         if (edges[index] == nullptr)
             return true;
         const AcGeCurve2d &curve = *edges[index];
+        const double curveRadius = analyticCurveRadius(curve);
         const acdb::TesselationOptions options =
-            context().optionsFor(analyticCurveRadius(curve));
+            gsContext().optionsFor(curveRadius);
         std::vector<AcGePoint3d> points = sampleBaseCurve2d(curve, options);
+        const double extent = coarseSampleExtent(points);
+        double tolerance = std::max(options.minSegmentLength, extent * 1.0e-3);
+        const double pixelTolerance = gsContext().deviation(1.0);
+        if (pixelTolerance > 0.0 && pixelTolerance < tolerance)
+            tolerance = pixelTolerance;
+        if (points.size() > 2)
+        {
+            const size_t maxPoints = 65536;
+            const double start = curve.startParam();
+            const double end = curve.endParam();
+            std::vector<AcGePoint3d> refined;
+            refined.reserve(points.size());
+            refined.push_back(points.front());
+            for (size_t index = 1; index < points.size(); ++index)
+            {
+                const double tA =
+                    start + (end - start) * (double(index - 1) /
+                                             double(points.size() - 1));
+                const double tB =
+                    start + (end - start) * (double(index) /
+                                             double(points.size() - 1));
+                appendAdaptiveCurve2d(curve, tA, refined.back(), tB,
+                                      points[index], tolerance, 0, maxPoints,
+                                      refined);
+                refined.push_back(points[index]);
+                if (refined.size() >= maxPoints)
+                    break;
+            }
+            points = std::move(refined);
+        }
         points.erase(std::remove_if(points.begin(), points.end(),
                                     [](const AcGePoint3d &point) {
                                         return !std::isfinite(point.x) ||
@@ -2253,7 +2582,7 @@ bool AcGiWorldDraw::circularArc(const AcGePoint3d &center, const double radius,
     if (worldCircle(arc))
         return true;
     return emitArcClosure(*this, center, arc.startPoint(), arc.endPoint(),
-                          sampleArcPoints(context(), arc), arcType);
+                          sampleArcPoints(gsContext(), arc), arcType);
 }
 
 bool AcGiWorldDraw::circularArc(const AcGePoint3d &start,
@@ -2267,7 +2596,7 @@ bool AcGiWorldDraw::circularArc(const AcGePoint3d &start,
     if (worldCircle(arc))
         return true;
     return emitArcClosure(*this, arc.center, arc.startPoint(), arc.endPoint(),
-                          sampleArcPoints(context(), arc), arcType);
+                          sampleArcPoints(gsContext(), arc), arcType);
 }
 
 bool AcGiWorldDraw::ellipticalArc(const AcGePoint3d &center,
@@ -2303,7 +2632,7 @@ bool AcGiWorldDraw::ellipticalArc(const AcGePoint3d &center,
     // used for the boundary.
     const double sweep = endAngleInRad - startAngleInRad;
     const acdb::TesselationOptions options =
-        context().optionsFor(ellipse.majorRadius());
+        gsContext().optionsFor(ellipse.majorRadius());
     const int segments = std::max(
         8, static_cast<int>(std::ceil(sweep / options.angleStep)));
     std::vector<AcGePoint3d> samples;

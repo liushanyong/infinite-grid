@@ -19,6 +19,11 @@
 #include "acdb/AcDbTessellate.h"
 #include "acgs/AcGsPort.h"
 
+namespace acdb
+{
+class AcDbDatabase;
+}
+
 namespace acgs
 {
 
@@ -143,10 +148,45 @@ public:
         return options_;
     }
 
+    // ---- AcGiContext support: owning document + persistent id minting ----
+    void setDatabase(acdb::AcDbDatabase *database) { database_ = database; }
+    [[nodiscard]] acdb::AcDbDatabase *database() const { return database_; }
+
+    // Mints context-scoped AcGi persistent ids (AcGiViewportDraw::isValidId
+    // accepts exactly the ids minted here).
+    Adesk::ULongPtr mintAcgiId() { return ++acgiIdCounter_; }
+    [[nodiscard]] Adesk::ULongPtr mintedAcgiIdCount() const
+    {
+        return acgiIdCounter_;
+    }
+
 private:
     GeometrySink sink_;
     acdb::TesselationOptions options_;
     SubEntityTraits traits_;
+    acdb::AcDbDatabase *database_ = nullptr;
+    Adesk::ULongPtr acgiIdCounter_ = 0;
+};
+
+// Recorded owner-draw request (ObjectARX AcGiOwnerDraw / OwnerDraw3d).  The
+// renderer keeps these as pending display-time commands; native GDI upload
+// stays host-side.
+struct OwnerDrawCommand
+{
+    enum class Kind
+    {
+        Dc,
+        World3d
+    };
+
+    Kind kind = Kind::Dc;
+    Adesk::Int32 viewportNumber = 0;
+    Adesk::Int32 left = 0;
+    Adesk::Int32 top = 0;
+    Adesk::Int32 right = 0;
+    Adesk::Int32 bottom = 0;
+    AcGePoint3d minimum{0.0, 0.0, 0.0};
+    AcGePoint3d maximum{0.0, 0.0, 0.0};
 };
 
 // The per-viewport counterpart of AcGiViewportDraw.  This pass carries screen
@@ -169,6 +209,26 @@ struct ViewportFrame
     AcGeMatrix3d eyeToDc;
     AcGeMatrix3d eyeToWorld;
     AcGeMatrix3d dcToEye;
+
+    // Camera metadata for AcGiViewport.  eyeToDc already carries the
+    // projection; these duplicate the camera parameters so AcGi callers do
+    // not have to reverse-engineer them from matrices.
+    bool perspective = false;
+    AcGePoint3d cameraLocation{0.0, 0.0, 0.0};
+    AcGePoint3d cameraTarget{0.0, 0.0, -1.0};
+    AcGeVector3d cameraUp{0.0, 1.0, 0.0};
+    Adesk::Int32 acadWindowId = 0;
+
+    // AcDbViewportTableRecord binding for AcGiViewportDraw::viewportObjectId.
+    acdb::AcDbObjectId viewportObjectId;
+
+    // Clipping values reported by AcGiViewport.  The renderer still owns
+    // actual slab clipping; the flags only mirror whether AcGi-visible clip
+    // planes are considered active.
+    bool clipFront = false;
+    bool clipBack = false;
+    double frontClipDistance = 0.0;
+    double backClipDistance = 0.0;
 };
 
 class ACGS_PORT ViewportDraw final : public WorldDraw
@@ -216,6 +276,15 @@ public:
         frame_ = std::move(frame);
     }
 
+    // Full-frame setter for callers that also supply camera / clip metadata.
+    void setViewportFrame(const ViewportFrame &frame)
+    {
+        ViewportFrame resolved = frame;
+        resolved.eyeToWorld = frame.worldToEye.inverted();
+        resolved.dcToEye = frame.eyeToDc.inverted();
+        frame_ = std::move(resolved);
+    }
+
     void clearViewportFrame() { frame_.reset(); }
     [[nodiscard]] bool hasViewportFrame() const { return frame_.has_value(); }
     [[nodiscard]] const ViewportFrame &viewportFrame() const
@@ -239,9 +308,48 @@ public:
         return dcToWorld(end) - dcToWorld(start);
     }
 
+    // ---- AcGiCommonDraw draw-state parity (AcGiViewportDraw reads these) ----
+    void setRegenType(int value) { regenType_ = value; }
+    void setRegenAbort(bool value) { regenAbort_ = value; }
+    void setDragging(bool value) { dragging_ = value; }
+    void setSecondaryCall(bool value) { secondaryCall_ = value; }
+    void setNumberOfIsolines(Adesk::UInt32 value) { numberOfIsolines_ = value; }
+    void setDeviationFactor(double value)
+    {
+        if (value > 0.0)
+            chordToleranceFactor_ = value;
+    }
+
+    [[nodiscard]] int regenType() const { return regenType_; }
+    [[nodiscard]] bool regenAbort() const { return regenAbort_; }
+    [[nodiscard]] bool dragging() const { return dragging_; }
+    [[nodiscard]] bool secondaryCall() const { return secondaryCall_; }
+    [[nodiscard]] Adesk::UInt32 numberOfIsolines() const
+    {
+        return numberOfIsolines_;
+    }
+
+    // ---- recorded owner-draw requests ----
+    std::vector<OwnerDrawCommand> &ownerDrawCommands()
+    {
+        return ownerDrawCommands_;
+    }
+    [[nodiscard]] const std::vector<OwnerDrawCommand> &ownerDrawCommands()
+        const
+    {
+        return ownerDrawCommands_;
+    }
+    void clearOwnerDrawCommands() { ownerDrawCommands_.clear(); }
+
 private:
     double pixelsPerUnit_ = 0.0;
     double chordToleranceFactor_ = 0.25;
+    int regenType_ = 0;
+    bool regenAbort_ = false;
+    bool dragging_ = false;
+    bool secondaryCall_ = false;
+    Adesk::UInt32 numberOfIsolines_ = 4;
+    std::vector<OwnerDrawCommand> ownerDrawCommands_;
     std::optional<ViewportFrame> frame_;
 };
 struct DrawListKey

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -126,6 +127,12 @@ public:
   // entities by the host.
   std::vector<acdb::AcDbHandle> skipHandles;
 
+  // Optional viewport configuration for the replay draw context.  Static
+  // world replay stays viewport-independent by default (world soup is cached
+  // across viewports); setting a frame equips eye/DC-space callbacks and
+  // behavior transforms with the same camera metadata the dynamic path uses.
+  std::optional<ViewportFrame> viewportFrame;
+
   // Replays model space of |document| into |target|.
   template <typename MetafileT>
   void record(const acdb::AcDbDatabase &document,
@@ -160,7 +167,9 @@ public:
                              MetafileT &target,
                              AcGsPickShape pickShape =
                                  AcGsPickShape::Primitives,
-                             bool excludeFromFit = false)
+                             bool excludeFromFit = false,
+                             const ViewportFrame *viewportFrame = nullptr,
+                             acdb::AcDbDatabase *database = nullptr)
   {
     auto addRange = [name, pickShape, excludeFromFit](
                         std::vector<AcGsEntityRange> &ranges, std::size_t begin,
@@ -173,6 +182,10 @@ public:
     const std::size_t fillBegin = target.geometry.fills.size();
     const std::size_t pointBegin = target.geometry.points.size();
     ViewportDraw draw(target.geometry, options);
+    if (viewportFrame != nullptr)
+      draw.setViewportFrame(*viewportFrame);
+    if (database != nullptr)
+      draw.setDatabase(database);
     AcGiViewportDraw graphics(draw);
     drawable.worldDraw(&graphics);
     addRange(target.strokeRanges, strokeBegin,
@@ -189,7 +202,9 @@ public:
                                  MetafileT &target,
                                  AcGsPickShape pickShape =
                                      AcGsPickShape::Primitives,
-                                 bool excludeFromFit = false)
+                                 bool excludeFromFit = false,
+                                 const ViewportFrame *viewportFrame = nullptr,
+                                 acdb::AcDbDatabase *database = nullptr)
   {
     if (const auto *compound =
             dynamic_cast<const AcGiCompoundDrawable *>(&drawable))
@@ -197,11 +212,12 @@ public:
       for (const AcGiCompoundDrawable::Member &member : compound->members())
         if (member.drawable != nullptr)
           appendDrawable(*member.drawable, member.name.c_str(), options,
-                         target);
+                         target, AcGsPickShape::Primitives, false,
+                         viewportFrame, database);
       return;
     }
     appendDrawable(drawable, name, options, target, pickShape,
-                   excludeFromFit);
+                   excludeFromFit, viewportFrame, database);
   }
 
 private:
@@ -283,7 +299,9 @@ private:
 
     const size_t fillBegin = target.geometry.fills.size();
     appendDrawableTree(*drawable, name.c_str(), options, target,
-                       hints.pickShape, hints.excludeFromFit);
+                       hints.pickShape, hints.excludeFromFit,
+                       viewportFrame.has_value() ? &*viewportFrame : nullptr,
+                       const_cast<acdb::AcDbDatabase *>(&document));
     if (mesh != nullptr && materialId.isValid())
     {
       for (size_t i = fillBegin; i < target.geometry.fills.size(); ++i)

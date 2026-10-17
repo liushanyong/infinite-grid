@@ -710,8 +710,8 @@ void AcDbEntity::subViewportDraw(AcGiViewportDraw *vd)
     {                                                                          \
         if (wd == nullptr)                                                     \
             return false;                                                      \
-        wd->subEntityTraits().setFrom(*this);                                  \
-        acdb::worldDraw(*this, wd->context());                                 \
+        wd->gsSubEntityTraits().setFrom(*this);                                  \
+        acdb::worldDraw(*this, wd->gsContext());                                 \
         return true;                                                           \
     }
 
@@ -720,8 +720,8 @@ void AcDbEntity::subViewportDraw(AcGiViewportDraw *vd)
     {                                                                          \
         if (wd == nullptr)                                                     \
             return false;                                                      \
-        wd->subEntityTraits().setFrom(*this);                                  \
-        acdb::worldDraw(*this, wd->context());                                 \
+        wd->gsSubEntityTraits().setFrom(*this);                                  \
+        acdb::worldDraw(*this, wd->gsContext());                                 \
         return true;                                                           \
     }                                                                          \
     Adesk::UInt32 EntityType::subSetAttributes(AcGiDrawableTraits *traits)     \
@@ -736,8 +736,8 @@ Adesk::Boolean AcDb3dSolid::subWorldDraw(AcGiWorldDraw *wd)
 {
     if (wd == nullptr)
         return false;
-    wd->subEntityTraits().setFrom(*this);
-    acdb::worldDraw(*this, wd->context(), fillIs3DFace);
+    wd->gsSubEntityTraits().setFrom(*this);
+    acdb::worldDraw(*this, wd->gsContext(), fillIs3DFace);
     return true;
 }
 ACGI_ENTITY_WORLD_DRAW(AcDbArc)

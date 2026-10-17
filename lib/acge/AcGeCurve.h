@@ -12,6 +12,14 @@ public:
     virtual double startParam() const = 0;
     virtual double endParam() const = 0;
     virtual AcGePoint2d pointAt(double param) const = 0;
+
+    // Optional derivative support: analytic curves report d(pointAt)/dparam;
+    // generic base-class curves return false so consumers fall back to
+    // parameter-space assumptions.
+    virtual bool tangent(AcGeVector2d & /*tangent*/, double /*param*/) const
+    {
+        return false;
+    }
 };
 
 class ACGE_PORT AcGeCurve3d
@@ -22,6 +30,14 @@ public:
     virtual double startParam() const = 0;
     virtual double endParam() const = 0;
     virtual AcGePoint3d pointAt(double param) const = 0;
+
+    // Optional derivative support: analytic curves report d(pointAt)/dparam;
+    // generic base-class curves return false so consumers fall back to
+    // parameter-space assumptions.
+    virtual bool tangent(AcGeVector3d & /*tangent*/, double /*param*/) const
+    {
+        return false;
+    }
 };
 
 class ACGE_PORT AcGeSurface

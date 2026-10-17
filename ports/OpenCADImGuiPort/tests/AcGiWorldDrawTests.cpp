@@ -1,4 +1,5 @@
 #include "acgi/AcGiWorldDraw.h"
+#include "acgi/AcGiDrawable.h"
 
 #include "acgs/model/AcGsModel.h"
 #include "acgs/model/AcGsDocumentReplayer.h"
@@ -12,6 +13,42 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+
+namespace
+{
+
+// Minimal generic curve used to exercise the base-class (non-analytic)
+// adaptive sampling path: parabola (t, t^2, 0), t in [-1, 1].
+struct TestParabola3d final : AcGeCurve3d
+{
+    double startParam() const override { return -1.0; }
+    double endParam() const override { return 1.0; }
+    AcGePoint3d pointAt(double t) const override
+    {
+        return AcGePoint3d(t, t * t, 0.0);
+    }
+};
+
+// Minimal drawable used to verify AcGiContext::isNesting bookkeeping.
+struct TestNestedDrawable final : AcGiDrawable
+{
+    Adesk::UInt32 subSetAttributes(AcGiDrawableTraits *) override
+    {
+        return kDrawableNone;
+    }
+    Adesk::Boolean subWorldDraw(AcGiWorldDraw *wd) override
+    {
+        observedDepth = wd->nestingDepth();
+        return true;
+    }
+    void subViewportDraw(AcGiViewportDraw *) override {}
+    Adesk::Boolean isPersistent() const override { return false; }
+    acdb::AcDbObjectId id() const override { return {}; }
+
+    Adesk::UInt32 observedDepth = 0;
+};
+
+} // namespace
 
 int main()
 {
@@ -730,24 +767,46 @@ int main()
            std::abs(viewportPosition.y - 0.5) < 1.0e-12);
     behaviorDraw.popModelTransform();
 
+    // Eye/DC emitters live on the AcGiViewportGeometry facet now.
+    AcGiViewportDraw behaviorViewportDraw(behaviorContext);
+    AcGiViewportGeometry &behaviorViewportGeometry = behaviorViewportDraw;
     AcGePoint3d eyePoints[] = {{0.0, 0.0, 2.0}, {1.0, 1.0, 2.0}};
-    assert(!behaviorDraw.polylineEye(2, eyePoints));
+    assert(!behaviorViewportGeometry.polylineEye(2, eyePoints));
     assert(!behaviorGeometry.strokes.empty());
     assert(std::abs(behaviorGeometry.strokes.back().points.front().x -
                     0.0) < 1.0e-12);
     assert(std::abs(behaviorGeometry.strokes.back().points.back().x -
                     1.0) < 1.0e-12);
     AcGePoint3d dcPoints[] = {{0.25, 0.25, 0.0}, {0.75, 0.75, 0.0}};
-    assert(!behaviorDraw.polygonDc(2, dcPoints));
+    assert(!behaviorViewportDraw.polygonDc(2, dcPoints));
     assert(behaviorGeometry.strokes.back().closed);
 
     AcGiOwnerDraw ownerDrawToken;
     AcGiOwnerDraw3d ownerDraw3dToken;
-    assert(behaviorDraw.ownerDrawDc(1, 0, 0, 100, 100, &ownerDrawToken));
+    assert(!behaviorViewportDraw.ownerDrawDc(1, 0, 0, 100, 100,
+                                             &ownerDrawToken));
     AcGePoint3d ownerMinimum;
     AcGePoint3d ownerMaximum;
-    assert(behaviorDraw.ownerDraw3d(ownerMinimum, ownerMaximum,
-                                    &ownerDraw3dToken));
+    assert(!behaviorViewportDraw.ownerDraw3d(ownerMinimum, ownerMaximum,
+                                             &ownerDraw3dToken));
+
+    // AcGiCommonDraw state is reachable through both contexts.
+    behaviorContext.setRegenType(kAcGiRegen);
+    behaviorContext.setDragging(true);
+    AcGiCommonDraw &behaviorCommon = behaviorDraw;
+    assert(behaviorCommon.regenType() == kAcGiRegen);
+    assert(behaviorCommon.isDragging());
+    assert(behaviorCommon.numberOfIsolines() == 4);
+    AcGiSubEntityTraits &commonTraits = behaviorCommon.subEntityTraits();
+    commonTraits.setColor(glm::vec4(0.25f, 0.5f, 0.75f, 1.0f));
+    assert(behaviorDraw.gsSubEntityTraits().traits().color.b > 0.74f);
+    AcGiGeometry *rawGeometry = behaviorCommon.rawGeometry();
+    assert(rawGeometry != nullptr);
+    AcGiContext *drawContext = behaviorCommon.context();
+    assert(drawContext != nullptr);
+    assert(drawContext->regenType() == kAcGiRegen);
+    assert(drawContext->isDragging());
+    assert(behaviorCommon.secondaryCall() == false);
 
     acdb::TessellatedEntity curveGeometry;
     acgs::ViewportDraw curveContext(curveGeometry);
@@ -803,6 +862,203 @@ int main()
     assert(ownedMapper != nullptr && ownedMapper->autoTransform() ==
                                          AcGiMapper::kObject);
 
+    // ---- AcGiViewportGeometry rasterImageDc + adaptive generic curves ----
+    acdb::TessellatedEntity rasterGeometry;
+    acgs::ViewportDraw rasterContext(rasterGeometry);
+    AcGiViewportDraw rasterDraw(rasterContext);
+    AcGeMatrix3d rasterWorldToEye;
+    AcGeMatrix3d rasterEyeToDc;
+    rasterContext.setViewportFrame(1, 0.0, 0.0, 100.0, 100.0,
+                                   rasterWorldToEye, rasterEyeToDc);
+    AcGiPixelBGRA32 rasterPixels[4] = {};
+    AcGiImageBGRA32 rasterImage(2, 2, rasterPixels);
+    assert(!rasterDraw.rasterImageDc(
+        AcGePoint3d(1.0, 1.0, 0.0), AcGeVector3d(2.0, 0.0, 0.0),
+        AcGeVector3d(0.0, 2.0, 0.0), rasterImage));
+    assert(!rasterGeometry.images.empty());
+    assert(rasterGeometry.images.front().width == 2 &&
+           rasterGeometry.images.front().height == 2);
+    assert(rasterGeometry.fills.size() >= 2);
+    // Entity-reference form stays a documented no-op slot.
+    assert(rasterDraw.rasterImageDc(
+        AcGePoint3d(), AcGeVector3d::kXAxis, AcGeVector3d::kYAxis,
+        acdb::AcDbObjectId{}, AcGiViewportGeometry::kFromDwg, 2, 2, 32,
+        true));
+    assert(rasterDraw.sequenceNumber() == 1);
+    assert(!rasterDraw.isValidId(0));
+    assert(!rasterDraw.viewportObjectId().isValid());
+
+    // Owner-draw requests are recorded as pending display-time commands.
+    rasterContext.clearOwnerDrawCommands();
+    assert(!rasterDraw.ownerDrawDc(2, 0, 0, 100, 100, &ownerDrawToken));
+    assert(!rasterDraw.ownerDraw3d(ownerMinimum, ownerMaximum,
+                                   &ownerDraw3dToken));
+    assert(rasterContext.ownerDrawCommands().size() == 2);
+    assert(rasterContext.ownerDrawCommands().front().kind ==
+           acgs::OwnerDrawCommand::Kind::Dc);
+    assert(rasterContext.ownerDrawCommands().front().viewportNumber == 2);
+    assert(rasterContext.ownerDrawCommands().back().kind ==
+           acgs::OwnerDrawCommand::Kind::World3d);
+    rasterContext.clearOwnerDrawCommands();
+
+    // Entity-reference rasterImageDc consumes pixels through the host
+    // resolver; unknown ids stay a no-op slot.
+    const acdb::AcDbObjectId rasterEntityId(acdb::AcDbHandle{4002});
+    std::vector<std::pair<acdb::AcDbObjectId, AcGiImageBGRA32>> rasterRegistry;
+    rasterRegistry.emplace_back(rasterEntityId, rasterImage);
+    rasterDraw.setRasterImageResolver(
+        [&rasterRegistry](const acdb::AcDbObjectId &id)
+            -> const AcGiImageBGRA32 * {
+            for (const auto &entry : rasterRegistry)
+                if (entry.first == id)
+                    return &entry.second;
+            return nullptr;
+        });
+    const size_t fillsBefore = rasterGeometry.fills.size();
+    assert(!rasterDraw.rasterImageDc(
+        AcGePoint3d(1.0, 1.0, 0.0), AcGeVector3d(2.0, 0.0, 0.0),
+        AcGeVector3d(0.0, 2.0, 0.0), rasterEntityId,
+        AcGiViewportGeometry::kFromDwg, 2, 2, 32, true));
+    assert(rasterGeometry.fills.size() > fillsBefore);
+    assert(rasterDraw.rasterImageDc(
+        AcGePoint3d(), AcGeVector3d::kXAxis, AcGeVector3d::kYAxis,
+        acdb::AcDbObjectId{}, AcGiViewportGeometry::kFromDwg, 2, 2, 32,
+        true));
+
+    // Persistent AcGi id minting + viewport-object-id binding.
+    const Adesk::ULongPtr mintedA = rasterDraw.mintAcgiId();
+    const Adesk::ULongPtr mintedB = rasterDraw.mintAcgiId();
+    assert(mintedA == 1 && mintedB == 2);
+    assert(rasterDraw.isValidId(1) && rasterDraw.isValidId(2));
+    assert(!rasterDraw.isValidId(0) && !rasterDraw.isValidId(3));
+
+    acgs::ViewportFrame boundFrame;
+    boundFrame.viewportNumber = 1;
+    boundFrame.viewportObjectId = rasterEntityId;
+    rasterContext.setViewportFrame(boundFrame);
+    assert(rasterDraw.viewportObjectId() == rasterEntityId);
+    assert(rasterDraw.viewport().viewportId() == 1);
+
+    // ---- analytic tangents + derivative-aware refinement ----
+    AcGeVector3d tangentVector;
+    AcGeLineSeg3d tangentLine(AcGePoint3d(0.0, 0.0, 0.0),
+                              AcGePoint3d(2.0, 0.0, 0.0));
+    assert(tangentLine.tangent(tangentVector, 0.5));
+    assert(std::abs(tangentVector.x - 2.0) < 1.0e-12);
+    AcGeCircle3d tangentCircle(AcGePoint3d(0.0, 0.0, 0.0),
+                               AcGeVector3d::kZAxis, 1.0);
+    assert(tangentCircle.tangent(tangentVector, 0.0));
+    assert(std::abs(tangentVector.y - 1.0) < 1.0e-12);
+    AcGeVector2d tangentVector2d;
+    AcGeCircArc2d tangentArc2d(AcGePoint2d(0.0, 0.0), 1.0, 0.0,
+                               1.5707963267948966);
+    assert(tangentArc2d.tangent(tangentVector2d, 0.0));
+    assert(std::abs(tangentVector2d.y - 1.0) < 1.0e-12);
+
+    acdb::TessellatedEntity tangentGeometry;
+    acgs::ViewportDraw tangentContext(tangentGeometry);
+    AcGiWorldDraw tangentDraw(tangentContext);
+    assert(!tangentDraw.curve(&tangentCircle));
+    assert(tangentGeometry.strokes.size() == 1);
+    const acdb::Stroke &tangentStroke = tangentGeometry.strokes.back();
+    assert(tangentStroke.points.size() > 32);
+    double tangentChordError = 0.0;
+    for (size_t index = 1; index < tangentStroke.points.size(); ++index)
+    {
+        const AcGePoint3d &a = tangentStroke.points[index - 1];
+        const AcGePoint3d &b = tangentStroke.points[index];
+        const AcGePoint3d chordMid{(a.x + b.x) * 0.5, (a.y + b.y) * 0.5,
+                                   (a.z + b.z) * 0.5};
+        const double chordLength = a.distanceTo(b);
+        if (!(chordLength > 0.0))
+            continue;
+        const double midAngle =
+            std::atan2(chordMid.y, chordMid.x);
+        tangentChordError = std::max(
+            tangentChordError,
+            AcGePoint3d(std::cos(midAngle), std::sin(midAngle), 0.0)
+                .distanceTo(chordMid));
+    }
+    // Extent-based fallback tolerance is bbox-diag * 1e-3; the coarse
+    // circle samples span [-1,1]^2, so diag = 2*sqrt(2) and every refined
+    // chord must stay below that scale.
+    assert(tangentChordError < 2.9e-3);
+
+    // Generic base-class curve: coarse pass plus chord-error refinement.
+    TestParabola3d parabola;
+    acdb::TessellatedEntity parabolaGeometry;
+    acgs::ViewportDraw parabolaContext(parabolaGeometry);
+    AcGiWorldDraw parabolaDraw(parabolaContext);
+    assert(!parabolaDraw.curve(&parabola));
+    assert(parabolaGeometry.strokes.size() == 1);
+    const acdb::Stroke &parabolaStroke = parabolaGeometry.strokes.back();
+    assert(parabolaStroke.points.size() > 32);
+    double parabolaChordError = 0.0;
+    for (size_t index = 1; index < parabolaStroke.points.size(); ++index)
+    {
+        const AcGePoint3d &a = parabolaStroke.points[index - 1];
+        const AcGePoint3d &b = parabolaStroke.points[index];
+        const double midT = (a.x + b.x) * 0.5;
+        parabolaChordError =
+            std::max(parabolaChordError,
+                     AcGePoint3d(midT, midT * midT, 0.0)
+                         .distanceTo(AcGePoint3d((a.x + b.x) * 0.5,
+                                                 (a.y + b.y) * 0.5,
+                                                 (a.z + b.z) * 0.5)));
+    }
+    // Fallback tolerance is extent * 1e-3; the parabola bbox diagonal is
+    // sqrt(2^2 + 1^2) ~ 2.236, so every chord must stay below that scale.
+    assert(parabolaChordError < 2.3e-3);
+
+    // ---- static replay accepts an optional viewport frame ----
+    acdb::AcDbDatabase frameDocument;
+    acdb::AcDb3dPolyline framePolyline;
+    framePolyline.handle = acdb::AcDbHandle{4001};
+    framePolyline.name = "FramePolyline";
+    framePolyline.vertices = {AcGePoint3d(0.0, 0.0, 0.0),
+                              AcGePoint3d(1.0, 0.0, 0.0)};
+    frameDocument.addEntity(std::move(framePolyline));
+    acgs::AcGsMetafile frameTarget;
+    acgs::AcGsDocumentReplayer frameReplay;
+    acgs::ViewportFrame replayFrame;
+    replayFrame.viewportNumber = 3;
+    frameReplay.viewportFrame = replayFrame;
+    frameReplay.record(frameDocument, {}, frameTarget);
+    assert(frameTarget.geometry.strokes.size() == 1);
+
+    // ---- extended AcGiContext: database binding, supports* capabilities,
+    // ---- boundary-clip / nesting state, id-based isValidId contract ----
+    acdb::TessellatedEntity dbContextGeometry;
+    acgs::ViewportDraw dbContextContext(dbContextGeometry);
+    dbContextContext.setDatabase(&frameDocument);
+    AcGiWorldDraw dbContextDraw(dbContextContext);
+    AcGiContext *dbContextQuery = dbContextDraw.context();
+    assert(dbContextQuery->database() == &frameDocument);
+    assert(!dbContextQuery->isPsOut());
+    assert(!dbContextQuery->isPlotGeneration());
+    assert(!dbContextQuery->isBoundaryClipping());
+    assert(!dbContextQuery->isNesting());
+    assert(dbContextQuery->supportsTrueTypeText());
+    assert(dbContextQuery->supportsOwnerDraw());
+    assert(dbContextQuery->supportsFillTrait());
+    assert(dbContextQuery->supportsCurveTrait());
+    assert(dbContextQuery->effectiveColor().colorMethod() ==
+           AcCmEntityColor::ColorMethod::kByColor);
+
+    AcGiClipBoundary dbContextClip;
+    dbContextClip.m_aptPoints = {{0.0, 0.0}, {1.0, 1.0}};
+    assert(dbContextDraw.pushClipBoundary(&dbContextClip));
+    assert(dbContextQuery->isBoundaryClipping());
+    dbContextDraw.popClipBoundary();
+    assert(!dbContextQuery->isBoundaryClipping());
+
+    TestNestedDrawable nestedDrawable;
+    // draw() forwards the nested worldDraw result (kTrue = viewport-
+    // independent here); the nesting depth bookkeeping is what we verify.
+    dbContextDraw.draw(&nestedDrawable);
+    assert(nestedDrawable.observedDepth == 1);
+    assert(!dbContextQuery->isNesting()); // nesting state ends with the call
+
     // ARX-style AcGeCurve2d pointer arrays adapt to the edge-value pipeline.
     AcGeLineSeg2d genericLine2d(AcGePoint2d(0.0, 0.0),
                                 AcGePoint2d(1.0, 0.0));
@@ -821,4 +1077,116 @@ int main()
         borrowedFaceData.setMappers(&borrowedMapper);
         assert(borrowedFaceData.mappers() == &borrowedMapper);
     }
+
+    // ---- AcGiViewport camera / projection queries and CommonDraw state ----
+    acdb::TessellatedEntity viewportQueryGeometry;
+    acgs::ViewportDraw viewportQueryContext(viewportQueryGeometry);
+    AcGiViewportDraw viewportDraw(viewportQueryContext);
+    assert(!viewportDraw.viewport().hasFrame());
+    assert(viewportDraw.regenType() == kAcGiRegenDisabled);
+    assert(!viewportDraw.regenAbort());
+    assert(!viewportDraw.isDragging());
+    assert(viewportDraw.numberOfIsolines() == 4);
+    assert(!viewportDraw.secondaryCall());
+    viewportQueryContext.setRegenType(kAcGiRegen);
+    viewportQueryContext.setRegenAbort(true);
+    viewportQueryContext.setDragging(true);
+    viewportQueryContext.setSecondaryCall(true);
+    viewportQueryContext.setNumberOfIsolines(8);
+    assert(viewportDraw.regenType() == kAcGiRegen);
+    assert(viewportDraw.regenAbort());
+    assert(viewportDraw.isDragging());
+    assert(viewportDraw.secondaryCall());
+    assert(viewportDraw.numberOfIsolines() == 8);
+
+    // Perspective camera at the origin looking down -z; the eye plane at
+    // depth 1 maps focal*(x,y) to device pixels.
+    acgs::ViewportFrame perspectiveFrame;
+    perspectiveFrame.viewportNumber = 7;
+    perspectiveFrame.left = 0.0;
+    perspectiveFrame.top = 0.0;
+    perspectiveFrame.right = 800.0;
+    perspectiveFrame.bottom = 600.0;
+    perspectiveFrame.worldToEye = AcGeMatrix3d::setToTranslation(
+        AcGeVector3d(0.0, 0.0, 0.0));
+    const double focalY = 600.0;
+    glm::dmat4 perspectiveMatrix(1.0);
+    perspectiveMatrix[0][0] = focalY;      // square viewport aspect
+    perspectiveMatrix[1][1] = focalY;
+    perspectiveMatrix[2][3] = -1.0;        // glm col-major: w = -z
+    perspectiveMatrix[3][3] = 0.0;         // no projective bias term
+    perspectiveMatrix[3][0] = 400.0;
+    perspectiveMatrix[3][1] = 300.0;
+    perspectiveFrame.eyeToDc = AcGeMatrix3d(perspectiveMatrix);
+    perspectiveFrame.perspective = true;
+    perspectiveFrame.cameraLocation = AcGePoint3d(0.0, 0.0, 0.0);
+    perspectiveFrame.cameraTarget = AcGePoint3d(0.0, 0.0, -10.0);
+    perspectiveFrame.cameraUp = AcGeVector3d::kYAxis;
+    perspectiveFrame.frontClipDistance = 0.1;
+    perspectiveFrame.backClipDistance = 1000.0;
+    viewportQueryContext.setViewportFrame(perspectiveFrame);
+
+    const AcGiViewport viewport = viewportDraw.viewport();
+    assert(viewport.hasFrame());
+    assert(viewport.viewportId() == 7);
+    assert(viewport.isPerspective());
+
+    AcGeMatrix3d queryMatrix;
+    assert(viewport.getModelToEyeTransform(queryMatrix));
+    assert(std::abs(transformBy(AcGePoint3d(1.0, 2.0, 3.0), queryMatrix).x -
+                    1.0) < 1.0e-12);
+    assert(viewport.getEyeToWorldTransform(queryMatrix));
+    assert(std::abs(transformBy(AcGePoint3d(1.0, 2.0, 3.0), queryMatrix).x -
+                    1.0) < 1.0e-12);
+
+    AcGePoint3d cameraLocation;
+    AcGePoint3d cameraTarget;
+    AcGeVector3d cameraUp;
+    assert(viewport.getCameraLocation(cameraLocation));
+    assert(viewport.getCameraTarget(cameraTarget));
+    assert(viewport.getCameraUpVector(cameraUp));
+    assert(std::abs(cameraLocation.z) < 1.0e-12 &&
+           std::abs(cameraTarget.z + 10.0) < 1.0e-12 &&
+           std::abs(cameraUp.y - 1.0) < 1.0e-12);
+
+    AcGePoint2d dcMinimum;
+    AcGePoint2d dcMaximum;
+    assert(viewport.getViewportDcCorners(dcMinimum, dcMaximum));
+    assert(std::abs(dcMinimum.y - 600.0) < 1.0e-12 &&
+           std::abs(dcMaximum.x - 800.0) < 1.0e-12);
+
+    bool clipFront = true;
+    bool clipBack = true;
+    double clipFrontValue = 0.0;
+    double clipBackValue = 0.0;
+    assert(viewport.getFrontAndBackClipValues(
+        clipFront, clipBack, clipFrontValue, clipBackValue));
+    assert(!clipFront && !clipBack);
+    assert(std::abs(clipFrontValue - 0.1) < 1.0e-12 &&
+           std::abs(clipBackValue - 1000.0) < 1.0e-12);
+
+    // doPerspective / doInversePerspective round-trip two eye units in
+    // front of the camera (eye z is negative toward the scene).
+    AcGePoint3d eyePoint(100.0, 50.0, -2.0);
+    AcGePoint3d perspectivePoint = eyePoint;
+    assert(viewport.doPerspective(perspectivePoint));
+    assert(std::abs(perspectivePoint.x - 30200.0) < 1.0e-9);
+    assert(std::abs(perspectivePoint.y - 15150.0) < 1.0e-9);
+    assert(std::abs(perspectivePoint.z + 2.0) < 1.0e-12);
+    assert(viewport.doInversePerspective(perspectivePoint));
+    assert(std::abs(perspectivePoint.x - 100.0) < 1.0e-9 &&
+           std::abs(perspectivePoint.y - 50.0) < 1.0e-9);
+
+    // A one-world-unit step at eye depth 2 with focal 600 spans 300 px.
+    AcGePoint2d pixels;
+    assert(viewport.getNumPixelsInUnitSquare(AcGePoint3d(0.0, 0.0, -2.0),
+                                             pixels));
+    assert(std::abs(pixels.x - 300.0) < 1.0e-9 &&
+           std::abs(pixels.y - 300.0) < 1.0e-9);
+
+    // Point deviation is the world size of a quarter pixel at that depth.
+    const double pointDeviation =
+        viewportDraw.deviation(kAcGiDeviationCurve,
+                               AcGePoint3d(0.0, 0.0, -2.0));
+    assert(std::abs(pointDeviation - 0.25 / 300.0) < 1.0e-12);
 }

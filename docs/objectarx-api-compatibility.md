@@ -431,8 +431,8 @@ only 255 as opaque, while 8-bit alpha is proportional.
 `edge` accepts both the port's value-edge list and an ObjectARX-style
 `AcGeCurve2d*` array; line-segment, circular-arc, elliptical-arc, and
 type-erased curve values emit as strokes (curve tessellation is capped at 65,536
-segments per edge). `AcGeCurve2d`/`AcGeCurve3d` are value-semantic facades over
-the existing analytic curve values, and `AcGiGeometry::curve` tessellates line,
+segments per edge). `AcGeCurve2d`/`AcGeCurve3d` are true abstract curve base classes, and
+`AcGiGeometry::curve` tessellates line,
 circle, circular-arc, and elliptical-arc inputs through the viewport deviation
 policy. `polylineEye`, `polygonEye`, `polylineDc`, `polygonDc`,
 `ownerDrawDc`, and `ownerDraw3d` are now protocol slots on `AcGiWorldDraw`;
@@ -444,3 +444,73 @@ position/scale/orientation transforms resolve viewport and screen inputs into
 world coordinates before cached soup submission; native GDI owner-draw uploads
 remain no-ops. `AcDbPolyline` already has an entity-level AcGi callback path,
 so `pline` is not a missing renderer algorithm.
+
+`AcGiViewport` is now implemented as a value object driven by
+`acgs::ViewportFrame`. It reports model/world ↔ eye transforms, the
+perspective flag, `doPerspective`/`doInversePerspective` (the port maps an
+eye point's x/y through the projection divide while keeping eye depth in z,
+and the inverse reverses that exact convention), camera location/target/up,
+viewport/window ids, DC corners, pixels per world unit at a point, and
+front/back clip values. `AcGsView::configureViewportDraw` fills the frame's
+camera metadata from the active orbit camera (the target sits at the focus
+depth along the camera front axis) and reports the depth-slab distances, with
+clip flags off because slab scheduling remains renderer-internal.
+`AcGiViewportDraw::viewport()` exposes the query object; without a configured
+frame the queries fail gracefully.
+
+The ObjectARX draw-context hierarchy is now source-shape complete:
+`AcGiCommonDraw` is the shared base of `AcGiWorldDraw` and
+`AcGiViewportDraw` and carries `regenType`, `regenAbort`,
+`subEntityTraits()`, `rawGeometry()`, `isDragging()`,
+`deviation(AcGiDeviationType, const AcGePoint3d&)`, `numberOfIsolines()`,
+`context()` (a minimal `AcGiContext` over the acgs draw state), and
+`secondaryCall()`. `AcGiViewportGeometry` is a separate facet
+(`AcGiGeometry` is a virtual base shared with `AcGiWorldGeometry`, so the
+concrete viewport draw keeps one primitive toolkit) exposing `polylineEye`,
+`polygonEye`, `polylineDc`, `polygonDc`, `ownerDrawDc`, `ownerDraw3d`, and
+`rasterImageDc`. `AcGiViewportDraw` additionally provides ARX extras
+`sequenceNumber()`, `isValidId()` (returns false — no persistent AcGi ids
+yet), and `viewportObjectId()` (empty — no AcDbViewport binding yet).
+`rasterImageDc` with pixel data converts the DC quad to world space and
+reuses the world `image` pipeline. The entity-reference form is now a real
+consumption protocol: the host installs a `RasterImageResolver`
+(`AcGiWorldDraw::setRasterImageResolver`) that maps an image-entity object id
+to its `AcGiImageBGRA32`; resolved ids emit pixels through the same pipeline
+and unresolved ids stay a no-op slot. ARX's `rasterImageDcUsingRawPointer`
+remains unmodeled because the value port has no `AcDbRasterImage` entity
+class. The port-level draw-context accessor is `gsContext()` because ARX
+reserves `context()` for `AcGiCommonDraw::context`.
+
+Owner-draw calls are recorded instead of dropped: `ownerDrawDc`,
+`ownerDraw3d` (and viewport commands generally) append
+`acgs::OwnerDrawCommand` records to `acgs::ViewportDraw` (readable through
+`ownerDrawCommands()`), return `kFalse` (stored), and the host flushes the
+pending display-time requests; native GDI upload remains host-side.
+
+`isValidId` accepts exactly the context-scoped ids minted through
+`mintAcgiId()`; `viewportObjectId` returns the `AcDbViewportTableRecord`
+binding carried on `ViewportFrame::viewportObjectId`, which the host assigns
+via `AcGsView::setViewportObjectId` (the view does not resolve database ids
+itself).
+
+`AcGiContext` now covers the ARX query subset: `isPsOut` / `isPlotGeneration`
+(fixed false — no plot pipeline), `database()` (bound by
+`AcGsDocumentReplayer` / `acgs::WorldDraw::setDatabase`),
+`isBoundaryClipping` (live clip-stack state), `isNesting` (draw-nesting
+depth), `effectiveColor` / `byBlockLineWeight` (current trait state), and the
+`supportsTrueTypeText` / `supportsOwnerDraw` / `supportsFillTrait` /
+`supportsCurveTrait` capability queries.
+
+Adaptive curve sampling is derivative-aware: `AcGeCurve2d/3d` expose an
+optional `tangent()` (implemented by the analytic line/circle/arc/ellipse
+values; generic base curves report none), and the midpoint refiner weights
+the parametric midpoint by tangent magnitudes to approximate arc-length
+parameterization before applying the chord-error stopping rule.
+
+`AcGsDocumentReplayer` accepts an optional `ViewportFrame`; static world
+replay stays viewport-independent by default, and a configured frame equips
+eye/DC callbacks and behavior transforms with camera metadata. Generic
+(non-analytic) curves emitted through `curve()` / `edge()` now use
+deviation-driven midpoint subdivision (viewport pixel tolerance when
+available, otherwise a scale-relative fallback) on top of the coarse pass,
+bounded by depth and a 65,536-point budget.

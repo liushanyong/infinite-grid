@@ -10,10 +10,15 @@
 // traits-state semantics of AcGi.
 //
 // Hierarchy (ObjectARX shape):
-//   AcGiGeometry          base geometry toolkit (transforms + primitives)
-//   └─ AcGiWorldGeometry  view-independent, model-coordinate methods
-//      └─ AcGiWorldDraw   + AcGiSubEntityTraits facet, sink recording
-//         └─ AcGiViewportDraw  + per-viewport screen-density channel
+//   AcGiCommonDraw         draw-state base (regen/dragging/deviation/context)
+//   ├─ AcGiWorldDraw       : AcGiWorldGeometry + AcGiSubEntityTraits facet
+//   │                        (view-independent world recording)
+//   └─ AcGiViewportDraw    : + AcGiViewportGeometry facet
+//                             (eye/DC protocol, raster images, screen
+//                             density, AcGiViewport queries)
+//   AcGiGeometry is a virtual base shared by AcGiWorldGeometry and
+//   AcGiViewportGeometry so the concrete viewport draw exposes one
+//   primitive toolkit.
 //
 // Return convention (ObjectARX contract, arxref.chm "AcGiGeometry"): the
 // primitive callbacks return kFalse (false) when the primitive was stored
@@ -36,8 +41,12 @@
 // edge() accepts a value-semantic subset of planar curves rather than native
 // AcGeCurve2d pointers; native GDI owner-draw uploads are not implemented.
 
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -117,6 +126,23 @@ enum AcGiFillType
 {
     kAcGiFillAlways = 1,
     kAcGiFillNever
+};
+
+// ObjectARX AcGiRegenType / AcGiDeviationType (acgidefs.h): draw-context
+// state consumed by AcGiCommonDraw queries.
+enum AcGiRegenType
+{
+    kAcGiRegenDisabled = 0,
+    kAcGiRegenQuickDraw,
+    kAcGiRegen,
+    kAcGiRegenAll
+};
+
+enum AcGiDeviationType
+{
+    kAcGiDeviationCircle = 0,
+    kAcGiDeviationCurve,
+    kAcGiDeviationSurface
 };
 
 // Value-segment subset used by the port's edge() callback.  The separate
@@ -861,51 +887,6 @@ public:
         return true;
     }
 
-    // Eye/DC-space viewport geometry.  They are accepted here as port-level
-    // virtuals so AcGiWorldDraw can provide real conversions without yet
-    // splitting the full AcGiViewportGeometry interface.
-    virtual Adesk::Boolean polylineEye(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
-    {
-        (void)nbPoints;
-        (void)vertexList;
-        return true;
-    }
-    virtual Adesk::Boolean polygonEye(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
-    {
-        (void)nbPoints;
-        (void)vertexList;
-        return true;
-    }
-    virtual Adesk::Boolean polylineDc(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
-    {
-        (void)nbPoints;
-        (void)vertexList;
-        return true;
-    }
-    virtual Adesk::Boolean polygonDc(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList)
-    {
-        (void)nbPoints;
-        (void)vertexList;
-        return true;
-    }
-    virtual Adesk::Boolean ownerDrawDc(
-        Adesk::Int32 /*viewportNumber*/, Adesk::Int32 /*left*/,
-        Adesk::Int32 /*top*/, Adesk::Int32 /*right*/,
-        Adesk::Int32 /*bottom*/, AcGiOwnerDraw * /*ownerDraw*/)
-    {
-        return true;
-    }
-    virtual Adesk::Boolean ownerDraw3d(
-        AcGePoint3d & /*minimum*/, AcGePoint3d & /*maximum*/,
-        AcGiOwnerDraw3d * /*ownerDraw*/)
-    {
-        return true;
-    }
-
     // Generic 3D curve: ARX default stores nothing (kFalse).  The concrete
     // AcGiWorldDraw below tessellates the supported value curves.
     virtual Adesk::Boolean curve(const AcGeCurve3d * /*curve*/)
@@ -916,7 +897,7 @@ public:
 
 // ---- AcGiWorldGeometry: view-independent, model-coordinate methods ----
 
-class ACGI_PORT AcGiWorldGeometry : public AcGiGeometry
+class ACGI_PORT AcGiWorldGeometry : public virtual AcGiGeometry
 {
 public:
     // ObjectARX AcGiWorldGeometry::setExtents: extents hint during
@@ -929,6 +910,54 @@ public:
     // the last objects rendered.  (Hook parity; the replay currently keeps
     // attributes in the same segment.)
     virtual void startAttributesSegment() {}
+};
+
+// ---- AcGiViewportGeometry: view-dependent eye/DC-space methods ----
+// ObjectARX shape: AcGiGeometry <- AcGiViewportGeometry.  Both geometry
+// facets share the AcGiGeometry virtual base so the concrete
+// AcGiViewportDraw keeps one unambiguous primitive toolkit.
+
+class ACGI_PORT AcGiViewportGeometry : public virtual AcGiGeometry
+{
+public:
+    // ObjectARX AcGiViewportGeometry::ImageSource.
+    enum ImageSource
+    {
+        kFromDwg,
+        kFromOleObject,
+        kFromRender
+    };
+
+    virtual Adesk::Boolean polylineEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) = 0;
+    virtual Adesk::Boolean polygonEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) = 0;
+    virtual Adesk::Boolean polylineDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) = 0;
+    virtual Adesk::Boolean polygonDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) = 0;
+
+    virtual Adesk::Boolean rasterImageDc(
+        const AcGePoint3d &origin, const AcGeVector3d &u,
+        const AcGeVector3d &v, const AcGiImageBGRA32 &imageSource,
+        TransparencyMode transparencyMode = kTransparency8Bit) = 0;
+
+    // Simplified entity-reference form of the ARX signature (pixel-to-DC
+    // and unrotated-clone parameters are not modeled by the value port).
+    virtual Adesk::Boolean rasterImageDc(
+        const AcGePoint3d &origin, const AcGeVector3d &u,
+        const AcGeVector3d &v, const acdb::AcDbObjectId &imageEntityId,
+        ImageSource source, Adesk::UInt32 imageWidth,
+        Adesk::UInt32 imageHeight, Adesk::Int16 imageColorDepth,
+        bool transparency) = 0;
+
+    virtual Adesk::Boolean ownerDrawDc(
+        Adesk::Int32 viewportNumber, Adesk::Int32 left, Adesk::Int32 top,
+        Adesk::Int32 right, Adesk::Int32 bottom,
+        AcGiOwnerDraw *ownerDraw) = 0;
+    virtual Adesk::Boolean ownerDraw3d(
+        AcGePoint3d &minimum, AcGePoint3d &maximum,
+        AcGiOwnerDraw3d *ownerDraw) = 0;
 };
 
 // ---- AcGiSubEntityTraits: the trait-state facet of a draw context ----
@@ -952,17 +981,83 @@ public:
     virtual void setFrom(const acdb::AcDbEntity &common) = 0;
 };
 
+// ---- AcGiContext: draw-context query (ObjectARX AcGiContext subset) ----
+
+namespace acdb
+{
+class AcDbDatabase;
+}
+
+class ACGI_PORT AcGiContext
+{
+public:
+    virtual ~AcGiContext() = default;
+
+    virtual AcGiRegenType regenType() const = 0;
+    virtual Adesk::Boolean isDragging() const = 0;
+
+    // ObjectARX AcGiContext subset supported by the port.  PsOut / plot
+    // generation are fixed false (no plot pipeline); the supports* queries
+    // report the port's real capabilities.
+    virtual Adesk::Boolean isPsOut() const = 0;
+    virtual Adesk::Boolean isPlotGeneration() const = 0;
+    virtual acdb::AcDbDatabase *database() const = 0;
+    virtual bool isBoundaryClipping() const = 0;
+    virtual bool isNesting() const = 0;
+    virtual AcCmEntityColor effectiveColor() const = 0;
+    virtual double byBlockLineWeight() const = 0;
+    virtual bool supportsTrueTypeText() { return false; }
+    virtual bool supportsOwnerDraw() { return false; }
+    virtual bool supportsFillTrait() const { return false; }
+    virtual bool supportsCurveTrait() const { return false; }
+};
+
+// ---- AcGiCommonDraw: base for AcGiWorldDraw / AcGiViewportDraw ----
+
+class ACGI_PORT AcGiCommonDraw
+{
+public:
+    virtual ~AcGiCommonDraw() = default;
+
+    virtual AcGiRegenType regenType() const = 0;
+    virtual Adesk::Boolean regenAbort() const = 0;
+    // ObjectARX returns the mutable facet through a const context; the port
+    // mirrors that signature with a const_cast.
+    virtual AcGiSubEntityTraits &subEntityTraits() const = 0;
+    virtual AcGiGeometry *rawGeometry() const = 0;
+    virtual Adesk::Boolean isDragging() const = 0;
+    virtual double deviation(AcGiDeviationType type,
+                             const AcGePoint3d &point) const = 0;
+    virtual Adesk::UInt32 numberOfIsolines() const = 0;
+    virtual AcGiContext *context() = 0;
+    virtual bool secondaryCall() const { return false; }
+};
+
 // ---- AcGiWorldDraw: shared-world draw context ----
 
-class ACGI_PORT AcGiWorldDraw : public AcGiWorldGeometry,
+class ACGI_PORT AcGiWorldDraw : public AcGiCommonDraw,
+                                public AcGiWorldGeometry,
                                 public AcGiSubEntityTraits
 {
 public:
     explicit AcGiWorldDraw(acgs::ViewportDraw &draw) : draw_(draw) {}
 
+    // The renderer sink context this facade records into; the entity
+    // drawables call the acdb::worldDraw overload set through it.  (ARX
+    // reserves context() for AcGiCommonDraw::context, so the port-level
+    // accessor carries a gs prefix.)
+    acgs::ViewportDraw &gsContext() { return draw_; }
+    [[nodiscard]] const acgs::ViewportDraw &gsContext() const
+    {
+        return draw_;
+    }
+
     // The trait state the sink applies to subsequently emitted primitives.
-    acgs::SubEntityTraits &subEntityTraits() { return draw_.subEntityTraits(); }
-    const acgs::SubEntityTraits &subEntityTraits() const
+    acgs::SubEntityTraits &gsSubEntityTraits()
+    {
+        return draw_.subEntityTraits();
+    }
+    const acgs::SubEntityTraits &gsSubEntityTraits() const
     {
         return draw_.subEntityTraits();
     }
@@ -970,44 +1065,95 @@ public:
     // AcGiSubEntityTraits facet: forwards to the trait state above.
     void setColor(const glm::vec4 &color) override
     {
-        subEntityTraits().setColor(color);
+        gsSubEntityTraits().setColor(color);
     }
     void setLayer(std::string layer) override
     {
-        subEntityTraits().setLayer(std::move(layer));
+        gsSubEntityTraits().setLayer(std::move(layer));
     }
     void setLineType(std::string lineType) override
     {
-        subEntityTraits().setLineType(std::move(lineType));
+        gsSubEntityTraits().setLineType(std::move(lineType));
     }
     void setLineWeight(double lineWeight) override
     {
-        subEntityTraits().setLineWeight(lineWeight);
+        gsSubEntityTraits().setLineWeight(lineWeight);
     }
     void setVisibility(bool visible) override
     {
-        subEntityTraits().setVisibility(visible);
+        gsSubEntityTraits().setVisibility(visible);
     }
     void setFillType(AcGiFillType fillType) override
     {
-        subEntityTraits().setFillEnabled(fillType == kAcGiFillAlways);
+        gsSubEntityTraits().setFillEnabled(fillType == kAcGiFillAlways);
     }
     AcGiFillType fillType() const override
     {
-        return subEntityTraits().traits().fillEnabled ? kAcGiFillAlways
+        return gsSubEntityTraits().traits().fillEnabled ? kAcGiFillAlways
                                                        : kAcGiFillNever;
     }
     void setMaterial(const acdb::AcDbObjectId &value) override
     {
-        subEntityTraits().setMaterial(value);
+        gsSubEntityTraits().setMaterial(value);
     }
     const acdb::AcDbObjectId &materialId() const override
     {
-        return subEntityTraits().materialId();
+        return gsSubEntityTraits().materialId();
     }
     void setFrom(const acdb::AcDbEntity &common) override
     {
-        subEntityTraits().setFrom(common);
+        gsSubEntityTraits().setFrom(common);
+    }
+
+    // ---- AcGiCommonDraw state (ObjectARX AcGiCommonDraw) ----
+
+    AcGiRegenType regenType() const override
+    {
+        return static_cast<AcGiRegenType>(draw_.regenType());
+    }
+    Adesk::Boolean regenAbort() const override { return draw_.regenAbort(); }
+    AcGiSubEntityTraits &subEntityTraits() const override
+    {
+        return const_cast<AcGiSubEntityTraits &>(
+            static_cast<const AcGiSubEntityTraits &>(*this));
+    }
+    AcGiGeometry *rawGeometry() const override
+    {
+        return const_cast<AcGiWorldDraw *>(this);
+    }
+    Adesk::Boolean isDragging() const override { return draw_.dragging(); }
+    double deviation(AcGiDeviationType type,
+                     const AcGePoint3d &point) const override;
+    Adesk::UInt32 numberOfIsolines() const override
+    {
+        return draw_.numberOfIsolines();
+    }
+    AcGiContext *context() override;
+    bool secondaryCall() const override { return draw_.secondaryCall(); }
+
+    // AcGiContext support state.
+    [[nodiscard]] Adesk::UInt32 nestingDepth() const { return drawDepth_; }
+    [[nodiscard]] bool hasActiveClipBoundary() const
+    {
+        return !clipStack_.empty();
+    }
+
+    // Persistent AcGi id minting (AcGiViewportDraw::isValidId contract).
+    Adesk::ULongPtr mintAcgiId() { return draw_.mintAcgiId(); }
+    [[nodiscard]] Adesk::ULongPtr mintedAcgiIdCount() const
+    {
+        return draw_.mintedAcgiIdCount();
+    }
+
+    // AcDbRasterImage consumption protocol: the host installs a resolver
+    // that maps an image-entity object id to its raster pixels.  When set,
+    // the entity-reference rasterImageDc resolves and emits real pixels;
+    // without it the call stays a no-op slot.
+    using RasterImageResolver = std::function<const AcGiImageBGRA32 *(
+        const acdb::AcDbObjectId &)>;
+    void setRasterImageResolver(RasterImageResolver resolver)
+    {
+        rasterImageResolver_ = std::move(resolver);
     }
 
     // ---- AcGiGeometry: concrete emitters (implemented against the sink) ----
@@ -1117,23 +1263,6 @@ public:
     AcGeMatrix3d pushOrientationTransform(
         AcGiOrientationTransformBehavior behavior) override;
 
-    // Viewport-space protocol: eye/DC points are first mapped to world and
-    // then emitted through the normal world sink (including current traits).
-    Adesk::Boolean polylineEye(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
-    Adesk::Boolean polygonEye(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
-    Adesk::Boolean polylineDc(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
-    Adesk::Boolean polygonDc(
-        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
-    Adesk::Boolean ownerDrawDc(
-        Adesk::Int32 viewportNumber, Adesk::Int32 left, Adesk::Int32 top,
-        Adesk::Int32 right, Adesk::Int32 bottom,
-        AcGiOwnerDraw *ownerDraw) override;
-    Adesk::Boolean ownerDraw3d(
-        AcGePoint3d &minimum, AcGePoint3d &maximum,
-        AcGiOwnerDraw3d *ownerDraw) override;
     Adesk::Boolean curve(const AcGeCurve3d *curve) override;
 
     Adesk::Boolean pushModelTransform(const AcGeVector3d &translation) override
@@ -1162,14 +1291,6 @@ public:
 
     // Nested-drawable replay; defined in AcGiDrawable.h.
     Adesk::Boolean draw(AcGiDrawable *nested) override;
-
-    // The renderer sink context this facade records into; the entity
-    // drawables call the acdb::worldDraw overload set through it.
-    acgs::ViewportDraw &context() { return draw_; }
-    [[nodiscard]] const acgs::ViewportDraw &context() const
-    {
-        return draw_;
-    }
 
 private:
     struct ClipFrame
@@ -1212,9 +1333,11 @@ private:
         return transformBy(point, currentTransform());
     }
 
+protected:
     // Maps an absolute world point back through the active model transform so
     // converted eye/DC points can re-enter worldPolyline/worldPolygon without
-    // being transformed a second time.
+    // being transformed a second time.  Protected because the AcGiViewportDraw
+    // eye/DC emitters need the same conversion.
     AcGePoint3d modelPointFromWorld(const AcGePoint3d &world) const
     {
         return transformBy(world, currentTransform().inverted());
@@ -1235,27 +1358,235 @@ private:
     void applyTraits(acdb::Triangle &triangle, bool fillIs3DFace) const;
 
     acgs::ViewportDraw &draw_;
+    std::unique_ptr<AcGiContext> commonContext_;
+    Adesk::UInt32 drawDepth_ = 0;
+    RasterImageResolver rasterImageResolver_;
     std::vector<AcGeMatrix3d> transformStack_;
     std::vector<ClipFrame> clipStack_;
 };
 
-// The per-viewport counterpart of AcGiWorldDraw (ObjectARX AcGiViewportDraw).
+// Value-layer AcGiViewport (ObjectARX acgi.h): camera / viewport-space query
+// object driven by the acgs::ViewportFrame configured by AcGsView.  Matrices
+// use the same conventions as the frame: worldToEye maps world points to eye
+// space and eyeToDc maps eye points (with perspective divide) to device
+// coordinates whose origin is (left, top).
+class ACGI_PORT AcGiViewport
+{
+public:
+    AcGiViewport() = default;
+    explicit AcGiViewport(const acgs::ViewportFrame &frame) : frame_(frame) {}
+
+    explicit operator bool() const { return frame_.has_value(); }
+    [[nodiscard]] bool hasFrame() const { return frame_.has_value(); }
+    [[nodiscard]] const acgs::ViewportFrame &frame() const
+    {
+        return frame_.value();
+    }
+
+    // "Model" and "world" are the same coordinate system in this port.
+    bool getModelToEyeTransform(AcGeMatrix3d &matrix) const
+    {
+        if (!frame_) return false;
+        matrix = frame_->worldToEye;
+        return true;
+    }
+    bool getEyeToModelTransform(AcGeMatrix3d &matrix) const
+    {
+        if (!frame_) return false;
+        matrix = frame_->eyeToWorld;
+        return true;
+    }
+    bool getWorldToEyeTransform(AcGeMatrix3d &matrix) const
+    {
+        return getModelToEyeTransform(matrix);
+    }
+    bool getEyeToWorldTransform(AcGeMatrix3d &matrix) const
+    {
+        return getEyeToModelTransform(matrix);
+    }
+
+    [[nodiscard]] bool isPerspective() const
+    {
+        return frame_ ? frame_->perspective : false;
+    }
+
+    // Applies the projection's perspective distortion to an eye-space point:
+    // x / y become device-space coordinates at that depth, z stays in eye
+    // depth.  This is the port's explicit convention for ARX's
+    // doPerspective / doInversePerspective pair.
+    bool doPerspective(AcGePoint3d &point) const
+    {
+        if (!frame_ || !frame_->perspective) return false;
+        const AcGePoint3d device = transformBy(point, frame_->eyeToDc);
+        point.x = device.x;
+        point.y = device.y;
+        return true;
+    }
+    bool doInversePerspective(AcGePoint3d &point) const
+    {
+        if (!frame_ || !frame_->perspective) return false;
+        const double focalX = frame_->eyeToDc.m[0][0];
+        const double focalY = frame_->eyeToDc.m[1][1];
+        if (std::abs(focalX) < 1.0e-12 || std::abs(focalY) < 1.0e-12)
+            return false;
+        const double eyeZ = point.z;
+        // eyeToDc is a projective matrix: its translation participates in
+        // the perspective divide, so undo focal * x + cx over (-z), not
+        // focal * (x - cx) over (-z).
+        point.x = (point.x * (-eyeZ) -
+                   0.5 * (frame_->left + frame_->right)) / focalX;
+        point.y = (point.y * (-eyeZ) -
+                   0.5 * (frame_->top + frame_->bottom)) / focalY;
+        return true;
+    }
+
+    // Number of device pixels spanned by a unit world square at the given
+    // world point.  The perspective query is always evaluated at the point,
+    // which is the meaningful value for tessellation; includePerspective is
+    // accepted for ARX signature parity.
+    bool getNumPixelsInUnitSquare(const AcGePoint3d &point,
+                                  AcGePoint2d &pixels,
+                                  bool includePerspective = true) const
+    {
+        (void)includePerspective;
+        if (!frame_) return false;
+        const AcGePoint3d eye = transformBy(point, frame_->worldToEye);
+        const AcGePoint3d center = transformBy(eye, frame_->eyeToDc);
+        const AcGePoint3d stepX = transformBy(
+            eye + AcGeVector3d(1.0, 0.0, 0.0), frame_->eyeToDc);
+        const AcGePoint3d stepY = transformBy(
+            eye + AcGeVector3d(0.0, 1.0, 0.0), frame_->eyeToDc);
+        pixels = AcGePoint2d(
+            std::hypot(stepX.x - center.x, stepX.y - center.y),
+            std::hypot(stepY.x - center.x, stepY.y - center.y));
+        return true;
+    }
+
+    bool getCameraLocation(AcGePoint3d &location) const
+    {
+        if (!frame_) return false;
+        location = frame_->cameraLocation;
+        return true;
+    }
+    bool getCameraTarget(AcGePoint3d &target) const
+    {
+        if (!frame_) return false;
+        target = frame_->cameraTarget;
+        return true;
+    }
+    bool getCameraUpVector(AcGeVector3d &up) const
+    {
+        if (!frame_) return false;
+        up = frame_->cameraUp;
+        return true;
+    }
+
+    [[nodiscard]] Adesk::Int32 viewportId() const
+    {
+        return frame_ ? frame_->viewportNumber : 0;
+    }
+    [[nodiscard]] Adesk::Int32 acadWindowId() const
+    {
+        return frame_ ? frame_->acadWindowId : 0;
+    }
+
+    bool getViewportDcCorners(AcGePoint2d &minimum,
+                              AcGePoint2d &maximum) const
+    {
+        if (!frame_) return false;
+        minimum = AcGePoint2d(frame_->left, frame_->bottom);
+        maximum = AcGePoint2d(frame_->right, frame_->top);
+        return true;
+    }
+
+    bool getFrontAndBackClipValues(bool &clipFront, bool &clipBack,
+                                   double &front, double &back) const
+    {
+        if (!frame_) return false;
+        clipFront = frame_->clipFront;
+        clipBack = frame_->clipBack;
+        front = frame_->frontClipDistance;
+        back = frame_->backClipDistance;
+        return true;
+    }
+
+private:
+    std::optional<acgs::ViewportFrame> frame_;
+};
+
+// The per-viewport counterpart of AcGiWorldDraw (ObjectARX
+// AcGiViewportDraw : AcGiCommonDraw with an AcGiViewportGeometry facet).
 // Both contexts record into the same sink in this port; the viewport form
-// exposes the screen-density channel that curve tessellation adapts to.
-class ACGI_PORT AcGiViewportDraw : public AcGiWorldDraw
+// exposes the screen-density channel, the AcGiViewportGeometry eye/DC and
+// raster-image protocol, AcGiViewport queries, and the inherited
+// AcGiCommonDraw draw state.
+class ACGI_PORT AcGiViewportDraw : public AcGiWorldDraw,
+                                   public AcGiViewportGeometry
 {
 public:
     explicit AcGiViewportDraw(acgs::ViewportDraw &draw) : AcGiWorldDraw(draw) {}
 
     [[nodiscard]] double pixelsPerUnit() const
     {
-        return context().pixelsPerUnit();
+        return gsContext().pixelsPerUnit();
     }
 
     // Maximum world-space distance from a chord to its curve at the
-    // current viewport density.
+    // current viewport density.  Keeps the AcGiCommonDraw point overload
+    // visible alongside the radius overload.
+    using AcGiWorldDraw::deviation;
     [[nodiscard]] double deviation(double curveRadius) const
     {
-        return context().deviation(curveRadius);
+        return gsContext().deviation(curveRadius);
     }
+
+    [[nodiscard]] AcGiViewport viewport() const
+    {
+        return gsContext().hasViewportFrame()
+                   ? AcGiViewport(gsContext().viewportFrame())
+                   : AcGiViewport();
+    }
+
+    // ---- AcGiViewportGeometry: eye/DC-space protocol ----
+    // Eye/DC points are first mapped to world and then emitted through the
+    // normal world sink (including current traits).
+
+    Adesk::Boolean polylineEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polygonEye(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polylineDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+    Adesk::Boolean polygonDc(
+        const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList) override;
+
+    // DC-space raster image with pixel data: the port converts the three DC
+    // quad anchors to world space and reuses the world image() pipeline.
+    Adesk::Boolean rasterImageDc(
+        const AcGePoint3d &origin, const AcGeVector3d &u,
+        const AcGeVector3d &v, const AcGiImageBGRA32 &imageSource,
+        TransparencyMode transparencyMode = kTransparency8Bit) override;
+
+    // ObjectARX entity-reference signature.  The value port has no
+    // AcDbRasterImage protocol yet, so this is a documented no-op slot
+    // (kTrue = nothing stored).
+    Adesk::Boolean rasterImageDc(
+        const AcGePoint3d &origin, const AcGeVector3d &u,
+        const AcGeVector3d &v, const acdb::AcDbObjectId &imageEntityId,
+        ImageSource source, Adesk::UInt32 imageWidth,
+        Adesk::UInt32 imageHeight, Adesk::Int16 imageColorDepth,
+        bool transparency) override;
+
+    Adesk::Boolean ownerDrawDc(
+        Adesk::Int32 viewportNumber, Adesk::Int32 left, Adesk::Int32 top,
+        Adesk::Int32 right, Adesk::Int32 bottom,
+        AcGiOwnerDraw *ownerDraw) override;
+    Adesk::Boolean ownerDraw3d(
+        AcGePoint3d &minimum, AcGePoint3d &maximum,
+        AcGiOwnerDraw3d *ownerDraw) override;
+
+    // ---- ObjectARX AcGiViewportDraw extras ----
+    [[nodiscard]] Adesk::UInt32 sequenceNumber() const;
+    [[nodiscard]] Adesk::Boolean isValidId(Adesk::ULongPtr acgiId) const;
+    [[nodiscard]] acdb::AcDbObjectId viewportObjectId() const;
 };

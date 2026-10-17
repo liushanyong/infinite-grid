@@ -44,6 +44,14 @@ public:
     double endParam() const override { return 1.0; }
     AcGeVector2d direction() const { return m_end - m_start; }
     AcGeVector2d derivativeAt(double) const { return direction(); }
+    bool tangent(AcGeVector2d &result, double) const override
+    {
+        const AcGeVector2d d = direction();
+        if (!std::isfinite(d.x) || !std::isfinite(d.y) || d.isZeroLength())
+            return false;
+        result = d;
+        return true;
+    }
     double parameterOf(const AcGePoint2d &point) const;
     double length() const { return m_start.distanceTo(m_end); }
     double length(double fromParam, double toParam,
@@ -158,6 +166,16 @@ public:
     AcGePoint2d startPoint() const { return pointAtAngle(m_startAngle); }
     AcGePoint2d endPoint() const { return pointAtAngle(m_endAngle); }
 
+    // Derivative of pointAtAngle: the parameter map is always CCW in the
+    // reference basis (the clockwise flag only selects the traversed span).
+    bool tangent(AcGeVector2d &result, double angle) const override
+    {
+        const AcGeVector2d side{-m_refVec.y, m_refVec.x};
+        result = m_refVec * (-m_radius * std::sin(angle)) +
+                 side * (m_radius * std::cos(angle));
+        return std::isfinite(result.x) && std::isfinite(result.y);
+    }
+
     bool angleOnArc(double worldAngle) const;
     bool isInside(const AcGePoint2d &point,
                   const AcGeTol &tol = AcGeTol{}) const;
@@ -249,6 +267,13 @@ public:
     }
     AcGePoint2d startPoint() const { return pointAt(m_startAngle); }
     AcGePoint2d endPoint() const { return pointAt(m_endAngle); }
+
+    bool tangent(AcGeVector2d &result, double angle) const override
+    {
+        result = m_majorAxis * (-m_majorRadius * std::sin(angle)) +
+                 m_minorAxis * (m_minorRadius * std::cos(angle));
+        return std::isfinite(result.x) && std::isfinite(result.y);
+    }
 
     bool isInside(const AcGePoint2d &point,
                   const AcGeTol &tol = AcGeTol{}) const;

@@ -38,6 +38,15 @@ public:
     double endParam() const override { return 1.0; }
     AcGeVector3d direction() const { return m_endPoint - m_startPoint; }
     AcGeVector3d derivativeAt(double) const { return direction(); }
+    bool tangent(AcGeVector3d &result, double) const override
+    {
+        const AcGeVector3d d = direction();
+        if (!std::isfinite(d.x) || !std::isfinite(d.y) ||
+            !std::isfinite(d.z) || d.isZeroLength())
+            return false;
+        result = d;
+        return true;
+    }
     double parameterOf(const AcGePoint3d &point) const;
 
     double length() const { return m_startPoint.distanceTo(m_endPoint); }
@@ -134,6 +143,16 @@ struct ACGE_PORT AcGeCircArc3d : AcGeCurve3d
     AcGePoint3d startPoint() const { return pointAt(startAngle); }
     AcGePoint3d endPoint() const { return pointAt(endAngle); }
 
+    bool tangent(AcGeVector3d &result, double angle) const override
+    {
+        const AcGeVector3d u = referenceAxis();
+        const AcGeVector3d w = normal.normal().crossProduct(u);
+        result = u * (-radius * std::sin(angle)) +
+                 w * (radius * std::cos(angle));
+        return std::isfinite(result.x) && std::isfinite(result.y) &&
+               std::isfinite(result.z) && !result.isZeroLength();
+    }
+
     void getPlane(AcGePlane &plane) const
     {
         plane.set(center, normal);
@@ -191,6 +210,10 @@ struct ACGE_PORT AcGeCircle3d : AcGeCurve3d
     AcGePoint3d pointAt(double angle) const override
     {
         return AcGeCircArc3d{center, normal, radius}.pointAt(angle);
+    }
+    bool tangent(AcGeVector3d &result, double angle) const override
+    {
+        return AcGeCircArc3d{center, normal, radius}.tangent(result, angle);
     }
     AcGePoint3d startPoint() const { return pointAt(0.0); }
     AcGePoint3d endPoint() const
@@ -291,6 +314,16 @@ struct ACGE_PORT AcGeEllipArc3d : AcGeCurve3d
 
     AcGePoint3d startPoint() const { return pointAt(startAngle); }
     AcGePoint3d endPoint() const { return pointAt(endAngle); }
+
+    bool tangent(AcGeVector3d &result, double angle) const override
+    {
+        const AcGeVector3d u = majorAxis.normal();
+        const AcGeVector3d w = normal.normal().crossProduct(u);
+        result = u * (-majorRadius() * std::sin(angle)) +
+                 w * (minorRadius() * std::cos(angle));
+        return std::isfinite(result.x) && std::isfinite(result.y) &&
+               std::isfinite(result.z) && !result.isZeroLength();
+    }
 
     bool isInside(const AcGePoint3d &point,
                   const AcGeTol &tol = AcGeTol{}) const;
