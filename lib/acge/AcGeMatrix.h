@@ -36,7 +36,22 @@ struct ACGE_PORT AcGeMatrix3d
         return glm::mat4(m);
     }
 
+    double &operator()(unsigned int row, unsigned int column)
+    {
+        return m[column][row];
+    }
+    const double &operator()(unsigned int row, unsigned int column) const
+    {
+        return m[column][row];
+    }
+
     static AcGeMatrix3d identity() { return AcGeMatrix3d(); }
+
+    AcGeMatrix3d &setToIdentity()
+    {
+        m = glm::dmat4(1.0);
+        return *this;
+    }
 
     static AcGeMatrix3d setToTranslation(const AcGeVector3d &translation)
     {
@@ -87,11 +102,47 @@ struct ACGE_PORT AcGeMatrix3d
         return result;
     }
 
+    AcGeMatrix3d &setToProduct(const AcGeMatrix3d &left,
+                               const AcGeMatrix3d &right)
+    {
+        m = left.m * right.m;
+        return *this;
+    }
+
+    AcGeMatrix3d &preMultBy(const AcGeMatrix3d &left)
+    {
+        m = left.m * m;
+        return *this;
+    }
+
+    AcGeMatrix3d &postMultBy(const AcGeMatrix3d &right)
+    {
+        m = m * right.m;
+        return *this;
+    }
+
+    AcGeMatrix3d transposed() const
+    {
+        return AcGeMatrix3d(glm::transpose(m));
+    }
+
+    AcGeMatrix3d &transposeIt()
+    {
+        m = glm::transpose(m);
+        return *this;
+    }
+
     AcGeMatrix3d inverted() const
     {
         AcGeMatrix3d result;
         result.m = glm::inverse(m);
         return result;
+    }
+
+    AcGeMatrix3d &invert()
+    {
+        m = glm::inverse(m);
+        return *this;
     }
 };
 

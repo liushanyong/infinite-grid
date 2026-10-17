@@ -79,7 +79,7 @@ void degenerateBoundary()
 void twoDimensionalBoundary()
 {
     std::vector<AcGeCurveBoundary::Contour2dElement> contour(1);
-    AcGeCurveBoundary boundary(contour, {});
+    AcGeCurveBoundary boundary({}, contour);
     assert(boundary.numElements() == 1);
     assert(boundary.isDegenerate());
 
