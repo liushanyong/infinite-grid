@@ -20,6 +20,12 @@ documented in the bundled reference. This is a partial compatibility layer,
 not a claim that all ObjectARX AcGe classes, methods, semantics, or ABI are
 implemented.
 
+`AcGeMatrix3d` exposes ObjectARX-style row/column element access and common
+identity, product, pre/post-multiplication, transpose, and inverse operations.
+It also provides the documented maximum-column scale query and a tolerance-
+aware Boolean inverse that leaves the output unchanged on failure. Its storage
+remains GLM-backed, and the complete native matrix API is not implemented.
+
 The geometry layer also includes source-level subsets of `AcGeLine2d/3d`,
 `AcGeRay2d/3d`, and `AcGeScale2d/3d`. These provide point/direction setup,
 parameterized evaluation (rays clamp to their half-line), and scale-vector
@@ -227,6 +233,23 @@ splines. Line segments expose their exact constant parameter derivatives.
 torus, bounded plane, and 3D B-spline/NURBS patches. These are source-level
 foundations, not the complete ObjectARX curve/surface method sets; generic
 curve fitting, extension, and many native methods remain incomplete.
+
+B-spline and NURBS curve/surface parameter ranges use the active interval
+`[U[degree], U[controlPointCount]]` (and likewise for V), including non-clamped
+knot vectors. B-spline and NURBS surfaces expose normals from their analytic
+partial derivatives; NURBS surfaces also expose directional rationality
+queries and a copied definition-data view of degrees, control points, weights,
+and knot vectors.
+NURBS surfaces also provide numerical U/V periodicity queries (matching the
+seam position and first parameter derivative); NURBS curves expose C1/G1
+discontinuity parameter queries at internal knot breaks.
+The common `AcGeCurve2d/3d` bases provide `evalPoint` overloads with first- and
+second-derivative output, and `AcGeSurface` provides point/partial-derivative/
+normal evaluation with derivative order 0 through 2. These base evaluators use
+finite differences (including one-sided stencils at bounded edges); their
+surface derivative array order is `du`, `dv`, then `duu`, `duv`, `dvv`.
+`AcGeSurface::isClosedInU/V` checks seam point agreement over representative
+samples of the other parameter range, including unbounded ranges.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
 wrappers in the ObjectARX sense: they bind any curve/surface value type and a
 cached parameter, then expose `point`, `deriv`/`uDeriv`/`vDeriv` (orders 1-2),

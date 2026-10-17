@@ -13,6 +13,7 @@
 #endif
 #include <glm/gtx/transform.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 
 #include "AcGeLinear.h"
@@ -36,7 +37,29 @@ struct ACGE_PORT AcGeMatrix3d
         return glm::mat4(m);
     }
 
+    double &operator()(unsigned int row, unsigned int column)
+    {
+        return m[column][row];
+    }
+    const double &operator()(unsigned int row, unsigned int column) const
+    {
+        return m[column][row];
+    }
+
     static AcGeMatrix3d identity() { return AcGeMatrix3d(); }
+
+    double scale() const
+    {
+        return std::max({glm::length(glm::dvec3(m[0])),
+                         glm::length(glm::dvec3(m[1])),
+                         glm::length(glm::dvec3(m[2]))});
+    }
+
+    AcGeMatrix3d &setToIdentity()
+    {
+        m = glm::dmat4(1.0);
+        return *this;
+    }
 
     static AcGeMatrix3d setToTranslation(const AcGeVector3d &translation)
     {
@@ -87,11 +110,63 @@ struct ACGE_PORT AcGeMatrix3d
         return result;
     }
 
+    AcGeMatrix3d &setToProduct(const AcGeMatrix3d &left,
+                               const AcGeMatrix3d &right)
+    {
+        m = left.m * right.m;
+        return *this;
+    }
+
+    AcGeMatrix3d &preMultBy(const AcGeMatrix3d &left)
+    {
+        m = left.m * m;
+        return *this;
+    }
+
+    AcGeMatrix3d &postMultBy(const AcGeMatrix3d &right)
+    {
+        m = m * right.m;
+        return *this;
+    }
+
+    AcGeMatrix3d transposed() const
+    {
+        return AcGeMatrix3d(glm::transpose(m));
+    }
+
+    AcGeMatrix3d &transposeIt()
+    {
+        m = glm::transpose(m);
+        return *this;
+    }
+
     AcGeMatrix3d inverted() const
     {
         AcGeMatrix3d result;
         result.m = glm::inverse(m);
         return result;
+    }
+
+    bool inverse(AcGeMatrix3d &result, double tolerance) const
+    {
+        const double determinant = glm::determinant(m);
+        if (!std::isfinite(determinant) || !std::isfinite(tolerance) ||
+            std::abs(determinant) <= std::abs(tolerance))
+            return false;
+
+        const glm::dmat4 candidate = glm::inverse(m);
+        for (unsigned int column = 0; column < 4; ++column)
+            for (unsigned int row = 0; row < 4; ++row)
+                if (!std::isfinite(candidate[column][row]))
+                    return false;
+        result.m = candidate;
+        return true;
+    }
+
+    AcGeMatrix3d &invert()
+    {
+        m = glm::inverse(m);
+        return *this;
     }
 };
 

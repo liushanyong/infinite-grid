@@ -89,6 +89,29 @@ void testRational2dQuarterCircle()
     assert(threw);
 }
 
+void testDiscontinuityQueries()
+{
+    const AcGeKnotVector knots(
+        AcGeDoubleArray{0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0});
+    AcGeNurbCurve2d tangentContinuous(
+        2, knots, {{0.0, 0.0}, {0.5, 1.0}, {1.0, 0.0},
+                   {1.75, -1.5}, {2.0, 0.0}});
+    AcGeDoubleArray params;
+    assert(tangentContinuous.getParamsOfC1Discontinuity(params));
+    assert(params.size() == 1 && near(params.front(), 1.0));
+    assert(!tangentContinuous.getParamsOfG1Discontinuity(params));
+    assert(params.empty());
+
+    AcGeNurbCurve3d corner(
+        2, knots, {{0.0, 0.0, 0.0}, {0.5, 1.0, 0.0},
+                   {1.0, 0.0, 0.0}, {1.5, 1.0, 0.0},
+                   {2.0, 0.0, 0.0}});
+    assert(corner.getParamsOfC1Discontinuity(params));
+    assert(params.size() == 1 && near(params.front(), 1.0));
+    assert(corner.getParamsOfG1Discontinuity(params));
+    assert(params.size() == 1 && near(params.front(), 1.0));
+}
+
 void testClamped3dStraightLine()
 {
     // Cubic with collinear control points: the curve is a straight line.
@@ -752,6 +775,7 @@ int main()
 {
     testClampedNonRational2d();
     testRational2dQuarterCircle();
+    testDiscontinuityQueries();
     testClamped3dStraightLine();
     testCurveLengths();
     testPeriodicClosedCurve();

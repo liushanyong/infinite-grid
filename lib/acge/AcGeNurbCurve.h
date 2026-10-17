@@ -143,6 +143,10 @@ public:
         double param, size_t derivativeCount) const;
     double curvatureAt(double param) const;
     bool isClosed(const AcGeTol &tol = AcGeTol{}) const;
+    bool getParamsOfC1Discontinuity(
+        AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
+    bool getParamsOfG1Discontinuity(
+        AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
 
     // Structural editing (ObjectARX genurb2d API; non-periodic only).
     AcGeNurbCurve2d &insertKnot(double param);
@@ -202,6 +206,10 @@ public:
         double param, size_t derivativeCount) const;
     double curvatureAt(double param) const;
     bool isClosed(const AcGeTol &tol = AcGeTol{}) const;
+    bool getParamsOfC1Discontinuity(
+        AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
+    bool getParamsOfG1Discontinuity(
+        AcGeDoubleArray &params, const AcGeTol &tol = AcGeTol{}) const;
 
     // Structural editing (ObjectARX genurb3d API; non-periodic only).
     AcGeNurbCurve3d &insertKnot(double param);
