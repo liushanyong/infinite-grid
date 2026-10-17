@@ -22,6 +22,7 @@
 #include "acgi/AcGiLineType.h"
 #include "acgi/AcGiTextEngine.h"
 #include "acgi/AcGiTextQueue.h"
+#include "acgi/AcGiWorldDraw.h"
 #include "rendering/RendererBackend.h"
 
 namespace acgs
@@ -1117,7 +1118,25 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
     struct FillBatch
     {
         std::uint32_t textureId = 0;
+        rendering::TextureAddressMode addressU =
+            rendering::TextureAddressMode::Clamp;
+        rendering::TextureAddressMode addressV =
+            rendering::TextureAddressMode::Clamp;
         std::vector<rendering::FillVertex> vertices;
+    };
+    const auto textureAddressMode = [](std::uint8_t tiling) {
+        switch (static_cast<AcGiMapper::Tiling>(tiling))
+        {
+        case AcGiMapper::kTile:
+            return rendering::TextureAddressMode::Repeat;
+        case AcGiMapper::kMirror:
+            return rendering::TextureAddressMode::Mirror;
+        case AcGiMapper::kInheritTiling:
+        case AcGiMapper::kCrop:
+        case AcGiMapper::kClamp:
+        default:
+            return rendering::TextureAddressMode::Clamp;
+        }
     };
     std::unordered_map<std::uint32_t, std::uint32_t> imageTextureIds;
     const auto resolveImageTexture = [&](std::uint32_t imageIndex) {
@@ -1139,6 +1158,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         return textureId;
     };
 
+    std::size_t submittedFillVertexCount = 0;
     for (const bool is3DFace : {false, true})
     {
         std::vector<FillBatch> batches;
@@ -1155,8 +1175,14 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
                 continue;
             const std::uint32_t textureId =
                 triangle.imageFallback ? 0 : uploadedTexture;
-            if (batches.empty() || batches.back().textureId != textureId)
-                batches.push_back({textureId, {}});
+            const rendering::TextureAddressMode addressU =
+                textureAddressMode(triangle.mapperUTiling);
+            const rendering::TextureAddressMode addressV =
+                textureAddressMode(triangle.mapperVTiling);
+            if (batches.empty() || batches.back().textureId != textureId ||
+                batches.back().addressU != addressU ||
+                batches.back().addressV != addressV)
+                batches.push_back({textureId, addressU, addressV, {}});
             FillBatch &batch = batches.back();
             const bool textured = textureId != 0;
             const glm::vec4 defaultFillColor = textured
@@ -1193,12 +1219,15 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
         {
             if (batch.vertices.empty())
                 continue;
+            submittedFillVertexCount += batch.vertices.size();
             const rendering::FilledTrianglesRenderData fillData{
                 .view = ctx.view,
                 .projection = ctx.projection,
                 .vertices = batch.vertices.data(),
                 .vertexCount = static_cast<uint32_t>(batch.vertices.size()),
                 .textureId = batch.textureId,
+                .textureAddressU = batch.addressU,
+                .textureAddressV = batch.addressV,
                 .is3DFace = is3DFace,
                 .layer = envLayer("GRID_FILL_LAYER"),
                 .logDepth = ctx.logDepth,
@@ -1287,7 +1316,7 @@ void AcGsView::submit(acgs::AcGsModel &drawList,
             "cam=(%.0f,%.0f,%.0f) ortho=%d clip_ok=%zu clip_rej=%zu\n",
             drawList.geometry().strokes.size(), lineInstances.size(),
             polylineVertices.size(), drawList.geometry().fills.size(),
-            fillVertices.size() + surfaceFillVertices.size(),
+            submittedFillVertexCount,
             drawList.geometry().points.size(), points.size(),
             ctx.slabNear, ctx.slabFar, ctx.cameraPos.x, ctx.cameraPos.y,
             ctx.cameraPos.z, int(ctx.ortho), debugClipAccepted,

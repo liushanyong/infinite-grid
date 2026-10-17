@@ -91,6 +91,8 @@ struct Triangle
     bool hasAllMappingCoords = false;
     bool hasMapMappingCoords = false;
     bool hasTextureCoords = false;
+    std::uint8_t mapperUTiling = 0;
+    std::uint8_t mapperVTiling = 0;
     std::uint32_t imageIndex = 0;
     bool imageFallback = false;
 };

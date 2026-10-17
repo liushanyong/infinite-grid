@@ -1,5 +1,6 @@
 #include "acgi/AcGiWorldDraw.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <limits>
@@ -313,6 +314,42 @@ int main()
            1.0e-9);
     assert(std::abs(meshGeometry.fills[0].mapMappingCoords[2].y - 0.75) <
            1.0e-9);
+    assert(meshGeometry.fills[0].hasTextureCoords);
+    assert(std::abs(meshGeometry.fills[0].textureCoords[0].x - 0.25f) <
+           1.0e-6f);
+    AcGiMapper mappedFaceMapper;
+    mappedFaceMapper.setTransform(
+        AcGeMatrix3d::setToTranslation(AcGeVector3d(0.5, 0.25, 0.0)));
+    mappedFaceMapper.setUTiling(AcGiMapper::kTile);
+    mappedFaceMapper.setVTiling(AcGiMapper::kMirror);
+    AcGiFaceData mappedFaceData;
+    mappedFaceData.setMappers(&mappedFaceMapper, 1);
+    acdb::TessellatedEntity mappedGeometry;
+    acgs::ViewportDraw mappedContext(mappedGeometry);
+    AcGiWorldDraw mappedDraw(mappedContext);
+    assert(!mappedDraw.mesh(2, 2, meshVertices, nullptr, &mappedFaceData,
+                            &vertices));
+    assert(mappedGeometry.fills.size() == 2);
+    assert(mappedGeometry.fills[0].hasTextureCoords);
+    assert(std::abs(mappedGeometry.fills[0].textureCoords[0].x - 0.75f) <
+           1.0e-6f);
+    assert(std::abs(mappedGeometry.fills[0].textureCoords[0].y - 0.5f) <
+           1.0e-6f);
+    assert(mappedGeometry.fills[0].mapperUTiling == AcGiMapper::kTile);
+    assert(mappedGeometry.fills[0].mapperVTiling == AcGiMapper::kMirror);
+    AcGiMapper planarMapper;
+    planarMapper.setProjection(AcGiMapper::kPlanar);
+    AcGiFaceData planarFaceData;
+    planarFaceData.setMappers(&planarMapper, 1);
+    acdb::TessellatedEntity planarGeometry;
+    acgs::ViewportDraw planarContext(planarGeometry);
+    AcGiWorldDraw planarDraw(planarContext);
+    assert(!planarDraw.mesh(2, 2, meshVertices, nullptr, &planarFaceData));
+    assert(planarGeometry.fills.size() == 2);
+    assert(planarGeometry.fills[0].hasTextureCoords);
+    for (const glm::vec2 &uv : planarGeometry.fills[0].textureCoords)
+        assert(uv.x >= 0.0f && uv.x <= 1.0f &&
+               uv.y >= 0.0f && uv.y <= 1.0f);
     AcGiVertexData malformedVertices = vertices;
     AcGePoint3d invalidMappingCoords[] = {
         {0.0, 0.0, 0.0},
@@ -478,11 +515,21 @@ int main()
     assert(!binaryAlphaDraw.image(
         binaryAlphaImage, {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
         {0.0, 1.0, 0.0}, AcGiGeometry::kTransparency1Bit));
-    assert(binaryAlphaGeometry.fills.size() == 2);
-    assert(binaryAlphaGeometry.fills.front().common.color.renderColor().b >
+    assert(binaryAlphaGeometry.images.size() == 1);
+    assert(binaryAlphaGeometry.images[0].width == 3);
+    assert(binaryAlphaGeometry.images[0].height == 1);
+    assert(binaryAlphaGeometry.images[0].bgra[3] == 0);
+    assert(binaryAlphaGeometry.fills.size() == 4);
+    const auto fallbackFill = std::find_if(
+        binaryAlphaGeometry.fills.begin(), binaryAlphaGeometry.fills.end(),
+        [](const acdb::Triangle &triangle) { return triangle.imageFallback; });
+    assert(fallbackFill != binaryAlphaGeometry.fills.end());
+    assert(fallbackFill->common.color.renderColor().b >
            0.99f);
-    assert(binaryAlphaGeometry.fills.front().common.color.renderColor().r <
+    assert(fallbackFill->common.color.renderColor().r <
            0.01f);
+    assert(binaryAlphaGeometry.fills[0].hasTextureCoords);
+    assert(binaryAlphaGeometry.fills[0].imageIndex == 1);
 
     acdb::TessellatedEntity opaqueModeGeometry;
     acgs::ViewportDraw opaqueModeContext(opaqueModeGeometry);
@@ -490,7 +537,7 @@ int main()
     assert(!opaqueModeDraw.image(
         binaryAlphaImage, {0.0, 0.0, 0.0}, {3.0, 0.0, 0.0},
         {0.0, 1.0, 0.0}, AcGiGeometry::kTransparencyOff));
-    assert(opaqueModeGeometry.fills.size() == 6);
+    assert(opaqueModeGeometry.fills.size() == 8);
     assert(std::abs(opaqueModeGeometry.fills.front().common.color.alpha() -
                     1.0f) < 1.0e-5f);
 

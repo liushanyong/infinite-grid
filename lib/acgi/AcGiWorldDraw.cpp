@@ -777,6 +777,10 @@ void applyMapper(acdb::Triangle &triangle, const AcGiMapper *mapper,
 {
     if (mapper == nullptr)
         return;
+    triangle.mapperUTiling =
+        static_cast<std::uint8_t>(mapper->uTiling());
+    triangle.mapperVTiling =
+        static_cast<std::uint8_t>(mapper->vTiling());
 
     const bool hasInputCoordinates =
         triangle.hasMapMappingCoords || triangle.hasAllMappingCoords;
@@ -1067,7 +1071,7 @@ bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
         raster.bgra[i * 4 + 2] = pixel.r;
         raster.bgra[i * 4 + 3] = alpha;
     }
-    raster.contentHash = 1469598103934665603ull;
+    raster.contentHash = 14695981039346656037ull;
     for (const std::uint8_t byte : raster.bgra)
     {
         raster.contentHash ^= byte;

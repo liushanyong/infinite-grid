@@ -962,6 +962,8 @@ uint32_t BgfxRenderer::uploadImageBGRA(const std::string &key,
         return 0;
     const std::size_t byteCount =
         static_cast<std::size_t>(width) * height * 4;
+    if (byteCount > UINT32_MAX)
+        return 0;
     const bgfx::TextureHandle texture = bgfx::createTexture2D(
         static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height),
         false, 1, bgfx::TextureFormat::BGRA8, flags,
@@ -3301,9 +3303,19 @@ void BgfxRenderer::drawFilledTriangles(const FilledTrianglesRenderData& data)
         bgfx::setUniform(m_primParams, fillStyle);
         bgfx::setUniform(m_realisticMaterial,
                          glm::value_ptr(data.material.baseColor));
+        std::uint32_t samplerFlags = 0;
+        if (data.textureAddressU == TextureAddressMode::Mirror)
+            samplerFlags |= BGFX_SAMPLER_U_MIRROR;
+        else if (data.textureAddressU == TextureAddressMode::Clamp)
+            samplerFlags |= BGFX_SAMPLER_U_CLAMP;
+        if (data.textureAddressV == TextureAddressMode::Mirror)
+            samplerFlags |= BGFX_SAMPLER_V_MIRROR;
+        else if (data.textureAddressV == TextureAddressMode::Clamp)
+            samplerFlags |= BGFX_SAMPLER_V_CLAMP;
         bgfx::setTexture(
             0, m_albedoSampler,
-            hasTexture ? m_meshTextures[data.textureId - 1] : m_whiteTexture);
+            hasTexture ? m_meshTextures[data.textureId - 1] : m_whiteTexture,
+            samplerFlags);
 
         glm::vec3 centroid(0.0f);
         for (uint32_t i = first; i < first + count; ++i)

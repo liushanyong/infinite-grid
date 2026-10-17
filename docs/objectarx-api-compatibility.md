@@ -267,20 +267,23 @@ tessellated sink primitives; they are not resolved into renderer styles yet.
 the ObjectARX spelling; the pointer-only setter borrows the array until the
 next synchronous `mesh`/`shell` callback, while the counted port setter copies
 and validates its input.
-`AcGiVertexData` mapping coordinates are validated and interpolated into the
-generated triangle vertices, but are not yet bound to a renderer texture
-channel. `AcGiFaceData` mapper arrays remain borrowed metadata and are not
-consumed by the draw sink; both counted and ObjectARX-style pointer-only
-`setMappers` overloads are available. The vertex data also exposes
-ObjectARX-style orientation accessors. Shell negative-count rings are
+`AcGiVertexData` mapping coordinates are validated, interpolated, and bound
+as fill UVs. Face mappers are consumed per face: their projection generates
+planar/box/cylindrical/spherical coordinates when no vertex mapping is
+provided, and their transform is applied before UV submission. Inherited
+projection uses the available vertex mapping channels. `AcGiMapper`
+projection/transform/tiling declarations and counted or pointer-only
+`AcGiFaceData::setMappers` overloads are available; mapper arrays remain
+borrowed for the synchronous mesh/shell callback. Shell negative-count rings are
 treated as holes in the preceding face and triangulated with simple planar
 outer/hole contours; edge attributes follow face-list ring order, while face
 attributes exclude holes. The shell `pResBuf` hatch-conversion payload is not
 consumed.
-`image` copies BGRA pixels and
-approximates them with two colored triangles per pixel, limited to 65,536
-pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
-proportional. This is a CPU geometry fallback, not filtered GPU texture upload.
+`image` copies BGRA pixels, uploads and caches a texture on the bgfx backend,
+and renders a UV-mapped quad. If upload is unavailable or fails (including the
+current WebGPU backend), it falls back to two colored triangles per pixel.
+Calls are limited to 65,536 pixels; 1-bit alpha treats only 255 as opaque,
+while 8-bit alpha is proportional.
 `edge` emits line-segment, circular-arc, and elliptical-arc edge values
 as strokes (curve tessellation is capped at 65,536 segments per edge); it does
 not accept native `AcGeCurve2d*` arrays because this port's AcGe curves are
