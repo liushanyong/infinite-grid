@@ -221,6 +221,7 @@ struct AcGiFaceData
     std::vector<acdb::AcDbObjectId> materials;
     const AcGiMapper *mapperValues = nullptr;
     size_t mapperCount = 0;
+    bool mapperCountKnown = false;
     std::vector<AcCmTransparency> transparency;
 
     void setColors(const short *values, size_t count)
@@ -292,16 +293,20 @@ struct AcGiFaceData
     {
         mapperValues = values;
         mapperCount = values == nullptr ? 0 : count;
+        mapperCountKnown = true;
     }
-    AcGiMapper *mappersData()
+    void setMappers(const AcGiMapper *values)
     {
-        return const_cast<AcGiMapper *>(mapperValues);
+        mapperValues = values;
+        mapperCount = 0;
+        mapperCountKnown = false;
     }
-    AcGiMapper *mappersData() const
+    AcGiMapper *mappers() const
     {
         return const_cast<AcGiMapper *>(mapperValues);
     }
     size_t mapperCountData() const { return mapperCount; }
+    bool mapperCountKnownData() const { return mapperCountKnown; }
     void setVisibility(const Adesk::UInt8 *values, size_t count)
     {
         if (values == nullptr)

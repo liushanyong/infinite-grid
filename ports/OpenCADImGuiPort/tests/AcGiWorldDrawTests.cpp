@@ -323,6 +323,16 @@ int main()
     assert(meshDraw.mesh(2, 2, meshVertices, nullptr, nullptr,
                          &malformedVertices));
     assert(meshGeometry.fills.size() == 2);
+    AcGiFaceData nativeMapperApi;
+    nativeMapperApi.setMappers(nullptr);
+    assert(nativeMapperApi.mappers() == nullptr);
+    assert(!nativeMapperApi.mapperCountKnownData());
+    AcGiFaceData malformedMappers;
+    int mapperStorage = 0;
+    malformedMappers.setMappers(
+        reinterpret_cast<const AcGiMapper *>(&mapperStorage), 2);
+    assert(meshDraw.mesh(2, 2, meshVertices, nullptr, &malformedMappers));
+    assert(meshGeometry.fills.size() == 2);
     AcGiEdgeData malformedEdges;
     malformedEdges.setLayers(edgeLayers, 1);
     assert(meshDraw.mesh(2, 2, meshVertices, &malformedEdges));

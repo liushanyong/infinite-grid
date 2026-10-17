@@ -266,8 +266,9 @@ tessellated sink primitives; they are not resolved into renderer styles yet.
 `AcGiVertexData` mapping coordinates are validated and interpolated into the
 generated triangle vertices, but are not yet bound to a renderer texture
 channel. `AcGiFaceData` mapper arrays remain borrowed metadata and are not
-consumed by the draw sink. The vertex data also exposes ObjectARX-style
-orientation accessors. Shell negative-count rings are
+consumed by the draw sink; both counted and ObjectARX-style pointer-only
+`setMappers` overloads are available. The vertex data also exposes
+ObjectARX-style orientation accessors. Shell negative-count rings are
 treated as holes in the preceding face and triangulated with simple planar
 outer/hole contours; edge attributes follow face-list ring order, while face
 attributes exclude holes. The shell `pResBuf` hatch-conversion payload is not

@@ -1817,6 +1817,9 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
            faceData->selectionMarkers.size() != faceCountSize) ||
           (!faceData->materials.empty() &&
            faceData->materials.size() != faceCountSize) ||
+          (faceData->mapperValues != nullptr &&
+           faceData->mapperCountKnown &&
+           faceData->mapperCount != faceCountSize) ||
           (!faceData->visibility.empty() &&
            faceData->visibility.size() != faceCountSize) ||
           (!faceData->normals.empty() &&
@@ -2065,6 +2068,9 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
            faceData->selectionMarkers.size() != faces.size()) ||
           (!faceData->materials.empty() &&
            faceData->materials.size() != faces.size()) ||
+          (faceData->mapperValues != nullptr &&
+           faceData->mapperCountKnown &&
+           faceData->mapperCount != faces.size()) ||
           (!faceData->visibility.empty() &&
            faceData->visibility.size() != faces.size()) ||
           (!faceData->normals.empty() &&
