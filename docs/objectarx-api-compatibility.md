@@ -170,3 +170,14 @@ They do not emulate all native class methods, ownership rules, error statuses,
 or the complete AcDb/AcGi/AcGs object model. Prefer the aliases in new public
 declarations, and add narrow/wide adapters where a third-party or file-format
 interface requires a different encoding.
+
+## AcGi geometry coverage
+
+`AcGiWorldDraw` records world-space primitives into the existing stroke,
+triangle, and point sink. Its `pushClipBoundary`/`popClipBoundary` stack clips
+world lines, polylines, points, and triangles against strictly convex planar
+boundaries in either winding. Clip-space matrices and front/back depth limits
+are retained in the port structure but are not interpreted. Image upload,
+GDI owner-draw, per-edge/per-face/per-vertex mesh traits, and `polyPolygon`
+remain outside the implemented subset; `AcDbPolyline` already has its own
+entity-level AcGi callback path.

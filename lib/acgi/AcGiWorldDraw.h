@@ -27,7 +27,9 @@
 // worldPolyline with a closed flag, worldTriangle, worldInfiniteLine for
 // Ray/XLine overlay semantics); viewport/screen transform behaviors and the
 // behaviors-only APIs collapse to their world-space form; clip boundaries
-// are accepted but not yet honored by the sink; polypoint emits real point
+// are honored as convex planar clips for world lines, polylines, points, and
+// triangles, but clip-space transforms and front/back limits are not applied;
+// polypoint emits real point
 // primitives instead of ARX's degenerate two-point strokes.  Not ported:
 // polyPolygon (needs the AcCmTransparency/fill-opacity vocabulary), image,
 // ownerDraw object upload, edge (2D-curve fill boundaries), and pline
@@ -107,6 +109,18 @@ struct AcGiVertexData
 // Clip boundary (port subset: the polygon in the plane of the primitives).
 struct AcGiClipBoundary
 {
+    // The ObjectARX clip-plane contract. The lower-case `points` member is
+    // retained as a convenience for existing port callers.
+    AcGeVector3d m_vNormal{0.0, 0.0, 1.0};
+    AcGePoint3d m_ptPoint{0.0, 0.0, 0.0};
+    std::vector<AcGePoint2d> m_aptPoints;
+    AcGeMatrix3d m_xToClipSpace;
+    AcGeMatrix3d m_xInverseBlockRefXForm;
+    bool m_bClippingFront = false;
+    bool m_bClippingBack = false;
+    double m_dFrontClipZ = 0.0;
+    double m_dBackClipZ = 0.0;
+    bool m_bDrawBoundary = false;
     std::vector<AcGePoint2d> points;
 };
 
@@ -362,13 +376,12 @@ public:
         return matrix;
     }
 
-    // Clip boundaries: accepted; the sink honors them once clip support
-    // lands (ARX: kTrue on successful push, paired with a pop).
-    virtual Adesk::Boolean pushClipBoundary(AcGiClipBoundary * /*boundary*/)
-    {
-        return true;
-    }
-    virtual void popClipBoundary() {}
+    // Clip boundaries are stacked and applied to subsequent world geometry.
+    // The port currently supports convex polygonal boundaries in the plane
+    // defined by m_ptPoint/m_vNormal; ARX clip-space matrices and front/back
+    // depth limits are retained but not yet interpreted.
+    virtual Adesk::Boolean pushClipBoundary(AcGiClipBoundary *boundary) = 0;
+    virtual void popClipBoundary() = 0;
 
     // GDI owner-draw object: no-op default per ObjectARX (kTrue).
     virtual Adesk::Boolean ownerDraw(AcGiGdiDrawObject * /*object*/,
@@ -473,6 +486,11 @@ public:
             acge::PointDisplayStyle::Circle) override;
     Adesk::Boolean worldInfiniteLine(const AcGePoint3d &start,
                                      const AcGeVector3d &direction) override;
+    Adesk::Boolean pushClipBoundary(AcGiClipBoundary *boundary) override
+    {
+        return pushClipBoundaryImpl(boundary);
+    }
+    void popClipBoundary() override { popClipBoundaryImpl(); }
     Adesk::Boolean text(const AcGePoint3d &position, const AcGeVector3d &normal,
                         const AcGeVector3d &direction, const char *message,
                         const AcGiTextStyle &style) override;
@@ -562,6 +580,22 @@ public:
     }
 
 private:
+    struct ClipFrame
+    {
+        std::vector<AcGePoint2d> boundary;
+        AcGePoint3d origin;
+        AcGeVector3d u;
+        AcGeVector3d v;
+        double winding = 1.0;
+    };
+
+    bool pushClipBoundaryImpl(const AcGiClipBoundary *boundary);
+    void popClipBoundaryImpl();
+    bool clipPoint(AcGePoint3d &point) const;
+    bool clipSegment(AcGePoint3d &start, AcGePoint3d &end) const;
+    std::vector<AcGePoint3d> clipPolygon(
+        std::vector<AcGePoint3d> polygon) const;
+
     AcGeMatrix3d currentTransform() const
     {
         return transformStack_.empty() ? AcGeMatrix3d()
@@ -580,6 +614,7 @@ private:
 
     acgs::ViewportDraw &draw_;
     std::vector<AcGeMatrix3d> transformStack_;
+    std::vector<ClipFrame> clipStack_;
 };
 
 // The per-viewport counterpart of AcGiWorldDraw (ObjectARX AcGiViewportDraw).

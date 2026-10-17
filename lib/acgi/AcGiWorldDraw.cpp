@@ -110,8 +110,12 @@ Adesk::Boolean emitArcClosure(AcGiWorldDraw &graphics,
 
 bool AcGiWorldDraw::worldLine(const AcGePoint3d &from, const AcGePoint3d &to)
 {
+    AcGePoint3d start = apply(from);
+    AcGePoint3d end = apply(to);
+    if (!clipSegment(start, end))
+        return false;
     acdb::Stroke &stroke = sink().addStroke();
-    stroke.points = {apply(from), apply(to)};
+    stroke.points = {start, end};
     applyTraits(stroke);
     return false;
 }
@@ -121,6 +125,13 @@ bool AcGiWorldDraw::worldPolyline(const AcGePoint3d *points, int count,
 {
     if (!points || count < 2)
         return true;
+    if (!clipStack_.empty())
+    {
+        const int segmentCount = closed ? count : count - 1;
+        for (int index = 0; index < segmentCount; ++index)
+            worldLine(points[index], points[(index + 1) % count]);
+        return false;
+    }
     acdb::Stroke &stroke = sink().addStroke(closed);
     stroke.points.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i)
@@ -132,9 +143,14 @@ bool AcGiWorldDraw::worldPolyline(const AcGePoint3d *points, int count,
 bool AcGiWorldDraw::worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                   const AcGePoint3d &c, bool fillIs3DFace)
 {
-    acdb::Triangle triangle{{}, apply(a), apply(b), apply(c)};
-    applyTraits(triangle, fillIs3DFace);
-    sink().appendTriangle(triangle);
+    std::vector<AcGePoint3d> clipped = clipPolygon({apply(a), apply(b), apply(c)});
+    for (size_t index = 2; index < clipped.size(); ++index)
+    {
+        acdb::Triangle triangle{{}, clipped[0], clipped[index - 1],
+                                clipped[index]};
+        applyTraits(triangle, fillIs3DFace);
+        sink().appendTriangle(triangle);
+    }
     return false;
 }
 
@@ -142,8 +158,11 @@ bool AcGiWorldDraw::worldPoint(const AcGePoint3d &position,
                                acge::PointDisplayStyle displayStyle)
 {
     const acgs::DrawTraits &traits = draw_.subEntityTraits().traits();
+    AcGePoint3d worldPosition = apply(position);
+    if (!clipPoint(worldPosition))
+        return false;
     acdb::TessellatedPoint point;
-    point.location = apply(position);
+    point.location = worldPosition;
     point.common = traits.toEntityCommon();
     point.pointSize =
         traits.lineWeight > 0.0 ? traits.lineWeight : 7.0;
@@ -159,12 +178,180 @@ bool AcGiWorldDraw::worldInfiniteLine(const AcGePoint3d &start,
     if (dir.lengthSq() <= 0.0)
         return true;
     constexpr double kProxyLength = 1.0e6;
+    if (!clipStack_.empty())
+        return worldLine(start, start + dir * kProxyLength);
     acdb::Stroke &stroke = sink().addStroke(false);
     stroke.points = {apply(start),
                      apply(start + dir * kProxyLength)};
     stroke.semiInfinite = true;
     applyTraits(stroke);
     return false;
+}
+
+bool AcGiWorldDraw::pushClipBoundaryImpl(const AcGiClipBoundary *boundary)
+{
+    if (boundary == nullptr)
+        return false;
+    const std::vector<AcGePoint2d> &points =
+        boundary->m_aptPoints.empty() ? boundary->points : boundary->m_aptPoints;
+    if (points.size() < 3)
+        return false;
+
+    AcGeVector3d normal = boundary->m_vNormal;
+    const double normalLengthSq = normal.lengthSq();
+    if (!(normalLengthSq > 1.0e-24) || !std::isfinite(normalLengthSq))
+        return false;
+    normal = normal.normal();
+
+    try
+    {
+        AcGeClipBoundary2d validated(points);
+        (void)validated;
+    }
+    catch (const std::exception &)
+    {
+        return false;
+    }
+
+    ClipFrame frame;
+    frame.boundary = points;
+    frame.origin = boundary->m_ptPoint;
+    frame.u = AcGeCircArc3d(frame.origin, normal, 1.0).referenceAxis();
+    frame.v = normal.crossProduct(frame.u);
+    double areaTwice = 0.0;
+    for (size_t index = 0; index < points.size(); ++index)
+    {
+        const AcGePoint2d &current = points[index];
+        const AcGePoint2d &next = points[(index + 1) % points.size()];
+        areaTwice += current.x * next.y - current.y * next.x;
+    }
+    if (!std::isfinite(areaTwice) || std::abs(areaTwice) <= 1.0e-20)
+        return false;
+    frame.winding = areaTwice > 0.0 ? 1.0 : -1.0;
+    clipStack_.push_back(std::move(frame));
+    return true;
+}
+
+void AcGiWorldDraw::popClipBoundaryImpl()
+{
+    if (!clipStack_.empty())
+        clipStack_.pop_back();
+}
+
+bool AcGiWorldDraw::clipPoint(AcGePoint3d &point) const
+{
+    for (const ClipFrame &frame : clipStack_)
+    {
+        const AcGeVector3d relative = point - frame.origin;
+        const AcGePoint2d projected(relative.dotProduct(frame.u),
+                                    relative.dotProduct(frame.v));
+        for (size_t index = 0; index < frame.boundary.size(); ++index)
+        {
+            const AcGePoint2d &a = frame.boundary[index];
+            const AcGePoint2d &b =
+                frame.boundary[(index + 1) % frame.boundary.size()];
+            const double side =
+                ((b.x - a.x) * (projected.y - a.y) -
+                 (b.y - a.y) * (projected.x - a.x)) *
+                frame.winding;
+            if (side < -1.0e-10)
+                return false;
+        }
+    }
+    return true;
+}
+
+bool AcGiWorldDraw::clipSegment(AcGePoint3d &start, AcGePoint3d &end) const
+{
+    for (const ClipFrame &frame : clipStack_)
+    {
+        const AcGeVector3d startRelative = start - frame.origin;
+        const AcGeVector3d endRelative = end - frame.origin;
+        const AcGePoint2d a0(startRelative.dotProduct(frame.u),
+                             startRelative.dotProduct(frame.v));
+        const AcGePoint2d a1(endRelative.dotProduct(frame.u),
+                             endRelative.dotProduct(frame.v));
+        double first = 0.0;
+        double last = 1.0;
+        for (size_t index = 0; index < frame.boundary.size(); ++index)
+        {
+            const AcGePoint2d &edgeStart = frame.boundary[index];
+            const AcGePoint2d &edgeEnd =
+                frame.boundary[(index + 1) % frame.boundary.size()];
+            const auto side = [&](const AcGePoint2d &point) {
+                return ((edgeEnd.x - edgeStart.x) *
+                            (point.y - edgeStart.y) -
+                        (edgeEnd.y - edgeStart.y) *
+                            (point.x - edgeStart.x)) *
+                       frame.winding;
+            };
+            const double d0 = side(a0);
+            const double d1 = side(a1);
+            if (d0 < -1.0e-10 && d1 < -1.0e-10)
+                return false;
+            if ((d0 < -1.0e-10) != (d1 < -1.0e-10))
+            {
+                const double t = std::clamp(d0 / (d0 - d1), 0.0, 1.0);
+                if (d0 < -1.0e-10)
+                    first = std::max(first, t);
+                else
+                    last = std::min(last, t);
+            }
+        }
+        if (first > last)
+            return false;
+        const AcGePoint3d originalStart = start;
+        const AcGeVector3d direction = end - start;
+        start = originalStart + direction * first;
+        end = originalStart + direction * last;
+    }
+    return true;
+}
+
+std::vector<AcGePoint3d>
+AcGiWorldDraw::clipPolygon(std::vector<AcGePoint3d> polygon) const
+{
+    for (const ClipFrame &frame : clipStack_)
+    {
+        for (size_t edgeIndex = 0;
+             edgeIndex < frame.boundary.size() && !polygon.empty();
+             ++edgeIndex)
+        {
+            const AcGePoint2d &edgeStart = frame.boundary[edgeIndex];
+            const AcGePoint2d &edgeEnd =
+                frame.boundary[(edgeIndex + 1) % frame.boundary.size()];
+            const auto side = [&](const AcGePoint3d &point) {
+                const AcGeVector3d relative = point - frame.origin;
+                const double x = relative.dotProduct(frame.u);
+                const double y = relative.dotProduct(frame.v);
+                return ((edgeEnd.x - edgeStart.x) * (y - edgeStart.y) -
+                        (edgeEnd.y - edgeStart.y) * (x - edgeStart.x)) *
+                       frame.winding;
+            };
+            std::vector<AcGePoint3d> output;
+            output.reserve(polygon.size() + 1);
+            AcGePoint3d previous = polygon.back();
+            double previousSide = side(previous);
+            for (const AcGePoint3d &current : polygon)
+            {
+                const double currentSide = side(current);
+                const bool previousInside = previousSide >= -1.0e-10;
+                const bool currentInside = currentSide >= -1.0e-10;
+                if (previousInside != currentInside)
+                {
+                    const double t = std::clamp(
+                        previousSide / (previousSide - currentSide), 0.0, 1.0);
+                    output.push_back(previous + (current - previous) * t);
+                }
+                if (currentInside)
+                    output.push_back(current);
+                previous = current;
+                previousSide = currentSide;
+            }
+            polygon = std::move(output);
+        }
+    }
+    return polygon;
 }
 
 void AcGiWorldDraw::applyTraits(acdb::Stroke &stroke) const
@@ -190,29 +377,16 @@ bool AcGiWorldDraw::worldCircle(const AcGeCircArc3d &arc)
     const acdb::TesselationOptions options = draw_.optionsFor(arc.radius);
     const int segments = std::max(
         8, static_cast<int>(std::ceil(sweep / options.angleStep)));
-    if (arc.isFullCircle())
+    const bool closed = arc.isFullCircle();
+    const int pointCount = closed ? segments : segments + 1;
+    std::vector<AcGePoint3d> points;
+    points.reserve(static_cast<size_t>(pointCount));
+    for (int i = 0; i < pointCount; ++i)
     {
-        acdb::Stroke &stroke = sink().addStroke(true);
-        stroke.points.reserve(static_cast<size_t>(segments));
-        for (int i = 0; i < segments; ++i)
-        {
-            const double t = sweep * static_cast<double>(i) / segments;
-            stroke.points.push_back(apply(arc.pointAt(arc.startAngle + t)));
-        }
-        applyTraits(stroke);
+        const double t = sweep * static_cast<double>(i) / segments;
+        points.push_back(arc.pointAt(arc.startAngle + t));
     }
-    else
-    {
-        acdb::Stroke &stroke = sink().addStroke(false);
-        stroke.points.reserve(static_cast<size_t>(segments) + 1);
-        for (int i = 0; i <= segments; ++i)
-        {
-            const double t = sweep * static_cast<double>(i) / segments;
-            stroke.points.push_back(apply(arc.pointAt(arc.startAngle + t)));
-        }
-        applyTraits(stroke);
-    }
-    return false;
+    return worldPolyline(points.data(), pointCount, closed);
 }
 
 bool AcGiWorldDraw::text(const AcGePoint3d &position,
@@ -239,15 +413,12 @@ bool AcGiWorldDraw::text(const AcGePoint3d &position,
         for (const rendering::ShxGlyphStroke &glyphStroke :
              acgi::textEngine().shxStrokes(utf8Glyphs))
         {
-            acdb::Stroke &stroke = sink().addStroke();
-            stroke.points = {
-                apply(position +
-                      AcGeVector3d(right * (glyphStroke.fromX * height) +
-                                   up * (glyphStroke.fromY * height))),
-                apply(position +
-                      AcGeVector3d(right * (glyphStroke.toX * height) +
-                                   up * (glyphStroke.toY * height)))};
-            applyTraits(stroke);
+            worldLine(position +
+                          AcGeVector3d(right * (glyphStroke.fromX * height) +
+                                       up * (glyphStroke.fromY * height)),
+                      position +
+                          AcGeVector3d(right * (glyphStroke.toX * height) +
+                                       up * (glyphStroke.toY * height)));
         }
         return false;
     }
@@ -291,15 +462,13 @@ bool AcGiWorldDraw::text(const AcGePoint3d &position,
         glm::normalize(glm::cross(glm::dvec3(normal.normal()), right));
     const glm::dvec3 frameHeight = up * (height * double(lineCount));
 
-    acdb::Stroke &frame = sink().addStroke(true);
-    frame.points.reserve(5);
-    frame.points.push_back(apply(position));
-    frame.points.push_back(apply(position + AcGeVector3d(right * width)));
-    frame.points.push_back(
-        apply(position + AcGeVector3d(right * width + frameHeight)));
-    frame.points.push_back(apply(position + AcGeVector3d(frameHeight)));
-    frame.points.push_back(apply(position));
-    applyTraits(frame);
+    const AcGePoint3d framePoints[] = {
+        position,
+        position + AcGeVector3d(right * width),
+        position + AcGeVector3d(right * width + frameHeight),
+        position + AcGeVector3d(frameHeight),
+        position};
+    worldPolyline(framePoints, 5, true);
     worldPoint(position);
     return false;
 }
