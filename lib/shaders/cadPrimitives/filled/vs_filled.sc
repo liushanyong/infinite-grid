@@ -1,5 +1,5 @@
-$input a_position, a_color0
-$output v_color, v_depth
+$input a_position, a_color0, a_texcoord0
+$output v_color, v_uv, v_depth
 
 #include <bgfx_shader.sh>
 
@@ -14,6 +14,7 @@ void main()
     // Layer compositing: positive offset moves geometry one layer closer.
     viewPosition.z += uLayerOffset.x;
     v_color = a_color0;
+    v_uv = a_texcoord0;
     v_depth = -viewPosition.z;
     gl_Position = mul(projection, viewPosition);
 }

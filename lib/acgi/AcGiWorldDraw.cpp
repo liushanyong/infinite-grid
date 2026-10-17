@@ -714,6 +714,8 @@ void applyVertexData(acdb::Triangle &triangle,
                     static_cast<float>(weight1) +
                 glm::vec4(vertexData->trueColors[sourceIndices[2]].renderColor()) *
                     static_cast<float>(weight2);
+            triangle.vertexColors[outputIndex].a *=
+                triangle.common.color.alpha();
             triangle.hasVertexColors = true;
         }
         if (vertexData->normals.size() > sourceIndices[0] &&
@@ -731,7 +733,143 @@ void applyVertexData(acdb::Triangle &triangle,
                 triangle.hasVertexNormals = true;
             }
         }
+        const auto copyMappingCoords =
+            [&](AcGiVertexData::MapChannel channel,
+                std::array<AcGePoint3d, 3> &output, bool &hasOutput) {
+                const AcGePoint3d *coords = vertexData->mappingCoords(channel);
+                if (coords == nullptr)
+                    return;
+                output[outputIndex] =
+                    coords[sourceIndices[0]] +
+                    (coords[sourceIndices[1]] - coords[sourceIndices[0]]) *
+                        weight1 +
+                    (coords[sourceIndices[2]] - coords[sourceIndices[0]]) *
+                        weight2;
+                hasOutput = true;
+            };
+        copyMappingCoords(AcGiVertexData::kAllChannels,
+                          triangle.allMappingCoords,
+                          triangle.hasAllMappingCoords);
+        copyMappingCoords(AcGiVertexData::kMapChannels,
+                          triangle.mapMappingCoords,
+                          triangle.hasMapMappingCoords);
+        const AcGePoint3d *textureCoords =
+            vertexData->mappingCoords(AcGiVertexData::kMapChannels);
+        if (textureCoords == nullptr)
+            textureCoords =
+                vertexData->mappingCoords(AcGiVertexData::kAllChannels);
+        if (textureCoords != nullptr)
+        {
+            const AcGePoint3d &coordinate =
+                triangle.hasMapMappingCoords
+                    ? triangle.mapMappingCoords[outputIndex]
+                    : triangle.allMappingCoords[outputIndex];
+            triangle.textureCoords[outputIndex] =
+                glm::vec2(static_cast<float>(coordinate.x),
+                          static_cast<float>(coordinate.y));
+            triangle.hasTextureCoords = true;
+        }
     }
+}
+
+void applyMapper(acdb::Triangle &triangle, const AcGiMapper *mapper,
+                 const std::array<AcGePoint3d, 3> &sourcePoints)
+{
+    if (mapper == nullptr)
+        return;
+    triangle.mapperUTiling =
+        static_cast<std::uint8_t>(mapper->uTiling());
+    triangle.mapperVTiling =
+        static_cast<std::uint8_t>(mapper->vTiling());
+
+    const bool hasInputCoordinates =
+        triangle.hasMapMappingCoords || triangle.hasAllMappingCoords;
+    if (!hasInputCoordinates &&
+        mapper->projection() == AcGiMapper::kInheritProjection)
+        return;
+
+    const AcGeVector3d normal =
+        (sourcePoints[1] - sourcePoints[0])
+            .crossProduct(sourcePoints[2] - sourcePoints[0]);
+    const double absX = std::abs(normal.x);
+    const double absY = std::abs(normal.y);
+    const double absZ = std::abs(normal.z);
+    const auto project = [&](const AcGePoint3d &point) {
+        switch (mapper->projection())
+        {
+        case AcGiMapper::kBox:
+            if (absX >= absY && absX >= absZ)
+                return AcGePoint3d(point.y, point.z, 0.0);
+            if (absY >= absZ)
+                return AcGePoint3d(point.x, point.z, 0.0);
+            return AcGePoint3d(point.x, point.y, 0.0);
+        case AcGiMapper::kCylinder:
+        {
+            const double angle = std::atan2(point.y, point.x);
+            return AcGePoint3d(angle / kTwoPi + 0.5, point.z, 0.0);
+        }
+        case AcGiMapper::kSphere:
+        {
+            const double length = std::sqrt(point.x * point.x +
+                                            point.y * point.y +
+                                            point.z * point.z);
+            if (!(length > 1.0e-30))
+                return AcGePoint3d(0.5, 0.5, 0.0);
+            return AcGePoint3d(
+                std::atan2(point.y, point.x) / kTwoPi + 0.5,
+                std::asin(std::clamp(point.z / length, -1.0, 1.0)) /
+                        3.14159265358979323846 +
+                    0.5,
+                0.0);
+        }
+        case AcGiMapper::kInheritProjection:
+        case AcGiMapper::kPlanar:
+        default:
+            return AcGePoint3d(point.x, point.y, 0.0);
+        }
+    };
+
+    std::array<glm::vec2, 3> uv{};
+    for (size_t index = 0; index < uv.size(); ++index)
+    {
+        AcGePoint3d coordinates;
+        if (triangle.hasMapMappingCoords)
+            coordinates = triangle.mapMappingCoords[index];
+        else if (triangle.hasAllMappingCoords)
+            coordinates = triangle.allMappingCoords[index];
+        else
+            coordinates = project(sourcePoints[index]);
+
+        if (!hasInputCoordinates &&
+            mapper->projection() != AcGiMapper::kInheritProjection)
+            coordinates = project(sourcePoints[index]);
+        coordinates = transformBy(coordinates, mapper->transform());
+        triangle.mapMappingCoords[index] = coordinates;
+        uv[index] = glm::vec2(static_cast<float>(coordinates.x),
+                              static_cast<float>(coordinates.y));
+    }
+    triangle.hasMapMappingCoords = true;
+    triangle.textureCoords = uv;
+    triangle.hasTextureCoords = true;
+}
+
+bool validMappingCoords(const AcGiVertexData *vertexData, size_t vertexCount)
+{
+    if (vertexData == nullptr)
+        return true;
+    for (const AcGiVertexData::MapChannel channel :
+         {AcGiVertexData::kAllChannels, AcGiVertexData::kMapChannels})
+    {
+        const AcGePoint3d *coords = vertexData->mappingCoords(channel);
+        if (coords == nullptr)
+            continue;
+        for (size_t index = 0; index < vertexCount; ++index)
+            if (!std::isfinite(coords[index].x) ||
+                !std::isfinite(coords[index].y) ||
+                !std::isfinite(coords[index].z))
+                return false;
+    }
+    return true;
 }
 
 void applyTriangleNormal(acdb::Triangle &triangle,
@@ -907,11 +1045,65 @@ bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
     const size_t height = imageSource.height();
     const AcGiPixelBGRA32 *pixels = imageSource.image();
     if (width == 0 || height == 0 || pixels == nullptr ||
-        width > kMaximumRasterPixels / height)
+        width > std::numeric_limits<std::uint32_t>::max() ||
+        height > std::numeric_limits<std::uint32_t>::max() ||
+        width > std::numeric_limits<size_t>::max() / height ||
+        width * height > kMaximumRasterPixels ||
+        width * height > std::numeric_limits<size_t>::max() / 4)
         return true;
 
     const acgs::DrawTraits originalTraits =
         draw_.subEntityTraits().traits();
+    acdb::RasterImage raster;
+    raster.width = static_cast<std::uint32_t>(width);
+    raster.height = static_cast<std::uint32_t>(height);
+    raster.bgra.resize(width * height * 4);
+    for (size_t i = 0; i < width * height; ++i)
+    {
+        const AcGiPixelBGRA32 &pixel = pixels[i];
+        std::uint8_t alpha = 255;
+        if (transparencyMode == kTransparency1Bit)
+            alpha = pixel.a == 255 ? 255 : 0;
+        else if (transparencyMode == kTransparency8Bit)
+            alpha = pixel.a;
+        raster.bgra[i * 4 + 0] = pixel.b;
+        raster.bgra[i * 4 + 1] = pixel.g;
+        raster.bgra[i * 4 + 2] = pixel.r;
+        raster.bgra[i * 4 + 3] = alpha;
+    }
+    raster.contentHash = 14695981039346656037ull;
+    for (const std::uint8_t byte : raster.bgra)
+    {
+        raster.contentHash ^= byte;
+        raster.contentHash *= 1099511628211ull;
+    }
+    auto &geometry = sink().geometry();
+    geometry.images.push_back(std::move(raster));
+    const std::uint32_t imageIndex =
+        static_cast<std::uint32_t>(geometry.images.size());
+
+    const AcGePoint3d p00 = position;
+    const AcGePoint3d p10 = position + u;
+    const AcGePoint3d p11 = position + u + v;
+    const AcGePoint3d p01 = position + v;
+    draw_.subEntityTraits().setColor(glm::vec4(1.0f));
+    size_t firstFill = geometry.fills.size();
+    worldTriangle(p00, p10, p11);
+    worldTriangle(p00, p11, p01);
+    if (geometry.fills.size() >= firstFill + 2)
+    {
+        acdb::Triangle &first = geometry.fills[firstFill];
+        first.imageIndex = imageIndex;
+        first.hasTextureCoords = true;
+        first.textureCoords = {glm::vec2(0, 0), glm::vec2(1, 0),
+                               glm::vec2(1, 1)};
+        acdb::Triangle &second = geometry.fills[firstFill + 1];
+        second.imageIndex = imageIndex;
+        second.hasTextureCoords = true;
+        second.textureCoords = {glm::vec2(0, 0), glm::vec2(1, 1),
+                                glm::vec2(0, 1)};
+    }
+
     for (size_t row = 0; row < height; ++row)
     {
         for (size_t column = 0; column < width; ++column)
@@ -937,8 +1129,22 @@ bool AcGiWorldDraw::image(const AcGiImageBGRA32 &imageSource,
             const AcGePoint3d p10 = position + u * x1 + v * y0;
             const AcGePoint3d p11 = position + u * x1 + v * y1;
             const AcGePoint3d p01 = position + u * x0 + v * y1;
+            firstFill = geometry.fills.size();
             worldTriangle(p00, p10, p11);
+            if (geometry.fills.size() > firstFill)
+            {
+                acdb::Triangle &triangle = geometry.fills[firstFill];
+                triangle.imageIndex = imageIndex;
+                triangle.imageFallback = true;
+            }
+            firstFill = geometry.fills.size();
             worldTriangle(p00, p11, p01);
+            if (geometry.fills.size() > firstFill)
+            {
+                acdb::Triangle &triangle = geometry.fills[firstFill];
+                triangle.imageIndex = imageIndex;
+                triangle.imageFallback = true;
+            }
         }
     }
     draw_.subEntityTraits().setFrom(originalTraits);
@@ -1765,9 +1971,22 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
     const size_t vertexCountSize = static_cast<size_t>(vertexCount);
     const size_t faceCountSize = static_cast<size_t>(faceCount);
     const size_t edgeCountSize = static_cast<size_t>(edgeCount);
+    const acdb::AcDbObjectId *edgeLinetypeIds =
+        edgeData == nullptr ? nullptr : edgeData->linetypeIds();
     if ((faceData != nullptr &&
          ((!faceData->trueColors.empty() &&
            faceData->trueColors.size() != faceCountSize) ||
+          (!faceData->colors.empty() &&
+           faceData->colors.size() != faceCountSize) ||
+          (!faceData->layers.empty() &&
+           faceData->layers.size() != faceCountSize) ||
+          (!faceData->selectionMarkers.empty() &&
+           faceData->selectionMarkers.size() != faceCountSize) ||
+          (!faceData->materials.empty() &&
+           faceData->materials.size() != faceCountSize) ||
+          (faceData->mapperValues != nullptr &&
+           faceData->mapperCountKnown &&
+           faceData->mapperCount != faceCountSize) ||
           (!faceData->visibility.empty() &&
            faceData->visibility.size() != faceCountSize) ||
           (!faceData->normals.empty() &&
@@ -1780,10 +1999,19 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
            vertexData->trueColors.size() != vertexCountSize) ||
           (!vertexData->normals.empty() &&
            vertexData->normals.size() != vertexCountSize) ||
-          !validNormals(vertexData->normals))) ||
+          !validNormals(vertexData->normals) ||
+          !validMappingCoords(vertexData, vertexCountSize))) ||
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edgeCountSize) ||
+          (!edgeData->colors.empty() &&
+           edgeData->colors.size() != edgeCountSize) ||
+          (!edgeData->layers.empty() &&
+           edgeData->layers.size() != edgeCountSize) ||
+          (!edgeData->linetypeIdValues.empty() &&
+           edgeData->linetypeIdValues.size() != edgeCountSize) ||
+          (!edgeData->selectionMarkers.empty() &&
+           edgeData->selectionMarkers.size() != edgeCountSize) ||
           (!edgeData->lineTypes.empty() &&
            edgeData->lineTypes.size() != edgeCountSize) ||
           (!edgeData->visibility.empty() &&
@@ -1805,7 +2033,28 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
              fillIndex < sink().geometry().fills.size(); ++fillIndex)
         {
             acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
+            if (faceData != nullptr)
+            {
+                if (!faceData->layers.empty())
+                    triangle.layerId = faceData->layers[faceIndex];
+                if (!faceData->materials.empty())
+                    triangle.materialId = faceData->materials[faceIndex];
+                if (!faceData->selectionMarkers.empty())
+                    triangle.selectionMarker =
+                        faceData->selectionMarkers[faceIndex];
+                if (!faceData->colors.empty())
+                {
+                    triangle.colorIndex = faceData->colors[faceIndex];
+                    triangle.hasColorIndex = true;
+                }
+            }
             applyVertexData(triangle, worldPoints, indices, vertexData);
+            applyMapper(
+                triangle,
+                faceData != nullptr && faceData->mapperValues != nullptr
+                    ? &faceData->mapperValues[faceIndex]
+                    : nullptr,
+                worldPoints);
             if (vertexData == nullptr || vertexData->normals.empty())
             {
                 if (faceData != nullptr && !faceData->normals.empty())
@@ -1836,9 +2085,20 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
                 ++faceIndex;
                 continue;
             }
+            draw_.subEntityTraits().setFrom(originalTraits);
             if (faceData != nullptr && !faceData->trueColors.empty())
                 draw_.subEntityTraits().setColor(
                     faceData->trueColors[faceIndex].renderColor());
+            if (faceData != nullptr && !faceData->transparency.empty() &&
+                faceData->transparency[faceIndex].isByAlpha())
+            {
+                glm::vec4 color = draw_.subEntityTraits().traits().color;
+                color.a *=
+                    static_cast<float>(
+                        faceData->transparency[faceIndex].alpha()) /
+                    255.0f;
+                draw_.subEntityTraits().setColor(color);
+            }
             const AcGePoint3d points[] = {vertexList[i00], vertexList[i01],
                                           vertexList[i10], vertexList[i11]};
             emitTriangle({points[0], points[1], points[3]},
@@ -1852,7 +2112,9 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
 
     const bool emitEdges =
         edgeData != nullptr &&
-        (!edgeData->trueColors.empty() || !edgeData->lineTypes.empty() ||
+        (!edgeData->colors.empty() || !edgeData->trueColors.empty() ||
+         !edgeData->layers.empty() || edgeLinetypeIds != nullptr ||
+         !edgeData->selectionMarkers.empty() || !edgeData->lineTypes.empty() ||
          !edgeData->visibility.empty());
     if (emitEdges)
     {
@@ -1867,7 +2129,26 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
             if (!edgeData->lineTypes.empty())
                 draw_.subEntityTraits().setLineType(
                     edgeData->lineTypes[edgeIndex]);
+            const size_t firstStroke = sink().geometry().strokes.size();
             worldLine(a, b);
+            for (size_t strokeIndex = firstStroke;
+                 strokeIndex < sink().geometry().strokes.size(); ++strokeIndex)
+            {
+                acdb::Stroke &stroke =
+                    sink().geometry().strokes[strokeIndex];
+                if (!edgeData->layers.empty())
+                    stroke.layerId = edgeData->layers[edgeIndex];
+                if (edgeLinetypeIds != nullptr)
+                    stroke.linetypeId = edgeLinetypeIds[edgeIndex];
+                if (!edgeData->selectionMarkers.empty())
+                    stroke.selectionMarker =
+                        edgeData->selectionMarkers[edgeIndex];
+                if (!edgeData->colors.empty())
+                {
+                    stroke.colorIndex = edgeData->colors[edgeIndex];
+                    stroke.hasColorIndex = true;
+                }
+            }
         };
         size_t edgeIndex = 0;
         for (Adesk::UInt32 row = 0; row < rows; ++row)
@@ -1949,9 +2230,22 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         }
     }
 
+    const acdb::AcDbObjectId *edgeLinetypeIds =
+        edgeData == nullptr ? nullptr : edgeData->linetypeIds();
     if ((faceData != nullptr &&
          ((!faceData->trueColors.empty() &&
            faceData->trueColors.size() != faces.size()) ||
+          (!faceData->colors.empty() &&
+           faceData->colors.size() != faces.size()) ||
+          (!faceData->layers.empty() &&
+           faceData->layers.size() != faces.size()) ||
+          (!faceData->selectionMarkers.empty() &&
+           faceData->selectionMarkers.size() != faces.size()) ||
+          (!faceData->materials.empty() &&
+           faceData->materials.size() != faces.size()) ||
+          (faceData->mapperValues != nullptr &&
+           faceData->mapperCountKnown &&
+           faceData->mapperCount != faces.size()) ||
           (!faceData->visibility.empty() &&
            faceData->visibility.size() != faces.size()) ||
           (!faceData->normals.empty() &&
@@ -1964,10 +2258,19 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
            vertexData->trueColors.size() != nbVertex) ||
           (!vertexData->normals.empty() &&
            vertexData->normals.size() != nbVertex) ||
-          !validNormals(vertexData->normals))) ||
+          !validNormals(vertexData->normals) ||
+          !validMappingCoords(vertexData, nbVertex))) ||
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edges.size()) ||
+          (!edgeData->colors.empty() &&
+           edgeData->colors.size() != edges.size()) ||
+          (!edgeData->layers.empty() &&
+           edgeData->layers.size() != edges.size()) ||
+          (!edgeData->linetypeIdValues.empty() &&
+           edgeData->linetypeIdValues.size() != edges.size()) ||
+          (!edgeData->selectionMarkers.empty() &&
+           edgeData->selectionMarkers.size() != edges.size()) ||
           (!edgeData->lineTypes.empty() &&
            edgeData->lineTypes.size() != edges.size()) ||
           (!edgeData->visibility.empty() &&
@@ -2001,6 +2304,15 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         if (faceData != nullptr && !faceData->trueColors.empty())
             draw_.subEntityTraits().setColor(
                 faceData->trueColors[faceIndex].renderColor());
+        if (faceData != nullptr && !faceData->transparency.empty() &&
+            faceData->transparency[faceIndex].isByAlpha())
+        {
+            glm::vec4 color = draw_.subEntityTraits().traits().color;
+            color.a *=
+                static_cast<float>(faceData->transparency[faceIndex].alpha()) /
+                255.0f;
+            draw_.subEntityTraits().setColor(color);
+        }
         for (const auto &triangle : triangleIndices)
         {
             const std::array<size_t, 3> indices{
@@ -2019,7 +2331,28 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
                  fillIndex < sink().geometry().fills.size(); ++fillIndex)
             {
                 acdb::Triangle &triangle = sink().geometry().fills[fillIndex];
+                if (faceData != nullptr)
+                {
+                    if (!faceData->layers.empty())
+                        triangle.layerId = faceData->layers[faceIndex];
+                    if (!faceData->materials.empty())
+                        triangle.materialId = faceData->materials[faceIndex];
+                    if (!faceData->selectionMarkers.empty())
+                        triangle.selectionMarker =
+                            faceData->selectionMarkers[faceIndex];
+                    if (!faceData->colors.empty())
+                    {
+                        triangle.colorIndex = faceData->colors[faceIndex];
+                        triangle.hasColorIndex = true;
+                    }
+                }
                 applyVertexData(triangle, worldPoints, indices, vertexData);
+                applyMapper(
+                    triangle,
+                    faceData != nullptr && faceData->mapperValues != nullptr
+                        ? &faceData->mapperValues[faceIndex]
+                        : nullptr,
+                    worldPoints);
                 if (vertexData == nullptr || vertexData->normals.empty())
                 {
                     if (faceData != nullptr && !faceData->normals.empty())
@@ -2035,7 +2368,9 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
 
     const bool emitEdges =
         edgeData != nullptr &&
-        (!edgeData->trueColors.empty() || !edgeData->lineTypes.empty() ||
+        (!edgeData->colors.empty() || !edgeData->trueColors.empty() ||
+         !edgeData->layers.empty() || edgeLinetypeIds != nullptr ||
+         !edgeData->selectionMarkers.empty() || !edgeData->lineTypes.empty() ||
          !edgeData->visibility.empty());
     if (emitEdges)
     {
@@ -2051,8 +2386,27 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
             if (!edgeData->lineTypes.empty())
                 draw_.subEntityTraits().setLineType(
                     edgeData->lineTypes[edgeIndex]);
+            const size_t firstStroke = sink().geometry().strokes.size();
             worldLine(vertexList[edges[edgeIndex].start],
                       vertexList[edges[edgeIndex].end]);
+            for (size_t strokeIndex = firstStroke;
+                 strokeIndex < sink().geometry().strokes.size(); ++strokeIndex)
+            {
+                acdb::Stroke &stroke =
+                    sink().geometry().strokes[strokeIndex];
+                if (!edgeData->layers.empty())
+                    stroke.layerId = edgeData->layers[edgeIndex];
+                if (edgeLinetypeIds != nullptr)
+                    stroke.linetypeId = edgeLinetypeIds[edgeIndex];
+                if (!edgeData->selectionMarkers.empty())
+                    stroke.selectionMarker =
+                        edgeData->selectionMarkers[edgeIndex];
+                if (!edgeData->colors.empty())
+                {
+                    stroke.colorIndex = edgeData->colors[edgeIndex];
+                    stroke.hasColorIndex = true;
+                }
+            }
         }
         draw_.subEntityTraits().setFrom(originalTraits);
     }

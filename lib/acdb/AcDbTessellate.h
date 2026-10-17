@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <vector>
 
@@ -61,6 +62,11 @@ struct Stroke
     // must treat the geometry as starting at points[0] and continuing forever
     // along points[1] - points[0].
     bool semiInfinite = false;
+    AcDbObjectId layerId;
+    AcDbObjectId linetypeId;
+    Adesk::LongPtr selectionMarker = -1;
+    short colorIndex = 0;
+    bool hasColorIndex = false;
 };
 
 struct Triangle
@@ -74,6 +80,29 @@ struct Triangle
     std::array<AcGeVector3d, 3> vertexNormals{};
     bool hasVertexColors = false;
     bool hasVertexNormals = false;
+    AcDbObjectId layerId;
+    AcDbObjectId materialId;
+    Adesk::LongPtr selectionMarker = -1;
+    short colorIndex = 0;
+    bool hasColorIndex = false;
+    std::array<AcGePoint3d, 3> allMappingCoords{};
+    std::array<AcGePoint3d, 3> mapMappingCoords{};
+    std::array<glm::vec2, 3> textureCoords{};
+    bool hasAllMappingCoords = false;
+    bool hasMapMappingCoords = false;
+    bool hasTextureCoords = false;
+    std::uint8_t mapperUTiling = 0;
+    std::uint8_t mapperVTiling = 0;
+    std::uint32_t imageIndex = 0;
+    bool imageFallback = false;
+};
+
+struct RasterImage
+{
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::vector<std::uint8_t> bgra;
+    std::uint64_t contentHash = 0;
 };
 
 struct TessellatedPoint
@@ -89,6 +118,7 @@ struct TessellatedEntity
     std::vector<Stroke> strokes;
     std::vector<Triangle> fills;
     std::vector<TessellatedPoint> points;
+    std::vector<RasterImage> images;
 };
 
 [[nodiscard]] inline glm::dvec3 normalizedOr(

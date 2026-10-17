@@ -43,6 +43,8 @@ GeometrySink::EntityRanges GeometrySink::append(
     ranges.strokeBegin = geometry_.strokes.size();
     ranges.fillBegin = geometry_.fills.size();
     ranges.pointBegin = geometry_.points.size();
+    const std::uint32_t imageIndexOffset =
+        static_cast<std::uint32_t>(geometry_.images.size());
 
     geometry_.strokes.insert(geometry_.strokes.end(), fragment.strokes.begin(),
                              fragment.strokes.end());
@@ -50,6 +52,8 @@ GeometrySink::EntityRanges GeometrySink::append(
                            fragment.fills.end());
     geometry_.points.insert(geometry_.points.end(), fragment.points.begin(),
                             fragment.points.end());
+    geometry_.images.insert(geometry_.images.end(), fragment.images.begin(),
+                            fragment.images.end());
 
     for (size_t i = ranges.strokeBegin; i < geometry_.strokes.size(); ++i)
     {
@@ -62,6 +66,8 @@ GeometrySink::EntityRanges GeometrySink::append(
         acdb::Triangle &fill = geometry_.fills[i];
         fill.common = traits.toEntityCommon();
         fill.is3DFace = fillIs3DFace;
+        if (fill.imageIndex != 0)
+            fill.imageIndex += imageIndexOffset;
     }
     for (size_t i = ranges.pointBegin; i < geometry_.points.size(); ++i)
     {

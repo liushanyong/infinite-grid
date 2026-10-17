@@ -307,6 +307,14 @@ struct FillVertex
 {
     glm::vec3 position;
     glm::vec4 color;
+    glm::vec2 uv{0.0f};
+};
+
+enum class TextureAddressMode : std::uint8_t
+{
+    Repeat,
+    Mirror,
+    Clamp
 };
 
 struct PolylineRenderData
@@ -350,6 +358,9 @@ struct FilledTrianglesRenderData
     glm::mat4 projection;
     const FillVertex *vertices = nullptr;
     uint32_t vertexCount = 0;
+    uint32_t textureId = 0;
+    TextureAddressMode textureAddressU = TextureAddressMode::Clamp;
+    TextureAddressMode textureAddressV = TextureAddressMode::Clamp;
     bool is3DFace = false;
     float layer = 0.0f;
     glm::vec4 logDepth;

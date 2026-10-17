@@ -101,6 +101,10 @@ public:
     // Memory variant for glTF embedded images; |key| dedupes repeat loads.
     int loadMeshTextureFromMemory(const std::string &key, const void *data,
                                   std::size_t size);
+    std::uint32_t uploadImageBGRA(const std::string &key,
+                                  std::uint32_t width,
+                                  std::uint32_t height,
+                                  const std::uint8_t *pixels);
     // Uploaded static geometry (imported glTF): non-zero id feeds
     // MeshBatchCommand::staticMeshId; buffers live until destroyStaticMesh
     // or device shutdown.

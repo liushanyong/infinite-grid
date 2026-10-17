@@ -28,8 +28,9 @@
 // Ray/XLine overlay semantics); viewport/screen transform behaviors and the
 // behaviors-only APIs collapse to their world-space form; clip boundaries
 // support simple concave polygons, clip-space transforms, depth limits, and
-// optional outlines; mesh/shell consume supported color, linetype, visibility,
-// and normal arrays; image is rasterized as a bounded per-pixel triangle
+// optional outlines; mesh/shell consume color, layer, linetype, selection,
+// material, transparency, visibility, and normal attributes into the sink;
+// image is rasterized as a bounded per-pixel triangle
 // approximation; polypoint emits real point primitives instead of ARX's
 // degenerate two-point strokes.
 // edge() accepts a value-semantic subset of planar curves rather than native
@@ -52,6 +53,53 @@
 #include "AcGiTextQueue.h"
 
 class AcGiDrawable;
+
+class AcGiMapper
+{
+public:
+    enum Projection
+    {
+        kInheritProjection = 0,
+        kPlanar,
+        kBox,
+        kCylinder,
+        kSphere
+    };
+    enum Tiling
+    {
+        kInheritTiling = 0,
+        kTile,
+        kCrop,
+        kClamp,
+        kMirror
+    };
+    enum AutoTransform
+    {
+        kInheritAutoTransform = 0,
+        kNone = 0x1,
+        kObject = 0x2,
+        kModel = 0x4
+    };
+
+    void set(const AcGiMapper &mapper) { *this = mapper; }
+    void setProjection(Projection value) { projection_ = value; }
+    void setAutoTransform(AutoTransform value) { autoTransform_ = value; }
+    void setTransform(const AcGeMatrix3d &value) { transform_ = value; }
+    void setUTiling(Tiling value) { uTiling_ = value; }
+    void setVTiling(Tiling value) { vTiling_ = value; }
+    Projection projection() const { return projection_; }
+    AutoTransform autoTransform() const { return autoTransform_; }
+    const AcGeMatrix3d &transform() const { return transform_; }
+    Tiling uTiling() const { return uTiling_; }
+    Tiling vTiling() const { return vTiling_; }
+
+private:
+    Projection projection_ = kInheritProjection;
+    AutoTransform autoTransform_ = kInheritAutoTransform;
+    AcGeMatrix3d transform_;
+    Tiling uTiling_ = kInheritTiling;
+    Tiling vTiling_ = kInheritTiling;
+};
 
 // The abstract curve base is not ported yet (acge ships concrete value
 // types); the generic-curve callback binds to the future class through the
@@ -107,6 +155,13 @@ enum AcGiOrientationTransformBehavior
     kAcGiZAxisOrientation
 };
 
+enum AcGiOrientationType
+{
+    kAcGiCounterClockwise = -1,
+    kAcGiNoOrientation = 0,
+    kAcGiClockwise = 1
+};
+
 // ---- port value types for the toolkit signatures ----
 
 struct AcGiPolyline
@@ -117,10 +172,86 @@ struct AcGiPolyline
 
 struct AcGiEdgeData
 {
+    std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<acdb::AcDbObjectId> layers;
+    std::vector<acdb::AcDbObjectId> linetypeIdValues;
+    std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<std::string> lineTypes;
     std::vector<Adesk::UInt8> visibility;
+    const acdb::AcDbObjectId *borrowedLinetypeIds = nullptr;
 
+    void setColors(const short *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            colors.clear();
+            return;
+        }
+        colors.assign(values, values + count);
+    }
+    short *colorsData() { return colors.data(); }
+    short *colorsData() const
+    {
+        return const_cast<short *>(colors.data());
+    }
+    void setLayers(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            layers.clear();
+        else
+            layers.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *layerIds() { return layers.data(); }
+    acdb::AcDbObjectId *layerIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(layers.data());
+    }
+    void setLinetypeIds(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            linetypeIdValues.clear();
+            borrowedLinetypeIds = nullptr;
+        }
+        else
+        {
+            linetypeIdValues.assign(values, values + count);
+            borrowedLinetypeIds = nullptr;
+        }
+    }
+    void setLineTypes(const acdb::AcDbObjectId *values)
+    {
+        linetypeIdValues.clear();
+        borrowedLinetypeIds = values;
+    }
+    void setLineTypes(const acdb::AcDbObjectId *values, size_t count)
+    {
+        setLinetypeIds(values, count);
+    }
+    acdb::AcDbObjectId *linetypeIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(
+            linetypeIdValues.empty() ? borrowedLinetypeIds
+                                     : linetypeIdValues.data());
+    }
+    acdb::AcDbObjectId *linetypeIdsData() { return linetypeIds(); }
+    acdb::AcDbObjectId *linetypeIdsData() const
+    {
+        return linetypeIds();
+    }
+    void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
+    {
+        if (values == nullptr)
+            selectionMarkers.clear();
+        else
+            selectionMarkers.assign(values, values + count);
+    }
+    Adesk::LongPtr *selectionMarkersData() { return selectionMarkers.data(); }
+    Adesk::LongPtr *selectionMarkersData() const
+    {
+        return const_cast<Adesk::LongPtr *>(selectionMarkers.data());
+    }
     void setLineTypes(const AcGiLineType *values, size_t count)
     {
         lineTypes.clear();
@@ -149,11 +280,32 @@ struct AcGiEdgeData
 };
 struct AcGiFaceData
 {
+    std::vector<short> colors;
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<acdb::AcDbObjectId> layers;
+    std::vector<Adesk::LongPtr> selectionMarkers;
     std::vector<Adesk::UInt8> visibility;
     std::vector<AcGeVector3d> normals;
+    std::vector<acdb::AcDbObjectId> materials;
+    const AcGiMapper *mapperValues = nullptr;
+    size_t mapperCount = 0;
+    bool mapperCountKnown = false;
     std::vector<AcCmTransparency> transparency;
 
+    void setColors(const short *values, size_t count)
+    {
+        if (values == nullptr)
+        {
+            colors.clear();
+            return;
+        }
+        colors.assign(values, values + count);
+    }
+    short *colorsData() { return colors.data(); }
+    short *colorsData() const
+    {
+        return const_cast<short *>(colors.data());
+    }
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
         if (values == nullptr)
@@ -161,6 +313,68 @@ struct AcGiFaceData
         else
             trueColors.assign(values, values + count);
     }
+    AcCmEntityColor *trueColorsData() { return trueColors.data(); }
+    AcCmEntityColor *trueColorsData() const
+    {
+        return const_cast<AcCmEntityColor *>(trueColors.data());
+    }
+    void setLayers(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            layers.clear();
+        else
+            layers.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *layerIds() { return layers.data(); }
+    acdb::AcDbObjectId *layerIds() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(layers.data());
+    }
+    void setSelectionMarkers(const Adesk::LongPtr *values, size_t count)
+    {
+        if (values == nullptr)
+            selectionMarkers.clear();
+        else
+            selectionMarkers.assign(values, values + count);
+    }
+    Adesk::LongPtr *selectionMarkersData()
+    {
+        return selectionMarkers.data();
+    }
+    Adesk::LongPtr *selectionMarkersData() const
+    {
+        return const_cast<Adesk::LongPtr *>(selectionMarkers.data());
+    }
+    void setMaterials(const acdb::AcDbObjectId *values, size_t count)
+    {
+        if (values == nullptr)
+            materials.clear();
+        else
+            materials.assign(values, values + count);
+    }
+    acdb::AcDbObjectId *materialsData() { return materials.data(); }
+    acdb::AcDbObjectId *materialsData() const
+    {
+        return const_cast<acdb::AcDbObjectId *>(materials.data());
+    }
+    void setMappers(const AcGiMapper *values, size_t count)
+    {
+        mapperValues = values;
+        mapperCount = values == nullptr ? 0 : count;
+        mapperCountKnown = true;
+    }
+    void setMappers(const AcGiMapper *values)
+    {
+        mapperValues = values;
+        mapperCount = 0;
+        mapperCountKnown = false;
+    }
+    AcGiMapper *mappers() const
+    {
+        return const_cast<AcGiMapper *>(mapperValues);
+    }
+    size_t mapperCountData() const { return mapperCount; }
+    bool mapperCountKnownData() const { return mapperCountKnown; }
     void setVisibility(const Adesk::UInt8 *values, size_t count)
     {
         if (values == nullptr)
@@ -168,12 +382,22 @@ struct AcGiFaceData
         else
             visibility.assign(values, values + count);
     }
+    Adesk::UInt8 *visibilityData() { return visibility.data(); }
+    Adesk::UInt8 *visibilityData() const
+    {
+        return const_cast<Adesk::UInt8 *>(visibility.data());
+    }
     void setNormals(const AcGeVector3d *values, size_t count)
     {
         if (values == nullptr)
             normals.clear();
         else
             normals.assign(values, values + count);
+    }
+    AcGeVector3d *normalsData() { return normals.data(); }
+    AcGeVector3d *normalsData() const
+    {
+        return const_cast<AcGeVector3d *>(normals.data());
     }
     void setTransparency(const AcCmTransparency *values, size_t count)
     {
@@ -182,11 +406,52 @@ struct AcGiFaceData
         else
             transparency.assign(values, values + count);
     }
+    AcCmTransparency *transparencyData() { return transparency.data(); }
+    AcCmTransparency *transparencyData() const
+    {
+        return const_cast<AcCmTransparency *>(transparency.data());
+    }
 };
 struct AcGiVertexData
 {
+    enum MapChannel
+    {
+        kAllChannels,
+        kMapChannels
+    };
+
     std::vector<AcCmEntityColor> trueColors;
     std::vector<AcGeVector3d> normals;
+
+    void setOrientationFlag(AcGiOrientationType value)
+    {
+        orientation = value;
+    }
+    AcGiOrientationType orientationFlag() const { return orientation; }
+
+    void setMappingCoords(MapChannel channel, const AcGePoint3d *values)
+    {
+        switch (channel)
+        {
+        case kAllChannels:
+            allMappingCoords = values;
+            break;
+        case kMapChannels:
+            mapMappingCoords = values;
+            break;
+        }
+    }
+    AcGePoint3d *mappingCoords(MapChannel channel) const
+    {
+        switch (channel)
+        {
+        case kAllChannels:
+            return const_cast<AcGePoint3d *>(allMappingCoords);
+        case kMapChannels:
+            return const_cast<AcGePoint3d *>(mapMappingCoords);
+        }
+        return nullptr;
+    }
 
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
@@ -202,6 +467,11 @@ struct AcGiVertexData
         else
             normals.assign(values, values + count);
     }
+
+private:
+    AcGiOrientationType orientation = kAcGiNoOrientation;
+    const AcGePoint3d *allMappingCoords = nullptr;
+    const AcGePoint3d *mapMappingCoords = nullptr;
 };
 
 // Clip boundary (port subset: a convex polygonal clip plane).
