@@ -143,6 +143,105 @@ double fitParameterizationAlpha(AcGe::KnotParameterization parameterization)
     }
 }
 
+struct TangentConstrainedFit
+{
+    std::vector<double> knots;
+    std::vector<AcGePoint3d> controlPoints;
+};
+
+TangentConstrainedFit fitWithEndpointTangents(
+    const std::vector<AcGePoint3d> &fitPoints,
+    const AcGeVector3d &startTangent, const AcGeVector3d &endTangent,
+    double alpha)
+{
+    constexpr size_t degree = 3;
+    if (fitPoints.size() < 2)
+        throw std::invalid_argument(
+            "Tangent-constrained fitting needs at least two fit points.");
+
+    const std::vector<double> parameters =
+        ge::normalizedCumulativeParameters(fitPoints, alpha);
+    for (size_t i = 1; i < parameters.size(); ++i)
+        if (!(parameters[i] > parameters[i - 1]))
+            throw std::invalid_argument(
+                "Tangent-constrained fit points must be distinct.");
+
+    const size_t count = fitPoints.size() + 2;
+    TangentConstrainedFit fit;
+    fit.knots.assign(count + degree + 1, 0.0);
+    std::fill(fit.knots.end() - static_cast<std::ptrdiff_t>(degree + 1),
+              fit.knots.end(), 1.0);
+    for (size_t i = 1; i + 1 < fitPoints.size(); ++i)
+        fit.knots[degree + i] = parameters[i];
+    std::vector<std::vector<double>> matrix(
+        count, std::vector<double>(count, 0.0));
+    std::vector<std::array<double, 3>> rhs(count);
+
+    const auto setBasisRow =
+        [&matrix, &rhs, &fit](size_t row, double parameter,
+                              size_t derivativeOrder, size_t degree,
+                              const AcGePoint3d *point,
+                              const AcGeVector3d *tangent) {
+            const size_t span =
+                ge::findKnotSpan(degree, fit.knots, parameter);
+            std::vector<std::vector<double>> basis;
+            ge::basisFunctionsDers(span, degree, fit.knots, parameter,
+                                   derivativeOrder, basis);
+            for (size_t i = 0; i <= degree; ++i)
+                matrix[row][span - degree + i] =
+                    basis[derivativeOrder][i];
+            if (point)
+                rhs[row] = {point->x, point->y, point->z};
+            else if (tangent)
+                rhs[row] = {tangent->x, tangent->y, tangent->z};
+        };
+
+    for (size_t i = 0; i < fitPoints.size(); ++i)
+        setBasisRow(i, parameters[i], 0, degree, &fitPoints[i], nullptr);
+    setBasisRow(fitPoints.size(), parameters.front(), 1, degree, nullptr,
+                &startTangent);
+    setBasisRow(fitPoints.size() + 1, parameters.back(), 1, degree, nullptr,
+                &endTangent);
+
+    for (size_t column = 0; column < count; ++column)
+    {
+        size_t pivot = column;
+        for (size_t row = column + 1; row < count; ++row)
+            if (std::abs(matrix[row][column]) >
+                std::abs(matrix[pivot][column]))
+                pivot = row;
+        if (std::abs(matrix[pivot][column]) < 1.0e-14)
+            throw std::runtime_error(
+                "Singular tangent-constrained interpolation system.");
+        std::swap(matrix[column], matrix[pivot]);
+        std::swap(rhs[column], rhs[pivot]);
+        for (size_t row = column + 1; row < count; ++row)
+        {
+            const double factor =
+                matrix[row][column] / matrix[column][column];
+            for (size_t k = column; k < count; ++k)
+                matrix[row][k] -= factor * matrix[column][k];
+            for (size_t axis = 0; axis < 3; ++axis)
+                rhs[row][axis] -= factor * rhs[column][axis];
+        }
+    }
+
+    std::vector<std::array<double, 3>> controlPoints(count);
+    for (size_t row = count; row-- > 0;)
+    {
+        std::array<double, 3> value = rhs[row];
+        for (size_t k = row + 1; k < count; ++k)
+            for (size_t axis = 0; axis < 3; ++axis)
+                value[axis] -= matrix[row][k] * controlPoints[k][axis];
+        for (size_t axis = 0; axis < 3; ++axis)
+            controlPoints[row][axis] = value[axis] / matrix[row][row];
+    }
+    fit.controlPoints.reserve(count);
+    for (const auto &point : controlPoints)
+        fit.controlPoints.emplace_back(point[0], point[1], point[2]);
+    return fit;
+}
+
 } // namespace
 
 namespace ge
@@ -1118,6 +1217,30 @@ bool AcGeNurbCurve2d::getFitData(AcGePoint2dArray &points,
     return true;
 }
 
+bool AcGeNurbCurve2d::getFitTangents(AcGeVector2d &startTangent,
+                                     AcGeVector2d &endTangent) const
+{
+    if (m_fitPoints.empty() || !m_fitTangentsDefined)
+        return false;
+    startTangent = m_fitStartTangent;
+    endTangent = m_fitEndTangent;
+    return true;
+}
+
+bool AcGeNurbCurve2d::getFitData(AcGePoint2dArray &points,
+                                 AcGeTol &fitTolerance,
+                                 bool &tangentsExist,
+                                 AcGeVector2d &startTangent,
+                                 AcGeVector2d &endTangent) const
+{
+    if (!getFitData(points, fitTolerance))
+        return false;
+    tangentsExist = m_fitTangentsDefined;
+    startTangent = tangentsExist ? m_fitStartTangent : AcGeVector2d{};
+    endTangent = tangentsExist ? m_fitEndTangent : AcGeVector2d{};
+    return true;
+}
+
 AcGeNurbCurve2d &AcGeNurbCurve2d::setFitData(
     int degree, const AcGePoint2dArray &points, const AcGeTol &fitTolerance)
 {
@@ -1144,7 +1267,64 @@ AcGeNurbCurve2d &AcGeNurbCurve2d::setFitData(
     m_fitPoints = points;
     m_fitTolerance = fitTolerance;
     m_fitDegree = degree;
+    m_fitTangentsDefined = false;
+    m_fitStartTangent = AcGeVector2d{};
+    m_fitEndTangent = AcGeVector2d{};
     return *this;
+}
+
+AcGeNurbCurve2d &AcGeNurbCurve2d::setFitData(
+    const AcGePoint2dArray &points, const AcGeVector2d &startTangent,
+    const AcGeVector2d &endTangent, const AcGeTol &fitTolerance)
+{
+    return setFitData(points, startTangent, endTangent,
+                      m_fitKnotParameterization, fitTolerance);
+}
+
+AcGeNurbCurve2d &AcGeNurbCurve2d::setFitData(
+    const AcGePoint2dArray &points, const AcGeVector2d &startTangent,
+    const AcGeVector2d &endTangent,
+    AcGe::KnotParameterization knotParameterization,
+    const AcGeTol &fitTolerance)
+{
+    (void)fitParameterizationAlpha(knotParameterization);
+    std::vector<AcGePoint3d> fitPoints3d;
+    fitPoints3d.reserve(points.size());
+    for (const AcGePoint2d &point : points)
+        fitPoints3d.emplace_back(point.x, point.y, 0.0);
+    const TangentConstrainedFit fit = fitWithEndpointTangents(
+        fitPoints3d, {startTangent.x, startTangent.y, 0.0},
+        {endTangent.x, endTangent.y, 0.0},
+        fitParameterizationAlpha(knotParameterization));
+    std::vector<double> px, py, pz(fit.controlPoints.size(), 0.0);
+    px.reserve(fit.controlPoints.size());
+    py.reserve(fit.controlPoints.size());
+    for (const AcGePoint3d &point : fit.controlPoints)
+    {
+        px.push_back(point.x);
+        py.push_back(point.y);
+    }
+    ge::detail::NurbsCurveCore candidate;
+    candidate.build(3, fit.knots, px, py, pz, {}, false, false);
+    m_core = std::move(candidate);
+    m_fitPoints = points;
+    m_fitTolerance = fitTolerance;
+    m_fitDegree = 3;
+    m_fitKnotParameterization = knotParameterization;
+    m_fitTangentsDefined = true;
+    m_fitStartTangent = startTangent;
+    m_fitEndTangent = endTangent;
+    return *this;
+}
+
+bool AcGeNurbCurve2d::setFitTangents(const AcGeVector2d &startTangent,
+                                     const AcGeVector2d &endTangent)
+{
+    if (m_fitPoints.empty())
+        return false;
+    setFitData(m_fitPoints, startTangent, endTangent,
+               m_fitKnotParameterization, m_fitTolerance);
+    return true;
 }
 
 bool AcGeNurbCurve2d::setFitPointAt(int index, const AcGePoint2d &point)
@@ -1154,7 +1334,11 @@ bool AcGeNurbCurve2d::setFitPointAt(int index, const AcGePoint2d &point)
         return false;
     AcGePoint2dArray updated = m_fitPoints;
     updated[static_cast<size_t>(index)] = point;
-    setFitData(m_fitDegree, updated, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(updated, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(m_fitDegree, updated, m_fitTolerance);
     return true;
 }
 
@@ -1165,8 +1349,12 @@ bool AcGeNurbCurve2d::addFitPointAt(int index, const AcGePoint2d &point)
         return false;
     AcGePoint2dArray updated = m_fitPoints;
     updated.insert(updated.begin() + index, point);
-    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
-               updated, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(updated, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+                   updated, m_fitTolerance);
     return true;
 }
 
@@ -1178,8 +1366,12 @@ bool AcGeNurbCurve2d::deleteFitPointAt(int index)
         return false;
     AcGePoint2dArray updated = m_fitPoints;
     updated.erase(updated.begin() + index);
-    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
-               updated, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(updated, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+                   updated, m_fitTolerance);
     return true;
 }
 
@@ -1225,7 +1417,11 @@ bool AcGeNurbCurve2d::setFitKnotParameterization(
     m_fitKnotParameterization = knotParameterization;
     try
     {
-        setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+        if (m_fitTangentsDefined)
+            setFitData(m_fitPoints, m_fitStartTangent, m_fitEndTangent,
+                       knotParameterization, m_fitTolerance);
+        else
+            setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
     }
     catch (...)
     {
@@ -1239,7 +1435,11 @@ bool AcGeNurbCurve2d::buildFitData()
 {
     if (m_fitPoints.empty())
         return false;
-    setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(m_fitPoints, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
     return true;
 }
 
@@ -1249,6 +1449,9 @@ bool AcGeNurbCurve2d::purgeFitData()
         return false;
     m_fitPoints.clear();
     m_fitDegree = 0;
+    m_fitTangentsDefined = false;
+    m_fitStartTangent = AcGeVector2d{};
+    m_fitEndTangent = AcGeVector2d{};
     return true;
 }
 
@@ -1526,6 +1729,30 @@ bool AcGeNurbCurve3d::getFitData(AcGePoint3dArray &points,
     return true;
 }
 
+bool AcGeNurbCurve3d::getFitTangents(AcGeVector3d &startTangent,
+                                     AcGeVector3d &endTangent) const
+{
+    if (m_fitPoints.empty() || !m_fitTangentsDefined)
+        return false;
+    startTangent = m_fitStartTangent;
+    endTangent = m_fitEndTangent;
+    return true;
+}
+
+bool AcGeNurbCurve3d::getFitData(AcGePoint3dArray &points,
+                                 AcGeTol &fitTolerance,
+                                 bool &tangentsExist,
+                                 AcGeVector3d &startTangent,
+                                 AcGeVector3d &endTangent) const
+{
+    if (!getFitData(points, fitTolerance))
+        return false;
+    tangentsExist = m_fitTangentsDefined;
+    startTangent = tangentsExist ? m_fitStartTangent : AcGeVector3d{};
+    endTangent = tangentsExist ? m_fitEndTangent : AcGeVector3d{};
+    return true;
+}
+
 AcGeNurbCurve3d &AcGeNurbCurve3d::setFitData(
     int degree, const AcGePoint3dArray &points, const AcGeTol &fitTolerance)
 {
@@ -1553,7 +1780,62 @@ AcGeNurbCurve3d &AcGeNurbCurve3d::setFitData(
     m_fitPoints = points;
     m_fitTolerance = fitTolerance;
     m_fitDegree = degree;
+    m_fitTangentsDefined = false;
+    m_fitStartTangent = AcGeVector3d{};
+    m_fitEndTangent = AcGeVector3d{};
     return *this;
+}
+
+AcGeNurbCurve3d &AcGeNurbCurve3d::setFitData(
+    const AcGePoint3dArray &points, const AcGeVector3d &startTangent,
+    const AcGeVector3d &endTangent, const AcGeTol &fitTolerance)
+{
+    return setFitData(points, startTangent, endTangent,
+                      m_fitKnotParameterization, fitTolerance);
+}
+
+AcGeNurbCurve3d &AcGeNurbCurve3d::setFitData(
+    const AcGePoint3dArray &points, const AcGeVector3d &startTangent,
+    const AcGeVector3d &endTangent,
+    AcGe::KnotParameterization knotParameterization,
+    const AcGeTol &fitTolerance)
+{
+    (void)fitParameterizationAlpha(knotParameterization);
+    const TangentConstrainedFit fit = fitWithEndpointTangents(
+        std::vector<AcGePoint3d>(points.begin(), points.end()),
+        startTangent, endTangent,
+        fitParameterizationAlpha(knotParameterization));
+    std::vector<double> px, py, pz;
+    px.reserve(fit.controlPoints.size());
+    py.reserve(fit.controlPoints.size());
+    pz.reserve(fit.controlPoints.size());
+    for (const AcGePoint3d &point : fit.controlPoints)
+    {
+        px.push_back(point.x);
+        py.push_back(point.y);
+        pz.push_back(point.z);
+    }
+    ge::detail::NurbsCurveCore candidate;
+    candidate.build(3, fit.knots, px, py, pz, {}, false, false);
+    m_core = std::move(candidate);
+    m_fitPoints = points;
+    m_fitTolerance = fitTolerance;
+    m_fitDegree = 3;
+    m_fitKnotParameterization = knotParameterization;
+    m_fitTangentsDefined = true;
+    m_fitStartTangent = startTangent;
+    m_fitEndTangent = endTangent;
+    return *this;
+}
+
+bool AcGeNurbCurve3d::setFitTangents(const AcGeVector3d &startTangent,
+                                     const AcGeVector3d &endTangent)
+{
+    if (m_fitPoints.empty())
+        return false;
+    setFitData(m_fitPoints, startTangent, endTangent,
+               m_fitKnotParameterization, m_fitTolerance);
+    return true;
 }
 
 bool AcGeNurbCurve3d::setFitPointAt(int index, const AcGePoint3d &point)
@@ -1563,7 +1845,11 @@ bool AcGeNurbCurve3d::setFitPointAt(int index, const AcGePoint3d &point)
         return false;
     AcGePoint3dArray updated = m_fitPoints;
     updated[static_cast<size_t>(index)] = point;
-    setFitData(m_fitDegree, updated, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(updated, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(m_fitDegree, updated, m_fitTolerance);
     return true;
 }
 
@@ -1574,8 +1860,12 @@ bool AcGeNurbCurve3d::addFitPointAt(int index, const AcGePoint3d &point)
         return false;
     AcGePoint3dArray updated = m_fitPoints;
     updated.insert(updated.begin() + index, point);
-    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
-               updated, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(updated, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+                   updated, m_fitTolerance);
     return true;
 }
 
@@ -1587,8 +1877,12 @@ bool AcGeNurbCurve3d::deleteFitPointAt(int index)
         return false;
     AcGePoint3dArray updated = m_fitPoints;
     updated.erase(updated.begin() + index);
-    setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
-               updated, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(updated, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(std::min(m_fitDegree, static_cast<int>(updated.size()) - 1),
+                   updated, m_fitTolerance);
     return true;
 }
 
@@ -1634,7 +1928,11 @@ bool AcGeNurbCurve3d::setFitKnotParameterization(
     m_fitKnotParameterization = knotParameterization;
     try
     {
-        setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+        if (m_fitTangentsDefined)
+            setFitData(m_fitPoints, m_fitStartTangent, m_fitEndTangent,
+                       knotParameterization, m_fitTolerance);
+        else
+            setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
     }
     catch (...)
     {
@@ -1648,7 +1946,11 @@ bool AcGeNurbCurve3d::buildFitData()
 {
     if (m_fitPoints.empty())
         return false;
-    setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
+    if (m_fitTangentsDefined)
+        setFitData(m_fitPoints, m_fitStartTangent, m_fitEndTangent,
+                   m_fitKnotParameterization, m_fitTolerance);
+    else
+        setFitData(m_fitDegree, m_fitPoints, m_fitTolerance);
     return true;
 }
 
@@ -1658,6 +1960,9 @@ bool AcGeNurbCurve3d::purgeFitData()
         return false;
     m_fitPoints.clear();
     m_fitDegree = 0;
+    m_fitTangentsDefined = false;
+    m_fitStartTangent = AcGeVector3d{};
+    m_fitEndTangent = AcGeVector3d{};
     return true;
 }
 

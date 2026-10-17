@@ -166,8 +166,24 @@ public:
     int numFitPoints() const;
     bool getFitPointAt(int index, AcGePoint2d &point) const;
     bool getFitData(AcGePoint2dArray &points, AcGeTol &fitTolerance) const;
+    bool getFitTangents(AcGeVector2d &startTangent,
+                        AcGeVector2d &endTangent) const;
+    bool getFitData(AcGePoint2dArray &points, AcGeTol &fitTolerance,
+                    bool &tangentsExist, AcGeVector2d &startTangent,
+                    AcGeVector2d &endTangent) const;
     AcGeNurbCurve2d &setFitData(int degree, const AcGePoint2dArray &points,
                                 const AcGeTol &fitTolerance = AcGeTol{});
+    AcGeNurbCurve2d &setFitData(const AcGePoint2dArray &points,
+                                const AcGeVector2d &startTangent,
+                                const AcGeVector2d &endTangent,
+                                const AcGeTol &fitTolerance = AcGeTol{});
+    AcGeNurbCurve2d &setFitData(
+        const AcGePoint2dArray &points, const AcGeVector2d &startTangent,
+        const AcGeVector2d &endTangent,
+        AcGe::KnotParameterization knotParameterization,
+        const AcGeTol &fitTolerance = AcGeTol{});
+    bool setFitTangents(const AcGeVector2d &startTangent,
+                        const AcGeVector2d &endTangent);
     bool setFitPointAt(int index, const AcGePoint2d &point);
     bool addFitPointAt(int index, const AcGePoint2d &point);
     bool deleteFitPointAt(int index);
@@ -197,6 +213,9 @@ private:
     AcGeTol m_fitTolerance;
     int m_fitDegree = 0;
     AcGe::KnotParameterization m_fitKnotParameterization = AcGe::kChord;
+    bool m_fitTangentsDefined = false;
+    AcGeVector2d m_fitStartTangent;
+    AcGeVector2d m_fitEndTangent;
 };
 
 class ACGE_PORT AcGeNurbCurve3d : public AcGeCurve3d
@@ -250,8 +269,24 @@ public:
     int numFitPoints() const;
     bool getFitPointAt(int index, AcGePoint3d &point) const;
     bool getFitData(AcGePoint3dArray &points, AcGeTol &fitTolerance) const;
+    bool getFitTangents(AcGeVector3d &startTangent,
+                        AcGeVector3d &endTangent) const;
+    bool getFitData(AcGePoint3dArray &points, AcGeTol &fitTolerance,
+                    bool &tangentsExist, AcGeVector3d &startTangent,
+                    AcGeVector3d &endTangent) const;
     AcGeNurbCurve3d &setFitData(int degree, const AcGePoint3dArray &points,
                                 const AcGeTol &fitTolerance = AcGeTol{});
+    AcGeNurbCurve3d &setFitData(const AcGePoint3dArray &points,
+                                const AcGeVector3d &startTangent,
+                                const AcGeVector3d &endTangent,
+                                const AcGeTol &fitTolerance = AcGeTol{});
+    AcGeNurbCurve3d &setFitData(
+        const AcGePoint3dArray &points, const AcGeVector3d &startTangent,
+        const AcGeVector3d &endTangent,
+        AcGe::KnotParameterization knotParameterization,
+        const AcGeTol &fitTolerance = AcGeTol{});
+    bool setFitTangents(const AcGeVector3d &startTangent,
+                        const AcGeVector3d &endTangent);
     bool setFitPointAt(int index, const AcGePoint3d &point);
     bool addFitPointAt(int index, const AcGePoint3d &point);
     bool deleteFitPointAt(int index);
@@ -281,4 +316,7 @@ private:
     AcGeTol m_fitTolerance;
     int m_fitDegree = 0;
     AcGe::KnotParameterization m_fitKnotParameterization = AcGe::kChord;
+    bool m_fitTangentsDefined = false;
+    AcGeVector3d m_fitStartTangent;
+    AcGeVector3d m_fitEndTangent;
 };

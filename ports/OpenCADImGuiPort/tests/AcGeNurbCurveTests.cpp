@@ -863,6 +863,71 @@ void testFitPointManagement()
     assert(curve3d.numFitPoints() == 0);
     assert(near(curve3d.pointAt(0.5).z, 2.0));
 }
+
+void testTangentConstrainedFit()
+{
+    const AcGePoint2dArray points2d{
+        {0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+    AcGeNurbCurve2d curve2d;
+    curve2d.setFitData(points2d, {1.0, 0.0}, {1.0, 0.0});
+    assert(curve2d.numFitPoints() == 3);
+    assert(near(curve2d.startPoint().x, 0.0));
+    assert(near(curve2d.startPoint().y, 0.0));
+    assert(near(curve2d.endPoint().x, 2.0));
+    assert(near(curve2d.endPoint().y, 0.0));
+    assert(near(curve2d.pointAt(0.5).x, 1.0));
+    assert(near(curve2d.pointAt(0.5).y, 1.0));
+    const auto startDerivatives2d = curve2d.derivativesAt(0.0, 1);
+    const auto endDerivatives2d = curve2d.derivativesAt(1.0, 1);
+    assert(near(startDerivatives2d[1].x, 1.0));
+    assert(near(startDerivatives2d[1].y, 0.0));
+    assert(near(endDerivatives2d[1].x, 1.0));
+    assert(near(endDerivatives2d[1].y, 0.0));
+
+    AcGeVector2d startTangent2d, endTangent2d;
+    assert(curve2d.getFitTangents(startTangent2d, endTangent2d));
+    assert(near(startTangent2d.x, 1.0));
+    assert(near(endTangent2d.x, 1.0));
+    AcGePoint2dArray fitPoints2d;
+    AcGeTol fitTolerance2d;
+    bool tangentsExist = false;
+    assert(curve2d.getFitData(fitPoints2d, fitTolerance2d, tangentsExist,
+                              startTangent2d, endTangent2d));
+    assert(tangentsExist && fitPoints2d.size() == points2d.size());
+
+    assert(curve2d.setFitPointAt(1, {1.0, 2.0}));
+    const auto editedStart2d = curve2d.derivativesAt(0.0, 1);
+    assert(near(editedStart2d[1].x, 1.0));
+    assert(near(editedStart2d[1].y, 0.0));
+    assert(curve2d.setFitTangents({0.0, 1.0}, {0.0, -1.0}));
+    const auto changedTangents2d = curve2d.derivativesAt(0.0, 1);
+    assert(near(changedTangents2d[1].x, 0.0));
+    assert(near(changedTangents2d[1].y, 1.0));
+    assert(curve2d.setFitKnotParameterization(AcGe::kUniform));
+    assert(curve2d.getFitTangents(startTangent2d, endTangent2d));
+    assert(near(startTangent2d.y, 1.0));
+
+    const AcGePoint3dArray points3d{
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 1.0}, {2.0, 0.0, 0.0}};
+    AcGeNurbCurve3d curve3d;
+    curve3d.setFitData(points3d, {1.0, 0.0, 0.0}, {1.0, 0.0, 0.0});
+    assert(near(curve3d.pointAt(0.5).z, 1.0));
+    const auto startDerivatives3d = curve3d.derivativesAt(0.0, 1);
+    const auto endDerivatives3d = curve3d.derivativesAt(1.0, 1);
+    assert(near(startDerivatives3d[1].x, 1.0));
+    assert(near(startDerivatives3d[1].z, 0.0));
+    assert(near(endDerivatives3d[1].x, 1.0));
+    assert(near(endDerivatives3d[1].z, 0.0));
+    AcGeVector3d startTangent3d, endTangent3d;
+    assert(curve3d.getFitTangents(startTangent3d, endTangent3d));
+    assert(near(startTangent3d.x, 1.0));
+    assert(curve3d.addFitPointAt(1, {0.5, 0.0, 0.5}));
+    const auto editedStart3d = curve3d.derivativesAt(0.0, 1);
+    assert(near(editedStart3d[1].x, 1.0));
+    assert(near(editedStart3d[1].z, 0.0));
+    assert(curve3d.purgeFitData());
+    assert(!curve3d.getFitTangents(startTangent3d, endTangent3d));
+}
 } // namespace
 
 int main()
@@ -889,5 +954,6 @@ int main()
     testJoinWithRationalPromotion();
     testStructuralOps3d();
     testFitPointManagement();
+    testTangentConstrainedFit();
     return 0;
 }

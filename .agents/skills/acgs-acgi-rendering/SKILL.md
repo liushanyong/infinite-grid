@@ -67,12 +67,32 @@ acgi ── 协议层: AcGiDrawable(regen 协议根,**AcDbEntity 继承它 — A
   replayer.skipHandles 跳过这些句柄(由纹理网格通道表现)——GRID_SAVE_DWG
   从此包含 glTF 网格。**留在文档外**(代码注释已列):相机附着 UI(中心
   立方体,逐帧文档变更破坏脏门控)、合成应力场(instanced ≤1e6)、无限
-  网格(环境着色器)、逐帧诊断叠盖。
+  网格(环境着色器)、逐帧诊断叠盖。世界原点参考线已归集(2026-10-16
+  晚):AcDbLine "ReferenceLine" 文档实体 + 新 AcGsEntityRange::
+  excludeFromFit(回放 hints 传递)——该范围渲染在深度板内(板外由深度
+  着色器 discard,等价旧的逐帧裁剪)但**不参与任何 fit/深度板边界**
+  (expandCadTessellationBounds 跳过 + 逐帧 stroke 分支跳过),否则
+  0→1e7 的跨度会把启动相机重框到 1500 万单位外。
+- **acdb SHX 字体加载 + 文本统一实体渲染**(2026-10-16):SHX 分流
+  (AcGiShxTextDrawable + shxFontReady 回放开关)已删除——所有
+  AcDbText/AcDbMText 经自身 subWorldDraw → AcGiWorldDraw::text。SHX
+  字形恢复且**加载权在 acdb**:文档 AcDbTextStyleTableRecord("SHX")
+  以绝对路径命名 txt.shx/gbcbig.shx,AcDbDatabase::loadTextStyleShxFonts
+  装入引擎并 bindShxStyleFont;AcDbText::worldDraw 把 styleName 写进
+  AcGiTextStyle::fileName,text() 检测绑定即路由到 shxStrokes(描边字
+  形=普通 stroke,非 TextRequest——消息子串选中对 SHX 无效,用范围名);
+  未绑定样式回退 SDF(TTF)。构建尾部加载一次,gShxFontReady=结果。
+- **acgi raster/owner-draw 边界修订**(2026-10-16):ARX raw-pointer 形
+  式 rasterImageDcUsingRawPointer 落为显式文档化 no-op 槽位
+  (AcGiViewportGeometry/Draw,kTrue)——待端口 AcDbRasterImage 实体类+
+  宿主显示时通道,属后续协议工程而非接口缺口;owner-draw 记录即 acgi
+  侧最终行为(kFalse=已存储,gsContext().ownerDrawCommands() 可读,宿主
+  显示时冲刷),真实 GDI 上传=宿主侧通道。gi_repro 覆盖 acdb SHX 链。
 - **宿主 transient 内容也经 acgi 发射**(2026-10-15):main.cpp 的
-  appendSceneLine/appendScenePoint(参考线/焦点标记/轨目标/视锥线框/
+  appendSceneLine/appendScenePoint(焦点标记/轨目标/视锥线框/
   网格 quad 诊断/tiny impostor)与 glTF 线框链都构造 AcGiWorldDraw 调
   worldLine/worldPoint/worldPolyline,不再绕 acdb::AcDbLine/AcDbPoint
-  实体或手填 Stroke。
+  实体或手填 Stroke(参考线已升格为文档实体)。
 - **原型体 mesh 走 AcGiGeometry**(2026-10-15):appendMeshEntityToScene
   的原型体分支改为 AcGiWorldDraw——填充样式 emit 原型三角汤为 shell 面
   表([3,i,i+1,i+2] 逐汤面,保证与 CPU 拾取同一份数据),线框样式 emit

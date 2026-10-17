@@ -335,6 +335,7 @@ Value encodePayload(const AcDbSpline &e)
     out.set("controlPoints", pointsToJson(e.controlPoints));
     out.set("fitPoints", pointsToJson(e.fitPoints));
     out.set("knots", doublesToJson(e.knots));
+    out.set("weights", doublesToJson(e.weights));
     return out;
 }
 
@@ -937,6 +938,8 @@ bool decodeInto(const Value &commonData, const Value &data,
             payload.fitPoints = jsonToPoints3(*v);
         if (const Value *v = data.find("knots"))
             payload.knots = jsonToDoubles(*v);
+        if (const Value *v = data.find("weights"))
+            payload.weights = jsonToDoubles(*v);
     }
     else if constexpr (std::is_same_v<Payload, AcDbText>)
     {

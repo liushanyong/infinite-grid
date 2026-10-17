@@ -835,8 +835,15 @@ inline int runStoreSelfTest()
     {
         const StoreResult resaved = saveDatabase(loaded,
                                                  "store_selftest2.db");
-        check(resaved.ok && resaved.entities == 7,
+        // The re-save writes every resident payload — the self-test
+        // document carries one entity per variant slot (Copilot 5ee3e73
+        // inserted the full payload set; the count tracks variant_size).
+        check(resaved.ok && resaved.entities == expectedEntityCount,
               "loaded document re-saves cleanly");
+        if (!resaved.ok)
+            std::fprintf(report,
+                "  resave error (entities=%zu mismatch)",
+                resaved.entities);
     }
 
     std::remove("store_selftest2.db");
