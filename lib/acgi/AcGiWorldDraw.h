@@ -40,8 +40,11 @@
 #include <vector>
 
 #include "arx/ArxTypes.h"
+#include "arx/AcCmEntityColor.h"
+#include "arx/AcCmTransparency.h"
 #include "../acge/AcGe.h"
 #include "../acgs/model/DrawContext.h"
+#include "AcGiLineType.h"
 #include "AcGiTextStyle.h"
 #include "AcGiTextQueue.h"
 
@@ -291,6 +294,17 @@ public:
         return worldPolyline(vertexList, static_cast<int>(nbPoints), true);
     }
 
+    virtual Adesk::Boolean polyPolygon(
+        const Adesk::UInt32 numPolygonIndices,
+        const Adesk::UInt32 *numPolygonPositions,
+        const AcGePoint3d *polygonPositions,
+        const Adesk::UInt32 *numPolygonPoints,
+        const AcGePoint3d *polygonPoints,
+        const AcCmEntityColor *outlineColors = nullptr,
+        const AcGiLineType *outlineTypes = nullptr,
+        const AcCmEntityColor *fillColors = nullptr,
+        const AcCmTransparency *fillOpacities = nullptr) = 0;
+
     virtual Adesk::Boolean polypoint(
         const Adesk::UInt32 nbPoints, const AcGePoint3d *vertexList,
         const AcGeVector3d * /*normal*/ = nullptr,
@@ -476,6 +490,16 @@ public:
                              const AcGePoint3d &to) override;
     Adesk::Boolean worldPolyline(const AcGePoint3d *points, int count,
                                  bool closed) override;
+    Adesk::Boolean polyPolygon(
+        const Adesk::UInt32 numPolygonIndices,
+        const Adesk::UInt32 *numPolygonPositions,
+        const AcGePoint3d *polygonPositions,
+        const Adesk::UInt32 *numPolygonPoints,
+        const AcGePoint3d *polygonPoints,
+        const AcCmEntityColor *outlineColors = nullptr,
+        const AcGiLineType *outlineTypes = nullptr,
+        const AcCmEntityColor *fillColors = nullptr,
+        const AcCmTransparency *fillOpacities = nullptr) override;
     Adesk::Boolean worldTriangle(const AcGePoint3d &a, const AcGePoint3d &b,
                                  const AcGePoint3d &c,
                                  bool fillIs3DFace = false) override;

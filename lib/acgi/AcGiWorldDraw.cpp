@@ -3,7 +3,9 @@
 #include "acgi/AcGiTextEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <climits>
 #include <limits>
 #include <utility>
 
@@ -36,6 +38,111 @@ long double signedDistance(const AcGePoint2d &edgeStart,
     const long double py =
         static_cast<long double>(point.y) - edgeStart.y;
     return ((dx * py - dy * px) / length) * winding;
+}
+
+std::vector<std::array<size_t, 3>>
+triangulatePolygon(const std::vector<AcGePoint3d> &vertices)
+{
+    if (vertices.size() < 3)
+        return {};
+
+    AcGeVector3d normal;
+    for (size_t index = 0; index < vertices.size(); ++index)
+    {
+        const AcGePoint3d &current = vertices[index];
+        const AcGePoint3d &next = vertices[(index + 1) % vertices.size()];
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+    const double normalLengthSq = normal.lengthSq();
+    if (!(normalLengthSq > 1.0e-24) || !std::isfinite(normalLengthSq))
+        return {};
+    normal = normal.normal();
+    const AcGeVector3d u =
+        AcGeCircArc3d(vertices.front(), normal, 1.0).referenceAxis();
+    const AcGeVector3d v = normal.crossProduct(u);
+    std::vector<AcGePoint2d> projected;
+    projected.reserve(vertices.size());
+    for (const AcGePoint3d &point : vertices)
+    {
+        const AcGeVector3d relative = point - vertices.front();
+        const AcGePoint2d planar(relative.dotProduct(u), relative.dotProduct(v));
+        if (!std::isfinite(planar.x) || !std::isfinite(planar.y))
+            return {};
+        projected.push_back(planar);
+    }
+
+    long double areaTwice = 0.0L;
+    for (size_t index = 0; index < projected.size(); ++index)
+    {
+        const AcGePoint2d &current = projected[index];
+        const AcGePoint2d &next = projected[(index + 1) % projected.size()];
+        areaTwice += static_cast<long double>(current.x) * next.y -
+                     static_cast<long double>(current.y) * next.x;
+    }
+    if (!std::isfinite(areaTwice) || areaTwice == 0.0L)
+        return {};
+    const long double winding = areaTwice > 0.0L ? 1.0L : -1.0L;
+    std::vector<size_t> remaining(vertices.size());
+    for (size_t index = 0; index < remaining.size(); ++index)
+        remaining[index] = index;
+
+    const auto cross = [&](size_t a, size_t b, size_t c) {
+        const long double abx =
+            static_cast<long double>(projected[b].x) - projected[a].x;
+        const long double aby =
+            static_cast<long double>(projected[b].y) - projected[a].y;
+        const long double acx =
+            static_cast<long double>(projected[c].x) - projected[a].x;
+        const long double acy =
+            static_cast<long double>(projected[c].y) - projected[a].y;
+        return (abx * acy - aby * acx) * winding;
+    };
+    const auto insideTriangle = [&](size_t point, size_t a, size_t b,
+                                    size_t c) {
+        return cross(a, b, point) >= -1.0e-12L &&
+               cross(b, c, point) >= -1.0e-12L &&
+               cross(c, a, point) >= -1.0e-12L;
+    };
+
+    std::vector<std::array<size_t, 3>> triangles;
+    triangles.reserve(vertices.size() - 2);
+    while (remaining.size() > 3)
+    {
+        bool clippedEar = false;
+        for (size_t index = 0; index < remaining.size(); ++index)
+        {
+            const size_t previous =
+                remaining[(index + remaining.size() - 1) % remaining.size()];
+            const size_t current = remaining[index];
+            const size_t next = remaining[(index + 1) % remaining.size()];
+            if (cross(previous, current, next) <= 1.0e-12L)
+                continue;
+            bool containsVertex = false;
+            for (const size_t candidate : remaining)
+            {
+                if (candidate != previous && candidate != current &&
+                    candidate != next &&
+                    insideTriangle(candidate, previous, current, next))
+                {
+                    containsVertex = true;
+                    break;
+                }
+            }
+            if (containsVertex)
+                continue;
+            triangles.push_back({previous, current, next});
+            remaining.erase(remaining.begin() +
+                            static_cast<std::ptrdiff_t>(index));
+            clippedEar = true;
+            break;
+        }
+        if (!clippedEar)
+            return {};
+    }
+    triangles.push_back({remaining[0], remaining[1], remaining[2]});
+    return triangles;
 }
 
 double ccwNormalized(double angle)
@@ -160,6 +267,88 @@ bool AcGiWorldDraw::worldPolyline(const AcGePoint3d *points, int count,
     for (int i = 0; i < count; ++i)
         stroke.points.push_back(apply(points[i]));
     applyTraits(stroke);
+    return false;
+}
+
+bool AcGiWorldDraw::polyPolygon(
+    const Adesk::UInt32 numPolygonIndices,
+    const Adesk::UInt32 *numPolygonPositions,
+    const AcGePoint3d *polygonPositions,
+    const Adesk::UInt32 *numPolygonPoints,
+    const AcGePoint3d *polygonPoints,
+    const AcCmEntityColor *outlineColors,
+    const AcGiLineType *outlineTypes,
+    const AcCmEntityColor *fillColors,
+    const AcCmTransparency *fillOpacities)
+{
+    if (numPolygonIndices == 0 || numPolygonPositions == nullptr ||
+        polygonPositions == nullptr || numPolygonPoints == nullptr ||
+        polygonPoints == nullptr)
+        return true;
+
+    size_t totalPositions = 0;
+    size_t totalPoints = 0;
+    for (Adesk::UInt32 type = 0; type < numPolygonIndices; ++type)
+    {
+        const size_t instanceCount = numPolygonPositions[type];
+        const size_t vertexCount = numPolygonPoints[type];
+        if ((instanceCount != 0 && vertexCount < 3) ||
+            vertexCount > static_cast<size_t>(INT_MAX) ||
+            instanceCount >
+                std::numeric_limits<size_t>::max() - totalPositions ||
+            vertexCount >
+                std::numeric_limits<size_t>::max() - totalPoints)
+            return true;
+        totalPositions += instanceCount;
+        totalPoints += vertexCount;
+    }
+    (void)totalPositions;
+    (void)totalPoints;
+
+    const acdb::AcDbEntity originalTraits =
+        draw_.subEntityTraits().traits().toEntityCommon();
+    size_t positionIndex = 0;
+    size_t pointIndex = 0;
+    for (Adesk::UInt32 type = 0; type < numPolygonIndices; ++type)
+    {
+        const Adesk::UInt32 instanceCount = numPolygonPositions[type];
+        const Adesk::UInt32 vertexCount = numPolygonPoints[type];
+        glm::vec4 fillColor = originalTraits.color.renderColor();
+        if (fillColors != nullptr)
+            fillColor = fillColors[type].renderColor();
+        if (fillOpacities != nullptr &&
+            fillOpacities[type].isByAlpha())
+            fillColor.a *=
+                static_cast<float>(fillOpacities[type].alpha()) / 255.0f;
+
+        for (Adesk::UInt32 instance = 0; instance < instanceCount; ++instance)
+        {
+            std::vector<AcGePoint3d> vertices;
+            vertices.reserve(vertexCount);
+            const AcGeVector3d insertion = polygonPositions[positionIndex++].asVector();
+            for (Adesk::UInt32 vertex = 0; vertex < vertexCount; ++vertex)
+                vertices.push_back(polygonPoints[pointIndex + vertex] + insertion);
+
+            if (fillColor.a > 0.0f)
+            {
+                draw_.subEntityTraits().setColor(fillColor);
+                for (const auto &indices : triangulatePolygon(vertices))
+                    worldTriangle(vertices[indices[0]], vertices[indices[1]],
+                                  vertices[indices[2]]);
+            }
+
+            glm::vec4 outlineColor = originalTraits.color.renderColor();
+            if (outlineColors != nullptr)
+                outlineColor = outlineColors[type].renderColor();
+            draw_.subEntityTraits().setColor(outlineColor);
+            if (outlineTypes != nullptr && outlineTypes[type].name != nullptr)
+                draw_.subEntityTraits().setLineType(outlineTypes[type].name);
+            worldPolyline(vertices.data(), static_cast<int>(vertices.size()), true);
+        }
+        pointIndex += vertexCount;
+        draw_.subEntityTraits().setFrom(originalTraits);
+    }
+    draw_.subEntityTraits().setFrom(originalTraits);
     return false;
 }
 
