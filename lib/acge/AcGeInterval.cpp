@@ -114,12 +114,14 @@ int AcGeInterval::subtract(const AcGeInterval &other, AcGeInterval &left,
         other.m_boundedBelow ? other.m_lower : negativeInfinity;
     const double otherUpper =
         other.m_boundedAbove ? other.m_upper : positiveInfinity;
+    const double tolerance = std::max(m_tolerance, other.m_tolerance);
 
     const double cutLower = std::max(thisLower, otherLower);
     const double cutUpper = std::min(thisUpper, otherUpper);
     const bool removesSingleton =
-        isSingleton() && otherLower < m_lower && m_lower < otherUpper;
-    if (!(cutLower < cutUpper) && !removesSingleton)
+        isSingleton() && otherLower < m_lower - tolerance &&
+        m_lower < otherUpper - tolerance;
+    if (!(cutLower < cutUpper - tolerance) && !removesSingleton)
     {
         left = *this;
         return 1;
@@ -131,7 +133,8 @@ int AcGeInterval::subtract(const AcGeInterval &other, AcGeInterval &left,
 
     // ObjectARX treats the subtrahend as open: its endpoint values remain in
     // the result, including when one coincides with an endpoint of this range.
-    if (other.m_boundedBelow && other.m_lower >= thisLower)
+    if (other.m_boundedBelow &&
+        other.m_lower >= thisLower - tolerance)
     {
         leftResult = *this;
         if (m_boundedAbove && other.m_lower > m_upper)
@@ -139,11 +142,17 @@ int AcGeInterval::subtract(const AcGeInterval &other, AcGeInterval &left,
             left = *this;
             return 1;
         }
-        leftResult.setUpper(other.m_lower);
+        double split = other.m_lower;
+        if (m_boundedBelow && std::abs(split - m_lower) <= tolerance)
+            split = m_lower;
+        if (m_boundedAbove && std::abs(split - m_upper) <= tolerance)
+            split = m_upper;
+        leftResult.setUpper(split);
         left = leftResult;
         ++count;
     }
-    if (other.m_boundedAbove && other.m_upper <= thisUpper)
+    if (other.m_boundedAbove &&
+        other.m_upper <= thisUpper + tolerance)
     {
         rightResult = *this;
         if (m_boundedBelow && other.m_upper < m_lower)
@@ -151,7 +160,12 @@ int AcGeInterval::subtract(const AcGeInterval &other, AcGeInterval &left,
             left = *this;
             return 1;
         }
-        rightResult.setLower(other.m_upper);
+        double split = other.m_upper;
+        if (m_boundedBelow && std::abs(split - m_lower) <= tolerance)
+            split = m_lower;
+        if (m_boundedAbove && std::abs(split - m_upper) <= tolerance)
+            split = m_upper;
+        rightResult.setLower(split);
         if (count == 0)
             left = rightResult;
         else

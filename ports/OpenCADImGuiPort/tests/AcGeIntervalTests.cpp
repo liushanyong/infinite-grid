@@ -36,6 +36,12 @@ int main()
     assert(bounded.subtract(AcGeInterval(6.0, 10.0), left, right) == 2);
     assertInterval(left, 0.0, 6.0);
     assertInterval(right, 10.0, 10.0);
+    assert(bounded.subtract(AcGeInterval(10.0 - 5.0e-13, 12.0),
+                             left, right) == 1);
+    assert(left == bounded);
+    assert(bounded.subtract(AcGeInterval(5.0e-13, 4.0), left, right) == 2);
+    assertInterval(left, 0.0, 0.0);
+    assertInterval(right, 4.0, 10.0);
 
     const AcGeInterval unboundedBelow(false, 5.0);
     assert(unboundedBelow.subtract(AcGeInterval(2.0, 4.0), left, right) ==
