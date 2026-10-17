@@ -517,9 +517,8 @@ public:
     }
 
     // Clip boundaries are stacked and applied to subsequent world geometry.
-    // The port currently supports convex polygonal boundaries in the plane
-    // defined by m_ptPoint/m_vNormal; ARX clip-space matrices and front/back
-    // depth limits are retained but not yet interpreted.
+    // The port supports two-corner rectangles and convex polygons in the
+    // documented clip coordinate system, including front/back depth limits.
     virtual Adesk::Boolean pushClipBoundary(AcGiClipBoundary *boundary) = 0;
     virtual void popClipBoundary() = 0;
 
