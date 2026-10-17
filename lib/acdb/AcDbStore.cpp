@@ -340,8 +340,18 @@ Value encodePayload(const AcDbPolyFaceMesh &e)
     out.set("indices", doublesToJson({e.geometry.indices.begin(),
                                       e.geometry.indices.end()}));
     out.set("style", int(e.style));
-    out.set("material",
-            colorToJson(e.material.baseColorFactor));
+    Value material(json::Object{});
+    material.set("baseColorFactor", colorToJson(e.material.baseColorFactor));
+    material.set("emissiveFactor", colorToJson(e.material.emissiveFactor));
+    material.set("diffuseFactor", colorToJson(e.material.diffuseFactor));
+    material.set("specularFactor", colorToJson(e.material.specularFactor));
+    material.set("metallicFactor", e.material.metallicFactor);
+    material.set("roughnessFactor", e.material.roughnessFactor);
+    material.set("alphaMask", e.material.alphaMask);
+    material.set("alphaMaskCutoff", e.material.alphaMaskCutoff);
+    material.set("diffuseTexture", e.material.diffuseTexture);
+    material.set("renderClass", int(e.material.renderClass));
+    out.set("material", std::move(material));
     return out;
 }
 
@@ -352,6 +362,7 @@ Value encodePayload(const AcDb3dSolid &e)
     out.set("indices", doublesToJson({e.indices.begin(),
                                       e.indices.end()}));
     out.set("renderClass", int(e.renderClass));
+    out.set("fillIs3DFace", e.fillIs3DFace);
     return out;
 }
 
@@ -949,7 +960,39 @@ bool decodeInto(const Value &commonData, const Value &data,
         if (const Value *v = data.find("style"))
             payload.style = MeshStyle(int(v->asNumber()));
         if (const Value *v = data.find("material"))
-            payload.material.baseColorFactor = jsonToColor(*v);
+        {
+            if (v->isObject())
+            {
+                if (const Value *field = v->find("baseColorFactor"))
+                    payload.material.baseColorFactor = jsonToColor(*field);
+                if (const Value *field = v->find("emissiveFactor"))
+                    payload.material.emissiveFactor = jsonToColor(*field);
+                if (const Value *field = v->find("diffuseFactor"))
+                    payload.material.diffuseFactor = jsonToColor(*field);
+                if (const Value *field = v->find("specularFactor"))
+                    payload.material.specularFactor = jsonToColor(*field);
+                if (const Value *field = v->find("metallicFactor"))
+                    payload.material.metallicFactor =
+                        float(field->asNumber(1.0));
+                if (const Value *field = v->find("roughnessFactor"))
+                    payload.material.roughnessFactor =
+                        float(field->asNumber(1.0));
+                if (const Value *field = v->find("alphaMask"))
+                    payload.material.alphaMask = float(field->asNumber(1.0));
+                if (const Value *field = v->find("alphaMaskCutoff"))
+                    payload.material.alphaMaskCutoff =
+                        float(field->asNumber(0.5));
+                if (const Value *field = v->find("diffuseTexture"))
+                    payload.material.diffuseTexture = field->asString();
+                if (const Value *field = v->find("renderClass"))
+                    payload.material.renderClass =
+                        RenderClass(int(field->asNumber()));
+            }
+            else
+            {
+                payload.material.baseColorFactor = jsonToColor(*v);
+            }
+        }
     }
     else if constexpr (std::is_same_v<Payload, AcDb3dSolid>)
     {
@@ -960,6 +1003,8 @@ bool decodeInto(const Value &commonData, const Value &data,
                 payload.indices.push_back(std::uint32_t(index));
         if (const Value *v = data.find("renderClass"))
             payload.renderClass = RenderClass(int(v->asNumber()));
+        if (const Value *v = data.find("fillIs3DFace"))
+            payload.fillIs3DFace = v->asBool();
     }
     else if constexpr (std::is_same_v<Payload, AcDbLight>)
     {

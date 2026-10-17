@@ -62,74 +62,98 @@ void basisFunctionsDers(size_t span, size_t degree,
                         size_t derivativeCount,
                         std::vector<std::vector<double>> &ders)
 {
+    // Derivatives of the B-spline basis via the standard identity
+    //   D(k, q, i) = q/(U[i+q]-U[i]) * D(k-1, q-1, i)
+    //              - q/(U[i+q+1]-U[i+1]) * D(k-1, q-1, i+1)
+    // with D(0, q, i) the Cox-de Boor basis value N_{i,q}(u) and the
+    // 0/0 -> 0 convention for repeated knots.  D(k, q, i) is the k-th
+    // derivative of N_{i,q}; the caller receives ders[k][j] =
+    // D(k, p, span - p + j).  Validated against exact Bezier derivative
+    // answers in AcGeNurbCurveTests.
     const size_t p = degree;
-    double ndu[33][33];
-    double left[33];
-    double right[33];
+    if (derivativeCount > p)
+        throw std::runtime_error(
+            "B-spline basis derivatives beyond the degree are zero.");
     if (p >= 32)
         throw std::runtime_error("B-spline degree too large.");
 
-    ndu[0][0] = 1.0;
-    for (size_t j = 1; j <= p; ++j)
-    {
-        left[j] = u - knots[span + 1 - j];
-        right[j] = knots[span + j] - u;
-        double saved = 0.0;
-        for (size_t r = 0; r < j; ++r)
-        {
-            ndu[j][r] = right[r + 1] + left[j - r];
-            const double temp = ndu[r + 1][j - 1] / ndu[j][r];
-            ndu[r + 1][j] = saved + right[r + 1] * temp;
-            saved = left[j - r] * temp;
-        }
-        ndu[j][j] = saved;
-    }
-    for (size_t j = 0; j <= p; ++j)
-        ders[0][j] = ndu[j][p];
+    // table[k][q] holds a window over global control indices
+    // [span - q, span]; entry access outside that window is zero.
+    std::vector<std::vector<double>> table(
+        (derivativeCount + 1) * (p + 1),
+        std::vector<double>(2 * p + 1, 0.0));
+    auto at = [&](size_t k, size_t q, long long g) -> double & {
+        const long long low = static_cast<long long>(span) -
+                              static_cast<long long>(q);
+        return table[k * (p + 1) + q]
+                    [static_cast<size_t>(g - low)];
+    };
+    auto get = [&](size_t k, size_t q, long long g) -> double {
+        const long long low = static_cast<long long>(span) -
+                              static_cast<long long>(q);
+        if (g < low || g > static_cast<long long>(span))
+            return 0.0;
+        return table[k * (p + 1) + q]
+                    [static_cast<size_t>(g - low)];
+    };
 
-    // Derivatives via the product rule on the triangular table.
-    double a[2][33];
-    for (size_t r = 0; r <= p; ++r)
+    // Degree 0: N_{span,0}(u) = 1.
+    at(0, 0, static_cast<long long>(span)) = 1.0;
+    // Cox-de Boor recursion for every degree level q.
+    for (size_t q = 1; q <= p; ++q)
     {
-        size_t s1 = 0;
-        size_t s2 = 1;
-        a[0][0] = 1.0;
-        for (size_t k = 1; k <= derivativeCount; ++k)
+        for (long long g = static_cast<long long>(span) -
+                           static_cast<long long>(q);
+             g <= static_cast<long long>(span); ++g)
         {
-            double d = 0.0;
-            const size_t rk = r - k;
-            const size_t pk = p - k;
-            if (r >= k)
-            {
-                a[s2][0] = a[s1][0] / ndu[pk + 1][rk];
-                d = a[s2][0] * ndu[pk][rk];
-            }
-            const size_t j1 = rk >= 1 ? 1 : -rk;
-            const size_t j2 = static_cast<size_t>(
-                static_cast<long long>(r) - 1 <= pk
-                    ? r - 1
-                    : static_cast<long long>(pk));
-            for (size_t j = j1; j <= j2; ++j)
-            {
-                a[s2][j] = (a[s1][j] - a[s1][j - 1]) / ndu[pk + 1][rk + j];
-                d += a[s2][j] * ndu[pk][rk + j];
-            }
-            if (r <= pk)
-            {
-                a[s2][r] = -a[s1][r - 1] / ndu[pk + 1][r];
-                d += a[s2][r] * ndu[pk][r];
-            }
-            ders[k][r] = d;
-            std::swap(s1, s2);
+            const size_t i = static_cast<size_t>(g);
+            double acc = 0.0;
+            const double left = knots[i + q] - knots[i];
+            if (left > 0.0)
+                acc += (u - knots[i]) / left * get(0, q - 1, g);
+            const double right = knots[i + q + 1] - knots[i + 1];
+            if (right > 0.0)
+                acc += (knots[i + q + 1] - u) / right *
+                       get(0, q - 1, g + 1);
+            at(0, q, g) = acc;
         }
     }
-    // Multiply by the degree factors.
-    size_t r = p;
+
+    // Derivative recursion.
     for (size_t k = 1; k <= derivativeCount; ++k)
     {
+        for (size_t q = k; q <= p; ++q)
+        {
+            for (long long g = static_cast<long long>(span) -
+                               static_cast<long long>(q);
+                 g <= static_cast<long long>(span); ++g)
+            {
+                const size_t i = static_cast<size_t>(g);
+                double acc = 0.0;
+                const double left = knots[i + q] - knots[i];
+                if (left > 0.0)
+                    acc += static_cast<double>(q) / left *
+                           get(k - 1, q - 1, g);
+                const double right = knots[i + q + 1] - knots[i + 1];
+                if (right > 0.0)
+                    acc -= static_cast<double>(q) / right *
+                           get(k - 1, q - 1, g + 1);
+                at(k, q, g) = acc;
+            }
+        }
+    }
+
+    ders.assign(derivativeCount + 1,
+                std::vector<double>(p + 1, 0.0));
+    for (size_t k = 0; k <= derivativeCount; ++k)
+    {
         for (size_t j = 0; j <= p; ++j)
-            ders[k][j] *= static_cast<double>(r);
-        r *= p - k;
+        {
+            const long long g = static_cast<long long>(span) -
+                                static_cast<long long>(p) +
+                                static_cast<long long>(j);
+            ders[k][j] = get(k, p, g);
+        }
     }
 }
 

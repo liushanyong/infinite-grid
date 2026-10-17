@@ -153,6 +153,73 @@ with `-DACGE_BUILD_TESTS=ON` in the root CMake build. Build targets
 `AcGeSweptSurfaceTests`, then run `ctest --test-dir <build-dir> -R "^AcGe"`.
 Assertions remain enabled for these tests in Release builds as well.
 
+`AcGeKnotVector` provides the documented ordered non-decreasing knot
+sequence: uniform `set(size, start, end)` and array construction, ordered
+`insert`/`append` with tolerance-based multiplicity grouping, distinct-knot
+extraction, `multiplicityAt`, interval lookup for a spline order, inclusive
+subvector removal, range reversal/remapping, and the documented
+`split`/`append(tail, knotRatio)` operations. `physicalLength` maps to
+vector capacity and `growLength` is tracked for API compatibility.
+
+`AcGeCubicSplineCurve2d/3d` are interpolation cubic splines through every
+fit point. The fit-point constructor builds a closed periodic C2 spline with
+chord-length parameterization (including the wrap segment); the
+start/end-derivative constructor builds a clamped C2 spline; and the
+knot/derivative constructor stores explicit per-interval cubic Hermite data.
+Evaluation clamps to `[startParam, endParam]`, periodic curves wrap the
+parameter around the span, and `setFitPointAt` re-solves the tangent system
+for periodic/clamped splines while `setFirstDerivAt` pins the curve to
+explicit derivative data. These value types do not implement the
+`AcGeCurve2d/3d` inheritance hierarchy, generic-curve fitting, or the
+filer/IO protocols.
+
+The documented `AcGeNurbCurve2d/3d` are non-uniform rational B-spline curves backed by a
+shared NURBS evaluation core. Non-periodic curves use the documented
+`knotCount == ctrlCount + degree + 1` clamped layout; periodic curves accept
+both ARX layouts (wrapped format 1 with `knotCount == ctrlCount + 1` and
+format 2 with a duplicated endpoint control point, which is normalized to
+format 1) and are unrolled to an unclamped uniform curve with wrapped
+control points. Evaluation, derivatives up to the degree, and curvature use
+the standard Cox-de Boor basis recursions with the A4.2 rational quotient
+rule, so rational curves (circle arcs, helices) evaluate exactly.
+`getDefinitionData`/`setControlPointAt`/`setWeightAt` round-trip and edit
+the definition. Structural editing (ObjectARX `insertKnot`, `addKnot`,
+`deleteControlPointAt`, `elevateDegree`, `hardTrimByParams`,
+`makeRational`, `joinWith`) is implemented for non-periodic curves with
+exactness semantics: `insertKnot`/`addKnot` are shape-preserving Boehm
+insertions (A5.1), `deleteControlPointAt` removes a control point only
+when the backing knot occurrence can be removed without changing the
+shape (A5.2 consistency check, otherwise `false`),
+`elevateDegree` decomposes to Bezier spans and re-merges junctions at
+(original multiplicity + increment), `hardTrimByParams` clamps both cut
+parameters to full multiplicity and slices the control polygon, and
+`joinWith` performs a C0 join of equal-degree open curves with coincident
+endpoints (junction knot multiplicity = degree). Not implemented: the
+`AcGeCurve2d/3d` inheritance hierarchy, curve fitting, extend, and
+surface classes.
+`AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
+wrappers in the ObjectARX sense: they bind any curve/surface value type and a
+cached parameter, then expose `point`, `deriv`/`uDeriv`/`vDeriv` (orders 1-2),
+`mixedPartial`, `normal`, `tangentVector`, `inverseTangentVector`,
+`curvature` (including the `curvature(param, res)` Boolean overload), and
+`isSingular`. Because this port keeps curve/surface entities as independent
+value types (no `AcGeCurve2d/3d` or `AcGeSurface` hierarchy), the wrappers
+type-erase any curve providing `pointAt(double)` or `pointAtAngle(double)` and
+any surface providing `pointAt(double, double)` — the same protocol as the
+swept-surface source curves. Analytic `firstDeriv(double)`/`derivativeAt(double)`
+is used when present; otherwise derivatives come from central finite
+differences.
+`AcGeAugPolyline3d` stores per-vertex points, first-derivative vectors, and
+second-derivative vectors over a `AcGeKnotVector` parameterization. It supports
+direct construction from matching knot/point/vector bundles (missing second
+derivatives default to zero) and adaptive curve approximation from any
+type-erased curve so each chord stays within `approxTol` of the source curve,
+matching the documented ARX contract.
+
+`AcGeIntArray`, `AcGeDoubleArray`, `AcGePoint2d/3dArray`,
+`AcGeVector2d/3dArray`, and `AcGeVoidPointerArray` spellings are exported
+as `std::vector` aliases from `AcGeArrays.h`, matching the `ArxTypes.h`
+`AcArray` compatibility decision.
 `AcDbText::text` and `AcDbMText::text` use `AcString`. Convert only at
 UTF-8 boundaries: `arxcompat::fromUtf8` when importing or reading persisted text
 and `arxcompat::toUtf8` when writing DWG or serializing JSON. Other CAD string

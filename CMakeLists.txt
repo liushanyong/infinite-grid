@@ -133,6 +133,9 @@ add_library(acge STATIC
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeTol.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeTriangle.cpp"
     "${CMAKE_SOURCE_DIR}/lib/acge/AcGeUtil.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeKnotVector.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeCubicSpline.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/acge/AcGeNurbCurve.cpp"
 )
 target_include_directories(acge PUBLIC "${CMAKE_SOURCE_DIR}/lib")
 target_link_libraries(acge PUBLIC glm::glm)
@@ -151,6 +154,12 @@ if(ACGE_BUILD_TESTS)
         AcGeDelaunay2dTests
         AcGeIntersect3dTests
         AcGeKdTreeTests
+        AcGeKnotVectorTests
+        AcGeCubicSplineTests
+        AcGeNurbCurveTests
+        AcGePointOnCurveTests
+        AcGePointOnSurfaceTests
+        AcGeAugPolylineTests
     )
         add_executable(${test_name}
             "${CMAKE_SOURCE_DIR}/ports/OpenCADImGuiPort/tests/${test_name}.cpp")
