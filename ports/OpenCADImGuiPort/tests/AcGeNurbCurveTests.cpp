@@ -109,6 +109,31 @@ void testClamped3dStraightLine()
     assert(near(curve.curvatureAt(0.5), 0.0));
 }
 
+void testCurveLengths()
+{
+    const AcGeKnotVector bezierKnots(
+        AcGeDoubleArray{0.0, 0.0, 0.0, 1.0, 1.0, 1.0});
+    const double w = std::sqrt(2.0) / 2.0;
+    const AcGeNurbCurve2d quarterCircle(
+        2, bezierKnots, {{1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}},
+        {1.0, w, 1.0});
+    assert(near(quarterCircle.length(), std::acos(-1.0) * 0.5, 1.0e-12));
+    assert(near(quarterCircle.length(0.25, 0.75),
+                quarterCircle.length(0.75, 0.25), 1.0e-12));
+    assert(near(quarterCircle.length(-1.0, 2.0),
+                quarterCircle.length(), 1.0e-12));
+    assert(quarterCircle.length(0.2, 0.8, 10.0) == 0.0);
+
+    const AcGeKnotVector lineKnots(
+        AcGeDoubleArray{0.0, 0.0, 0.5, 1.0, 1.0});
+    const AcGeNurbCurve3d polyline(
+        1, lineKnots, {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+                       {1.0, 2.0, 0.0}});
+    assert(near(polyline.length(), 3.0));
+    assert(near(polyline.length(0.25, 0.75), 1.5));
+    assert(near(AcGeNurbCurve3d{}.length(), 0.0));
+}
+
 void testPeriodicClosedCurve()
 {
     // ARX wrapped format 1: 4 control points, uniform knots (0..4).
@@ -728,6 +753,7 @@ int main()
     testClampedNonRational2d();
     testRational2dQuarterCircle();
     testClamped3dStraightLine();
+    testCurveLengths();
     testPeriodicClosedCurve();
     testPeriodicFormat2Normalization();
     testDefinitionRoundTripAndEditing();

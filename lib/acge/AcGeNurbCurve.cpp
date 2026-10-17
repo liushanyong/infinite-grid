@@ -8,16 +8,64 @@
 #include <utility>
 
 #include "AcGeNurbsCore.h"
+#include "AcGeNurbsSpline.h"
 
 namespace
 {
 
 constexpr int kMinDegree = 1;
 constexpr int kMaxDegree = 31; // A2.3 fixed tables support up to 32 spans
+constexpr size_t kArcLengthQuadratureOrder = 24;
 
-bool finite(double v)
+bool isFinite(double v)
 {
     return std::isfinite(v);
+}
+
+double nurbsCurveLength(const ge::detail::NurbsCurveCore &curve,
+                        double fromParam, double toParam)
+{
+    if (curve.degree < 1 || curve.evalKnots.empty() ||
+        !(curve.u0 < curve.u1))
+        return 0.0;
+
+    if (fromParam > toParam)
+        std::swap(fromParam, toParam);
+    double start = std::max(fromParam, curve.u0);
+    const double end = std::min(toParam, curve.u1);
+    if (!(start < end))
+        return 0.0;
+
+    const auto quadrature = ge::gaussLegendreNodes(kArcLengthQuadratureOrder);
+    double length = 0.0;
+    while (start < end)
+    {
+        const auto nextKnot =
+            std::upper_bound(curve.evalKnots.begin(), curve.evalKnots.end(),
+                             start);
+        const double spanEnd =
+            nextKnot == curve.evalKnots.end()
+                ? end
+                : std::min(end, *nextKnot);
+        if (!(start < spanEnd))
+            break;
+
+        const double halfSpan = (spanEnd - start) * 0.5;
+        for (size_t i = 0; i < quadrature.first.size(); ++i)
+        {
+            const double param =
+                start + halfSpan * (quadrature.first[i] + 1.0);
+            std::vector<std::array<double, 4>> derivatives;
+            curve.homogeneousDerivatives(param, 1, derivatives);
+            const double dx = derivatives[1][0];
+            const double dy = derivatives[1][1];
+            const double dz = derivatives[1][2];
+            length += halfSpan * quadrature.second[i] *
+                      std::hypot(dx, dy, dz);
+        }
+        start = spanEnd;
+    }
+    return length;
 }
 
 size_t wrappedIndex(long long raw, size_t n)
@@ -103,7 +151,7 @@ void NurbsCurveCore::build(int degreeIn, const std::vector<double> &knotsIn,
             "AcGeNurbCurve weights must match control points.");
     for (size_t i = 0; i < n; ++i)
     {
-        if (!finite(px[i]) || !finite(py[i]) || !finite(pz[i]))
+        if (!isFinite(px[i]) || !isFinite(py[i]) || !isFinite(pz[i]))
             throw std::invalid_argument(
                 "AcGeNurbCurve control points must be finite.");
     }
@@ -111,14 +159,14 @@ void NurbsCurveCore::build(int degreeIn, const std::vector<double> &knotsIn,
     {
         for (size_t i = 0; i < n; ++i)
         {
-            if (!finite(wIn[i]) || wIn[i] <= 0.0)
+            if (!isFinite(wIn[i]) || wIn[i] <= 0.0)
                 throw std::invalid_argument(
                     "AcGeNurbCurve weights must be finite and positive.");
         }
     }
     for (size_t i = 1; i < knotsIn.size(); ++i)
     {
-        if (!finite(knotsIn[i]) || knotsIn[i] < knotsIn[i - 1])
+        if (!isFinite(knotsIn[i]) || knotsIn[i] < knotsIn[i - 1])
             throw std::invalid_argument(
                 "AcGeNurbCurve knots must be nondecreasing finite values.");
     }
@@ -231,7 +279,7 @@ void NurbsCurveCore::setWeight(size_t i, double w)
             "AcGeNurbCurve::setWeightAt requires a rational curve.");
     if (i >= weights.size())
         throw std::out_of_range("AcGeNurbCurve weight index out of range.");
-    if (!finite(w) || w <= 0.0)
+    if (!isFinite(w) || w <= 0.0)
         throw std::invalid_argument(
             "AcGeNurbCurve weights must be finite and positive.");
     weights[i] = w;
@@ -327,7 +375,7 @@ void NurbsCurveCore::insertKnot(double u)
     if (periodic)
         throw std::logic_error(
             "AcGeNurbCurve structural editing requires a non-periodic curve.");
-    if (!finite(u) || u < u0 || u > u1)
+    if (!isFinite(u) || u < u0 || u > u1)
         throw std::invalid_argument(
             "AcGeNurbCurve insertKnot parameter is outside the curve domain.");
     const size_t p = static_cast<size_t>(degree);
@@ -640,7 +688,7 @@ void NurbsCurveCore::hardTrim(double newStart, double newEnd)
     if (periodic)
         throw std::logic_error(
             "AcGeNurbCurve structural editing requires a non-periodic curve.");
-    if (!finite(newStart) || !finite(newEnd))
+    if (!isFinite(newStart) || !isFinite(newEnd))
         throw std::invalid_argument(
             "AcGeNurbCurve hardTrim parameters must be finite.");
     if (newStart < u0 || newEnd > u1)
@@ -700,7 +748,7 @@ void NurbsCurveCore::hardTrim(double newStart, double newEnd)
 
 void NurbsCurveCore::makeRational(double weight)
 {
-    if (!finite(weight) || weight <= 0.0)
+    if (!isFinite(weight) || weight <= 0.0)
         throw std::invalid_argument(
             "AcGeNurbCurve makeRational weight must be finite and positive.");
     if (!rational)
@@ -848,7 +896,7 @@ AcGePoint2d AcGeNurbCurve2d::controlPointAt(int i) const
 AcGeNurbCurve2d &AcGeNurbCurve2d::setControlPointAt(int i,
                                                     const AcGePoint2d &point)
 {
-    if (!finite(point.x) || !finite(point.y))
+    if (!isFinite(point.x) || !isFinite(point.y))
         throw std::invalid_argument(
             "AcGeNurbCurve2d control points must be finite.");
     m_core.setControlPoint(static_cast<size_t>(i), point.x, point.y, 0.0);
@@ -905,6 +953,16 @@ AcGeVector2d AcGeNurbCurve2d::firstDeriv(double param) const
     std::vector<std::array<double, 4>> ders;
     m_core.homogeneousDerivatives(param, 1, ders);
     return {ders[1][0], ders[1][1]};
+}
+
+double AcGeNurbCurve2d::length(double fromParam, double toParam,
+                               double tol) const
+{
+    if (!isFinite(fromParam) || !isFinite(toParam) || !isFinite(tol))
+        throw std::invalid_argument(
+            "AcGeNurbCurve2d length parameters must be finite.");
+    const double result = nurbsCurveLength(m_core, fromParam, toParam);
+    return result <= std::abs(tol) ? 0.0 : result;
 }
 
 std::vector<AcGeVector2d> AcGeNurbCurve2d::derivativesAt(
@@ -1060,7 +1118,7 @@ AcGePoint3d AcGeNurbCurve3d::controlPointAt(int i) const
 AcGeNurbCurve3d &AcGeNurbCurve3d::setControlPointAt(int i,
                                                     const AcGePoint3d &point)
 {
-    if (!finite(point.x) || !finite(point.y) || !finite(point.z))
+    if (!isFinite(point.x) || !isFinite(point.y) || !isFinite(point.z))
         throw std::invalid_argument(
             "AcGeNurbCurve3d control points must be finite.");
     m_core.setControlPoint(static_cast<size_t>(i), point.x, point.y, point.z);
@@ -1118,6 +1176,16 @@ AcGeVector3d AcGeNurbCurve3d::firstDeriv(double param) const
     std::vector<std::array<double, 4>> ders;
     m_core.homogeneousDerivatives(param, 1, ders);
     return {ders[1][0], ders[1][1], ders[1][2]};
+}
+
+double AcGeNurbCurve3d::length(double fromParam, double toParam,
+                               double tol) const
+{
+    if (!isFinite(fromParam) || !isFinite(toParam) || !isFinite(tol))
+        throw std::invalid_argument(
+            "AcGeNurbCurve3d length parameters must be finite.");
+    const double result = nurbsCurveLength(m_core, fromParam, toParam);
+    return result <= std::abs(tol) ? 0.0 : result;
 }
 
 std::vector<AcGeVector3d> AcGeNurbCurve3d::derivativesAt(

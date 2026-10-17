@@ -136,6 +136,24 @@ units; intersection coordinates remain subject to floating-point roundoff.
 This subset uses standard containers and exceptions rather than ObjectARX
 array/error-status signatures, and does not support concave subject polygons.
 
+Clipping remains value-based: `AcGeClipBoundary2d` clips points, segments,
+polygons, and sampled polylines directly. The port intentionally does not add
+`AcGeEntity2d/3d` base classes merely to reproduce entity-oriented clipping
+overloads.
+
+`AcGeSurfSurfInt` provides a type-erased, sampled subset for transverse
+intersections over finite surface parameter domains. `intCurve()` returns a
+polyline approximation and `intParamCurve()` returns corresponding sampled
+parameters on each input surface. Coincident regions, tangent components,
+classification/configuration queries, and analytic intersection curves are
+not implemented.
+
+`AcGeExternalCurve2d`, `AcGeExternalCurve3d`, and `AcGeExternalSurface` are
+callback-backed value adapters with explicit parameter ranges. They do not
+own opaque kernel objects or provide ObjectARX entity inheritance; the
+ownership flag only records the requested compatibility state. A missing
+evaluator is reported by `isDefined()` and evaluation throws.
+
 `AcGeRuledSurface3d`, `AcGeExtrudedSurface3d`, and `AcGeRevolvedSurface3d` are
 **project extensions**, not native ObjectARX class/API compatibility claims.
 They provide finite parameter domains, owning `AcGeSweptCurve3d` source adapters,
@@ -195,7 +213,12 @@ shape (A5.2 consistency check, otherwise `false`),
 (original multiplicity + increment), `hardTrimByParams` clamps both cut
 parameters to full multiplicity and slices the control polygon, and
 `joinWith` performs a C0 join of equal-degree open curves with coincident
-endpoints (junction knot multiplicity = degree). Not implemented: the
+endpoints (junction knot multiplicity = degree). `length()` and
+`length(fromParam, toParam, tol)` integrate derivative magnitude with
+24-point Gauss-Legendre quadrature split at knot spans; parameter intervals
+are clipped to the curve domain, reversed bounds produce the same positive
+length, and results no greater than `abs(tol)` are reported as zero. Not
+implemented: the
 `AcGeCurve2d/3d` inheritance hierarchy, curve fitting, extend, and
 surface classes.
 `AcGePointOnCurve2d/3d` and `AcGePointOnSurface` are parameterized point
