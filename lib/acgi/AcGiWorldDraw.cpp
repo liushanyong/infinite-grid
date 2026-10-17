@@ -1202,6 +1202,8 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edgeCountSize) ||
+          (!edgeData->lineTypes.empty() &&
+           edgeData->lineTypes.size() != edgeCountSize) ||
           (!edgeData->visibility.empty() &&
            edgeData->visibility.size() != edgeCountSize))))
         return true;
@@ -1261,7 +1263,8 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
 
     const bool emitEdges =
         edgeData != nullptr &&
-        (!edgeData->trueColors.empty() || !edgeData->visibility.empty());
+        (!edgeData->trueColors.empty() || !edgeData->lineTypes.empty() ||
+         !edgeData->visibility.empty());
     if (emitEdges)
     {
         auto emitEdge = [&](size_t edgeIndex, const AcGePoint3d &a,
@@ -1272,6 +1275,9 @@ bool AcGiWorldDraw::mesh(const Adesk::UInt32 rows, const Adesk::UInt32 columns,
             if (!edgeData->trueColors.empty())
                 draw_.subEntityTraits().setColor(
                     edgeData->trueColors[edgeIndex].renderColor());
+            if (!edgeData->lineTypes.empty())
+                draw_.subEntityTraits().setLineType(
+                    edgeData->lineTypes[edgeIndex]);
             worldLine(a, b);
         };
         size_t edgeIndex = 0;
@@ -1363,6 +1369,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
         (edgeData != nullptr &&
          ((!edgeData->trueColors.empty() &&
            edgeData->trueColors.size() != edges.size()) ||
+          (!edgeData->lineTypes.empty() &&
+           edgeData->lineTypes.size() != edges.size()) ||
           (!edgeData->visibility.empty() &&
            edgeData->visibility.size() != edges.size()))))
         return true;
@@ -1414,7 +1422,8 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
 
     const bool emitEdges =
         edgeData != nullptr &&
-        (!edgeData->trueColors.empty() || !edgeData->visibility.empty());
+        (!edgeData->trueColors.empty() || !edgeData->lineTypes.empty() ||
+         !edgeData->visibility.empty());
     if (emitEdges)
     {
         std::vector<bool> edgeVisible(edges.size(), false);
@@ -1440,6 +1449,9 @@ bool AcGiWorldDraw::shell(const Adesk::UInt32 nbVertex,
             if (!edgeData->trueColors.empty())
                 draw_.subEntityTraits().setColor(
                     edgeData->trueColors[edgeIndex].renderColor());
+            if (!edgeData->lineTypes.empty())
+                draw_.subEntityTraits().setLineType(
+                    edgeData->lineTypes[edgeIndex]);
             const auto [a, b] = edges[edgeIndex];
             worldLine(vertexList[a], vertexList[b]);
         }

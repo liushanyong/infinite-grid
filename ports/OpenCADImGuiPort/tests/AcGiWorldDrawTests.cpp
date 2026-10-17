@@ -136,6 +136,9 @@ int main()
         {0.0, 0.0, 1.0}, {0.0, 0.0, 1.0},
         {0.0, 0.0, 1.0}, {0.0, 0.0, 1.0}};
     const Adesk::UInt8 edgeVisibility[] = {1, 0, 1, 0};
+    const AcGiLineType dashedLineType{"DASHED", nullptr, 0};
+    const AcGiLineType edgeLineTypes[] = {
+        dashedLineType, dashedLineType, dashedLineType, dashedLineType};
     AcGiFaceData faces;
     faces.setTrueColors(fillColors, 1);
     AcGiVertexData vertices;
@@ -143,9 +146,11 @@ int main()
     vertices.setNormals(vertexNormals, 4);
     AcGiEdgeData edges;
     edges.setVisibility(edgeVisibility, 4);
+    edges.setLineTypes(edgeLineTypes, 4);
     assert(!meshDraw.mesh(2, 2, meshVertices, &edges, &faces, &vertices));
     assert(meshGeometry.fills.size() == 2);
     assert(meshGeometry.strokes.size() == 2);
+    assert(meshGeometry.strokes.front().common.lineType == "DASHED");
     assert(meshGeometry.fills[0].hasVertexColors);
     assert(meshGeometry.fills[0].hasVertexNormals);
 
@@ -157,6 +162,7 @@ int main()
                             &vertices));
     assert(shellGeometry.fills.size() == 2);
     assert(shellGeometry.strokes.size() == 2);
+    assert(shellGeometry.strokes.front().common.lineType == "DASHED");
     assert(shellGeometry.fills[0].hasVertexColors);
 
     acdb::TessellatedEntity imageGeometry;

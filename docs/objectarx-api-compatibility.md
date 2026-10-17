@@ -185,8 +185,11 @@ set, the clip outline is emitted if its clip-to-world transform is finite.
 positions, ear-clips simple planar concave outlines, and carries fill/outline
 colors and alpha into the existing primitives. Mesh/shell callbacks consume
 true-color and visibility arrays, apply vertex colors/normals to generated
-triangles, and emit explicitly visible edge strokes; face transparency remains
-ignored as the reference currently specifies. `image` copies BGRA pixels and
+triangles, and emit explicitly visible edge strokes with optional color and
+linetype overrides; face transparency remains ignored as the reference currently
+specifies. Face materials/mappers/layers and selection markers are not represented
+by the draw sink. The shell `pResBuf` hatch-conversion payload is not consumed.
+`image` copies BGRA pixels and
 approximates them with two colored triangles per pixel, limited to 65,536
 pixels per call; 1-bit alpha treats only 255 as opaque, while 8-bit alpha is
 proportional. This is a CPU geometry fallback, not filtered GPU texture upload.

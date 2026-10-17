@@ -27,16 +27,17 @@
 // worldPolyline with a closed flag, worldTriangle, worldInfiniteLine for
 // Ray/XLine overlay semantics); viewport/screen transform behaviors and the
 // behaviors-only APIs collapse to their world-space form; clip boundaries
-// are honored as convex planar clips for world lines, polylines, points, and
-// triangles, but clip-space transforms and front/back limits are not applied;
-// mesh/shell consume supported color, visibility, and normal arrays; image is
-// rasterized as a bounded per-pixel triangle approximation; polypoint emits
-// real point primitives instead of ARX's degenerate two-point strokes.
+// support convex polygons, clip-space transforms, depth limits, and optional
+// outlines; mesh/shell consume supported color, linetype, visibility, and
+// normal arrays; image is rasterized as a bounded per-pixel triangle
+// approximation; polypoint emits real point primitives instead of ARX's
+// degenerate two-point strokes.
 // edge() accepts a value-semantic subset of planar curves rather than native
 // AcGeCurve2d pointers; native GDI owner-draw uploads are not implemented.
 
 #include <cmath>
 #include <limits>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -108,8 +109,20 @@ struct AcGiPolyline
 struct AcGiEdgeData
 {
     std::vector<AcCmEntityColor> trueColors;
+    std::vector<std::string> lineTypes;
     std::vector<Adesk::UInt8> visibility;
 
+    void setLineTypes(const AcGiLineType *values, size_t count)
+    {
+        lineTypes.clear();
+        if (values == nullptr)
+            return;
+        lineTypes.reserve(count);
+        for (size_t index = 0; index < count; ++index)
+            lineTypes.emplace_back(values[index].name == nullptr
+                                       ? ""
+                                       : values[index].name);
+    }
     void setTrueColors(const AcCmEntityColor *values, size_t count)
     {
         if (values == nullptr)
