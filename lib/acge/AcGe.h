@@ -55,5 +55,6 @@
 #include "AcGeOffsetSurface.h"
 #include "AcGeNurbSurface.h"
 #include "AcGeExternalGeometry.h"
+#include "AcGeExternalBoundedSurface.h"
 #include "AcGeSurfSurfInt.h"
 #include "AcGeCurveCurveInt.h"

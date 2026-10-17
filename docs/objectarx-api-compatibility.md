@@ -161,6 +161,14 @@ own opaque kernel objects or provide ObjectARX entity inheritance; the
 ownership flag only records the requested compatibility state. A missing
 evaluator is reported by `isDefined()` and evaluation throws.
 
+`AcGeExternalBoundedSurface` wraps an `AcGeExternalSurface` evaluator and
+stores its `AcGeCurveBoundary` contours, base-surface classification, parameter
+domain, and external-entity kind. It implements the shared `AcGeSurface`
+evaluation interface; contours are metadata and do not trim or constrain
+evaluation. Its classification is supplied at construction, and its
+callback-backed value model does not reproduce opaque-kernel ownership or the
+native pointer-based accessors.
+
 `AcGeRuledSurface3d`, `AcGeExtrudedSurface3d`, and `AcGeRevolvedSurface3d` are
 **project extensions**, not native ObjectARX class/API compatibility claims.
 They provide finite parameter domains, owning `AcGeSweptCurve3d` source adapters,
