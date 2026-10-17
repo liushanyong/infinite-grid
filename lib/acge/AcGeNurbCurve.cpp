@@ -1213,16 +1213,14 @@ bool AcGeNurbCurve2d::setFitKnotParameterization(
 {
     if (m_fitPoints.empty())
         return false;
-    double alpha = 0.0;
     try
     {
-        alpha = fitParameterizationAlpha(knotParameterization);
+        (void)fitParameterizationAlpha(knotParameterization);
     }
     catch (const std::invalid_argument &)
     {
         return false;
     }
-    (void)alpha;
     const AcGe::KnotParameterization previous = m_fitKnotParameterization;
     m_fitKnotParameterization = knotParameterization;
     try
@@ -1624,16 +1622,14 @@ bool AcGeNurbCurve3d::setFitKnotParameterization(
 {
     if (m_fitPoints.empty())
         return false;
-    double alpha = 0.0;
     try
     {
-        alpha = fitParameterizationAlpha(knotParameterization);
+        (void)fitParameterizationAlpha(knotParameterization);
     }
     catch (const std::invalid_argument &)
     {
         return false;
     }
-    (void)alpha;
     const AcGe::KnotParameterization previous = m_fitKnotParameterization;
     m_fitKnotParameterization = knotParameterization;
     try
